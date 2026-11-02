@@ -28,6 +28,15 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 - Report only measured results. A miss is a valid result. When evidence is missing, the answer is "inconclusive", never "safe".
 - A human (the project owner) confirms every verdict before a case is marked complete.
 
+## Decision log (`docs/decision-log.md`)
+
+The decision log is public on purpose: it shows judges that decisions came before results. Every entry must follow these rules:
+
+1. Only adjudicated cases. Never mention a case, template or bug type before its review is done and the owner has confirmed the verdict.
+2. Nothing about held-back benchmark cases, not even counts by type, until the final report.
+3. No hints about the Day 15 reveal before Day 15.
+4. Record decisions made and results measured. To-dos, worries and half-formed ideas go in `private/BACKLOG.md`.
+
 ## Templates
 
 - Write new templates and their proof tests in `private/templates/<id>/`. Copy one to `templates/seed/` only after its case is adjudicated. Held-back benchmark templates never go public.

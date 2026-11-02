@@ -40,7 +40,7 @@ The charter is `private/CHARTER.md`; its daily challenge protocol (section 16) i
    - **Remaining risk:**
    ```
 
-   Measured results only, with links to PRs and commits.
+   Measured results only, with links to PRs and commits. Before writing, check the entry against the decision-log rules in `CLAUDE.md`: only adjudicated cases, nothing about held-back cases, no Day 15 hints before Day 15, and to-dos go to `private/BACKLOG.md` instead.
 2. Update the Status table in `README.md` if a milestone changed.
 3. Update `private/BACKLOG.md`: tick finished items, add new ones.
 4. Commit and push FaultForge, `private/`, and the target if it changed. Plain-English commit messages, no attribution lines.
