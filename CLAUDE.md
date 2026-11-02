@@ -12,6 +12,7 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 
 - `private/` is its own git repository. Commit and push it after every case. It must never be added to this repo.
 - A `PreToolUse` hook (`.claude/hooks/guard-target.ts`) blocks commits, PRs, comments and file edits in the target that contain giveaway words, and blocks force pushes to the target. If it blocks something, reword it. Don't work around it. It scans the whole shell command, so run target-repo actions in their own command, never chained with work in this repo.
+- `private/` is a separate repository inside this folder, and the shell's working directory can carry over between commands. Always use `git -C <path>` for git commands, so a commit can't land in the wrong repository.
 
 ## Rules for anything the reviewer can see
 
