@@ -11,7 +11,7 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 | `faultforge-private` (`./private`, git-ignored here) | private | answer key, audit events, case records, raw evidence, unreleased templates, `BACKLOG.md`, charter | — |
 
 - `private/` is its own git repository. Commit and push it after every case. It must never be added to this repo.
-- A `PreToolUse` hook (`.claude/hooks/guard-target.ts`) blocks commits, PRs, comments and file edits in the target that contain giveaway words, and blocks force pushes to the target. If it blocks something, reword it. Don't work around it.
+- A `PreToolUse` hook (`.claude/hooks/guard-target.ts`) blocks commits, PRs, comments and file edits in the target that contain giveaway words, and blocks force pushes to the target. If it blocks something, reword it. Don't work around it. It scans the whole shell command, so run target-repo actions in their own command, never chained with work in this repo.
 
 ## Rules for anything the reviewer can see
 
@@ -36,12 +36,13 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 ## Commands
 
 ```bash
-npm run check                                        # this repo: typecheck + tests
+npm run check                                        # typecheck, lint (Biome) and tests
+npm run format                                       # apply Biome's formatting and safe fixes
 npm run inject -- --template <id> --target ../faultforge-target --case FF-NNNN
-cd ../faultforge-target && npm test && npm run typecheck
+cd ../faultforge-target && npm run check             # same three checks in the target
 ```
 
-Run `npm run check` before every commit in this repo, and the target's `npm test && npm run typecheck` before every commit there (planted-bug branches excepted: the inject command validates those). Don't commit or push if a check fails.
+Run `npm run check` before every commit, in this repo and in the target (planted-bug branches excepted: the inject command validates those). Don't commit or push if a check fails. Both repos share the same Biome settings; keep `biome.json` identical in both.
 
 ## Daily routine
 

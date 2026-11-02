@@ -22,7 +22,9 @@ const bash = (command: string, cwd?: string) => decide("Bash", { command }, cwd)
 describe("guard-target hook", () => {
   describe("blocks", () => {
     it("a PR body that names the lab", () => {
-      expect(bash('gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body "FaultForge case"')).toMatch(/names the lab/);
+      expect(bash('gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body "FaultForge case"')).toMatch(
+        /names the lab/,
+      );
     });
 
     it("a target commit that says planted", () => {
@@ -34,11 +36,15 @@ describe("guard-target hook", () => {
     });
 
     it("a comment with a case id posted through gh api", () => {
-      expect(bash('gh api repos/AJBeumer/faultforge-target/issues/1/comments -f body="FF-0002 closed"')).toMatch(/case id/);
+      expect(bash('gh api repos/AJBeumer/faultforge-target/issues/1/comments -f body="FF-0002 closed"')).toMatch(
+        /case id/,
+      );
     });
 
     it("an edit to a target file that names the lab", () => {
-      expect(decide("Edit", { file_path: "D:/Projects/faultforge-target/README.md", new_string: "Used by FaultForge" })).toMatch(/names the lab/);
+      expect(
+        decide("Edit", { file_path: "D:/Projects/faultforge-target/README.md", new_string: "Used by FaultForge" }),
+      ).toMatch(/names the lab/);
     });
 
     it("a commit made from inside the target that mentions the ledger", () => {
@@ -48,7 +54,9 @@ describe("guard-target hook", () => {
 
   describe("allows", () => {
     it("a neutral PR on the target", () => {
-      expect(bash('gh pr create --repo AJBeumer/faultforge-target --title "Simplify replay lookup" --body "Small cleanup."')).toBeUndefined();
+      expect(
+        bash('gh pr create --repo AJBeumer/faultforge-target --title "Simplify replay lookup" --body "Small cleanup."'),
+      ).toBeUndefined();
     });
 
     it("read-only gh api calls on the target", () => {
@@ -64,7 +72,12 @@ describe("guard-target hook", () => {
     });
 
     it("Fastify's app.inject in target tests", () => {
-      expect(decide("Edit", { file_path: "D:/Projects/faultforge-target/test/x.test.ts", new_string: "await app.inject(req) // deps are injected" })).toBeUndefined();
+      expect(
+        decide("Edit", {
+          file_path: "D:/Projects/faultforge-target/test/x.test.ts",
+          new_string: "await app.inject(req) // deps are injected",
+        }),
+      ).toBeUndefined();
     });
 
     it("a normal push to the target", () => {

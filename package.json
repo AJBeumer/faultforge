@@ -6,7 +6,9 @@
     "inject": "tsx packages/harness/src/inject.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "lint": "biome check .",
+    "format": "biome check --write ."
   },
   "repository": {
     "type": "git",
@@ -22,6 +24,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.4",
     "@types/node": "^26.6.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

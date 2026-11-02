@@ -49,8 +49,10 @@ if (!args.template || !args.target || !args.case) {
 const caseId = args.case;
 const targetDir = resolve(args.target);
 // Unreleased templates live in private storage; only adjudicated ones are copied to templates/seed.
-const templateDir = [join(PRIVATE_DIR, "templates", args.template), join(ROOT, "templates", "seed", args.template)]
-  .find((dir) => existsSync(join(dir, "template.json")));
+const templateDir = [
+  join(PRIVATE_DIR, "templates", args.template),
+  join(ROOT, "templates", "seed", args.template),
+].find((dir) => existsSync(join(dir, "template.json")));
 if (!templateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
 const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
 const giveaways = telltales(`${template.publish.branch}\n${template.publish.commitMessage}`);
@@ -88,11 +90,12 @@ try {
   writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
 
   typecheck = runStep("typecheck", process.execPath, [
-    join(targetDir, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.json", "--noEmit",
+    join(targetDir, "node_modules/typescript/bin/tsc"),
+    "-p",
+    "tsconfig.json",
+    "--noEmit",
   ]);
-  publicTests = runStep("public-tests", process.execPath, [
-    join(targetDir, "node_modules/vitest/vitest.mjs"), "run",
-  ]);
+  publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
   proofOnVariant = runProof("variant");
 
   if (typecheck !== "pass") throw new Error("variant does not typecheck");
@@ -109,6 +112,7 @@ try {
     git("switch", "--quiet", baseBranch);
   }
 }
+if (!injectionCommit) fail("variant was not committed");
 
 copyFileSync(proofPath, join(artefactDir, template.proofTest));
 const proofHash = sha256(readFileSync(proofPath));
@@ -131,22 +135,21 @@ const entry = {
   validated: true,
   createdAt,
 };
-appendFileSync(ledgerPath, JSON.stringify(entry) + "\n");
-appendFileSync(
-  join(PRIVATE_DIR, "audit-events.jsonl"),
-  JSON.stringify({
-    eventId: randomUUID(),
-    type: "sabotage.injected",
-    at: createdAt,
-    caseId,
-    tool: TOOL,
-    environment: `${platform()}-${arch()}-node${process.versions.node}`,
-    inputHash: sha256(readFileSync(join(templateDir, "template.json")) + proofHash + baseCommit),
-  }) + "\n",
-);
+appendJsonl(ledgerPath, entry);
+appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
+  eventId: randomUUID(),
+  type: "sabotage.injected",
+  at: createdAt,
+  caseId,
+  tool: TOOL,
+  environment: `${platform()}-${arch()}-node${process.versions.node}`,
+  inputHash: sha256(readFileSync(join(templateDir, "template.json")) + proofHash + baseCommit),
+});
 
 log(`validated: proof passes on base, fails on variant; public tests ${publicTests}`);
-log(`${caseId} -> branch ${template.publish.branch} @ ${injectionCommit!.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`);
+log(
+  `${caseId} -> branch ${template.publish.branch} @ ${injectionCommit.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`,
+);
 log(`ledger: ${ledgerPath}`);
 
 /** Replaces the template's `find` text, which must occur exactly once. Returns the new lines. */
@@ -176,9 +179,18 @@ function runProof(stage: "base" | "variant"): Outcome {
 }
 
 /** Runs a command, stores its output as an artefact, and reports pass or fail. */
-function runStep(name: string, cmd: string, cmdArgs: string[], cwd = targetDir, env: Record<string, string> = {}): Outcome {
+function runStep(
+  name: string,
+  cmd: string,
+  cmdArgs: string[],
+  cwd = targetDir,
+  env: Record<string, string> = {},
+): Outcome {
   const result = run(cmd, cmdArgs, cwd, env);
-  writeFileSync(join(artefactDir, `${name}.log`), `$ ${cmdArgs.join(" ")}\nexit ${result.status}\n\n${result.stdout}${result.stderr}`);
+  writeFileSync(
+    join(artefactDir, `${name}.log`),
+    `$ ${cmdArgs.join(" ")}\nexit ${result.status}\n\n${result.stdout}${result.stderr}`,
+  );
   return result.status === 0 ? "pass" : "fail";
 }
 
@@ -200,7 +212,14 @@ function git(...gitArgs: string[]): string {
 
 function readJsonl(path: string): Record<string, unknown>[] {
   if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function appendJsonl(path: string, value: object) {
+  appendFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 function sha256(data: string | Buffer): string {

@@ -18,10 +18,7 @@
       "Bash(gh pr diff:*)",
       "Bash(gh repo view:*)"
     ],
-    "deny": [
-      "Bash(git push --force:*)",
-      "Bash(git push -f:*)"
-    ]
+    "deny": ["Bash(git push --force:*)", "Bash(git push -f:*)"]
   },
   "hooks": {
     "PreToolUse": [

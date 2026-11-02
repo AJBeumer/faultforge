@@ -41,7 +41,9 @@ function checkCommand(command: string) {
   const text = [stripTargetNames(command), ...referencedFiles(command)].join("\n");
   const found = telltales(text);
   if (found.length) {
-    deny(`This would put a hint into faultforge-target (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`);
+    deny(
+      `This would put a hint into faultforge-target (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
+    );
   }
 }
 
@@ -53,7 +55,9 @@ function checkFileEdit() {
     .join("\n");
   const found = telltales(stripTargetNames(text));
   if (found.length) {
-    deny(`This edit would put a hint into faultforge-target (${found.join(", ")}). Keep target files free of any mention of the lab.`);
+    deny(
+      `This edit would put a hint into faultforge-target (${found.join(", ")}). Keep target files free of any mention of the lab.`,
+    );
   }
 }
 
@@ -79,8 +83,8 @@ function stripTargetNames(text: string): string {
 function referencedFiles(command: string): string[] {
   const files: string[] = [];
   for (const match of command.matchAll(/(?:\s-F|--file|--body-file|--input)[\s=]+["']?([^\s"']+)/g)) {
-    const file = match[1]!;
-    if (file === "-") continue;
+    const file = match[1];
+    if (!file || file === "-") continue;
     const path = isAbsolute(file) ? file : resolve(cwd, file);
     if (existsSync(path)) files.push(readFileSync(path, "utf8"));
   }
