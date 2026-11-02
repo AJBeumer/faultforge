@@ -49,7 +49,7 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 
 | Day | Milestone | State |
 |---|---|---|
-| 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | In progress |
+| 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1)) |
 | 2 | Verify Qodo's local structured review, or fall back to PR comments | Planned |
 | 3 to 14 | More bug templates, control PRs, first measured baseline | Planned |
 | 15 | Something new joins the factory | Planned |
@@ -60,7 +60,7 @@ Progress and decisions for each daily challenge are recorded in [docs/decision-l
 ## Repositories
 
 - **FaultForge** (this repository): the harness, tooling, reports, and documentation.
-- **faultforge-target** (coming soon): the small booking API that gets attacked and reviewed. It is kept separate so the answer key never sits next to the code Qodo reviews.
+- **[faultforge-target](https://github.com/AJBeumer/faultforge-target)**: the small booking API that gets attacked and reviewed. It is kept separate so the answer key never sits next to the code Qodo reviews.
 
 ## Stack
 
