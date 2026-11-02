@@ -1,0 +1,14 @@
+{
+  "id": "idempotency-guard-bypass-v1",
+  "invariantId": "INV-IDEMP-001",
+  "defectClass": "idempotency",
+  "summary": "Replay path looks up the original booking by idempotency key instead of booking id, so the lookup always misses and a repeat request creates a second booking.",
+  "file": "src/bookings/create.ts",
+  "find": "    const original = deps.store.getBooking(previous.bookingId);\n",
+  "replace": "    const original = deps.store.getBooking(idempotencyKey);\n",
+  "proofTest": "proof.test.ts",
+  "publish": {
+    "branch": "tidy-replay-lookup",
+    "commitMessage": "Simplify replay lookup in createBooking"
+  }
+}
