@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Private FaultForge data: answer keys, raw artefacts, internal plans.
+# Never commit these. They must stay out of the reviewer's context.
+private/
+.faultforge/
+ground-truth*.jsonl
+audit-events*.jsonl
+raw-artifacts/
+
+# Logs and OS files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
