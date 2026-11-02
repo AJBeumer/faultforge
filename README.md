@@ -22,6 +22,51 @@ FaultForge replaces the guessing with evidence.
 
 Every case is written to an append-only log, and every number in a report can be traced back to it. Clean control PRs with no injected bug will go through the same pipeline, so false positives are measured too, not just catches.
 
+```mermaid
+flowchart TB
+  subgraph private["Private repository"]
+    templates["Bug templates<br/>and hidden proof tests"]
+    key[("Answer key")]
+    log[("Append-only audit log")]
+  end
+
+  subgraph lab["FaultForge (this repository)"]
+    inject["<b>1. Break it</b><br/>plant one bug on a new branch<br/>and prove it with the hidden test"]
+    match["<b>3. Prove it</b><br/>match each finding to the answer key:<br/>right file, overlapping lines, right kind of problem"]
+    verdict["A human confirms the verdict"]
+  end
+
+  subgraph target["faultforge-target (public)"]
+    pr["Ordinary-looking pull request"]
+    control["Clean control PR<br/>with no bug"]
+  end
+
+  qodo["<b>2. Review it</b><br/>Qodo reviews the PR"]
+
+  subgraph outputs["What comes out"]
+    bench["Benchmark<br/>catches, misses and false alarms"]
+    site["Case site and replay<br/>no Qodo account needed"]
+    audit["npx faultforge audit<br/>blind-spot report for your own repo"]
+  end
+
+  templates --> inject
+  inject -->|"answer key"| key
+  inject -->|"neutral branch and PR"| pr
+  pr --> qodo
+  control -.-> qodo
+  qodo -->|"findings"| match
+  key --> match
+  match --> verdict --> log
+  log -.-> bench
+  log -.-> site
+  lab -.->|"same engine, your code"| audit
+
+  classDef planned stroke-dasharray: 5 5
+  class control,bench,site,audit planned
+```
+
+Solid boxes work today; dashed boxes are planned. Qodo is connected only to the target repository. The answer key and the audit log stay private. A template is published here only after its case has been adjudicated.
+
 ## Where it is going
 
 By the end of the month:
