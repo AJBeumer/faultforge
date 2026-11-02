@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "templates/**/*.ts"]
+  "include": ["packages/**/*.ts", "templates/**/*.ts", ".claude/hooks/**/*.ts"]
 }

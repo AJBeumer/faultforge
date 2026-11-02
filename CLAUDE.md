@@ -36,10 +36,12 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 ## Commands
 
 ```bash
-npm run typecheck                                    # this repo
+npm run check                                        # this repo: typecheck + tests
 npm run inject -- --template <id> --target ../faultforge-target --case FF-NNNN
 cd ../faultforge-target && npm test && npm run typecheck
 ```
+
+Run `npm run check` before every commit in this repo, and the target's `npm test && npm run typecheck` before every commit there (planted-bug branches excepted: the inject command validates those). Don't commit or push if a check fails.
 
 ## Daily routine
 

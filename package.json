@@ -4,7 +4,9 @@
   "description": "Adversarial quality lab for AI software factories",
   "scripts": {
     "inject": "tsx packages/harness/src/inject.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
   },
   "repository": {
     "type": "git",
