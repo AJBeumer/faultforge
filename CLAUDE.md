@@ -18,6 +18,8 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 - Branch names, commit messages, PR titles and descriptions in the target must read like ordinary changes. No words such as sabotage, planted, inject, ledger, proof test, case ids, or the project's name.
 - Only Qodo reviews target PRs. If another bot reviews one, save its output, mark it as not counting, and remove it from future PRs.
 - Never merge a planted-bug PR. Close it without merging, with a normal-sounding comment.
+- faultforge-target must have no active relationship in Qodo (Repositories → Relationships). Qodo discovers relationships in the background, and an active one would let it read this repository during a target review.
+- Never dismiss a Qodo finding or chat with Qodo on a case PR. Qodo learns from both, which would bias later cases.
 - Don't change Qodo's configuration without recording a new configuration version in the decision log. Results are only comparable under the same configuration.
 
 ## History and evidence

@@ -13,6 +13,7 @@ Read `CLAUDE.md` first. Every step below obeys it.
 
 - `private/` and `../faultforge-target` both have clean working trees, and the target is on `main` and in sync with `origin/main`.
 - The template exists in `private/templates/<id>/` (preferred) or `templates/seed/<id>/`, with `template.json` and its proof test.
+- Ask the owner to confirm that Qodo → Repositories → Relationships shows **no active relationship** for faultforge-target. Qodo discovers relationships in the background, and an active one lets it read FaultForge during the review. Record the answer in the case record (`review.relationships`). Also record the Qodo configuration version.
 - The template's `publish.branch` doesn't already exist locally or on GitHub. If it does, stop and ask for a new branch name. Don't delete old case branches: they are evidence.
 
 ## 2. Plant and validate
@@ -66,6 +67,7 @@ Show the owner: the finding(s), the match per criterion, any collateral, and the
 
 ## 7. Close out
 
+- Never click **Dismiss** on a Qodo finding and never chat with Qodo on a case PR. Qodo's PR history indexing learns from both, which would bias later cases.
 - Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue). They close the PR.
 - Commit and push `private/`: `Add <case>: <template id>, <verdict>`.
 - Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
