@@ -20,7 +20,7 @@ FaultForge replaces the guessing with evidence.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
 3. **Prove it.** The answer key lives in a private ledger outside the repository, so the reviewer never gets a hint. Every finding is matched against it with a fixed rule: right file, overlapping lines, right kind of problem.
 
-Clean control PRs with no injected bug go through the same pipeline, so false positives are measured too, not just catches. Every case is written to an append-only log, and every number in a report can be traced back to it.
+Every case is written to an append-only log, and every number in a report can be traced back to it. Clean control PRs with no injected bug will go through the same pipeline, so false positives are measured too, not just catches.
 
 ## Where it is going
 
@@ -61,7 +61,34 @@ Progress and decisions for each daily challenge are recorded in [docs/decision-l
 
 - **FaultForge** (this repository): the harness, tooling, reports, and documentation.
 - **[faultforge-target](https://github.com/AJBeumer/faultforge-target)**: the small booking API that gets attacked and reviewed. It is kept separate so the answer key never sits next to the code Qodo reviews.
+- **A private repository** holds the answer key, raw reviewer output and unreleased bug templates. Templates are published here only after their case has been reviewed and adjudicated.
+
+## Try it
+
+Requires Node.js 22 or later.
+
+```bash
+npm install
+npm run check      # typecheck, lint and tests
+```
+
+Planting a bug needs a checkout of [faultforge-target](https://github.com/AJBeumer/faultforge-target) next to this repository:
+
+```bash
+npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --case FF-0001
+```
+
+The command applies the template on a new branch in the target, runs the hidden proof test before and after, and keeps the change only if the test proves the bug. It writes the answer key to a local `private/` folder, which git ignores. A one-command audit for your own repository is planned (see Status).
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `packages/harness/` | The inject command and its checks |
+| `templates/seed/` | Bug templates and proof tests, published after their case is adjudicated |
+| `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons |
+| `CLAUDE.md`, `.claude/` | Rules and tooling for the coding agent that helps build this project, including a hook that blocks hints from reaching the target repository |
 
 ## Stack
 
-TypeScript, Node.js, Fastify, Vitest, Qodo. Plain scripts and a small CLI. No agent framework.
+TypeScript, Node.js, Fastify, Vitest, Biome, Qodo. Built with Claude Code as the coding agent. Plain scripts and a small CLI. No agent framework.

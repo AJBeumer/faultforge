@@ -170,7 +170,14 @@ function runProof(stage: "base" | "variant"): Outcome {
   const outcome = runStep(
     `proof-${stage}`,
     process.execPath,
-    [join(ROOT, "node_modules/vitest/vitest.mjs"), "run", proofPath, "--root", ROOT],
+    [
+      join(ROOT, "node_modules/vitest/vitest.mjs"),
+      "run",
+      "--root",
+      dirname(proofPath),
+      "--config",
+      join(ROOT, "vitest.proof.config.ts"),
+    ],
     ROOT,
     { FAULTFORGE_TARGET_DIR: targetDir },
   );
