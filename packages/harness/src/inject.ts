@@ -15,6 +15,7 @@ import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { telltales } from "./neutral.ts";
 
 interface Template {
   id: string;
@@ -47,8 +48,13 @@ if (!args.template || !args.target || !args.case) {
 
 const caseId = args.case;
 const targetDir = resolve(args.target);
-const templateDir = join(ROOT, "templates", "seed", args.template);
+// Unreleased templates live in private storage; only adjudicated ones are copied to templates/seed.
+const templateDir = [join(PRIVATE_DIR, "templates", args.template), join(ROOT, "templates", "seed", args.template)]
+  .find((dir) => existsSync(join(dir, "template.json")));
+if (!templateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
 const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
+const giveaways = telltales(`${template.publish.branch}\n${template.publish.commitMessage}`);
+if (giveaways.length) fail(`branch name or commit message gives the case away: ${giveaways.join(", ")}`);
 const proofPath = join(templateDir, template.proofTest);
 const artefactDir = join(PRIVATE_DIR, "raw-artifacts", caseId);
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");

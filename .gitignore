@@ -27,3 +27,6 @@ Thumbs.db
 # Editors
 .vscode/
 .idea/
+
+# Personal Claude Code overrides
+.claude/settings.local.json
