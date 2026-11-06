@@ -96,7 +96,8 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 |---|---|---|
 | 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1)) |
 | 2 | House rules: target `AGENTS.md` imported as Qodo review standards (configuration v3) | Done ([PR #2](https://github.com/AJBeumer/faultforge-target/pull/2)) |
-| 3 to 14 | Verify Qodo's structured review output, more bug templates, control PRs, first measured baseline | Planned |
+| 3 | Backlog as [GitHub Issues](https://github.com/AJBeumer/faultforge/issues) and a [project board](https://github.com/users/AJBeumer/projects/6); three target tickets delivered one by one, each reviewed by Qodo (configuration v4) | Done ([#6](https://github.com/AJBeumer/faultforge-target/pull/6), [#8](https://github.com/AJBeumer/faultforge-target/pull/8), [#9](https://github.com/AJBeumer/faultforge-target/pull/9)) |
+| 4 to 14 | Verify Qodo's structured review output, more bug templates, control PRs, first measured baseline | Planned |
 | 15 | Devil's Advocate challenges its first real Qodo finding with a test | Planned |
 | 16 to 30 | Evidence, replay, one-command audit, final benchmark | Planned |
 
