@@ -264,4 +264,10 @@ async function main() {
 }
 
 // Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main();
+// Exit codes: 0 complete, 1 timed out, 2 couldn't run (usage, missing key, gh or API error), 3 skipped.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await main().catch((error: unknown) => {
+    console.error(`review:wait could not run: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  });
+}
