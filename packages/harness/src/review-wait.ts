@@ -96,6 +96,8 @@ export interface WaitDeps {
   fetchReview: () => Promise<QodoReview>;
   /** Called on every poll; return the comment's `updated_at` to have new versions saved. */
   onPoll?: () => Promise<void>;
+  /** Called when a poll fails; the wait goes on until the deadline. */
+  onError?: (error: unknown) => void;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
@@ -104,28 +106,47 @@ export type WaitResult =
   | { state: "complete" | "skipped"; review: QodoReview; polls: number; seenCompleteAt: number }
   | { state: "timeout"; review: QodoReview | undefined; polls: number };
 
-/** Polls until the review of `headSha` is complete or `timeoutMs` has passed. */
+/**
+ * Polls until the review of `headSha` is complete or `timeoutMs` has passed.
+ * A failed poll is reported and retried; if no poll ever succeeded, the last error is thrown.
+ */
 export async function waitForReview(
   headSha: string,
   deps: WaitDeps,
   { timeoutMs = 20 * 60_000, intervalMs = 20_000 } = {},
 ): Promise<WaitResult> {
   const deadline = deps.now() + timeoutMs;
+  const save = async () => {
+    try {
+      await deps.onPoll?.();
+    } catch (error) {
+      deps.onError?.(error);
+    }
+  };
   let review: QodoReview | undefined;
+  let lastError: unknown;
   let polls = 0;
   for (;;) {
     polls++;
-    await deps.onPoll?.();
-    review = await deps.fetchReview();
-    const state = reviewState(review, headSha);
-    if (state === "complete" || state === "skipped") {
-      // Qodo gives no end time; this is when it was first seen finished, at most one interval late.
-      const seenCompleteAt = deps.now();
-      // One last save: Qodo may have edited its comment between the poll and this answer.
-      await deps.onPoll?.();
-      return { state, review, polls, seenCompleteAt };
+    await save();
+    try {
+      review = await deps.fetchReview();
+      const state = reviewState(review, headSha);
+      if (state === "complete" || state === "skipped") {
+        // Qodo gives no end time; this is when it was first seen finished, at most one interval late.
+        const seenCompleteAt = deps.now();
+        // One last save: Qodo may have edited its comment between the poll and this answer.
+        await save();
+        return { state, review, polls, seenCompleteAt };
+      }
+    } catch (error) {
+      lastError = error;
+      deps.onError?.(error);
     }
-    if (deps.now() + intervalMs > deadline) return { state: "timeout", review, polls };
+    if (deps.now() + intervalMs > deadline) {
+      if (review === undefined && lastError !== undefined) throw lastError;
+      return { state: "timeout", review, polls };
+    }
     await deps.sleep(intervalMs);
   }
 }
@@ -207,6 +228,8 @@ async function main() {
         }
       },
       onPoll,
+      onError: (error) =>
+        console.error(`Poll failed, trying again: ${error instanceof Error ? error.message : String(error)}`),
       now: Date.now,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     },
@@ -264,7 +287,7 @@ async function main() {
 }
 
 // Run only when called as a script, not when the tests import it.
-// Exit codes: 0 complete, 1 timed out, 2 couldn't run (usage, missing key, gh or API error), 3 skipped.
+// Exit codes: 0 complete, 1 timed out, 2 couldn't run (usage, missing key, or every poll failed), 3 skipped.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main().catch((error: unknown) => {
     console.error(`review:wait could not run: ${error instanceof Error ? error.message : String(error)}`);

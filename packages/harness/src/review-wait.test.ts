@@ -164,3 +164,59 @@ describe("review findings on PR 59, second round", () => {
     expect(result).toMatchObject({ state: "complete", seenCompleteAt: 1_000 });
   });
 });
+
+describe("review findings on PR 61", () => {
+  const failOnce = (answer: QodoReview) => {
+    let calls = 0;
+    return async () => {
+      if (calls++ === 0) throw new Error("fetch failed");
+      return answer;
+    };
+  };
+  const clock = () => {
+    let t = 0;
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        t += ms;
+      },
+    };
+  };
+
+  it("keeps waiting through a failed poll and still sees the review complete", async () => {
+    const errors: unknown[] = [];
+    const result = await waitForReview(PR1_HEAD, {
+      fetchReview: failOnce(pr1),
+      onError: (error) => errors.push(error),
+      ...clock(),
+    });
+    expect(result).toMatchObject({ state: "complete", polls: 2 });
+    expect(errors).toHaveLength(1);
+  });
+
+  it("keeps waiting when saving the comments fails once", async () => {
+    let saves = 0;
+    const result = await waitForReview(PR1_HEAD, {
+      fetchReview: async () => pr1,
+      onPoll: async () => {
+        if (saves++ === 0) throw new Error("gh failed");
+      },
+      ...clock(),
+    });
+    expect(result.state).toBe("complete");
+  });
+
+  it("gives up with the error, not a timeout, when every poll failed", async () => {
+    const run = waitForReview(
+      PR1_HEAD,
+      {
+        fetchReview: async () => {
+          throw new Error("unauthorized");
+        },
+        ...clock(),
+      },
+      { timeoutMs: 60_000, intervalMs: 20_000 },
+    );
+    await expect(run).rejects.toThrow("unauthorized");
+  });
+});

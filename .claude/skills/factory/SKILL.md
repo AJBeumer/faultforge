@@ -28,7 +28,7 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
    - Exit 0: the review of the head commit is complete. Read **all open findings** it lists, not just the head's.
    - Exit 3: Qodo skipped the review. That's a gate: log it, the PR waits for the owner.
    - Exit 1: no completed review in time. That's a gate.
-   - Exit 2: the tool couldn't run (usage, missing key, a `gh` or API error). Not a review result: fix the setup and run it again.
+   - Exit 2: the tool couldn't run (usage, missing key, or `gh` or the API failing on every poll; a single failed poll is retried). Not a review result: fix the setup and run it again.
 4. **Act on the findings**, as `/work-ticket` says: reproduce each with a failing test first, fix what's real, explain what isn't, push, and run `review:wait` again. At most three rounds; an action-required finding still open after that is a gate.
 5. **Check the behaviour** on the running app (or with real commands for tooling), every criterion and a failure case. Save the transcript.
 6. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence.
