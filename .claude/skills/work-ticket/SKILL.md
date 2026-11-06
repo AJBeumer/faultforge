@@ -11,7 +11,7 @@ Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` o
 
 Read `CLAUDE.md` first. In the target, also follow its `AGENTS.md`. This skill is for ordinary work. Planted-bug cases use `/new-case`.
 
-Every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. Run commands for a `reviewed` repo on their own, never chained with commands for this repo (the guard hook scans the whole command).
+Every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. Run commands for a `reviewed` repo on their own, never chained with commands for another repo, and from inside its checkout: `cd <path> && gh pr create --repo <github> ...`. The guard allows a reviewed repo's PR or issue to link to its own tickets (such as `Ticket: <link>`) only when the command runs in that checkout, and refuses any command that writes to more than one repo.
 
 ## 1. Read the ticket
 

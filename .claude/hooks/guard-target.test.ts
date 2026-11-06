@@ -301,6 +301,24 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     );
   });
 
+  it("treats a single & as a second command (Qodo, ae9c1de)", () => {
+    const command =
+      'gh issue create --repo AJBeumer/faultforge --title "x" --body "a" & gh issue create --repo AJBeumer/faultforge-target --title "y" --body "b"';
+    expect(bash(command)).toMatch(/separate commands/);
+  });
+
+  it("sees commands hidden in a quoted $(...) (Qodo, ae9c1de)", () => {
+    const command =
+      'echo "$(gh issue create --repo AJBeumer/faultforge --title x --body a; gh issue create --repo AJBeumer/faultforge-target --title y --body b)"';
+    expect(bash(command)).toMatch(/separate commands/);
+  });
+
+  it("lets a target PR link its own ticket when run from the target checkout, as /work-ticket now does", () => {
+    const command =
+      'cd /d/Projects/faultforge-target && gh pr create --repo AJBeumer/faultforge-target --title "Add a cancel route" --body "Ticket: https://github.com/AJBeumer/faultforge-target/issues/3"';
+    expect(bash(command)).toBeUndefined();
+  });
+
   it("allows a chained command that stays inside the target checkout", () => {
     expect(
       bash(

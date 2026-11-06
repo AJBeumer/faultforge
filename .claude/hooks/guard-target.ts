@@ -97,14 +97,15 @@ function entersCheckout(command: string, repo: Reviewed): boolean {
 }
 
 /**
- * True when the command chains several commands (`;`, `&&`, `||`, `|` or a new line) outside quoted
- * text and heredoc bodies, which may legitimately hold any of those characters.
+ * True when the command runs more than one command: `;`, `&&`, `||`, `|`, a background `&`, a new
+ * line, or a command substitution. Quoted text and heredoc bodies may hold those characters as plain
+ * text, so they are ignored, except double-quoted text that runs `$(...)` or backticks.
  */
 function isChained(command: string): boolean {
   const bare = command
     .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
-    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, " ");
-  return /;|&&|\|\||\||\n/.test(bare.trim());
+    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (/^"[\s\S]*(\$\(|`)/.test(quoted) ? quoted : " "));
+  return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(bare.trim());
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
