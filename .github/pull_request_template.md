@@ -1,9 +1,17 @@
 Closes #
 
+Ticket: 
+
+## Acceptance criteria and results
+
+| Criterion | Result |
+|---|---|
+|  |  |
+
 ## What changed
 
 ## How I checked it
 
 - [ ] `npm run check` passes
-- [ ] Ticked only the ticket items I verified
+- [ ] Each criterion checked, and the result above is what I observed
 - [ ] Nothing about unreviewed cases or templates
