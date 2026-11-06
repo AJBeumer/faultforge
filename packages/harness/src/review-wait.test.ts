@@ -150,3 +150,17 @@ describe("parseToolText and parseRpcBody (review findings on PR 59)", () => {
     expect(parseRpcBody('event: message\ndata: {"result":\ndata: {"ok":true}}\n\n')).toEqual({ result: { ok: true } });
   });
 });
+
+describe("review findings on PR 59, second round", () => {
+  it("records when the review was first seen complete", async () => {
+    let t = 1_000;
+    const result = await waitForReview(PR1_HEAD, {
+      fetchReview: async () => pr1,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+    });
+    expect(result).toMatchObject({ state: "complete", seenCompleteAt: 1_000 });
+  });
+});

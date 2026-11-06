@@ -101,7 +101,7 @@ export interface WaitDeps {
 }
 
 export type WaitResult =
-  | { state: "complete" | "skipped"; review: QodoReview; polls: number }
+  | { state: "complete" | "skipped"; review: QodoReview; polls: number; seenCompleteAt: number }
   | { state: "timeout"; review: QodoReview | undefined; polls: number };
 
 /** Polls until the review of `headSha` is complete or `timeoutMs` has passed. */
@@ -119,9 +119,11 @@ export async function waitForReview(
     review = await deps.fetchReview();
     const state = reviewState(review, headSha);
     if (state === "complete" || state === "skipped") {
+      // Qodo gives no end time; this is when it was first seen finished, at most one interval late.
+      const seenCompleteAt = deps.now();
       // One last save: Qodo may have edited its comment between the poll and this answer.
       await deps.onPoll?.();
-      return { state, review, polls };
+      return { state, review, polls, seenCompleteAt };
     }
     if (deps.now() + intervalMs > deadline) return { state: "timeout", review, polls };
     await deps.sleep(intervalMs);
@@ -168,6 +170,7 @@ async function main() {
 
   // Save every version of Qodo's comments while waiting: the first version can be edited later.
   let lastVersion = "";
+  let lastContent = "";
   const onPoll = async () => {
     type Comment = { user: { login: string }; updated_at: string };
     const comments = {
@@ -179,7 +182,10 @@ async function main() {
       .map((c) => c.updated_at)
       .sort()
       .pop();
-    if (version && version !== lastVersion) {
+    // Compared by content: two edits in the same second share a timestamp but not their text.
+    const content = JSON.stringify(comments);
+    if (version && content !== lastContent) {
+      lastContent = content;
       lastVersion = version;
       writeFileSync(join(dir, `${short}.comments.${version.replace(/:/g, "")}.raw.json`), JSON.stringify(comments));
     }
@@ -223,6 +229,8 @@ async function main() {
     state: { complete: "complete", skipped: "skipped by Qodo", timeout: "review incomplete" }[result.state],
     pushSeenAt,
     reviewEffort: effort,
+    reviewSeenCompleteAt: "seenCompleteAt" in result ? new Date(result.seenCompleteAt).toISOString() : null,
+    reviewSeenCompleteNote: "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
     reviewStartedAt:
       result.review?.review_session?.commit_sha === headSha ? result.review.review_session.started_at : null,
     recordedAt: new Date().toISOString(),

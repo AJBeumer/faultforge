@@ -61,6 +61,8 @@ export class QodoApi {
   /** Calls one allow-listed tool and returns its text result parsed as JSON. */
   async call(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (!READ_ONLY_TOOLS.has(tool)) throw new Error(`Refusing ${tool}: not on the read-only allow-list.`);
+    // Cleared first, so a failed call never leaves the previous answer looking like its own.
+    this.lastRaw = "";
     this.ready ??= this.start();
     await this.ready;
     const result = (await this.rpc("tools/call", { name: tool, arguments: args })) as {
