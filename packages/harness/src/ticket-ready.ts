@@ -26,18 +26,44 @@ export const SECTIONS = {
 type RepoKey = keyof typeof SECTIONS;
 const REPOS: Record<RepoKey, string> = { faultforge: "AJBeumer/faultforge", target: "AJBeumer/faultforge-target" };
 
-/** Problems that make a ticket not ready, or an empty list. */
-export function readinessProblems(body: string, sections: Sections, openBlockers: number[]): string[] {
+/** A ticket's `###` sections by lower-case name. Code blocks are left out, so examples can't count. */
+function sectionsOf(body: string): Map<string, string> {
+  const prose = body.replace(/^(```|~~~)[\s\S]*?^\1\s*$/gm, "");
   const parts = new Map<string, string>();
-  for (const match of body.matchAll(/^###\s+(.+?)\s*$([\s\S]*?)(?=^###\s|(?![\s\S]))/gm)) {
+  for (const match of prose.matchAll(/^###\s+(.+?)\s*$([\s\S]*?)(?=^###\s|(?![\s\S]))/gm)) {
     parts.set((match[1] ?? "").trim().toLowerCase(), (match[2] ?? "").trim());
   }
+  return parts;
+}
+
+/** Text with nothing in it but list markers, such as the form's untouched "- ". */
+function isEmpty(text: string): boolean {
+  return text === "_No response_" || text.replace(/^\s*-\s*(\[[ xX]\])?\s*$/gm, "").trim() === "";
+}
+
+/** Issue numbers in this repo written in the "Depends on" section, e.g. "#12, #15". */
+export function writtenDependencies(body: string): number[] {
+  const text = sectionsOf(body).get("depends on") ?? "";
+  return [...text.matchAll(/(?<![\w/-])#(\d+)\b/g)].map((m) => Number(m[1]));
+}
+
+/** Open issue numbers from every page of GitHub's paginated dependency list. */
+export function openNumbers(pages: { number: number; state: string }[][]): number[] {
+  return pages
+    .flat()
+    .filter((issue) => issue.state === "open")
+    .map((issue) => issue.number);
+}
+
+/** Problems that make a ticket not ready, or an empty list. */
+export function readinessProblems(body: string, sections: Sections, openBlockers: number[]): string[] {
+  const parts = sectionsOf(body);
 
   const problems: string[] = [];
   for (const name of sections.required) {
     const text = parts.get(name.toLowerCase());
     if (text === undefined) problems.push(`missing section "${name}"`);
-    else if (text === "" || text === "_No response_") problems.push(`section "${name}" is empty`);
+    else if (isEmpty(text)) problems.push(`section "${name}" is empty`);
     else if (name === sections.checklist && !/^- \[[ xX]\] \S/m.test(text)) {
       problems.push(`"${name}" has no checklist items`);
     }
@@ -59,13 +85,18 @@ function main() {
   const repo = REPOS[repoKey as RepoKey];
   const sections = SECTIONS[repoKey as RepoKey];
   const issue = JSON.parse(gh("api", `repos/${repo}/issues/${number}`));
-  const blockers: { number: number; state: string }[] = JSON.parse(
-    gh("api", `repos/${repo}/issues/${number}/dependencies/blocked_by`),
+  const body: string = issue.body ?? "";
+  // Native "blocked by" links, every page, plus blockers only written in the Depends on text.
+  const linked = openNumbers(
+    JSON.parse(gh("api", "--paginate", "--slurp", `repos/${repo}/issues/${number}/dependencies/blocked_by`)),
+  );
+  const written = writtenDependencies(body).filter(
+    (n) => !linked.includes(n) && gh("api", `repos/${repo}/issues/${n}`, "--jq", ".state").trim() === "open",
   );
   const problems = readinessProblems(
-    issue.body ?? "",
+    body,
     sections,
-    blockers.filter((b) => b.state === "open").map((b) => b.number),
+    [...linked, ...written].sort((a, b) => a - b),
   );
   if (problems.length) {
     console.log(`${repoKey} #${number} is not ready:\n${problems.map((p) => `- ${p}`).join("\n")}`);

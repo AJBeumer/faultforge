@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readinessProblems, SECTIONS } from "./ticket-ready.ts";
+import { openNumbers, readinessProblems, SECTIONS, writtenDependencies } from "./ticket-ready.ts";
 
 const ready = `### Result
 A thing exists.
@@ -50,5 +50,31 @@ describe("readinessProblems", () => {
       'missing section "Must not break"',
       "blocked by open tickets #3",
     ]);
+  });
+});
+
+describe("review findings on PR 53", () => {
+  it("treats the form's untouched placeholder as empty", () => {
+    const body = ready.replace("- The other thing", "- ");
+    expect(readinessProblems(body, SECTIONS.faultforge, [])).toEqual(['section "Must not break" is empty']);
+  });
+
+  it("ignores headings and checklists inside code blocks", () => {
+    const body = "### Result\nx\n\n### Must not break\n- y\n\n```markdown\n### Done when\n- [ ] example\n```";
+    expect(readinessProblems(body, SECTIONS.faultforge, [])).toEqual(['missing section "Done when"']);
+  });
+
+  it("reads blockers written in Depends on", () => {
+    expect(writtenDependencies(`${ready}\n\n### Depends on\n#12, #15 and target 3`)).toEqual([12, 15]);
+  });
+
+  it("finds no written blockers when there is no Depends on section", () => {
+    expect(writtenDependencies(ready)).toEqual([]);
+  });
+
+  it("finds an open blocker on a later page", () => {
+    const page1 = Array.from({ length: 30 }, (_, i) => ({ number: i + 1, state: "closed" }));
+    const page2 = [{ number: 99, state: "open" }];
+    expect(openNumbers([page1, page2])).toEqual([99]);
   });
 });
