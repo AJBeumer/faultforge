@@ -9,8 +9,9 @@
   "properties": {
     "$schema": { "type": "string" },
     "evidence": {
-      "description": "Where saved reviews and live-check transcripts go, relative to this repo. Must be private storage.",
-      "type": "string"
+      "description": "Where saved reviews and live-check transcripts go, relative to this repo. Always inside the git-ignored private/ folder, never a public one.",
+      "type": "string",
+      "pattern": "^private/(?!(.*/)?\\.\\.(/|$))[^\\s\\\\]*$"
     },
     "repos": {
       "type": "object",

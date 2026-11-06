@@ -56,6 +56,13 @@ describe("configProblems", () => {
     expect(configProblems(config)).not.toEqual([]);
   });
 
+  it.each(["docs/evidence", "private/../docs", "../elsewhere", "/tmp/evidence"])(
+    "rejects evidence stored outside private/: %s",
+    (evidence) => {
+      expect(configProblems({ ...valid(), evidence })).not.toEqual([]);
+    },
+  );
+
   it("accepts a third repo added as one entry", () => {
     const config = valid();
     config.repos.other = { ...config.repos.target, github: "AJBeumer/other-app", path: "../other-app" };

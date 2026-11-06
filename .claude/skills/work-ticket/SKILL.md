@@ -7,11 +7,11 @@ description: Work one ticket end to end - read it from GitHub Issues, branch, bu
 
 Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` or `faultforge 3`. One ticket at a time, in the order the owner gave.
 
-**Repo settings come from `factory.json`, never from memory:** `github` (owner/name), `path` (local checkout), `guard` (`lab` or `reviewed`), `check` (must pass before every commit), `start` (how to run it for a live check, or null), `tickets` (required sections), `board` (tracked on the project board), and `evidence` (where saved reviews and transcripts go). Below, `<github>`, `<path>`, `<check>` and so on mean that repo's values. Read them with `node -e 'console.log(JSON.stringify(require("./factory.json").repos["<key>"], null, 2))'`.
+**Repo settings come from `factory.json`, never from memory:** `github` (owner/name), `path` (local checkout), `guard` (`lab` or `reviewed`), `check` (must pass before every commit), `start` (how to run it for a live check, or null), `tickets` (required sections), `board` (tracked on the project board), and `evidence` (where saved reviews and transcripts go). Below, `<github>`, `<path>`, `<check>` and so on mean that repo's values. Read them, with the shared `evidence` folder, with `node -e 'const f=require("./factory.json"); console.log(JSON.stringify({...f.repos["<key>"], evidence: f.evidence}, null, 2))'`. Paths are relative to this repo.
 
 Read `CLAUDE.md` first. In the target, also follow its `AGENTS.md`. This skill is for ordinary work. Planted-bug cases use `/new-case`.
 
-Use the hackathon token for every `gh` call: `export GH_TOKEN="$(tr -d '\r\n' < 'C:/Users/aj_be/.github/PAT_GH_FF_BASIC_TARGET.txt')"`. Never print it. Run commands for a `reviewed` repo on their own, never chained with commands for this repo (the guard hook scans the whole command).
+Every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. Run commands for a `reviewed` repo on their own, never chained with commands for this repo (the guard hook scans the whole command).
 
 ## 1. Read the ticket
 

@@ -10,23 +10,27 @@
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 
 interface Reviewed {
   /** owner/name on GitHub */
   github: string;
-  /** The repo name, which is also its local folder name. */
+  /** The repo name on GitHub. */
   name: string;
+  /** The local checkout's folder name, from its configured path. */
+  folder: string;
 }
 
-const REVIEWED = reviewedRepos();
+/** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
+const TARGET: Reviewed = {
+  github: "AJBeumer/faultforge-target",
+  name: "faultforge-target",
+  folder: "faultforge-target",
+};
+
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** A link GitHub turns into a "mentioned in" event on a reviewed repo's issue or PR. */
-const REVIEWED_LINK = new RegExp(
-  REVIEWED.map((r) => `github\\.com/${esc(r.github)}/(issues|pull)/\\d+|${esc(r.name)}#\\d+`).join("|"),
-  "i",
-);
+const REVIEWED = reviewedRepos();
 
 const input = JSON.parse(readFileSync(0, "utf8"));
 const tool: string = input.tool_name ?? "";
@@ -40,21 +44,40 @@ if (tool === "Bash" || tool === "PowerShell") {
 }
 
 /**
- * The reviewed repos from `factory.json` (or `FAULTFORGE_CONFIG`). If the file can't be read, the
- * target as it was protected before the config existed: a broken config must never switch the guard off.
+ * The target, plus every repo marked reviewed in `factory.json` (or `FAULTFORGE_CONFIG`). A missing,
+ * broken or wrong config can only fail to add a repo; it can never switch off the target's guard.
  */
 function reviewedRepos(): Reviewed[] {
+  const repos = [TARGET];
   try {
     const path = process.env.FAULTFORGE_CONFIG ?? join(import.meta.dirname, "../../factory.json");
-    const repos: { github: string; guard: string }[] = Object.values(JSON.parse(readFileSync(path, "utf8")).repos);
-    const reviewed = repos
-      .filter((r) => r.guard === "reviewed")
-      .map((r) => ({ github: r.github, name: r.github.split("/")[1] ?? r.github }));
-    if (reviewed.length) return reviewed;
+    const entries: { github?: unknown; path?: unknown; guard?: unknown }[] = Object.values(
+      JSON.parse(readFileSync(path, "utf8")).repos ?? {},
+    );
+    for (const entry of entries) {
+      if (entry.guard !== "reviewed" || typeof entry.github !== "string" || typeof entry.path !== "string") continue;
+      if (repos.some((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase())) continue;
+      const name = entry.github.split("/")[1] ?? entry.github;
+      repos.push({ github: entry.github, name, folder: basename(entry.path) || name });
+    }
   } catch {
-    // fall through to the safe default
+    // keep the target alone
   }
-  return [{ github: "AJBeumer/faultforge-target", name: "faultforge-target" }];
+  return repos;
+}
+
+/** A link GitHub turns into a "mentioned in" event on one of these repos' issues or PRs. */
+function linkPattern(repos: Reviewed[]): RegExp | undefined {
+  if (!repos.length) return undefined;
+  return new RegExp(
+    repos.map((r) => `github\\.com/${esc(r.github)}/(issues|pull)/\\d+|${esc(r.name)}#\\d+`).join("|"),
+    "i",
+  );
+}
+
+/** True when a local path is inside the repo's checkout folder (whole folder names only). */
+function inCheckout(path: string, repo: Reviewed): boolean {
+  return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
 }
 
 function checkCommand(command: string) {
@@ -65,7 +88,7 @@ function checkCommand(command: string) {
 
   const repo = REVIEWED.find((r) => actsOn(command, r));
   if (!repo) {
-    if (writes) checkOneWay(command);
+    if (writes) checkLinks(command, REVIEWED);
     return;
   }
 
@@ -73,6 +96,12 @@ function checkCommand(command: string) {
     deny(`Force pushes to ${repo.name} are not allowed: its history is evidence for recorded cases.`);
   }
   if (!writes) return;
+
+  // A reviewed repo may link to itself, never to another reviewed repo.
+  checkLinks(
+    command,
+    REVIEWED.filter((r) => r !== repo),
+  );
 
   const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
   const found = telltales(text);
@@ -85,7 +114,7 @@ function checkCommand(command: string) {
 
 function checkFileEdit() {
   const path = resolve(cwd, String(args.file_path ?? ""));
-  const repo = REVIEWED.find((r) => new RegExp(esc(r.name), "i").test(path));
+  const repo = REVIEWED.find((r) => inCheckout(path, r));
   if (!repo) return;
   const text = [args.content, args.new_string, ...(args.edits ?? []).map((e: { new_string?: string }) => e.new_string)]
     .filter(Boolean)
@@ -104,11 +133,11 @@ function checkFileEdit() {
  * thing to act on does.
  */
 function actsOn(command: string, repo: Reviewed): boolean {
-  const name = esc(repo.name);
+  const folders = [repo.folder, repo.name].map(esc).join("|");
   const github = esc(repo.github);
   return (
-    new RegExp(name, "i").test(cwd) ||
-    new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*${name}`, "i").test(command) ||
+    inCheckout(cwd, repo) ||
+    new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command) ||
     new RegExp(`--repo[\\s=]+["']?${github}\\b`, "i").test(command) ||
     new RegExp(`repos/${github}/`, "i").test(command) ||
     new RegExp(
@@ -120,11 +149,10 @@ function actsOn(command: string, repo: Reviewed): boolean {
 }
 
 /**
- * Links only go one way: this repository may name reviewed work as plain text ("target 3"), but its
- * issues, PRs and commits never link to a reviewed repo's issue or PR. A link would show on that
- * repo's timeline, where its reviewer reads it.
+ * Links only go one way: posts may name reviewed work as plain text ("target 3"), but never link to
+ * one of `repos`' issues or PRs. A link would show on that repo's timeline, where its reviewer reads it.
  */
-function checkOneWay(command: string) {
+function checkLinks(command: string, repos: Reviewed[]) {
   // Only when `gh pr create` is a command being run, not words inside a message.
   if (/(?:^|[;&|\n]\s*)gh\s+pr\s+create\b[^|;&\n"']*\s--fill(-first|-verbose)?\b/.test(command)) {
     deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
@@ -134,18 +162,22 @@ function checkOneWay(command: string) {
   // itself, not in the extracted arguments, so check the whole command for those.
   const indirect = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command) || posted.some((p) => /[$`]/.test(p));
   const text = [...(indirect ? [command] : posted), ...referencedFiles(command)].join("\n");
-  if (REVIEWED_LINK.test(text)) {
+  const linked = repos.find((r) => linkPattern([r])?.test(text));
+  if (linked) {
     deny(
-      'This would link to the target from FaultForge, and the target would show it on its timeline. Name target work as plain text instead, like "target 3".',
+      `This would link to the target (${linked.name}) from here, and it would show that on its timeline. Name the work as plain text instead, like "target 3".`,
     );
   }
 }
 
-/** The reviewed repos' own names and local paths are allowed; mentions of the lab in prose are not. */
+/**
+ * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
+ * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
+ */
 function stripReviewedNames(text: string): string {
-  let stripped = text.replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (/faultforge/i.test(token) ? " " : token));
-  for (const repo of REVIEWED) stripped = stripped.replace(new RegExp(esc(repo.name), "gi"), " ");
-  return stripped;
+  const repoWords = REVIEWED.flatMap((r) => [r.name, r.folder]).map(esc);
+  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
+  return text.replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (identifies.test(token) ? " " : token));
 }
 
 /**

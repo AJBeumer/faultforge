@@ -224,6 +224,49 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(bash('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toBeUndefined();
   });
 
+  /** factory.json changed by `edit`, written to a temp file. */
+  function configWith(name: string, edit: (config: typeof factory) => void): string {
+    const config = structuredClone(factory);
+    edit(config);
+    const file = join(tmpdir(), `factory-${name}.json`);
+    writeFileSync(file, JSON.stringify(config));
+    return file;
+  }
+
+  it("keeps protecting the target when the config wrongly marks it as lab", () => {
+    const config = configWith("target-as-lab", (c) => {
+      c.repos.target.guard = "lab";
+      c.repos.other = { ...c.repos.faultforge, github: "AJBeumer/other-app", guard: "reviewed" };
+    });
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, config)).toMatch(/names the lab/);
+  });
+
+  it("protects a reviewed checkout whose folder name differs from its GitHub name", () => {
+    const config = configWith("other-folder", (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: "../checkout-two" };
+    });
+    expect(
+      decide("Edit", { file_path: "D:/Projects/checkout-two/README.md", new_string: "planted here" }, HARNESS, config),
+    ).toMatch(/other-app/);
+    expect(
+      decide("Bash", { command: 'git commit -m "Fix planted bug"' }, "D:\\Projects\\checkout-two", config),
+    ).toMatch(/planted/);
+  });
+
+  it("blocks one reviewed repo from linking to another", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge-target --title "x" --body "see other-app#2"';
+    expect(decide("Bash", { command }, HARNESS, withThirdRepo())).toMatch(/link/);
+  });
+
+  it("doesn't let a reviewed repo's name hide a forbidden word", () => {
+    const config = configWith("named-ledger", (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/ledger", path: "../ledger" };
+    });
+    const command = 'gh pr create --repo AJBeumer/faultforge-target --title "Update ledger" --body "x"';
+    expect(decide("Bash", { command }, HARNESS, config)).toMatch(/ledger/);
+  });
+
   it("falls back to protecting the target if factory.json can't be read", () => {
     const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
     expect(decide("Bash", { command }, HARNESS, join(tmpdir(), "no-such-factory.json"))).toMatch(/names the lab/);
