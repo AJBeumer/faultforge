@@ -76,21 +76,24 @@ function linkPattern(repos: Reviewed[]): RegExp | undefined {
 }
 
 /**
- * The GitHub repo (owner/name) a command explicitly sends to: `--repo`, an API route, or a URL given
- * to `gh` or to `git push/pull/fetch/clone/remote`. Undefined when the command names none.
+ * Every GitHub repo (owner/name) a command names as a destination: `--repo`, an API route, or a URL
+ * given to `gh` or to `git push/pull/fetch/clone/remote`, anywhere in the command, chained parts and
+ * quoted text included. The guard applies the strictest rule over all of them.
  */
-function explicitDestination(command: string): string | undefined {
+function explicitDestinations(command: string): string[] {
   const patterns = [
-    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/i,
-    /\brepos\/([\w.-]+\/[\w.-]+)\//i,
-    /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[/"'\s]|$)/i,
-    /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[/"'\s]|$)/i,
+    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    /\brepos\/([\w.-]+\/[\w.-]+)\//gi,
+    /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
+    /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
   ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(command)?.[1];
-    if (match) return match;
-  }
-  return undefined;
+  return patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
+}
+
+/** True when the command moves into the repo's checkout itself (`cd` or `git -C`). */
+function entersCheckout(command: string, repo: Reviewed): boolean {
+  const folders = [repo.folder, repo.name].map(esc).join("|");
+  return new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command);
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
@@ -104,12 +107,18 @@ function checkCommand(command: string) {
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  // Where a post goes decides the rules, not the folder it's sent from. Only a command that names
-  // no destination (say, `git commit` in a checkout) is judged by its folder.
-  const destination = explicitDestination(command);
-  const repo = destination
-    ? REVIEWED.find((r) => r.github.toLowerCase() === destination.toLowerCase())
-    : REVIEWED.find((r) => actsOn(command, r));
+  // Every reviewed repo the command touches, by any part of it: a named destination, or a `cd`/`git -C`
+  // into its checkout. The folder the command runs in only counts when it names no destination at
+  // all (say, `git commit` inside a checkout), so a post from there to another repo is judged by
+  // where it goes.
+  const destinations = explicitDestinations(command);
+  const touched = REVIEWED.filter(
+    (r) =>
+      destinations.includes(r.github.toLowerCase()) ||
+      entersCheckout(command, r) ||
+      (!destinations.length && inCheckout(cwd, r)),
+  );
+  const repo = touched[0];
   if (!repo) {
     if (writes) checkLinks(command, REVIEWED);
     return;
@@ -120,11 +129,9 @@ function checkCommand(command: string) {
   }
   if (!writes) return;
 
-  // A reviewed repo may link to itself, never to another reviewed repo.
-  checkLinks(
-    command,
-    REVIEWED.filter((r) => r !== repo),
-  );
+  // A reviewed repo may link to itself only when it is the one and only destination.
+  const onlyItself = touched.length === 1 && destinations.every((d) => d === repo.github.toLowerCase());
+  checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
 
   const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
   const found = telltales(text);
@@ -148,27 +155,6 @@ function checkFileEdit() {
       `This edit would put a hint into ${repo.name} (${found.join(", ")}). Keep its files free of any mention of the lab.`,
     );
   }
-}
-
-/**
- * True when the command runs in, or acts on, the reviewed repo. A URL that is only part of the
- * text (say, a link written into a file here) doesn't count; one given to `gh` or `git` as the
- * thing to act on does.
- */
-function actsOn(command: string, repo: Reviewed): boolean {
-  const folders = [repo.folder, repo.name].map(esc).join("|");
-  const github = esc(repo.github);
-  return (
-    inCheckout(cwd, repo) ||
-    new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command) ||
-    new RegExp(`--repo[\\s=]+["']?${github}\\b`, "i").test(command) ||
-    new RegExp(`repos/${github}/`, "i").test(command) ||
-    new RegExp(
-      `\\bgit\\b[^|;&\\n]*\\b(push|pull|fetch|clone|remote)\\b[^|;&\\n]*github\\.com[/:]${github}\\b`,
-      "i",
-    ).test(command) ||
-    new RegExp(`\\bgh\\s+(pr|issue)\\s+\\w+\\s+["']?https://github\\.com/${github}\\b`, "i").test(command)
-  );
 }
 
 /**

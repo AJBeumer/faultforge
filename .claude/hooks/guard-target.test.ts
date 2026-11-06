@@ -269,6 +269,23 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(decide("Bash", { command }, TARGET, withThirdRepo())).toMatch(/link to the target/);
   });
 
+  it("still blocks a target force push chained after a command for this repo (Qodo, 2e15454)", () => {
+    const command =
+      "gh issue list --repo AJBeumer/faultforge; git push --force https://github.com/AJBeumer/faultforge-target.git main";
+    expect(bash(command)).toMatch(/Force pushes/);
+  });
+
+  it("still blocks a target force push via cd, chained after a post here", () => {
+    const command =
+      'gh issue comment 5 --repo AJBeumer/faultforge --body "x"; cd /d/Projects/faultforge-target && git push --force origin main';
+    expect(bash(command)).toMatch(/Force pushes/);
+  });
+
+  it("isn't fooled by --repo written inside a quoted body (Qodo, 2e15454)", () => {
+    const command = 'gh pr create --body "--repo evil/repo FaultForge" --repo AJBeumer/faultforge-target --title "x"';
+    expect(bash(command)).toMatch(/names the lab/);
+  });
+
   it("treats a post to this repo as a post here, even when sent from the target folder", () => {
     const command = 'gh issue create --repo AJBeumer/faultforge --title "FaultForge note" --body "x"';
     expect(decide("Bash", { command }, TARGET)).toBeUndefined();
