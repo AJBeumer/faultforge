@@ -95,8 +95,8 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 | Day | Milestone | State |
 |---|---|---|
 | 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1)) |
-| 2 | Verify Qodo's local structured review, or fall back to PR comments | Planned |
-| 3 to 14 | More bug templates, control PRs, first measured baseline | Planned |
+| 2 | House rules: target `AGENTS.md` imported as Qodo review standards (configuration v3) | Done ([PR #2](https://github.com/AJBeumer/faultforge-target/pull/2)) |
+| 3 to 14 | Verify Qodo's structured review output, more bug templates, control PRs, first measured baseline | Planned |
 | 15 | Something new joins the factory | Planned |
 | 16 to 30 | Evidence, replay, one-command audit, final benchmark | Planned |
 

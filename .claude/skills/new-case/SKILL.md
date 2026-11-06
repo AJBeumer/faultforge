@@ -14,6 +14,7 @@ Read `CLAUDE.md` first. Every step below obeys it.
 - `private/` and `../faultforge-target` both have clean working trees, and the target is on `main` and in sync with `origin/main`.
 - The template exists in `private/templates/<id>/` (preferred) or `templates/seed/<id>/`, with `template.json` and its proof test.
 - Ask the owner to confirm that Qodo → Repositories → Relationships shows **no active relationship** for faultforge-target. Qodo discovers relationships in the background, and an active one lets it read FaultForge during the review. Record the answer in the case record (`review.relationships`). Also record the Qodo configuration version.
+- Check Qodo's state with the read-only client (`QODO_KEY_FILE` set, run from `private/`): `node qodo-mcp-readonly.mjs call cross-repo-overview '{}'` must show no edges, and `rules-list` and `review-skills-list` must match the current version's snapshot in `private/config/qodo-vN/` (from v3 on: `rules.json`, `review-skills.json`; ids, text and active state). Any difference means the reviewer changed: stop and tell the owner. Save both outputs as the case's `qodo-state.raw.json`.
 - The template's `publish.branch` doesn't already exist locally or on GitHub. If it does, stop and ask for a new branch name. Don't delete old case branches: they are evidence.
 
 ## 2. Plant and validate
