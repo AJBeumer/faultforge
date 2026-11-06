@@ -72,7 +72,10 @@
       "note": "Requested automatically by GitHub and posted at 14:29:41Z, after Qodo's review, so it could not have influenced it. Turned off for later PRs."
     }
   ],
-  "verdict": "not_run",
+  "challenge": {
+    "verdict": "not_run",
+    "note": "Devil's Advocate, which tests each finding, starts on Day 15. This is about the finding, not the detection: Qodo's catch is confirmed in `detection` and `human`."
+  },
   "human": {
     "disposition": "confirmed_detected",
     "adjudicatedBy": "AJBeumer",

@@ -5,19 +5,26 @@
   "description": "An adjudicated case, published so anyone can check the result against public evidence. Private fields (proof tests, template text, private paths) are left out.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "caseId",
-    "kind",
-    "target",
-    "injection",
-    "pr",
-    "review",
-    "findings",
-    "detection",
-    "verdict",
-    "human",
-    "status"
+  "required": ["schemaVersion", "caseId", "kind", "target", "pr", "review", "findings", "challenge", "human", "status"],
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "sabotage" } } },
+      "then": {
+        "required": ["injection", "detection"],
+        "properties": {
+          "human": { "type": "object", "properties": { "disposition": { "not": { "const": "confirmed_clean" } } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "control" } } },
+      "then": {
+        "not": {
+          "anyOf": [{ "required": ["injection"] }, { "required": ["detection"] }, { "required": ["collateral"] }]
+        },
+        "properties": { "human": { "type": "object", "properties": { "disposition": { "const": "confirmed_clean" } } } }
+      }
+    }
   ],
   "properties": {
     "$schema": { "type": "string" },
@@ -138,13 +145,22 @@
         }
       }
     },
-    "verdict": { "enum": ["supported", "disproven", "inconclusive", "not_run"] },
+    "challenge": {
+      "description": "Devil's Advocate's test of the finding. Separate from detection: whether Qodo caught the bug is in `detection` and `human`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "note"],
+      "properties": {
+        "verdict": { "enum": ["supported", "disproven", "inconclusive", "not_run"] },
+        "note": { "type": "string" }
+      }
+    },
     "human": {
       "type": "object",
       "additionalProperties": false,
       "required": ["disposition", "adjudicatedBy", "adjudicatedAt"],
       "properties": {
-        "disposition": { "enum": ["confirmed_detected", "confirmed_missed", "review_incomplete"] },
+        "disposition": { "enum": ["confirmed_detected", "confirmed_missed", "review_incomplete", "confirmed_clean"] },
         "adjudicatedBy": { "type": "string" },
         "adjudicatedAt": { "type": "string", "format": "date-time" }
       }
