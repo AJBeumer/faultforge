@@ -272,18 +272,49 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   it("still blocks a target force push chained after a command for this repo (Qodo, 2e15454)", () => {
     const command =
       "gh issue list --repo AJBeumer/faultforge; git push --force https://github.com/AJBeumer/faultforge-target.git main";
-    expect(bash(command)).toMatch(/Force pushes/);
+    expect(bash(command)).toMatch(/Force pushes|separate commands/);
   });
 
   it("still blocks a target force push via cd, chained after a post here", () => {
     const command =
       'gh issue comment 5 --repo AJBeumer/faultforge --body "x"; cd /d/Projects/faultforge-target && git push --force origin main';
-    expect(bash(command)).toMatch(/Force pushes/);
+    expect(bash(command)).toMatch(/Force pushes|separate commands/);
   });
 
   it("isn't fooled by --repo written inside a quoted body (Qodo, 2e15454)", () => {
     const command = 'gh pr create --body "--repo evil/repo FaultForge" --repo AJBeumer/faultforge-target --title "x"';
     expect(bash(command)).toMatch(/names the lab/);
+  });
+
+  it("blocks a chained command that writes across repos, from the target checkout (Qodo, 77c1f44)", () => {
+    expect(bash("gh issue list --repo AJBeumer/faultforge; git push --force origin main", TARGET)).toMatch(
+      /separate commands/,
+    );
+    expect(bash('gh issue list --repo AJBeumer/faultforge; git commit -m "Fix planted bug"', TARGET)).toMatch(
+      /separate commands/,
+    );
+  });
+
+  it("checks a lab commit whose message fakes a target --repo (Qodo, 77c1f44)", () => {
+    expect(bash('git commit -m "Note --repo AJBeumer/faultforge-target see faultforge-target#6"')).toMatch(
+      /link to the target/,
+    );
+  });
+
+  it("allows a chained command that stays inside the target checkout", () => {
+    expect(
+      bash(
+        'cd /d/Projects/faultforge-target && git add -A && git commit -m "Add a cancel route" && git push -q -u origin cancel',
+      ),
+    ).toBeUndefined();
+  });
+
+  it("allows a target PR whose heredoc body has several lines", () => {
+    expect(
+      bash(
+        'gh pr create --repo AJBeumer/faultforge-target --title "Add a cancel route" --body-file - <<EOF\nCloses #3\n\nAdds cancel.\nEOF',
+      ),
+    ).toBeUndefined();
   });
 
   it("treats a post to this repo as a post here, even when sent from the target folder", () => {

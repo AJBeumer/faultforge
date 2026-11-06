@@ -96,6 +96,17 @@ function entersCheckout(command: string, repo: Reviewed): boolean {
   return new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command);
 }
 
+/**
+ * True when the command chains several commands (`;`, `&&`, `||`, `|` or a new line) outside quoted
+ * text and heredoc bodies, which may legitimately hold any of those characters.
+ */
+function isChained(command: string): boolean {
+  const bare = command
+    .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
+    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, " ");
+  return /;|&&|\|\||\||\n/.test(bare.trim());
+}
+
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
 function inCheckout(path: string, repo: Reviewed): boolean {
   return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
@@ -112,6 +123,21 @@ function checkCommand(command: string) {
   // all (say, `git commit` inside a checkout), so a post from there to another repo is judged by
   // where it goes.
   const destinations = explicitDestinations(command);
+  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
+
+  // Reading a shell command with patterns can't be complete, so a command that writes and involves
+  // more than one repo must be split: each part then gets judged on its own. A chain that stays in
+  // one repo (cd target && git add && git commit && git push) is fine.
+  if (writes && isChained(command)) {
+    const involved = new Set(destinations);
+    for (const r of REVIEWED) if (runsIn(r)) involved.add(r.github.toLowerCase());
+    if (involved.size > 1) {
+      deny(
+        "This command writes and involves more than one repo. Run the parts for different repos as separate commands.",
+      );
+    }
+  }
+
   const touched = REVIEWED.filter(
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
@@ -129,8 +155,9 @@ function checkCommand(command: string) {
   }
   if (!writes) return;
 
-  // A reviewed repo may link to itself only when it is the one and only destination.
-  const onlyItself = touched.length === 1 && destinations.every((d) => d === repo.github.toLowerCase());
+  // A reviewed repo may link to its own tickets only when the command really runs in its checkout
+  // and goes nowhere else. Words in a message (a quoted --repo, say) can't grant that.
+  const onlyItself = touched.length === 1 && runsIn(repo) && destinations.every((d) => d === repo.github.toLowerCase());
   checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
 
   const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
