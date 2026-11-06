@@ -24,13 +24,14 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
 
 1. **Ready?** `npm run ticket:ready -- <repo> <N>`. Not ready, or blocked by a ticket whose PR isn't merged yet: log it as skipped with the reason, and go to the next ticket.
 2. **Build it** with the `/work-ticket` routine: branch from an up-to-date `main`, a test per criterion plus a failure case, the repo's `check` from `factory.json`, a PR with the ticket link, criteria table and Must-not-break table. Commands for a reviewed repo run from its checkout.
-3. **Wait for the real review:** `npm run review:wait -- <repo> <pr>`.
+3. **Wait for the real review:** `npm run review:wait -- <repo> <pr>`. It also saves the evidence on every run: each new version of Qodo's comments while it waits (Qodo rewrites them in place after a push), the raw API answer, and a `review.json` record, under `<evidence>/reviews/<repo>-pr<N>/`. Run it after every push, so every round has its own record.
    - Exit 0: the review of the head commit is complete. Read **all open findings** it lists, not just the head's.
    - Exit 3: Qodo skipped the review. That's a gate: log it, the PR waits for the owner.
    - Exit 1: no completed review in time. That's a gate.
 4. **Act on the findings**, as `/work-ticket` says: reproduce each with a failing test first, fix what's real, explain what isn't, push, and run `review:wait` again. At most three rounds; an action-required finding still open after that is a gate.
 5. **Check the behaviour** on the running app (or with real commands for tooling), every criterion and a failure case. Save the transcript.
-6. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence. Log it as **ready to merge** and go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
+6. **Does it change the reviewer?** For a `reviewed` repo, list the PR's files (`gh pr diff <pr> --repo <github> --name-only`). If `AGENTS.md` or `INVARIANTS.md` is among them, this is gate 4: log it as **waiting for the owner to approve a new Qodo configuration version**, never as ready to merge, and go to the next ticket.
+7. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence. Log it as **ready to merge** and go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
 
 ## The log
 
