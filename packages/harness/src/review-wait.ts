@@ -6,7 +6,8 @@
  *
  * A Qodo comment is not a finished review: on Day 3 it twice said "no open findings" and was edited
  * minutes later to add findings. Only Qodo's API saying the run for the head commit is `completed`
- * counts. Read-only throughout. Exits 0 when the review is complete, 1 when it timed out.
+ * counts. Read-only throughout. Exits 0 when the review is complete, 1 when it timed out, 3 when
+ * Qodo finished the run but skipped reviewing it.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -20,6 +21,7 @@ export interface QodoReview {
   ab_test_name?: string | null;
   ab_arm?: string | null;
   review_session?: { commit_sha?: string; status?: string; review_complete?: boolean; started_at?: string } | null;
+  review_runs?: { commit_sha?: string; run_id?: number; review_effort?: string | null; status?: string }[];
   findings?: {
     id: string;
     git_sha: string;
@@ -43,11 +45,18 @@ export interface Finding {
   description: string | null;
 }
 
-/** "complete" only when the run for exactly this commit is completed. */
-export function reviewState(review: QodoReview, headSha: string): "complete" | "running" | "not-started" {
+/**
+ * "complete" only when the run for exactly this commit is completed. "skipped" when Qodo finished the
+ * run but chose not to review it (`review_effort: "skip"`, seen on a docs-only PR): its comment then
+ * shows zero findings, which looks like a clean review but isn't one.
+ */
+export function reviewState(review: QodoReview, headSha: string): "complete" | "skipped" | "running" | "not-started" {
   const session = review.review_session;
   if (!session || session.commit_sha !== headSha) return "not-started";
-  return session.status === "completed" && session.review_complete ? "complete" : "running";
+  if (session.status !== "completed") return "running";
+  if (session.review_complete) return "complete";
+  const run = review.review_runs?.find((r) => r.commit_sha === headSha);
+  return run?.review_effort === "skip" ? "skipped" : "running";
 }
 
 /** The findings Qodo raised on this commit, in a stable shape. */
@@ -74,7 +83,7 @@ export interface WaitDeps {
 }
 
 export type WaitResult =
-  | { state: "complete"; review: QodoReview; polls: number }
+  | { state: "complete" | "skipped"; review: QodoReview; polls: number }
   | { state: "timeout"; review: QodoReview | undefined; polls: number };
 
 /** Polls until the review of `headSha` is complete or `timeoutMs` has passed. */
@@ -90,7 +99,8 @@ export async function waitForReview(
     polls++;
     await deps.onPoll?.();
     review = await deps.fetchReview();
-    if (reviewState(review, headSha) === "complete") return { state: "complete", review, polls };
+    const state = reviewState(review, headSha);
+    if (state === "complete" || state === "skipped") return { state, review, polls };
     if (deps.now() + intervalMs > deadline) return { state: "timeout", review, polls };
     await deps.sleep(intervalMs);
   }
@@ -168,7 +178,7 @@ async function main() {
     repo: github,
     pr,
     headSha,
-    state: result.state === "complete" ? "complete" : "review incomplete",
+    state: { complete: "complete", skipped: "skipped by Qodo", timeout: "review incomplete" }[result.state],
     pushedAt,
     reviewStartedAt:
       result.review?.review_session?.commit_sha === headSha ? result.review.review_session.started_at : null,
@@ -182,6 +192,12 @@ async function main() {
   if (result.state === "timeout") {
     console.log(`Review incomplete: no completed Qodo run for ${short} after ${timeoutMinutes} min. Saved in ${dir}`);
     process.exit(1);
+  }
+  if (result.state === "skipped") {
+    console.log(
+      `Qodo finished but skipped reviewing ${short} (review_effort: skip). Zero findings here does NOT mean clean. Saved in ${dir}`,
+    );
+    process.exit(3);
   }
   console.log(`Qodo's review of ${short} is complete. Pushed ${pushedAt}, review started ${record.reviewStartedAt}.`);
   console.log(`CI: ${ci}`);

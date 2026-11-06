@@ -1,0 +1,28 @@
+{
+  "ab_arm": null,
+  "ab_test_name": null,
+  "finding_count": 0,
+  "findings": [],
+  "git_provider": null,
+  "pr_url": "https://github.com/AJBeumer/faultforge/pull/58",
+  "review_runs": [
+    {
+      "commit_sha": "81fe91d80d019ae0da78c3f4b5f133059834742d",
+      "review_complete": false,
+      "review_effort": "skip",
+      "run_id": 1838250,
+      "started_at": "2026-11-06T19:50:58.820457Z",
+      "status": "completed"
+    }
+  ],
+  "review_session": {
+    "commit_sha": "81fe91d80d019ae0da78c3f4b5f133059834742d",
+    "git_provider": "github",
+    "review_complete": false,
+    "run_id": 1838250,
+    "started_at": "2026-11-06T19:50:58.820457Z",
+    "status": "completed",
+    "summary_comment_id": "6694016605"
+  },
+  "ui_flows": []
+}

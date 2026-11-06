@@ -36,6 +36,14 @@ describe("reviewState", () => {
     expect(reviewState(running, PR1_HEAD)).toBe("running");
   });
 
+  it("recognises a run Qodo finished but skipped (real response from a docs-only PR)", () => {
+    const skipped: QodoReview = JSON.parse(
+      readFileSync(join(import.meta.dirname, "../fixtures/qodo-skipped-docs-pr.json"), "utf8"),
+    );
+    expect(reviewState(skipped, "81fe91d80d019ae0da78c3f4b5f133059834742d")).toBe("skipped");
+    expect(findingsFor(skipped, "81fe91d80d019ae0da78c3f4b5f133059834742d")).toEqual([]);
+  });
+
   it("isn't complete when the status says completed but review_complete is false", () => {
     const partial = { review_session: { commit_sha: PR1_HEAD, status: "completed", review_complete: false } };
     expect(reviewState(partial, PR1_HEAD)).toBe("running");
@@ -72,6 +80,15 @@ describe("waitForReview", () => {
     expect(result.state).toBe("complete");
     expect(result.polls).toBe(3);
     expect(polls()).toBe(3);
+  });
+
+  it("stops waiting when Qodo skips the review, and says so", async () => {
+    const skipped = {
+      review_session: { commit_sha: PR1_HEAD, status: "completed", review_complete: false },
+      review_runs: [{ commit_sha: PR1_HEAD, review_effort: "skip", status: "completed" }],
+    };
+    const { deps } = scripted([running, skipped]);
+    expect((await waitForReview(PR1_HEAD, deps)).state).toBe("skipped");
   });
 
   it("times out when the head commit is never reviewed", async () => {
