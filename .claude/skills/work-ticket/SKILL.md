@@ -17,8 +17,8 @@ Use the hackathon token for every `gh` call: `export GH_TOKEN="$(tr -d '\r\n' < 
 gh issue view <N> --repo AJBeumer/<repo>
 ```
 
-- It must say what to deliver and have checkable acceptance criteria. If not, stop and ask the owner to fix the ticket.
-- Check what it's blocked by. Don't start a blocked ticket.
+- Check it's ready: `npm run ticket:ready -- <faultforge|target> <N>`. It needs every section (FaultForge: Result, Done when, Must not break; target: What, Acceptance criteria, Must not break), a checklist to verify against, and no open blockers.
+- If it isn't ready, **stop**. Tell the owner exactly what the command reported, and don't start until the ticket is fixed. Don't fill the gap yourself and carry on.
 - Move it to **In progress** on the board (FaultForge tickets only; the board doesn't track the target).
 
 ## 2. Branch and build
@@ -39,6 +39,11 @@ Ticket: <link>
 
 ## Acceptance criteria and results
 | Criterion | Result |
+|---|---|
+| <copied from the ticket> | <what you observed> |
+
+## Must not break
+| Item | How checked |
 |---|---|
 | <copied from the ticket> | <what you observed> |
 

@@ -18,6 +18,15 @@ body:
     validations:
       required: true
   - type: textarea
+    id: must-not-break
+    attributes:
+      label: Must not break
+      description: What must still work afterwards. Acceptance criteria say what must happen; this says what must stay intact.
+      value: |
+        -
+    validations:
+      required: true
+  - type: textarea
     id: why
     attributes:
       label: Why
