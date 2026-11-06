@@ -24,7 +24,7 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
 
 1. **Ready?** `npm run ticket:ready -- <repo> <N>`. Not ready, or blocked by a ticket whose PR isn't merged yet: log it as skipped with the reason, and go to the next ticket.
 2. **Build it** with the `/work-ticket` routine: branch from an up-to-date `main`, a test per criterion plus a failure case, the repo's `check` from `factory.json`, a PR with the ticket link, criteria table and Must-not-break table. Commands for a reviewed repo run from its checkout.
-3. **Wait for the real review:** `npm run review:wait -- <repo> <pr>`. It also saves the evidence on every run: each new version of Qodo's comments while it waits (Qodo rewrites them in place after a push), the raw API answer, and a `review.json` record, under `<evidence>/reviews/<repo>-pr<N>/`. Run it after every push, so every round has its own record.
+3. **Wait for the real review:** `npm run review:wait -- <repo> <pr>`. It also saves the evidence on every run: each new version of Qodo's comments while it waits (Qodo rewrites them in place after a push), the raw API answer, and a `review.json` record, under `<evidence>/reviews/<repo>-pr<N>/`. Run it after every push, so every round has its own record. It needs `QODO_KEY_FILE` (or `QODO_API_KEY`) and `GH_TOKEN`. Don't pipe its output: a pipe hides the exit code, and a run that failed at once can look complete.
    - Exit 0: the review of the head commit is complete. Read **all open findings** it lists, not just the head's.
    - Exit 3: Qodo skipped the review. That's a gate: log it, the PR waits for the owner.
    - Exit 1: no completed review in time. That's a gate.
