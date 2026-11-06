@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -33,6 +35,11 @@ describe("guard-target hook", () => {
 
     it("a force push to the target", () => {
       expect(bash("cd /d/Projects/faultforge-target && git push --force origin main")).toMatch(/Force pushes/);
+    });
+
+    it("a force push to the target by URL, from anywhere", () => {
+      expect(bash("git push https://github.com/AJBeumer/faultforge-target.git +main")).toMatch(/Force pushes/);
+      expect(bash("git push --force https://github.com/AJBeumer/faultforge-target.git main")).toMatch(/Force pushes/);
     });
 
     it("a comment with a case id posted through gh api", () => {
@@ -82,6 +89,98 @@ describe("guard-target hook", () => {
 
     it("a normal push to the target", () => {
       expect(bash("git -C D:/Projects/faultforge-target push -u origin tidy-x")).toBeUndefined();
+    });
+
+    it("a command in this repo whose file edit happens to contain a target URL (Day 3 false positive)", () => {
+      expect(
+        bash(
+          "cd /d/Projects/FaultForge && node -e 'readme(\"https://github.com/AJBeumer/faultforge-target/pull/1\")' && " +
+            'git switch -c publish-record && git commit -m "Publish the FF-0001 case record"',
+        ),
+      ).toBeUndefined();
+    });
+
+    it("an issue here that names target work as plain text", () => {
+      expect(
+        bash('gh issue create --repo AJBeumer/faultforge --title "Epic" --body "target 10: run the checks"'),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("keeps links one-way: nothing here links to the target", () => {
+    it("blocks an issue here that links a target issue", () => {
+      expect(
+        bash(
+          'gh issue create --repo AJBeumer/faultforge --title "x" --body "see https://github.com/AJBeumer/faultforge-target/issues/3"',
+        ),
+      ).toMatch(/link to the target/);
+    });
+
+    it("blocks a PR comment here with a short target reference", () => {
+      expect(
+        bash('gh pr comment 45 --repo AJBeumer/faultforge --body "fixed in AJBeumer/faultforge-target#6"'),
+      ).toMatch(/link to the target/);
+    });
+
+    it("blocks an issue here created without --repo, from this folder", () => {
+      expect(bash('gh issue create --title "x" --body "faultforge-target#3"')).toMatch(/link to the target/);
+    });
+
+    it("blocks a commit message here that references a target PR", () => {
+      expect(bash('git commit -m "Follow-up to faultforge-target#6"')).toMatch(/link to the target/);
+    });
+
+    it("blocks an API write here that links a target PR", () => {
+      expect(
+        bash(
+          'gh api -X PATCH repos/AJBeumer/faultforge/issues/5 -f body="https://github.com/AJBeumer/faultforge-target/pull/6"',
+        ),
+      ).toMatch(/link to the target/);
+    });
+
+    it("allows a file edit here that links the target (files don't create links)", () => {
+      expect(
+        decide("Edit", {
+          file_path: "D:/Projects/FaultForge/docs/decision-log.md",
+          new_string: "[PR #6](https://github.com/AJBeumer/faultforge-target/pull/6)",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("allows a commit message that only mentions gh pr create --fill", () => {
+      expect(bash('git commit -q -m "Guard: refuse gh pr create --fill here"')).toBeUndefined();
+    });
+
+    it("blocks a link piped in as the commit message (-F -)", () => {
+      expect(bash('printf "Follow-up to faultforge-target#6" | git commit -F -')).toMatch(/link to the target/);
+    });
+
+    it("blocks a link in a heredoc PR body (--body-file -)", () => {
+      expect(
+        bash('gh pr create --repo AJBeumer/faultforge --title "x" --body-file - <<EOF\nsee faultforge-target#6\nEOF'),
+      ).toMatch(/link to the target/);
+    });
+
+    it("blocks a link in a body file whose path has spaces", () => {
+      const file = join(tmpdir(), "issue body with spaces.md");
+      writeFileSync(file, "see https://github.com/AJBeumer/faultforge-target/issues/3");
+      expect(bash(`gh issue create --repo AJBeumer/faultforge --title "x" --body-file "${file}"`)).toMatch(
+        /link to the target/,
+      );
+    });
+
+    it("blocks a PR here filled from commit messages it can't check", () => {
+      expect(bash("gh pr create --repo AJBeumer/faultforge --fill")).toMatch(/--fill/);
+    });
+
+    it("blocks a link passed through a shell variable", () => {
+      expect(
+        bash("body='see faultforge-target#6'; gh issue create --repo AJBeumer/faultforge --body \"$body\""),
+      ).toMatch(/link to the target/);
+    });
+
+    it("allows reading a target PR from here", () => {
+      expect(bash("gh pr view https://github.com/AJBeumer/faultforge-target/pull/6")).toBeUndefined();
     });
   });
 });
