@@ -108,7 +108,8 @@ export type WaitResult =
 
 /**
  * Polls until the review of `headSha` is complete or `timeoutMs` has passed.
- * A failed poll is reported and retried; if no poll ever succeeded, the last error is thrown.
+ * A failed poll is reported and retried. A finished review is reported only once its comments were saved
+ * after it finished. At the deadline, the last error is thrown if no poll succeeded or the final save never did.
  */
 export async function waitForReview(
   headSha: string,
@@ -116,16 +117,20 @@ export async function waitForReview(
   { timeoutMs = 20 * 60_000, intervalMs = 20_000 } = {},
 ): Promise<WaitResult> {
   const deadline = deps.now() + timeoutMs;
+  let review: QodoReview | undefined;
+  let lastError: unknown;
+  let seenCompleteAt: number | undefined;
+  let polls = 0;
   const save = async () => {
     try {
       await deps.onPoll?.();
+      return true;
     } catch (error) {
+      lastError = error;
       deps.onError?.(error);
+      return false;
     }
   };
-  let review: QodoReview | undefined;
-  let lastError: unknown;
-  let polls = 0;
   for (;;) {
     polls++;
     await save();
@@ -134,17 +139,16 @@ export async function waitForReview(
       const state = reviewState(review, headSha);
       if (state === "complete" || state === "skipped") {
         // Qodo gives no end time; this is when it was first seen finished, at most one interval late.
-        const seenCompleteAt = deps.now();
+        seenCompleteAt ??= deps.now();
         // One last save: Qodo may have edited its comment between the poll and this answer.
-        await save();
-        return { state, review, polls, seenCompleteAt };
+        if (await save()) return { state, review, polls, seenCompleteAt };
       }
     } catch (error) {
       lastError = error;
       deps.onError?.(error);
     }
     if (deps.now() + intervalMs > deadline) {
-      if (review === undefined && lastError !== undefined) throw lastError;
+      if (lastError !== undefined && (review === undefined || seenCompleteAt !== undefined)) throw lastError;
       return { state: "timeout", review, polls };
     }
     await deps.sleep(intervalMs);

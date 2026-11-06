@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { parseRpcBody, parseToolText } from "./qodo-api.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseRpcBody, parseToolText, QodoApi } from "./qodo-api.ts";
 import { findingsFor, openFindings, type QodoReview, reviewEffort, reviewState, waitForReview } from "./review-wait.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
@@ -218,5 +218,69 @@ describe("review findings on PR 61", () => {
       { timeoutMs: 60_000, intervalMs: 20_000 },
     );
     await expect(run).rejects.toThrow("unauthorized");
+  });
+});
+
+describe("review findings on PR 61, third round", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("connects again on the next call after the first connection failed", async () => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    let failed = false;
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method, id } = JSON.parse(init.body);
+      methods.push(method);
+      if (!failed) {
+        failed = true;
+        throw new Error("fetch failed");
+      }
+      const result = method === "tools/call" ? { content: [{ type: "text", text: '{"ok":true}' }] } : {};
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), { status: 200 });
+    });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).rejects.toThrow("fetch failed");
+    await expect(api.call("get-pr-review-findings")).resolves.toEqual({ ok: true });
+    expect(methods).toEqual(["initialize", "initialize", "notifications/initialized", "tools/call"]);
+  });
+
+  it("doesn't report a review complete until the last save of its comments succeeded", async () => {
+    let t = 0;
+    let saves = 0;
+    const result = await waitForReview(PR1_HEAD, {
+      fetchReview: async () => pr1,
+      // The save after the review is seen complete fails once.
+      onPoll: async () => {
+        if (++saves === 2) throw new Error("gh failed");
+      },
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+    });
+    expect(result.state).toBe("complete");
+    expect(saves).toBeGreaterThanOrEqual(4);
+  });
+
+  it("stops with the error when the comments can never be saved", async () => {
+    let t = 0;
+    const run = waitForReview(
+      PR1_HEAD,
+      {
+        fetchReview: async () => pr1,
+        onPoll: async () => {
+          throw new Error("gh failed");
+        },
+        now: () => t,
+        sleep: async (ms) => {
+          t += ms;
+        },
+      },
+      { timeoutMs: 60_000, intervalMs: 20_000 },
+    );
+    await expect(run).rejects.toThrow("gh failed");
   });
 });
