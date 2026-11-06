@@ -47,42 +47,44 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 - **Challenge requirement:** connect a ticketing system to the coding agent through MCP or a CLI, and check that it can list tickets and read one back. Choose tickets and their order. Work them one at a time, each on its own branch and PR, with the ticket link and acceptance criteria in the PR. Investigate Qodo's findings, run the delivered behaviour against every criterion, fix what's confirmed, and use the feedback before the next ticket.
 - **Increment delivered:**
-  - **Tickets in GitHub Issues, through the `gh` CLI.** The agent listed the Week 1 tickets and read [#3](https://github.com/AJBeumer/faultforge/issues/3) back with its result and checklist.
-  - **The whole 30-day plan as [44 FaultForge tickets](https://github.com/AJBeumer/faultforge/issues),** in 6 milestones with due dates, with native "blocked by" links and a public [project board](https://github.com/users/AJBeumer/projects/6). Every ticket has a Result, a Done-when checklist and a Why.
-  - **Four target tickets.** Three were worked in order, each on its own branch and PR:
+  - **Tickets in GitHub Issues, through the `gh` CLI.** The agent listed the Week 1 tickets and read [#3](https://github.com/AJBeumer/faultforge/issues/3) back with its result and checklist. The whole 30-day plan is [public as tickets](https://github.com/AJBeumer/faultforge/issues) in six milestones, with "blocked by" links and a [project board](https://github.com/users/AJBeumer/projects/6). Every ticket has a Result, a Done-when checklist and a Must-not-break list.
+  - **Two factories, one way of working.** The product (the target's booking API) and the tool itself (FaultForge) both go ticket → branch → PR with the ticket link and criteria → CI → Qodo → live check → fix. Nine tickets were delivered this way, one at a time:
 
-    | Ticket | PR | Qodo | Outcome |
+    | Repo | Ticket | PR | Delivered |
     |---|---|---|---|
-    | [#3 Cancel a booking](https://github.com/AJBeumer/faultforge-target/issues/3) | [#6](https://github.com/AJBeumer/faultforge-target/pull/6) | 1 bug, 1 requirement gap | both confirmed and fixed; clean re-review |
-    | [#7 Clarify the input rule](https://github.com/AJBeumer/faultforge-target/issues/7) | [#8](https://github.com/AJBeumer/faultforge-target/pull/8) | 1 low finding | valid, resolved by merge order; still shown after it was resolved |
-    | [#4 List my bookings](https://github.com/AJBeumer/faultforge-target/issues/4) | [#9](https://github.com/AJBeumer/faultforge-target/pull/9) | no findings | every criterion confirmed on the running app |
+    | target | [3](https://github.com/AJBeumer/faultforge-target/issues/3) cancel a booking | [6](https://github.com/AJBeumer/faultforge-target/pull/6) | cancel route, one shared not-found reply |
+    | target | [7](https://github.com/AJBeumer/faultforge-target/issues/7) clarify input rule | [8](https://github.com/AJBeumer/faultforge-target/pull/8) | AGENTS.md rule 3 (Qodo configuration v4) |
+    | target | [4](https://github.com/AJBeumer/faultforge-target/issues/4) list my bookings | [9](https://github.com/AJBeumer/faultforge-target/pull/9) | list route, newest first |
+    | target | [10](https://github.com/AJBeumer/faultforge-target/issues/10) checks on every PR | [12](https://github.com/AJBeumer/faultforge-target/pull/12) | CI, required on `main` |
+    | faultforge | [#3](https://github.com/AJBeumer/faultforge/issues/3) FF-0001 case record | [#45](https://github.com/AJBeumer/faultforge/pull/45) | [`examples/FF-0001.json`](../examples/FF-0001.json), schema, leak test |
+    | faultforge | [#46](https://github.com/AJBeumer/faultforge/issues/46) links one way | [#52](https://github.com/AJBeumer/faultforge/pull/52) | guard: nothing here links to the target |
+    | faultforge | [#47](https://github.com/AJBeumer/faultforge/issues/47) refuse tickets that aren't ready | [#53](https://github.com/AJBeumer/faultforge/pull/53) | `npm run ticket:ready`, Must-not-break in forms |
+    | faultforge | [#17](https://github.com/AJBeumer/faultforge/issues/17) checks on every PR | [#54](https://github.com/AJBeumer/faultforge/pull/54) | CI, required on `main` |
+    | faultforge | [#48](https://github.com/AJBeumer/faultforge/issues/48) one factory.json | [#55](https://github.com/AJBeumer/faultforge/pull/55) | both repos described once; guard, readiness check and skill read it |
 
-    [#5 Prevent overlapping bookings](https://github.com/AJBeumer/faultforge-target/issues/5) is on hold, because it changes Qodo's rules.
-  - **A `/work-ticket` skill** with the routine that worked, and PR templates in both repos that carry the ticket link and a criteria table.
+  - **A `/work-ticket` skill** with the routine that held up, and an epic ([#51](https://github.com/AJBeumer/faultforge/issues/51)) that lists the target's tickets as plain text, so the target never links back here.
 - **What changed from the plan and why:**
-  - **The charter and every ticket are public (charter 2.2), including Devil's Advocate.** The owner chose openness over the planned Day 15 surprise. What stays private: the answer key, raw evidence, and templates of cases not yet reviewed.
-  - **GitHub Issues instead of Linear or Jira.** It's free and already connected. Qodo reads a linked GitHub issue without any extra integration, and judges can follow ticket → PR → review in public.
-  - **Only target tickets were worked today.** Qodo has no access to this repository since Day 1, so FaultForge PRs would get no review. That's ticket [#16](https://github.com/AJBeumer/faultforge/issues/16).
-- **Tests and Qodo evidence:**
-  - **PR #6:**
-    - Qodo found that the cancel route cancelled the booking even when the request body had unknown fields. I reproduced it with a failing test (`200` instead of `400`) before fixing it.
-    - Qodo also flagged a **requirement gap**: ticket #3 says "requires `x-user-id`", and no test sent a request without the header. So it reads the linked ticket and checks the PR against the criteria.
-    - My first fix, a body schema, broke every request without a body, and it ran before authentication. The existing tests caught both.
-    - Re-review at `0149fd4`: no open findings.
-  - **PR #8:** Qodo noted that rule 3 named `cancel.ts` before the file existed. It was resolved by merging #6 first. Qodo re-reviewed after `main` was merged in and kept the finding: it seems to clear a finding only when the lines it points at change.
-  - **PR #9:**
-    - Clean review.
-    - Checked on the running server: newest first, other users excluded, empty list, `401` without a valid user.
-    - The ordering tests fail when the sort is removed.
-  - Every criterion of #3 and #4 was checked with real requests. A read-back showed that refused requests left the booking unchanged. The checks: target `npm run check`, 32 tests.
+  - **The charter is public ([version 2.2](CHARTER.md)), including Devil's Advocate.** The owner chose openness over the Day 15 surprise. What stays private: the answer key, raw evidence, and templates of cases not yet reviewed.
+  - **GitHub Issues instead of Linear or Jira.** Free, already connected, and Qodo reads a linked GitHub issue with no extra integration. Judges can follow ticket → PR → review in public.
+  - **Qodo reviews FaultForge again (configuration v5).** Its access was removed on Day 1 to stop lab content reaching target reviews. The factory's own work should get the same review, and almost everything here is public now. Checked through Qodo's read-only API right after: both repos registered, the target's 19 rules unchanged and scoped to the target only, no review skills, no linked repositories, and standards discovery not run on FaultForge. Recorded as a new version because Qodo carrying context from FaultForge PRs into target reviews can't be ruled out. No case has run under v3, v4 or v5.
+  - **Every change now goes through a PR.** Both `main` branches require the CI check, with no bypass.
+- **Tests and Qodo evidence:** Qodo raised **38 findings** on the nine PRs. Counted from the saved review comments, and each one is visible on its PR:
+
+  | Outcome | Count |
+  |---|---:|
+  | Real, and fixed | 32 |
+  | Right problem, wrong suggested fix (one would have invented a verdict in a public record) | 2 |
+  | Valid, deliberately not fixed: the guard blocks too much, never too little | 2 |
+  | Valid, resolved by merging in the right order | 1 |
+  | Not reproduced (CI on Linux ran all 74 tests) | 1 |
+
+  Findings were reproduced with a failing test before they were fixed, and every acceptance criterion was checked on the running app or with real commands. Seven of the 32 were bugs in my own earlier fixes. Qodo found nothing on target PR 9, and the live check agreed. The review missed at least one problem I found myself: the guard blocking a commit message that merely quoted a command.
 - **Lesson or decision:**
-  - **Qodo configuration v4** (from 6 November, 17:22 UTC): v3 plus a clarified rule 3 in the target's `AGENTS.md`. Every route that changes state checks its whole input, including routes without a body, after authentication. It came straight from the PR #6 finding. Qodo turned that one sentence into two reworded rules and one new rule ("authenticate before rejecting body fields"), which is the very mistake in my first fix. 19 rules, 17 active, no linked repositories. No case has run under v3 or v4 yet.
-  - **Qodo rewrites its review comment in place after every push.** The first version of the PR #6 review would have been lost if it hadn't been saved before the fix. Reviews are now saved the moment they appear, and again for each commit. This is part of ticket [#5](https://github.com/AJBeumer/faultforge/issues/5).
-  - **A clean review is not a finished ticket, and an open finding is not an open problem.** PR #9 was clean and still had to be checked against every criterion. PR #8 kept a finding that was already resolved. Both are recorded, not dismissed.
-  - **Check that the live check hits the right build.** The first check of #4 was answered by a leftover server from #3, because stopping the task ended `npx` but not Node. The answers looked plausible. I discarded that run and redid it after matching the server's process to the port. The skill now does this.
-  - **Ticketed case PRs get their own configuration version.** They will link a target ticket for the change they claim to make, never describing the bug. When requirement-gap findings count is decided before the first such case ([#12](https://github.com/AJBeumer/faultforge/issues/12)).
+  - **A Qodo comment is not a finished review.** Twice (PR #55 on `37c8d81` and `2e15454`) the comment first said "no open findings" and was edited 2 to 5 minutes later to add findings, one of them High. Only Qodo's API status (`review_session.status: completed` for the head commit) says a review is done. Review start varied from 6 seconds to 10 minutes after a push. Ticket [#56](https://github.com/AJBeumer/faultforge/issues/56) will make that status a required check.
+  - **Qodo tracks findings by line, not by problem.** On target PR 8 a finding fixed elsewhere stayed open; on PR #52 and #55 findings we deliberately didn't fix were closed because their lines changed. "Resolved" needs its own check, which matters for the benchmark.
+  - **After three rounds of bypasses, change the design.** Qodo kept finding ways past the guard through chained commands and quoted text. Reading a shell command with patterns can't be complete, so a command that writes across repos must now be split, and a reviewed repo may link to its own tickets only from its own checkout.
+  - **Qodo configuration v4** (from 17:22 UTC): AGENTS.md rule 3 now covers routes that take no body. Qodo turned that one sentence into two reworded rules and one new one within a minute. 19 rules, 17 active.
 - **Remaining risk:**
-  - Qodo's structured review output (the charter's Day 2 gate, [#6](https://github.com/AJBeumer/faultforge/issues/6)) is still unverified.
-  - Qodo reviews only the target, so harness PRs get no independent review ([#16](https://github.com/AJBeumer/faultforge/issues/16)).
-  - The board's built-in workflows and repository link need the owner in the browser.
-  - The FF-0001 public record ([#3](https://github.com/AJBeumer/faultforge/issues/3)) is due Sunday 8 November.
+  - The `/factory` loop ([#50](https://github.com/AJBeumer/faultforge/issues/50)) isn't built, so tickets are still worked with the owner approving each step.
+  - The merge gate on Qodo's run status ([#56](https://github.com/AJBeumer/faultforge/issues/56)) isn't built, so a PR can still look reviewed before Qodo has finished.
+  - Qodo's local structured review (the charter's Day 2 gate, [#6](https://github.com/AJBeumer/faultforge/issues/6)) is still unverified.
