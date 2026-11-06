@@ -30,8 +30,8 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
    - Exit 1: no completed review in time. That's a gate.
 4. **Act on the findings**, as `/work-ticket` says: reproduce each with a failing test first, fix what's real, explain what isn't, push, and run `review:wait` again. At most three rounds; an action-required finding still open after that is a gate.
 5. **Check the behaviour** on the running app (or with real commands for tooling), every criterion and a failure case. Save the transcript.
-6. **Does it change the reviewer?** For a `reviewed` repo, list the PR's files (`gh pr diff <pr> --repo <github> --name-only`). If `AGENTS.md` or `INVARIANTS.md` is among them, this is gate 4: log it as **waiting for the owner to approve a new Qodo configuration version**, never as ready to merge, and go to the next ticket.
-7. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence. Log it as **ready to merge** and go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
+6. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence.
+7. **Does it change the reviewer?** For a `reviewed` repo, list the PR's files (`gh pr diff <pr> --repo <github> --name-only`). If any of them is named `AGENTS.md` or `INVARIANTS.md`, in any folder, this is gate 4: log it as **waiting for the owner to approve a new Qodo configuration version**, never as ready to merge. Qodo picks up rule changes when they reach the default branch (seen on Day 3: about a minute after the merge), so the owner's merge is the moment the reviewer changes. Otherwise log it as **ready to merge**. Then go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
 
 ## The log
 
