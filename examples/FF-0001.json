@@ -1,0 +1,85 @@
+{
+  "$schema": "../schemas/case-record.v1.json",
+  "schemaVersion": 1,
+  "caseId": "FF-0001",
+  "kind": "sabotage",
+  "target": {
+    "repo": "AJBeumer/faultforge-target",
+    "baseCommit": "99167581040c60b8b00a92f0992d0890c95a0cbc"
+  },
+  "injection": {
+    "templateId": "idempotency-guard-bypass-v1",
+    "invariantId": "INV-IDEMP-001",
+    "defectClass": "idempotency",
+    "file": "src/bookings/create.ts",
+    "lines": [33, 33],
+    "commit": "c7ffd1540d6ae37e15450c8342d83dc8f866884f",
+    "template": "https://github.com/AJBeumer/faultforge/tree/main/templates/seed/idempotency-guard-bypass-v1"
+  },
+  "pr": {
+    "repo": "AJBeumer/faultforge-target",
+    "number": 1,
+    "url": "https://github.com/AJBeumer/faultforge-target/pull/1"
+  },
+  "review": {
+    "reviewer": "qodo-code-review[bot]",
+    "path": "pr-comments",
+    "configVersion": "v1",
+    "reviewedCommit": "c7ffd1540d6ae37e15450c8342d83dc8f866884f",
+    "reviewedAt": "2026-11-02T14:28:48Z",
+    "url": "https://github.com/AJBeumer/faultforge-target/pull/1#issuecomment-6579672874",
+    "linkedRepositories": "none used: every evidence citation in the review is a file on the PR branch"
+  },
+  "findings": [
+    {
+      "id": "qodo:db9e3625-ca25-490b-8bdf-a61f58b4f0bf",
+      "title": "Booking replays expose another user's data",
+      "file": "src/bookings/create.ts",
+      "lines": [33, 33],
+      "commentLines": [24, 61],
+      "category": "Security",
+      "severity": "high",
+      "summary": "Replay looks up the booking by the caller's idempotency key instead of the recorded booking id. A same-body replay creates another booking (201), and a key equal to another user's booking id returns that user's booking."
+    }
+  ],
+  "detection": {
+    "caught": true,
+    "matchedFindingIds": ["qodo:db9e3625-ca25-490b-8bdf-a61f58b4f0bf"],
+    "match": {
+      "file": { "pass": true, "detail": "the finding names src/bookings/create.ts, the changed file" },
+      "lines": { "pass": true, "detail": "finding lines 33-33 overlap the changed lines 33-33" },
+      "kind": {
+        "pass": true,
+        "detail": "describes a repeat request creating a second booking: the idempotency rule INV-IDEMP-001"
+      }
+    },
+    "notes": [
+      "Qodo's structured data places the finding at line 33 exactly. The PR comment's fix prompt names the wider range 24-61, which also overlaps.",
+      "Qodo's PR summary, posted a minute before the review, also described the problem."
+    ]
+  },
+  "collateral": [
+    {
+      "invariantId": "INV-AUTH-001",
+      "reproduced": true,
+      "evidence": "Reproduced on the reviewed commit: alice repeating a request with key bk_0001 got bob's booking bk_0001 back (200)."
+    }
+  ],
+  "otherReviewers": [
+    {
+      "reviewer": "copilot-pull-request-reviewer[bot]",
+      "countsForDetection": false,
+      "note": "Requested automatically by GitHub and posted at 14:29:41Z, after Qodo's review, so it could not have influenced it. Turned off for later PRs."
+    }
+  ],
+  "challenge": {
+    "verdict": "not_run",
+    "note": "Devil's Advocate, which tests each finding, starts on Day 15. This is about the finding, not the detection: Qodo's catch is confirmed in `detection` and `human`."
+  },
+  "human": {
+    "disposition": "confirmed_detected",
+    "adjudicatedBy": "AJBeumer",
+    "adjudicatedAt": "2026-11-02T14:34:24.670Z"
+  },
+  "status": "complete"
+}
