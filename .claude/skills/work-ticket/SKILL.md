@@ -82,6 +82,10 @@ Then decide, with the owner, whether the evidence calls for:
 - a repeatable task worth a skill
 - context the reviewer was missing
 
+## When the guard hook blocks a command
+
+Nothing in that command ran, including the parts before the blocked write. Check what was actually posted or written before reporting it as done. If the block was right, reword. If it was a false positive, write a test for it and fix the hook in its own ticket; don't work around it.
+
 ## 7. Finish
 
 - Tick only the ticket criteria you verified.
