@@ -8,6 +8,12 @@ Ticket:
 |---|---|
 |  |  |
 
+## Must not break
+
+| Item | How checked |
+|---|---|
+|  |  |
+
 ## What changed
 
 ## How I checked it
