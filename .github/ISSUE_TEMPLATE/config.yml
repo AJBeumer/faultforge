@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: Project charter
     url: https://github.com/AJBeumer/faultforge/blob/main/docs/CHARTER.md
-    about: The goal, method and 30-day plan every ticket serves.
+    about: The goal and the 30-day plan.
