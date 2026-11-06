@@ -62,10 +62,11 @@ gh api repos/AJBeumer/<repo>/pulls/<pr>/comments  > $D/pr<pr>-review-comments.<c
 
 A clean review doesn't mean the ticket is done.
 
-- Run the app from the branch (target: `PORT=3000 npx tsx src/server.ts` in the background).
+- First make sure port 3000 is free (`netstat -ano | grep ":3000 .*LISTENING"`). A leftover server answers just as convincingly as the new one.
+- Run the app from the branch (target: `PORT=3000 npx tsx src/server.ts` in the background). Before checking anything, confirm the `pid` in the server's log is the process that owns port 3000.
 - Check every criterion and at least one edge or failure case with real requests. Show that a refused request left state unchanged by reading it back.
 - Save the transcript to `private/raw-artifacts/day-NN/ticket-<N>-live-check.txt` and put the results in the PR table.
-- Stop the server.
+- Stop the server with its whole process tree (`taskkill //PID <pid> //T //F`). Stopping the background task only ends `npx` and leaves Node listening.
 
 ## 6. Act on the findings
 
