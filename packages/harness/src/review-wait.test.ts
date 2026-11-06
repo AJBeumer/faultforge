@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findingsFor, type QodoReview, reviewState, waitForReview } from "./review-wait.ts";
+import { parseRpcBody, parseToolText } from "./qodo-api.ts";
+import { findingsFor, openFindings, type QodoReview, reviewEffort, reviewState, waitForReview } from "./review-wait.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
@@ -79,7 +80,8 @@ describe("waitForReview", () => {
     const result = await waitForReview(PR1_HEAD, deps);
     expect(result.state).toBe("complete");
     expect(result.polls).toBe(3);
-    expect(polls()).toBe(3);
+    // Three saves while waiting, and one last save after the review completed.
+    expect(polls()).toBe(4);
   });
 
   it("stops waiting when Qodo skips the review, and says so", async () => {
@@ -97,5 +99,54 @@ describe("waitForReview", () => {
     expect(result.state).toBe("timeout");
     // Polls at 0, 20, 40 and 60 seconds: one last look at the deadline itself.
     expect(result.polls).toBe(4);
+  });
+});
+
+describe("review findings on PR 59", () => {
+  const lite: QodoReview = JSON.parse(
+    readFileSync(join(import.meta.dirname, "../fixtures/qodo-lite-rereview.json"), "utf8"),
+  );
+  const LITE_HEAD = "a7dd788";
+
+  it("reports findings still open from earlier commits, not only the head's", () => {
+    const head = lite.review_session?.commit_sha ?? "";
+    expect(head.startsWith(LITE_HEAD)).toBe(true);
+    expect(findingsFor(lite, head)).toEqual([]);
+    expect(openFindings(lite)).toHaveLength(9);
+    expect(openFindings(lite)[0]).toMatchObject({ commit: "4d4d112", severity: "action_required" });
+  });
+
+  it("reports how deeply Qodo reviewed the head commit", () => {
+    expect(reviewEffort(lite, lite.review_session?.commit_sha ?? "")).toBe("lite");
+  });
+
+  it("saves the comments one last time after the review completes", async () => {
+    const calls: string[] = [];
+    await waitForReview(PR1_HEAD, {
+      fetchReview: async () => {
+        calls.push("fetch");
+        return pr1;
+      },
+      onPoll: async () => {
+        calls.push("poll");
+      },
+      now: () => 0,
+      sleep: async () => {},
+    });
+    expect(calls).toEqual(["poll", "fetch", "poll"]);
+  });
+});
+
+describe("parseToolText and parseRpcBody (review findings on PR 59)", () => {
+  it("throws on a tool error instead of treating it as data", () => {
+    expect(() => parseToolText({ isError: true, content: [{ type: "text", text: '{"error":"x"}' }] })).toThrow(/x/);
+  });
+
+  it("reads JSON with leading whitespace", () => {
+    expect(parseRpcBody('  \n{"result":{"ok":true}}')).toEqual({ result: { ok: true } });
+  });
+
+  it("joins an event's data lines", () => {
+    expect(parseRpcBody('event: message\ndata: {"result":\ndata: {"ok":true}}\n\n')).toEqual({ result: { ok: true } });
   });
 });

@@ -32,6 +32,8 @@ export interface QodoReview {
     category?: string | null;
     title?: string | null;
     description?: string | null;
+    attribution_status?: string | null;
+    dismiss_reason?: string | null;
   }[];
 }
 
@@ -74,6 +76,22 @@ export function findingsFor(review: QodoReview, headSha: string): Finding[] {
     }));
 }
 
+/** How deeply Qodo reviewed this commit ("standard", "lite", "skip"…), if it says. */
+export function reviewEffort(review: QodoReview, headSha: string): string | null {
+  return review.review_runs?.find((r) => r.commit_sha === headSha)?.review_effort ?? null;
+}
+
+/**
+ * Every finding on the PR that Qodo hasn't marked implemented or dismissed, from any commit. A later
+ * "lite" review of a new commit doesn't repeat earlier findings, so looking only at the head commit
+ * can show zero while earlier ones are still open.
+ */
+export function openFindings(review: QodoReview): (Finding & { commit: string })[] {
+  return (review.findings ?? [])
+    .filter((f) => !f.dismiss_reason && f.attribution_status !== "implemented")
+    .map((f) => ({ ...(findingsFor({ findings: [f] }, f.git_sha)[0] as Finding), commit: f.git_sha.slice(0, 7) }));
+}
+
 export interface WaitDeps {
   fetchReview: () => Promise<QodoReview>;
   /** Called on every poll; return the comment's `updated_at` to have new versions saved. */
@@ -100,14 +118,24 @@ export async function waitForReview(
     await deps.onPoll?.();
     review = await deps.fetchReview();
     const state = reviewState(review, headSha);
-    if (state === "complete" || state === "skipped") return { state, review, polls };
+    if (state === "complete" || state === "skipped") {
+      // One last save: Qodo may have edited its comment between the poll and this answer.
+      await deps.onPoll?.();
+      return { state, review, polls };
+    }
     if (deps.now() + intervalMs > deadline) return { state: "timeout", review, polls };
     await deps.sleep(intervalMs);
   }
 }
 
+/** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
 function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8" });
+  return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
+}
+
+/** Every item of a paginated list endpoint. */
+function ghAll<T>(path: string, pick: (page: unknown) => T[] = (page) => page as T[]): T[] {
+  return (JSON.parse(gh("api", "--paginate", "--slurp", path)) as unknown[]).flatMap(pick);
 }
 
 async function main() {
@@ -122,7 +150,12 @@ async function main() {
   const { github } = repoConfig(factory, repoKey);
   const pr = Number(prArg);
   const headSha = gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim();
-  const pushedAt = gh("api", `repos/${github}/commits/${headSha}`, "--jq", ".commit.committer.date").trim();
+  // GitHub has no push time; the first check suite for the commit is created when the push arrives.
+  const suites = ghAll<{ created_at: string }>(
+    `repos/${github}/commits/${headSha}/check-suites`,
+    (p) => (p as { check_suites: { created_at: string }[] }).check_suites,
+  );
+  const pushSeenAt = suites.map((s) => s.created_at).sort()[0] ?? null;
   const dir = resolve(
     fileURLToPath(new URL("../../..", import.meta.url)),
     factory.evidence,
@@ -136,15 +169,19 @@ async function main() {
   // Save every version of Qodo's comments while waiting: the first version can be edited later.
   let lastVersion = "";
   const onPoll = async () => {
-    const comments = gh("api", `repos/${github}/issues/${pr}/comments`);
-    const version = (JSON.parse(comments) as { user: { login: string }; updated_at: string }[])
+    type Comment = { user: { login: string }; updated_at: string };
+    const comments = {
+      pr: ghAll<Comment>(`repos/${github}/issues/${pr}/comments`),
+      inline: ghAll<Comment>(`repos/${github}/pulls/${pr}/comments`),
+    };
+    const version = [...comments.pr, ...comments.inline]
       .filter((c) => c.user.login.startsWith("qodo"))
       .map((c) => c.updated_at)
       .sort()
       .pop();
     if (version && version !== lastVersion) {
       lastVersion = version;
-      writeFileSync(join(dir, `${short}.comments.${version.replace(/:/g, "")}.raw.json`), comments);
+      writeFileSync(join(dir, `${short}.comments.${version.replace(/:/g, "")}.raw.json`), JSON.stringify(comments));
     }
   };
 
@@ -153,11 +190,15 @@ async function main() {
     headSha,
     {
       fetchReview: async () => {
-        const review = (await api.call("get-pr-review-findings", {
-          pr_url: `https://github.com/${github}/pull/${pr}`,
-          extended: true,
-        })) as QodoReview;
-        return review;
+        try {
+          return (await api.call("get-pr-review-findings", {
+            pr_url: `https://github.com/${github}/pull/${pr}`,
+            extended: true,
+          })) as QodoReview;
+        } finally {
+          // Raw first: kept even when the answer can't be parsed.
+          if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);
+        }
       },
       onPoll,
       now: Date.now,
@@ -167,25 +208,28 @@ async function main() {
   );
 
   if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));
-  const checks = JSON.parse(gh("api", `repos/${github}/commits/${headSha}/check-runs`)).check_runs as {
-    name: string;
-    status: string;
-    conclusion: string | null;
-  }[];
+  const checks = ghAll<{ name: string; status: string; conclusion: string | null }>(
+    `repos/${github}/commits/${headSha}/check-runs`,
+    (p) => (p as { check_runs: { name: string; status: string; conclusion: string | null }[] }).check_runs,
+  );
   const ci = checks.map((c) => `${c.name}: ${c.conclusion ?? c.status}`).join(", ") || "no checks";
   const findings = result.review ? findingsFor(result.review, headSha) : [];
+  const open = result.review ? openFindings(result.review) : [];
+  const effort = result.review ? reviewEffort(result.review, headSha) : null;
   const record = {
     repo: github,
     pr,
     headSha,
     state: { complete: "complete", skipped: "skipped by Qodo", timeout: "review incomplete" }[result.state],
-    pushedAt,
+    pushSeenAt,
+    reviewEffort: effort,
     reviewStartedAt:
       result.review?.review_session?.commit_sha === headSha ? result.review.review_session.started_at : null,
     recordedAt: new Date().toISOString(),
     ci,
     abTest: { name: result.review?.ab_test_name ?? null, arm: result.review?.ab_arm ?? null },
     findings,
+    openFindings: open,
   };
   writeFileSync(join(dir, `${short}.review.json`), `${JSON.stringify(record, null, 2)}\n`);
 
@@ -199,12 +243,14 @@ async function main() {
     );
     process.exit(3);
   }
-  console.log(`Qodo's review of ${short} is complete. Pushed ${pushedAt}, review started ${record.reviewStartedAt}.`);
+  console.log(
+    `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}). Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
+  );
   console.log(`CI: ${ci}`);
-  console.log(`${findings.length} finding(s):`);
-  for (const f of findings) {
+  console.log(`${findings.length} finding(s) on ${short}; ${open.length} open on this PR in total:`);
+  for (const f of open) {
     const where = f.file ? `${f.file}${f.lines ? `:${f.lines[0]}-${f.lines[1]}` : ""}` : "(no location)";
-    console.log(`- [${f.severity}] ${f.title} (${f.category}, ${where})`);
+    console.log(`- [${f.severity}] ${f.title} (${f.category}, ${where}, raised on ${f.commit})`);
   }
   console.log(`Saved in ${dir}`);
 }
