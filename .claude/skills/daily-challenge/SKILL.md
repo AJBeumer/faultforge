@@ -5,11 +5,11 @@ description: Start or finish a FaultForge hackathon day - read the backlog and t
 
 # FaultForge daily challenge
 
-The charter is `private/CHARTER.md`; its daily challenge protocol (section 16) is the source for this routine.
+The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16) is the source for this routine.
 
 ## Start of day
 
-1. Read `private/BACKLOG.md`, the latest entry in `docs/decision-log.md`, and the roadmap row for today in the charter (section 16).
+1. Read `private/BACKLOG.md`, the open tickets (`gh issue list --repo AJBeumer/faultforge`), the latest entry in `docs/decision-log.md`, and the roadmap row for today in the charter (section 16).
 2. Read the day's challenge text. Its acceptance requirements are mandatory, even when they change the planned order.
 3. Check that all three repos are clean and in sync (`git status -sb` in `.`, `private/` and `../faultforge-target`).
 4. Propose a plan to the owner, in plain English:
@@ -24,7 +24,7 @@ The charter is `private/CHARTER.md`; its daily challenge protocol (section 16) i
 
 - Build one testable slice. Run cases with `/new-case`.
 - Keep the rules in `CLAUDE.md`. In particular, never reveal unreleased templates, the answer key or case ids in the target repo.
-- Don't announce the Day 15 challenger before Day 15.
+- Pick the day's work from the open tickets (GitHub Issues), in the order the owner gives. New work gets a ticket first.
 
 ## End of day
 
@@ -40,7 +40,7 @@ The charter is `private/CHARTER.md`; its daily challenge protocol (section 16) i
    - **Remaining risk:**
    ```
 
-   Measured results only, with links to PRs and commits. Before writing, check the entry against the decision-log rules in `CLAUDE.md`: only adjudicated cases, nothing about held-back cases, no Day 15 hints before Day 15, and to-dos go to `private/BACKLOG.md` instead.
+   Measured results only, with links to PRs and commits. Before writing, check the entry against the decision-log rules in `CLAUDE.md`: only adjudicated cases, nothing about held-back cases, and planned work goes in a ticket instead.
 2. Update the Status table in `README.md` if a milestone changed.
 3. Update `private/BACKLOG.md`: tick finished items, add new ones.
 4. Commit and push FaultForge, `private/`, and the target if it changed. Plain-English commit messages, no attribution lines.

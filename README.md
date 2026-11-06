@@ -80,7 +80,7 @@ By the end of the month:
 - **For judges and visitors:** browse every real case online, or open the repo in a Codespace and replay the full pipeline without needing a Qodo account.
 - **A benchmark** with real counts and defined denominators: what Qodo caught, what it missed, and why.
 
-Halfway through the month, the factory gets a new member that doesn't trust anyone. More on Day 15.
+Halfway through the month, the factory gets a new member that doesn't trust anyone: **Devil's Advocate**, which tries to support or disprove each Qodo finding by writing and running a test. The full plan is in the [charter](docs/CHARTER.md) and the [tickets](https://github.com/AJBeumer/faultforge/issues).
 
 ## Principles
 
@@ -97,7 +97,7 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 | 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1)) |
 | 2 | House rules: target `AGENTS.md` imported as Qodo review standards (configuration v3) | Done ([PR #2](https://github.com/AJBeumer/faultforge-target/pull/2)) |
 | 3 to 14 | Verify Qodo's structured review output, more bug templates, control PRs, first measured baseline | Planned |
-| 15 | Something new joins the factory | Planned |
+| 15 | Devil's Advocate challenges its first real Qodo finding with a test | Planned |
 | 16 to 30 | Evidence, replay, one-command audit, final benchmark | Planned |
 
 Progress and decisions for each daily challenge are recorded in [docs/decision-log.md](docs/decision-log.md).

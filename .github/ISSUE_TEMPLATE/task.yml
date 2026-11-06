@@ -1,0 +1,48 @@
+name: Task
+description: A piece of FaultForge work with a clear result and a checkable definition of done.
+labels: []
+body:
+  - type: textarea
+    id: result
+    attributes:
+      label: Result
+      description: What exists or is true when this is done. One or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: A checklist anyone can verify without a judgement call. Tick an item only when it has been checked.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The charter outcome, principle or lesson this serves.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Out of scope
+      description: What this ticket deliberately does not do.
+    validations:
+      required: false
+  - type: textarea
+    id: depends
+    attributes:
+      label: Depends on
+      description: Other tickets that must be done first, as #numbers.
+    validations:
+      required: false
+  - type: checkboxes
+    id: integrity
+    attributes:
+      label: Integrity check
+      options:
+        - label: This ticket names no unreviewed case, unreleased template, or planned bug.
+          required: true

@@ -6,9 +6,9 @@ FaultForge plants known bugs in a small target codebase, has Qodo review them as
 
 | Repo | Visibility | Holds | Never holds |
 |---|---|---|---|
-| `faultforge` (this one) | public | harness, adjudicated templates, docs, sanitized results | answer key, raw evidence, unreleased templates |
+| `faultforge` (this one) | public | harness, adjudicated templates, docs and charter, work tickets (Issues), sanitized results | answer key, raw evidence, unreleased templates |
 | `faultforge-target` (`../faultforge-target`) | public, reviewed by Qodo | the booking API and its ordinary tests | any mention of FaultForge, planted bugs, cases, proof tests or the answer key |
-| `faultforge-private` (`./private`, git-ignored here) | private | answer key, audit events, case records, raw evidence, unreleased templates, `BACKLOG.md`, charter | — |
+| `faultforge-private` (`./private`, git-ignored here) | private | answer key, audit events, case records, raw evidence, unreleased templates, `BACKLOG.md` for anything that would reveal them | — |
 
 - `private/` is its own git repository. Commit and push it after every case. It must never be added to this repo.
 - A `PreToolUse` hook (`.claude/hooks/guard-target.ts`) blocks commits, PRs, comments and file edits in the target that contain giveaway words, and blocks force pushes to the target. If it blocks something, reword it. Don't work around it. It scans the whole shell command, so run target-repo actions in their own command, never chained with work in this repo.
@@ -37,13 +37,24 @@ The decision log is public on purpose: it shows judges that decisions came befor
 
 1. Only adjudicated cases. Never mention a case, template or bug type before its review is done and the owner has confirmed the verdict.
 2. Nothing about held-back benchmark cases, not even counts by type, until the final report.
-3. No hints about the Day 15 reveal before Day 15.
-4. Record decisions made and results measured. To-dos, worries and half-formed ideas go in `private/BACKLOG.md`.
+3. Record decisions made and results measured. Planned work goes in a ticket; worries, half-formed ideas and anything that would reveal an unreviewed case go in `private/BACKLOG.md`.
+
+The plan itself is public (`docs/CHARTER.md`, version 2.2), including Devil's Advocate and the arbiter. What stays private is what would let a reviewer, or a reader, know the answer before the review.
 
 ## Templates
 
-- Write new templates and their proof tests in `private/templates/<id>/`. Copy one to `templates/seed/` only after its case is adjudicated. Held-back benchmark templates never go public.
+- Write new templates and their proof tests in `private/templates/<id>/`. Copy one to `templates/seed/` only after its case is adjudicated. Held-back benchmark templates are published only with the final report.
 - `npm run inject` looks in `private/templates/` first, then `templates/seed/`. It refuses branch names or commit messages that give the case away.
+
+## Tickets
+
+All FaultForge work is planned as GitHub Issues on `AJBeumer/faultforge`, grouped in milestones (one per phase of the charter roadmap).
+
+- Every ticket states its **Result** and a **Done when** checklist that can be checked without judgement calls. Use the issue form (`.github/ISSUE_TEMPLATE/task.yml`).
+- Work one ticket at a time, in the order the owner gives. The PR says `Closes #N`, and ticks the checklist only for criteria that were actually verified.
+- Public tickets follow the decision-log rules above: they never name an unreviewed case, an unreleased template, or what a planned bug will be. Template work is described by count and defect class at most.
+- Target tickets (`AJBeumer/faultforge-target` Issues) describe ordinary development work on the booking API and must read like any project's tickets. The guard hook checks them.
+- From configuration v4 on, every case PR links a target ticket for the change it claims to make. The ticket describes the intended change, never the bug.
 
 ## Commands
 
