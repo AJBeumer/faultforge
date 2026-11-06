@@ -259,6 +259,21 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(decide("Bash", { command }, HARNESS, withThirdRepo())).toMatch(/link/);
   });
 
+  it("checks where a post goes, not which folder it's sent from (two repos)", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge --title "x" --body "see faultforge-target#3"';
+    expect(decide("Bash", { command }, TARGET)).toMatch(/link to the target/);
+  });
+
+  it("checks where a post goes, not which folder it's sent from (Qodo's third-repo case)", () => {
+    const command = 'gh issue create --repo AJBeumer/other-app --title "x" --body "see faultforge-target#3"';
+    expect(decide("Bash", { command }, TARGET, withThirdRepo())).toMatch(/link to the target/);
+  });
+
+  it("treats a post to this repo as a post here, even when sent from the target folder", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge --title "FaultForge note" --body "x"';
+    expect(decide("Bash", { command }, TARGET)).toBeUndefined();
+  });
+
   it("doesn't let a reviewed repo's name hide a forbidden word", () => {
     const config = configWith("named-ledger", (c) => {
       c.repos.other = { ...c.repos.target, github: "AJBeumer/ledger", path: "../ledger" };

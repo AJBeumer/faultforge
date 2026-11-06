@@ -75,6 +75,24 @@ function linkPattern(repos: Reviewed[]): RegExp | undefined {
   );
 }
 
+/**
+ * The GitHub repo (owner/name) a command explicitly sends to: `--repo`, an API route, or a URL given
+ * to `gh` or to `git push/pull/fetch/clone/remote`. Undefined when the command names none.
+ */
+function explicitDestination(command: string): string | undefined {
+  const patterns = [
+    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/i,
+    /\brepos\/([\w.-]+\/[\w.-]+)\//i,
+    /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[/"'\s]|$)/i,
+    /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?:[/"'\s]|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(command)?.[1];
+    if (match) return match;
+  }
+  return undefined;
+}
+
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
 function inCheckout(path: string, repo: Reviewed): boolean {
   return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
@@ -86,7 +104,12 @@ function checkCommand(command: string) {
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  const repo = REVIEWED.find((r) => actsOn(command, r));
+  // Where a post goes decides the rules, not the folder it's sent from. Only a command that names
+  // no destination (say, `git commit` in a checkout) is judged by its folder.
+  const destination = explicitDestination(command);
+  const repo = destination
+    ? REVIEWED.find((r) => r.github.toLowerCase() === destination.toLowerCase())
+    : REVIEWED.find((r) => actsOn(command, r));
   if (!repo) {
     if (writes) checkLinks(command, REVIEWED);
     return;
