@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AJBeumer/faultforge/blob/main/schemas/factory.v1.json",
+  "title": "FaultForge factory configuration, version 1",
+  "description": "The repositories the factory works on, and how each one is checked, started, guarded and ticketed. Read by the guard hook, the readiness check and the skills. Holds no secrets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence", "repos"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "evidence": {
+      "description": "Where saved reviews and live-check transcripts go, relative to this repo. Must be private storage.",
+      "type": "string"
+    },
+    "repos": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/repo" }
+    }
+  },
+  "$defs": {
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github", "path", "guard", "check", "start", "tickets", "board"],
+      "properties": {
+        "github": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+        "path": { "description": "Local checkout, relative to this repo.", "type": "string" },
+        "guard": {
+          "description": "lab: may name the lab, but its issues, PRs and commits never link to a reviewed repo. reviewed: Qodo reviews it, so nothing sent to it may name the lab or the bug, force pushes are blocked, and nothing links to it.",
+          "enum": ["lab", "reviewed"]
+        },
+        "check": { "description": "The command that must pass before a commit and in CI.", "type": "string" },
+        "start": {
+          "description": "How to run the app for a live check, or null if there is nothing to run.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["command", "port", "health"],
+              "properties": {
+                "command": { "type": "string" },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "health": { "type": "string", "pattern": "^/" }
+              }
+            }
+          ]
+        },
+        "tickets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sections", "checklist"],
+          "properties": {
+            "sections": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+            "checklist": { "description": "The section that holds the checkable items.", "type": "string" }
+          }
+        },
+        "board": { "description": "Tracked on the public project board.", "type": "boolean" }
+      }
+    }
+  }
+}

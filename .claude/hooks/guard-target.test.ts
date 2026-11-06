@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,10 +9,11 @@ const HARNESS = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
 
 /** Runs the hook with a payload and returns the deny reason, or undefined if allowed. */
-function decide(tool: string, toolInput: object, cwd = HARNESS): string | undefined {
+function decide(tool: string, toolInput: object, cwd = HARNESS, config?: string): string | undefined {
   const result = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput }),
     encoding: "utf8",
+    env: config ? { ...process.env, FAULTFORGE_CONFIG: config } : process.env,
   });
   expect(result.status).toBe(0);
   if (!result.stdout.trim()) return undefined;
@@ -182,5 +183,49 @@ describe("guard-target hook", () => {
     it("allows reading a target PR from here", () => {
       expect(bash("gh pr view https://github.com/AJBeumer/faultforge-target/pull/6")).toBeUndefined();
     });
+  });
+});
+
+describe("guard-target hook reads the reviewed repos from factory.json", () => {
+  const factory = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
+
+  /** factory.json plus a third reviewed repo, added as one entry. */
+  function withThirdRepo(): string {
+    const config = structuredClone(factory);
+    config.repos.other = { ...config.repos.target, github: "AJBeumer/other-app", path: "../other-app" };
+    const file = join(tmpdir(), "factory-with-third-repo.json");
+    writeFileSync(file, JSON.stringify(config));
+    return file;
+  }
+
+  it("protects a third repo once it has an entry", () => {
+    const config = withThirdRepo();
+    const bash3 = (command: string) => decide("Bash", { command }, HARNESS, config);
+    expect(bash3('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toMatch(
+      /hint into other-app/,
+    );
+    expect(bash3("git push --force https://github.com/AJBeumer/other-app.git main")).toMatch(
+      /Force pushes to other-app/,
+    );
+    expect(bash3('gh issue create --repo AJBeumer/faultforge --title "x" --body "see other-app#2"')).toMatch(
+      /link to the target/,
+    );
+    expect(
+      decide("Edit", { file_path: "D:/Projects/other-app/README.md", new_string: "planted here" }, HARNESS, config),
+    ).toMatch(/other-app/);
+  });
+
+  it("still protects the target alongside the third repo", () => {
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, withThirdRepo())).toMatch(/names the lab/);
+  });
+
+  it("doesn't touch a repo that isn't in the config", () => {
+    expect(bash('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toBeUndefined();
+  });
+
+  it("falls back to protecting the target if factory.json can't be read", () => {
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, join(tmpdir(), "no-such-factory.json"))).toMatch(/names the lab/);
   });
 });
