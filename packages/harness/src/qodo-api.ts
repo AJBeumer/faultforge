@@ -63,7 +63,12 @@ export class QodoApi {
     if (!READ_ONLY_TOOLS.has(tool)) throw new Error(`Refusing ${tool}: not on the read-only allow-list.`);
     // Cleared first, so a failed call never leaves the previous answer looking like its own.
     this.lastRaw = "";
-    this.ready ??= this.start();
+    // A failed start is forgotten, so the next call connects again instead of repeating the old failure.
+    this.ready ??= this.start().catch((error: unknown) => {
+      this.ready = undefined;
+      this.session = undefined;
+      throw error;
+    });
     await this.ready;
     const result = (await this.rpc("tools/call", { name: tool, arguments: args })) as {
       isError?: boolean;
