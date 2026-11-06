@@ -77,6 +77,9 @@ function targetsTargetRepo(command: string): boolean {
     /\b(cd|git\s+-C)\s+["']?[^\s"']*faultforge-target/i.test(command) ||
     /--repo[\s=]+["']?AJBeumer\/faultforge-target\b/i.test(command) ||
     /repos\/AJBeumer\/faultforge-target\//i.test(command) ||
+    /\bgit\b[^|;&\n]*\b(push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]AJBeumer\/faultforge-target\b/i.test(
+      command,
+    ) ||
     /\bgh\s+(pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/AJBeumer\/faultforge-target\b/i.test(command)
   );
 }
@@ -87,7 +90,15 @@ function targetsTargetRepo(command: string): boolean {
  * timeline, where its reviewer reads it.
  */
 function checkOneWay(command: string) {
-  const text = [...postedArguments(command), ...referencedFiles(command)].join("\n");
+  // Only when `gh pr create` is a command being run, not words inside a message.
+  if (/(?:^|[;&|\n]\s*)gh\s+pr\s+create\b[^|;&\n"']*\s--fill(-first|-verbose)?\b/.test(command)) {
+    deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
+  }
+  const posted = postedArguments(command);
+  // Text read from stdin (a pipe or heredoc) or built from shell variables is in the command
+  // itself, not in the extracted arguments, so check the whole command for those.
+  const indirect = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command) || posted.some((p) => /[$`]/.test(p));
+  const text = [...(indirect ? [command] : posted), ...referencedFiles(command)].join("\n");
   if (TARGET_LINK.test(text)) {
     deny(
       'This would link to the target from FaultForge, and the target would show it on its timeline. Name target work as plain text instead, like "target 3".',
@@ -116,8 +127,10 @@ function postedArguments(command: string): string[] {
 /** Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. */
 function referencedFiles(command: string): string[] {
   const files: string[] = [];
-  for (const match of command.matchAll(/(?:\s-F|--file|--body-file|--input)[\s=]+["']?([^\s"']+)/g)) {
-    const file = match[1];
+  for (const match of command.matchAll(
+    /(?:\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g,
+  )) {
+    const file = match[1] ?? match[2] ?? match[3];
     if (!file || file === "-") continue;
     const path = isAbsolute(file) ? file : resolve(cwd, file);
     if (existsSync(path)) files.push(readFileSync(path, "utf8"));
