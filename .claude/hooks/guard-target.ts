@@ -13,6 +13,8 @@ import { isAbsolute, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 
 const TARGET = /faultforge-target/i;
+/** A link GitHub turns into a "mentioned in" event on a target issue or PR. */
+const TARGET_LINK = /github\.com\/AJBeumer\/faultforge-target\/(issues|pull)\/\d+|faultforge-target#\d+/i;
 
 const input = JSON.parse(readFileSync(0, "utf8"));
 const tool: string = input.tool_name ?? "";
@@ -26,16 +28,19 @@ if (tool === "Bash" || tool === "PowerShell") {
 }
 
 function checkCommand(command: string) {
-  if (!targetsTargetRepo(command)) return;
-
-  if (/\bgit\b[^|;&\n]*\bpush\b[^|;&\n]*(\s--force(-with-lease)?\b|\s-f\b|\s\+\S)/.test(command)) {
-    deny("Force pushes to faultforge-target are not allowed: its history is evidence for recorded cases.");
-  }
-
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
+
+  if (!targetsTargetRepo(command)) {
+    if (writes) checkOneWay(command);
+    return;
+  }
+
+  if (/\bgit\b[^|;&\n]*\bpush\b[^|;&\n]*(\s--force(-with-lease)?\b|\s-f\b|\s\+\S)/.test(command)) {
+    deny("Force pushes to faultforge-target are not allowed: its history is evidence for recorded cases.");
+  }
   if (!writes) return;
 
   const text = [stripTargetNames(command), ...referencedFiles(command)].join("\n");
@@ -61,15 +66,33 @@ function checkFileEdit() {
   }
 }
 
-/** True when the command runs in, or points at, the target repository. */
+/**
+ * True when the command runs in, or acts on, the target repository. A target URL that is only
+ * part of the text (say, a link written into a file here) doesn't count; one given to `gh` as
+ * the thing to act on does.
+ */
 function targetsTargetRepo(command: string): boolean {
   return (
     TARGET.test(cwd) ||
     /\b(cd|git\s+-C)\s+["']?[^\s"']*faultforge-target/i.test(command) ||
     /--repo[\s=]+["']?AJBeumer\/faultforge-target\b/i.test(command) ||
     /repos\/AJBeumer\/faultforge-target\//i.test(command) ||
-    /github\.com\/AJBeumer\/faultforge-target\b/i.test(command)
+    /\bgh\s+(pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/AJBeumer\/faultforge-target\b/i.test(command)
   );
+}
+
+/**
+ * Links only go one way: this repository may name target work as plain text ("target 3"), but its
+ * issues, PRs and commits never link to a target issue or PR. A link would show on the target's
+ * timeline, where its reviewer reads it.
+ */
+function checkOneWay(command: string) {
+  const text = [...postedArguments(command), ...referencedFiles(command)].join("\n");
+  if (TARGET_LINK.test(text)) {
+    deny(
+      'This would link to the target from FaultForge, and the target would show it on its timeline. Name target work as plain text instead, like "target 3".',
+    );
+  }
 }
 
 /** The target's own name and local paths are allowed; mentions of the lab in prose are not. */
@@ -77,6 +100,17 @@ function stripTargetNames(text: string): string {
   return text
     .replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (/faultforge/i.test(token) ? " " : token))
     .replace(/faultforge-target/gi, " ");
+}
+
+/**
+ * The text a command would post: commit messages, titles, bodies and API fields. Other parts of
+ * the command, such as a script that edits a file, are left out.
+ */
+function postedArguments(command: string): string[] {
+  const flag = /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
+  const value = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/;
+  const pattern = new RegExp(`${flag.source}(?:${value.source})`, "g");
+  return [...command.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 
 /** Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. */

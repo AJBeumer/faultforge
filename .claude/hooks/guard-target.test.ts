@@ -83,5 +83,65 @@ describe("guard-target hook", () => {
     it("a normal push to the target", () => {
       expect(bash("git -C D:/Projects/faultforge-target push -u origin tidy-x")).toBeUndefined();
     });
+
+    it("a command in this repo whose file edit happens to contain a target URL (Day 3 false positive)", () => {
+      expect(
+        bash(
+          "cd /d/Projects/FaultForge && node -e 'readme(\"https://github.com/AJBeumer/faultforge-target/pull/1\")' && " +
+            'git switch -c publish-record && git commit -m "Publish the FF-0001 case record"',
+        ),
+      ).toBeUndefined();
+    });
+
+    it("an issue here that names target work as plain text", () => {
+      expect(
+        bash('gh issue create --repo AJBeumer/faultforge --title "Epic" --body "target 10: run the checks"'),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("keeps links one-way: nothing here links to the target", () => {
+    it("blocks an issue here that links a target issue", () => {
+      expect(
+        bash(
+          'gh issue create --repo AJBeumer/faultforge --title "x" --body "see https://github.com/AJBeumer/faultforge-target/issues/3"',
+        ),
+      ).toMatch(/link to the target/);
+    });
+
+    it("blocks a PR comment here with a short target reference", () => {
+      expect(
+        bash('gh pr comment 45 --repo AJBeumer/faultforge --body "fixed in AJBeumer/faultforge-target#6"'),
+      ).toMatch(/link to the target/);
+    });
+
+    it("blocks an issue here created without --repo, from this folder", () => {
+      expect(bash('gh issue create --title "x" --body "faultforge-target#3"')).toMatch(/link to the target/);
+    });
+
+    it("blocks a commit message here that references a target PR", () => {
+      expect(bash('git commit -m "Follow-up to faultforge-target#6"')).toMatch(/link to the target/);
+    });
+
+    it("blocks an API write here that links a target PR", () => {
+      expect(
+        bash(
+          'gh api -X PATCH repos/AJBeumer/faultforge/issues/5 -f body="https://github.com/AJBeumer/faultforge-target/pull/6"',
+        ),
+      ).toMatch(/link to the target/);
+    });
+
+    it("allows a file edit here that links the target (files don't create links)", () => {
+      expect(
+        decide("Edit", {
+          file_path: "D:/Projects/FaultForge/docs/decision-log.md",
+          new_string: "[PR #6](https://github.com/AJBeumer/faultforge-target/pull/6)",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("allows reading a target PR from here", () => {
+      expect(bash("gh pr view https://github.com/AJBeumer/faultforge-target/pull/6")).toBeUndefined();
+    });
   });
 });
