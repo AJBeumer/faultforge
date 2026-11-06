@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,10 +9,11 @@ const HARNESS = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
 
 /** Runs the hook with a payload and returns the deny reason, or undefined if allowed. */
-function decide(tool: string, toolInput: object, cwd = HARNESS): string | undefined {
+function decide(tool: string, toolInput: object, cwd = HARNESS, config?: string): string | undefined {
   const result = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput }),
     encoding: "utf8",
+    env: config ? { ...process.env, FAULTFORGE_CONFIG: config } : process.env,
   });
   expect(result.status).toBe(0);
   if (!result.stdout.trim()) return undefined;
@@ -182,5 +183,173 @@ describe("guard-target hook", () => {
     it("allows reading a target PR from here", () => {
       expect(bash("gh pr view https://github.com/AJBeumer/faultforge-target/pull/6")).toBeUndefined();
     });
+  });
+});
+
+describe("guard-target hook reads the reviewed repos from factory.json", () => {
+  const factory = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
+
+  /** factory.json plus a third reviewed repo, added as one entry. */
+  function withThirdRepo(): string {
+    const config = structuredClone(factory);
+    config.repos.other = { ...config.repos.target, github: "AJBeumer/other-app", path: "../other-app" };
+    const file = join(tmpdir(), "factory-with-third-repo.json");
+    writeFileSync(file, JSON.stringify(config));
+    return file;
+  }
+
+  it("protects a third repo once it has an entry", () => {
+    const config = withThirdRepo();
+    const bash3 = (command: string) => decide("Bash", { command }, HARNESS, config);
+    expect(bash3('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toMatch(
+      /hint into other-app/,
+    );
+    expect(bash3("git push --force https://github.com/AJBeumer/other-app.git main")).toMatch(
+      /Force pushes to other-app/,
+    );
+    expect(bash3('gh issue create --repo AJBeumer/faultforge --title "x" --body "see other-app#2"')).toMatch(
+      /link to the target/,
+    );
+    expect(
+      decide("Edit", { file_path: "D:/Projects/other-app/README.md", new_string: "planted here" }, HARNESS, config),
+    ).toMatch(/other-app/);
+  });
+
+  it("still protects the target alongside the third repo", () => {
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, withThirdRepo())).toMatch(/names the lab/);
+  });
+
+  it("doesn't touch a repo that isn't in the config", () => {
+    expect(bash('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toBeUndefined();
+  });
+
+  /** factory.json changed by `edit`, written to a temp file. */
+  function configWith(name: string, edit: (config: typeof factory) => void): string {
+    const config = structuredClone(factory);
+    edit(config);
+    const file = join(tmpdir(), `factory-${name}.json`);
+    writeFileSync(file, JSON.stringify(config));
+    return file;
+  }
+
+  it("keeps protecting the target when the config wrongly marks it as lab", () => {
+    const config = configWith("target-as-lab", (c) => {
+      c.repos.target.guard = "lab";
+      c.repos.other = { ...c.repos.faultforge, github: "AJBeumer/other-app", guard: "reviewed" };
+    });
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, config)).toMatch(/names the lab/);
+  });
+
+  it("protects a reviewed checkout whose folder name differs from its GitHub name", () => {
+    const config = configWith("other-folder", (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: "../checkout-two" };
+    });
+    expect(
+      decide("Edit", { file_path: "D:/Projects/checkout-two/README.md", new_string: "planted here" }, HARNESS, config),
+    ).toMatch(/other-app/);
+    expect(
+      decide("Bash", { command: 'git commit -m "Fix planted bug"' }, "D:\\Projects\\checkout-two", config),
+    ).toMatch(/planted/);
+  });
+
+  it("blocks one reviewed repo from linking to another", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge-target --title "x" --body "see other-app#2"';
+    expect(decide("Bash", { command }, HARNESS, withThirdRepo())).toMatch(/link/);
+  });
+
+  it("checks where a post goes, not which folder it's sent from (two repos)", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge --title "x" --body "see faultforge-target#3"';
+    expect(decide("Bash", { command }, TARGET)).toMatch(/link to the target/);
+  });
+
+  it("checks where a post goes, not which folder it's sent from (Qodo's third-repo case)", () => {
+    const command = 'gh issue create --repo AJBeumer/other-app --title "x" --body "see faultforge-target#3"';
+    expect(decide("Bash", { command }, TARGET, withThirdRepo())).toMatch(/link to the target/);
+  });
+
+  it("still blocks a target force push chained after a command for this repo (Qodo, 2e15454)", () => {
+    const command =
+      "gh issue list --repo AJBeumer/faultforge; git push --force https://github.com/AJBeumer/faultforge-target.git main";
+    expect(bash(command)).toMatch(/Force pushes|separate commands/);
+  });
+
+  it("still blocks a target force push via cd, chained after a post here", () => {
+    const command =
+      'gh issue comment 5 --repo AJBeumer/faultforge --body "x"; cd /d/Projects/faultforge-target && git push --force origin main';
+    expect(bash(command)).toMatch(/Force pushes|separate commands/);
+  });
+
+  it("isn't fooled by --repo written inside a quoted body (Qodo, 2e15454)", () => {
+    const command = 'gh pr create --body "--repo evil/repo FaultForge" --repo AJBeumer/faultforge-target --title "x"';
+    expect(bash(command)).toMatch(/names the lab/);
+  });
+
+  it("blocks a chained command that writes across repos, from the target checkout (Qodo, 77c1f44)", () => {
+    expect(bash("gh issue list --repo AJBeumer/faultforge; git push --force origin main", TARGET)).toMatch(
+      /separate commands/,
+    );
+    expect(bash('gh issue list --repo AJBeumer/faultforge; git commit -m "Fix planted bug"', TARGET)).toMatch(
+      /separate commands/,
+    );
+  });
+
+  it("checks a lab commit whose message fakes a target --repo (Qodo, 77c1f44)", () => {
+    expect(bash('git commit -m "Note --repo AJBeumer/faultforge-target see faultforge-target#6"')).toMatch(
+      /link to the target/,
+    );
+  });
+
+  it("treats a single & as a second command (Qodo, ae9c1de)", () => {
+    const command =
+      'gh issue create --repo AJBeumer/faultforge --title "x" --body "a" & gh issue create --repo AJBeumer/faultforge-target --title "y" --body "b"';
+    expect(bash(command)).toMatch(/separate commands/);
+  });
+
+  it("sees commands hidden in a quoted $(...) (Qodo, ae9c1de)", () => {
+    const command =
+      'echo "$(gh issue create --repo AJBeumer/faultforge --title x --body a; gh issue create --repo AJBeumer/faultforge-target --title y --body b)"';
+    expect(bash(command)).toMatch(/separate commands/);
+  });
+
+  it("lets a target PR link its own ticket when run from the target checkout, as /work-ticket now does", () => {
+    const command =
+      'cd /d/Projects/faultforge-target && gh pr create --repo AJBeumer/faultforge-target --title "Add a cancel route" --body "Ticket: https://github.com/AJBeumer/faultforge-target/issues/3"';
+    expect(bash(command)).toBeUndefined();
+  });
+
+  it("allows a chained command that stays inside the target checkout", () => {
+    expect(
+      bash(
+        'cd /d/Projects/faultforge-target && git add -A && git commit -m "Add a cancel route" && git push -q -u origin cancel',
+      ),
+    ).toBeUndefined();
+  });
+
+  it("allows a target PR whose heredoc body has several lines", () => {
+    expect(
+      bash(
+        'gh pr create --repo AJBeumer/faultforge-target --title "Add a cancel route" --body-file - <<EOF\nCloses #3\n\nAdds cancel.\nEOF',
+      ),
+    ).toBeUndefined();
+  });
+
+  it("treats a post to this repo as a post here, even when sent from the target folder", () => {
+    const command = 'gh issue create --repo AJBeumer/faultforge --title "FaultForge note" --body "x"';
+    expect(decide("Bash", { command }, TARGET)).toBeUndefined();
+  });
+
+  it("doesn't let a reviewed repo's name hide a forbidden word", () => {
+    const config = configWith("named-ledger", (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/ledger", path: "../ledger" };
+    });
+    const command = 'gh pr create --repo AJBeumer/faultforge-target --title "Update ledger" --body "x"';
+    expect(decide("Bash", { command }, HARNESS, config)).toMatch(/ledger/);
+  });
+
+  it("falls back to protecting the target if factory.json can't be read", () => {
+    const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
+    expect(decide("Bash", { command }, HARNESS, join(tmpdir(), "no-such-factory.json"))).toMatch(/names the lab/);
   });
 });

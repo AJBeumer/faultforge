@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { openNumbers, readinessProblems, SECTIONS, writtenDependencies } from "./ticket-ready.ts";
+import { loadFactory, repoConfig } from "./factory-config.ts";
+import { openNumbers, readinessProblems, writtenDependencies } from "./ticket-ready.ts";
+
+const factory = loadFactory();
+const SECTIONS = {
+  faultforge: repoConfig(factory, "faultforge").tickets,
+  target: repoConfig(factory, "target").tickets,
+};
 
 const ready = `### Result
 A thing exists.

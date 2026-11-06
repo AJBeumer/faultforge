@@ -5,26 +5,15 @@
  *   npm run ticket:ready -- faultforge 47
  *   npm run ticket:ready -- target 4
  *
+ * The repo key, its GitHub name and its ticket sections come from `factory.json`.
  * Exits 0 when ready, 1 with the list of problems when not.
  */
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadFactory, type RepoConfig } from "./factory-config.ts";
 
-interface Sections {
-  required: string[];
-  /** The section that must hold checklist items, so "done" can be verified. */
-  checklist: string;
-}
-
-/** Section names per repo. The target's tickets use its own form ("What", "Acceptance criteria"). */
-export const SECTIONS = {
-  faultforge: { required: ["Result", "Done when", "Must not break"], checklist: "Done when" },
-  target: { required: ["What", "Acceptance criteria", "Must not break"], checklist: "Acceptance criteria" },
-} satisfies Record<string, Sections>;
-
-type RepoKey = keyof typeof SECTIONS;
-const REPOS: Record<RepoKey, string> = { faultforge: "AJBeumer/faultforge", target: "AJBeumer/faultforge-target" };
+type Sections = RepoConfig["tickets"];
 
 /** A ticket's `###` sections by lower-case name. Code blocks are left out, so examples can't count. */
 function sectionsOf(body: string): Map<string, string> {
@@ -60,7 +49,7 @@ export function readinessProblems(body: string, sections: Sections, openBlockers
   const parts = sectionsOf(body);
 
   const problems: string[] = [];
-  for (const name of sections.required) {
+  for (const name of sections.sections) {
     const text = parts.get(name.toLowerCase());
     if (text === undefined) problems.push(`missing section "${name}"`);
     else if (isEmpty(text)) problems.push(`section "${name}" is empty`);
@@ -77,13 +66,15 @@ function gh(...args: string[]): string {
 }
 
 function main() {
+  const factory = loadFactory();
   const [repoKey, number] = process.argv.slice(2);
-  if (!repoKey || !(repoKey in SECTIONS) || !number) {
-    console.error("usage: npm run ticket:ready -- <faultforge|target> <issue number>");
+  const config = repoKey ? factory.repos[repoKey] : undefined;
+  if (!config || !number) {
+    console.error(`usage: npm run ticket:ready -- <${Object.keys(factory.repos).join("|")}> <issue number>`);
     process.exit(2);
   }
-  const repo = REPOS[repoKey as RepoKey];
-  const sections = SECTIONS[repoKey as RepoKey];
+  const repo = config.github;
+  const sections = config.tickets;
   const issue = JSON.parse(gh("api", `repos/${repo}/issues/${number}`));
   const body: string = issue.body ?? "";
   // Native "blocked by" links, every page, plus blockers only written in the Depends on text.

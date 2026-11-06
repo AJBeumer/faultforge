@@ -5,28 +5,30 @@ description: Work one ticket end to end - read it from GitHub Issues, branch, bu
 
 # Work one ticket
 
-Arguments: repo and ticket number, e.g. `target 4` or `faultforge 3`. One ticket at a time, in the order the owner gave.
+Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` or `faultforge 3`. One ticket at a time, in the order the owner gave.
+
+**Repo settings come from `factory.json`, never from memory:** `github` (owner/name), `path` (local checkout), `guard` (`lab` or `reviewed`), `check` (must pass before every commit), `start` (how to run it for a live check, or null), `tickets` (required sections), `board` (tracked on the project board), and `evidence` (where saved reviews and transcripts go). Below, `<github>`, `<path>`, `<check>` and so on mean that repo's values. Read them, with the shared `evidence` folder, with `node -e 'const f=require("./factory.json"); console.log(JSON.stringify({...f.repos["<key>"], evidence: f.evidence}, null, 2))'`. Paths are relative to this repo.
 
 Read `CLAUDE.md` first. In the target, also follow its `AGENTS.md`. This skill is for ordinary work. Planted-bug cases use `/new-case`.
 
-Use the hackathon token for every `gh` call: `export GH_TOKEN="$(tr -d '\r\n' < 'C:/Users/aj_be/.github/PAT_GH_FF_BASIC_TARGET.txt')"`. Never print it. Run target commands on their own, never chained with commands for this repo (the guard hook scans the whole command).
+Every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. Run commands for a `reviewed` repo on their own, never chained with commands for another repo, and from inside its checkout: `cd <path> && gh pr create --repo <github> ...`. The guard allows a reviewed repo's PR or issue to link to its own tickets (such as `Ticket: <link>`) only when the command runs in that checkout, and refuses any command that writes to more than one repo.
 
 ## 1. Read the ticket
 
 ```bash
-gh issue view <N> --repo AJBeumer/<repo>
+gh issue view <N> --repo <github>
 ```
 
-- Check it's ready: `npm run ticket:ready -- <faultforge|target> <N>`. It needs every section (FaultForge: Result, Done when, Must not break; target: What, Acceptance criteria, Must not break), a checklist to verify against, and no open blockers.
+- Check it's ready: `npm run ticket:ready -- <key> <N>`. It needs every section in `tickets.sections`, a checklist in `tickets.checklist`, and no open blockers.
 - If it isn't ready, **stop**. Tell the owner exactly what the command reported, and don't start until the ticket is fixed. Don't fill the gap yourself and carry on.
-- Move it to **In progress** on the board (FaultForge tickets only; the board doesn't track the target).
+- If `board` is true, move it to **In progress** on the project board. Repos with `board: false` stay off it, so a `reviewed` repo never links back here.
 
 ## 2. Branch and build
 
 - Start from an up-to-date `main`. One branch per ticket, named after the change (`cancel-booking`), never after the ticket number.
 - Write a test for every criterion, plus at least one failure case.
-- `npm run check` must pass before committing.
-- Editing the target's `AGENTS.md` or `INVARIANTS.md` changes Qodo's rules: that's a new configuration version. Record it in the decision log and snapshot it.
+- `<check>` must pass before committing, and CI runs it again on the PR.
+- In a `reviewed` repo, editing `AGENTS.md` or `INVARIANTS.md` changes Qodo's rules: that's a new configuration version. Record it in the decision log and snapshot it.
 
 ## 3. Open the PR
 
@@ -58,19 +60,20 @@ Fill the Result column only with what you actually observed. Leave it blank unti
 Qodo rewrites its review comment in place after every push, so the first version is lost if you wait. Poll every 20 seconds (up to 20 minutes) and save the raw comments as soon as "Code Review by Qodo" appears, and again after each new commit:
 
 ```bash
-D=private/raw-artifacts/day-NN
-gh api repos/AJBeumer/<repo>/issues/<pr>/comments > $D/pr<pr>-issue-comments.<commit>.raw.json
-gh api repos/AJBeumer/<repo>/pulls/<pr>/comments  > $D/pr<pr>-review-comments.<commit>.raw.json
+D=<evidence>/day-NN
+gh api repos/<github>/issues/<pr>/comments > $D/<key>-pr<pr>-issue-comments.<commit>.raw.json
+gh api repos/<github>/pulls/<pr>/comments  > $D/<key>-pr<pr>-review-comments.<commit>.raw.json
 ```
 
 ## 5. Check the behaviour, not just the tests
 
 A clean review doesn't mean the ticket is done.
 
-- First make sure port 3000 is free (`netstat -ano | grep ":3000 .*LISTENING"`). A leftover server answers just as convincingly as the new one.
-- Run the app from the branch (target: `PORT=3000 npx tsx src/server.ts` in the background). Before checking anything, confirm the `pid` in the server's log is the process that owns port 3000.
+- If `start` is null, check the delivered behaviour directly instead: run the command, the hook, or the script the ticket is about, with real input, and record what happened.
+- Otherwise, first make sure `start.port` is free (`netstat -ano | grep ":<port> .*LISTENING"`). A leftover server answers just as convincingly as the new one.
+- Run `PORT=<port> <start.command>` in `<path>`, in the background, and wait until `<start.health>` answers. Before checking anything, confirm the `pid` in the server's log is the process that owns the port.
 - Check every criterion and at least one edge or failure case with real requests. Show that a refused request left state unchanged by reading it back.
-- Save the transcript to `private/raw-artifacts/day-NN/ticket-<N>-live-check.txt` and put the results in the PR table.
+- Save the transcript to `<evidence>/day-NN/<key>-ticket-<N>-live-check.txt` and put the results in the PR table.
 - Stop the server with its whole process tree (`taskkill //PID <pid> //T //F`). Stopping the background task only ends `npx` and leaves Node listening.
 
 ## 6. Act on the findings

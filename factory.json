@@ -1,0 +1,30 @@
+{
+  "$schema": "./schemas/factory.v1.json",
+  "evidence": "private/raw-artifacts",
+  "repos": {
+    "faultforge": {
+      "github": "AJBeumer/faultforge",
+      "path": ".",
+      "guard": "lab",
+      "check": "npm run check",
+      "start": null,
+      "tickets": {
+        "sections": ["Result", "Done when", "Must not break"],
+        "checklist": "Done when"
+      },
+      "board": true
+    },
+    "target": {
+      "github": "AJBeumer/faultforge-target",
+      "path": "../faultforge-target",
+      "guard": "reviewed",
+      "check": "npm run check",
+      "start": { "command": "npx tsx src/server.ts", "port": 3000, "health": "/health" },
+      "tickets": {
+        "sections": ["What", "Acceptance criteria", "Must not break"],
+        "checklist": "Acceptance criteria"
+      },
+      "board": false
+    }
+  }
+}

@@ -1,20 +1,36 @@
 /**
- * Claude Code PreToolUse hook. Keeps the target repository free of hints for the reviewer.
+ * Claude Code PreToolUse hook. Keeps the reviewed repositories free of hints for the reviewer.
  *
- * Blocks, for faultforge-target only:
+ * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. For each, it blocks:
  *  - force pushes
  *  - commits, pushes, PRs, comments and API writes whose text names the lab or the bug
  *  - file edits whose new content does the same
+ * And everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo.
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 
-const TARGET = /faultforge-target/i;
-/** A link GitHub turns into a "mentioned in" event on a target issue or PR. */
-const TARGET_LINK = /github\.com\/AJBeumer\/faultforge-target\/(issues|pull)\/\d+|faultforge-target#\d+/i;
+interface Reviewed {
+  /** owner/name on GitHub */
+  github: string;
+  /** The repo name on GitHub. */
+  name: string;
+  /** The local checkout's folder name, from its configured path. */
+  folder: string;
+}
+
+/** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
+const TARGET: Reviewed = {
+  github: "AJBeumer/faultforge-target",
+  name: "faultforge-target",
+  folder: "faultforge-target",
+};
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const REVIEWED = reviewedRepos();
 
 const input = JSON.parse(readFileSync(0, "utf8"));
 const tool: string = input.tool_name ?? "";
@@ -27,69 +43,153 @@ if (tool === "Bash" || tool === "PowerShell") {
   checkFileEdit();
 }
 
+/**
+ * The target, plus every repo marked reviewed in `factory.json` (or `FAULTFORGE_CONFIG`). A missing,
+ * broken or wrong config can only fail to add a repo; it can never switch off the target's guard.
+ */
+function reviewedRepos(): Reviewed[] {
+  const repos = [TARGET];
+  try {
+    const path = process.env.FAULTFORGE_CONFIG ?? join(import.meta.dirname, "../../factory.json");
+    const entries: { github?: unknown; path?: unknown; guard?: unknown }[] = Object.values(
+      JSON.parse(readFileSync(path, "utf8")).repos ?? {},
+    );
+    for (const entry of entries) {
+      if (entry.guard !== "reviewed" || typeof entry.github !== "string" || typeof entry.path !== "string") continue;
+      if (repos.some((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase())) continue;
+      const name = entry.github.split("/")[1] ?? entry.github;
+      repos.push({ github: entry.github, name, folder: basename(entry.path) || name });
+    }
+  } catch {
+    // keep the target alone
+  }
+  return repos;
+}
+
+/** A link GitHub turns into a "mentioned in" event on one of these repos' issues or PRs. */
+function linkPattern(repos: Reviewed[]): RegExp | undefined {
+  if (!repos.length) return undefined;
+  return new RegExp(
+    repos.map((r) => `github\\.com/${esc(r.github)}/(issues|pull)/\\d+|${esc(r.name)}#\\d+`).join("|"),
+    "i",
+  );
+}
+
+/**
+ * Every GitHub repo (owner/name) a command names as a destination: `--repo`, an API route, or a URL
+ * given to `gh` or to `git push/pull/fetch/clone/remote`, anywhere in the command, chained parts and
+ * quoted text included. The guard applies the strictest rule over all of them.
+ */
+function explicitDestinations(command: string): string[] {
+  const patterns = [
+    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    /\brepos\/([\w.-]+\/[\w.-]+)\//gi,
+    /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
+    /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
+  ];
+  return patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
+}
+
+/** True when the command moves into the repo's checkout itself (`cd` or `git -C`). */
+function entersCheckout(command: string, repo: Reviewed): boolean {
+  const folders = [repo.folder, repo.name].map(esc).join("|");
+  return new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command);
+}
+
+/**
+ * True when the command runs more than one command: `;`, `&&`, `||`, `|`, a background `&`, a new
+ * line, or a command substitution. Quoted text and heredoc bodies may hold those characters as plain
+ * text, so they are ignored, except double-quoted text that runs `$(...)` or backticks.
+ */
+function isChained(command: string): boolean {
+  const bare = command
+    .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
+    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (/^"[\s\S]*(\$\(|`)/.test(quoted) ? quoted : " "));
+  return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(bare.trim());
+}
+
+/** True when a local path is inside the repo's checkout folder (whole folder names only). */
+function inCheckout(path: string, repo: Reviewed): boolean {
+  return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
+}
+
 function checkCommand(command: string) {
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  if (!targetsTargetRepo(command)) {
-    if (writes) checkOneWay(command);
+  // Every reviewed repo the command touches, by any part of it: a named destination, or a `cd`/`git -C`
+  // into its checkout. The folder the command runs in only counts when it names no destination at
+  // all (say, `git commit` inside a checkout), so a post from there to another repo is judged by
+  // where it goes.
+  const destinations = explicitDestinations(command);
+  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
+
+  // Reading a shell command with patterns can't be complete, so a command that writes and involves
+  // more than one repo must be split: each part then gets judged on its own. A chain that stays in
+  // one repo (cd target && git add && git commit && git push) is fine.
+  if (writes && isChained(command)) {
+    const involved = new Set(destinations);
+    for (const r of REVIEWED) if (runsIn(r)) involved.add(r.github.toLowerCase());
+    if (involved.size > 1) {
+      deny(
+        "This command writes and involves more than one repo. Run the parts for different repos as separate commands.",
+      );
+    }
+  }
+
+  const touched = REVIEWED.filter(
+    (r) =>
+      destinations.includes(r.github.toLowerCase()) ||
+      entersCheckout(command, r) ||
+      (!destinations.length && inCheckout(cwd, r)),
+  );
+  const repo = touched[0];
+  if (!repo) {
+    if (writes) checkLinks(command, REVIEWED);
     return;
   }
 
   if (/\bgit\b[^|;&\n]*\bpush\b[^|;&\n]*(\s--force(-with-lease)?\b|\s-f\b|\s\+\S)/.test(command)) {
-    deny("Force pushes to faultforge-target are not allowed: its history is evidence for recorded cases.");
+    deny(`Force pushes to ${repo.name} are not allowed: its history is evidence for recorded cases.`);
   }
   if (!writes) return;
 
-  const text = [stripTargetNames(command), ...referencedFiles(command)].join("\n");
+  // A reviewed repo may link to its own tickets only when the command really runs in its checkout
+  // and goes nowhere else. Words in a message (a quoted --repo, say) can't grant that.
+  const onlyItself = touched.length === 1 && runsIn(repo) && destinations.every((d) => d === repo.github.toLowerCase());
+  checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
+
+  const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
   const found = telltales(text);
   if (found.length) {
     deny(
-      `This would put a hint into faultforge-target (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
+      `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
     );
   }
 }
 
 function checkFileEdit() {
-  const path = String(args.file_path ?? "");
-  if (!TARGET.test(resolve(cwd, path))) return;
+  const path = resolve(cwd, String(args.file_path ?? ""));
+  const repo = REVIEWED.find((r) => inCheckout(path, r));
+  if (!repo) return;
   const text = [args.content, args.new_string, ...(args.edits ?? []).map((e: { new_string?: string }) => e.new_string)]
     .filter(Boolean)
     .join("\n");
-  const found = telltales(stripTargetNames(text));
+  const found = telltales(stripReviewedNames(text));
   if (found.length) {
     deny(
-      `This edit would put a hint into faultforge-target (${found.join(", ")}). Keep target files free of any mention of the lab.`,
+      `This edit would put a hint into ${repo.name} (${found.join(", ")}). Keep its files free of any mention of the lab.`,
     );
   }
 }
 
 /**
- * True when the command runs in, or acts on, the target repository. A target URL that is only
- * part of the text (say, a link written into a file here) doesn't count; one given to `gh` as
- * the thing to act on does.
+ * Links only go one way: posts may name reviewed work as plain text ("target 3"), but never link to
+ * one of `repos`' issues or PRs. A link would show on that repo's timeline, where its reviewer reads it.
  */
-function targetsTargetRepo(command: string): boolean {
-  return (
-    TARGET.test(cwd) ||
-    /\b(cd|git\s+-C)\s+["']?[^\s"']*faultforge-target/i.test(command) ||
-    /--repo[\s=]+["']?AJBeumer\/faultforge-target\b/i.test(command) ||
-    /repos\/AJBeumer\/faultforge-target\//i.test(command) ||
-    /\bgit\b[^|;&\n]*\b(push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]AJBeumer\/faultforge-target\b/i.test(
-      command,
-    ) ||
-    /\bgh\s+(pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/AJBeumer\/faultforge-target\b/i.test(command)
-  );
-}
-
-/**
- * Links only go one way: this repository may name target work as plain text ("target 3"), but its
- * issues, PRs and commits never link to a target issue or PR. A link would show on the target's
- * timeline, where its reviewer reads it.
- */
-function checkOneWay(command: string) {
+function checkLinks(command: string, repos: Reviewed[]) {
   // Only when `gh pr create` is a command being run, not words inside a message.
   if (/(?:^|[;&|\n]\s*)gh\s+pr\s+create\b[^|;&\n"']*\s--fill(-first|-verbose)?\b/.test(command)) {
     deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
@@ -99,18 +199,22 @@ function checkOneWay(command: string) {
   // itself, not in the extracted arguments, so check the whole command for those.
   const indirect = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command) || posted.some((p) => /[$`]/.test(p));
   const text = [...(indirect ? [command] : posted), ...referencedFiles(command)].join("\n");
-  if (TARGET_LINK.test(text)) {
+  const linked = repos.find((r) => linkPattern([r])?.test(text));
+  if (linked) {
     deny(
-      'This would link to the target from FaultForge, and the target would show it on its timeline. Name target work as plain text instead, like "target 3".',
+      `This would link to the target (${linked.name}) from here, and it would show that on its timeline. Name the work as plain text instead, like "target 3".`,
     );
   }
 }
 
-/** The target's own name and local paths are allowed; mentions of the lab in prose are not. */
-function stripTargetNames(text: string): string {
-  return text
-    .replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (/faultforge/i.test(token) ? " " : token))
-    .replace(/faultforge-target/gi, " ");
+/**
+ * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
+ * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
+ */
+function stripReviewedNames(text: string): string {
+  const repoWords = REVIEWED.flatMap((r) => [r.name, r.folder]).map(esc);
+  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
+  return text.replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (identifies.test(token) ? " " : token));
 }
 
 /**
