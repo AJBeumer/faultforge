@@ -1,38 +1,14 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { tempRepo } from "./fixtures.ts";
 
 const HOOK = join(import.meta.dirname, "guard-target.ts");
 const HARNESS = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
 const FACTORY = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
-
-/**
- * A temporary git repository with one commit, standing in for a reviewed checkout so the guard reads pending
- * content from it and never from the owner's real checkout. With `withOrigin`, a bare `origin` tracks its
- * `main`; without one, every local commit counts as unpushed, which the tests that don't push don't mind.
- */
-function tempRepo(withOrigin = false) {
-  const dir = mkdtempSync(join(tmpdir(), "guard-repo-"));
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  git("init", "-q", "-b", "main");
-  writeFileSync(join(dir, "README.md"), "# App\n");
-  git("add", ".");
-  git("commit", "-q", "-m", "Start");
-  if (withOrigin) {
-    const remote = mkdtempSync(join(tmpdir(), "guard-remote-"));
-    execFileSync("git", ["init", "-q", "--bare", remote]);
-    git("remote", "add", "origin", remote);
-    git("push", "-q", "-u", "origin", "main");
-  }
-  return { dir, git };
-}
 
 /** factory.json with the target's checkout pointed at a fixture repo, written to its own temp file. */
 function configWithTarget(checkout: string, extra?: (config: typeof FACTORY) => void): string {
@@ -674,6 +650,48 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
         expect(decide("Bash", { command: `git -C ${missing} commit -m Tidy` }, HARNESS, config)).toMatch(/can't find/);
         // A commit elsewhere is not held up by a reviewed checkout that isn't there.
         expect(decide("Bash", { command: "git commit -m Tidy" }, HARNESS, config)).toBeUndefined();
+      });
+    });
+
+    describe("what Qodo found in round 3 (PR 120), through the hook", () => {
+      it("refuses a chain with a numbered redirect or an expanding heredoc, and allows git -C steps", () => {
+        const { dir, config } = reviewedRepo();
+        expect(
+          decide("Bash", { command: 'echo "$X" 1>notes.md && git add . && git commit -m Tidy' }, dir, config),
+        ).toMatch(/on its own/);
+        expect(
+          decide(
+            "Bash",
+            { command: "echo <<EOF\n$(echo planted > n.md)\nEOF\ngit add . && git commit -m Tidy" },
+            dir,
+            config,
+          ),
+        ).toMatch(/on its own/);
+        expect(
+          decide("Bash", { command: `git -C ${dir} add -A && git -C ${dir} commit -m Tidy` }, HARNESS, config),
+        ).toBeUndefined();
+      });
+
+      it("refuses a push whose merge commit introduced a telltale while resolving", () => {
+        const { dir, git, config } = reviewedRepo(true);
+        git("checkout", "-q", "-b", "feature");
+        writeFileSync(join(dir, "feature.md"), "fine\n");
+        git("add", "feature.md");
+        git("commit", "-q", "-m", "Feature");
+        git("checkout", "-q", "main");
+        git("merge", "-q", "--no-ff", "--no-commit", "feature");
+        writeFileSync(join(dir, "resolved.md"), "The planted bug\n");
+        git("add", "resolved.md");
+        git("commit", "-q", "-m", "Merge feature");
+        expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
+      });
+
+      it("refuses a commit of a file staged and then deleted from the working tree", () => {
+        const { dir, git, config } = reviewedRepo();
+        writeFileSync(join(dir, "notes.md"), "The planted bug\n");
+        git("add", "notes.md");
+        rmSync(join(dir, "notes.md"));
+        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
       });
     });
   });
