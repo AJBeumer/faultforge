@@ -248,3 +248,41 @@ describe("factory policy: text that only quotes blocked words (#73)", () => {
     expect(denialReason("Edit", ["only files under the run's folder may change"])).not.toMatch(/--body-file/);
   });
 });
+
+describe("factory policy: the skills' run-mode steps are allowed, the interactive ones they replace are not (#113)", () => {
+  const ticket = "18";
+
+  it.each([
+    // /work-ticket step 1 in a run: the snapshot file, not the live ticket
+    'cat "$FAULTFORGE_TICKET_FILE"',
+    "sed -n 1,200p $FAULTFORGE_TICKET_FILE",
+    // steps 4 and 6: the capture and proof commands
+    "npm run review:wait -- faultforge 12 --commit abc1234",
+    "npm run revert:check -- faultforge 12",
+    // step 3: the PR with its body as a file
+    "gh pr create --repo AJBeumer/faultforge --title 'Filter bookings' --body-file pr.md",
+    "git commit -F msg.txt",
+    // step 5: the live check and the Linux way to stop the server tree
+    "netstat -ano | grep ':3000 .*LISTENING'",
+    "curl -s http://127.0.0.1:3000/health",
+    "pkill -TERM -P 4242; kill 4242",
+    // reading the board is fine
+    "gh project view 6 --owner AJBeumer",
+    "gh project item-list 6 --owner AJBeumer",
+  ])("allows %s", (command) => {
+    expect(commandViolations(command, ticket)).toEqual([]);
+  });
+
+  it.each([
+    // the interactive step 1
+    "gh issue view 18 --repo AJBeumer/faultforge",
+    // the interactive token paragraph
+    'export GH_TOKEN="$(cat /somewhere/token.txt)"',
+    // the board move, as the skill used to do it
+    "gh project item-edit --id X --field-id Y --project-id Z --single-select-option-id W",
+    "gh project item-add 6 --owner AJBeumer --url https://github.com/AJBeumer/faultforge/issues/18",
+    "gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: {}) { clientMutationId } }'",
+  ])("blocks %s", (command) => {
+    expect(commandViolations(command, ticket)).not.toEqual([]);
+  });
+});

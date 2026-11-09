@@ -29,6 +29,11 @@ const COMMAND_RULES: [RegExp, string][] = [
     /\bgh\s+(repo|label|secret|variable|workflow|ruleset|release)\s+(?!view\b|list\b)\w/i,
     "repo settings are the owner's",
   ],
+  // The board is a write the runner's audit can't see, so a run may only read it (#113).
+  [
+    /\bgh\s+project\s+(?!view\b|list\b|field-list\b|item-list\b)\w/i,
+    "the runner tracks the ticket; the board is the owner's",
+  ],
   [
     /\bgh\s+api\b[^\n]*(\s(-X|--method)[\s=]*(?!GET\b)\w|\s(-f|-F|--field|--raw-field|--input)[\s=])/i,
     "gh api is read-only here",

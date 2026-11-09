@@ -400,7 +400,7 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
   return [
     `You are running unattended: a scheduled task started you for ${repoKey} ticket ${number}. Nobody is watching or will answer, so never ask a question or wait for one.`,
     "Work only this ticket, with the /factory routine. At most three review rounds.",
-    `The ticket's text, as the runner checked it, is in ${ticketFile}. Read the ticket from that file only: never with gh issue view or gh api, which are blocked for this ticket in this run.`,
+    `The ticket's text, as the runner checked it, is in ${ticketFile} (also named by the FAULTFORGE_TICKET_FILE environment variable). Read the ticket from that file only: never with gh issue view, gh api or npm run ticket:ready, which read it live. Don't move the ticket on the project board: the runner tracks it.`,
     "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
     "Pass PR bodies, comments and commit messages as files, never inline: write the text with the Write tool to a file in your run folder or the temp folder, then use gh pr create/edit --body-file or git commit -F. The policy hook reads the whole command, so a blocked word quoted in an inline message blocks it.",
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
@@ -1036,6 +1036,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             FAULTFORGE_FACTORY_RUN: runId,
             FAULTFORGE_RUN_ROOT: ws.root,
             FAULTFORGE_TICKET_NUMBER: String(number),
+            FAULTFORGE_TICKET_FILE: ticketFile,
           },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
