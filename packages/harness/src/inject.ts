@@ -15,7 +15,7 @@ import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { telltales } from "./neutral.ts";
+import { templateTelltales } from "./neutral.ts";
 
 interface Template {
   id: string;
@@ -55,8 +55,10 @@ const templateDir = [
 ].find((dir) => existsSync(join(dir, "template.json")));
 if (!templateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
 const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
-const giveaways = telltales(`${template.publish.branch}\n${template.publish.commitMessage}`);
-if (giveaways.length) fail(`branch name or commit message gives the case away: ${giveaways.join(", ")}`);
+// Everything the template would put in front of the reviewer must read as an ordinary change: the branch
+// name and commit message, and the code it looks for and writes.
+const giveaways = templateTelltales(template);
+if (giveaways.length) fail(`the template gives the case away (${giveaways.join("; ")})`);
 const proofPath = join(templateDir, template.proofTest);
 const artefactDir = join(PRIVATE_DIR, "raw-artifacts", caseId);
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");

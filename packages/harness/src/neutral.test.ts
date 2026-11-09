@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { telltales } from "./neutral.ts";
+import { telltales, templateTelltales } from "./neutral.ts";
 
 describe("telltales", () => {
   it.each([
@@ -28,5 +28,30 @@ describe("telltales", () => {
 
   it("allows the target repository's own name", () => {
     expect(telltales("faultforge-target")).toEqual([]);
+  });
+});
+
+describe("templateTelltales (#105)", () => {
+  const template = {
+    find: "    const original = deps.store.getBooking(previous.bookingId);\n",
+    replace: "    const original = deps.store.getBooking(idempotencyKey);\n",
+    proofTest: "proof.test.ts",
+    publish: { branch: "tidy-replay-lookup", commitMessage: "Simplify replay lookup in createBooking" },
+  };
+
+  it("passes a template whose every reviewer-visible field reads as ordinary", () => {
+    expect(templateTelltales(template)).toEqual([]);
+  });
+
+  it("names the field that would give the case away, for every field that reaches the reviewed repo", () => {
+    expect(templateTelltales({ ...template, replace: "    // planted: look up by key\n" })).toEqual([
+      "replace: says planted",
+    ]);
+    expect(templateTelltales({ ...template, find: "// FaultForge marker\n" })).toEqual(["find: names the lab"]);
+    // The proof test stays private, so its name is not one of the checked fields (it isn't even in the type).
+    expect(templateTelltales({ ...template, publish: { ...template.publish, branch: "ff-0002" } })).toEqual([]);
+    expect(
+      templateTelltales({ ...template, publish: { branch: "FF-0002-fix", commitMessage: "Fix planted bug" } }),
+    ).toEqual(["branch: contains a case id", "commitMessage: says planted"]);
   });
 });
