@@ -8,6 +8,16 @@ Built for the Qodo hackathon *Build a Software Factory in 30 Days* (November 202
 
 ---
 
+## See it in five minutes
+
+Everything here is public and needs no account. In order of what it proves:
+
+1. **One real case, end to end:** [`examples/FF-0001.json`](examples/FF-0001.json). The planted bug's file and line, the exact commit Qodo reviewed, Qodo's finding, the fixed match rule applied criterion by criterion, and the owner's verdict. Qodo's review is on [target PR 1](https://github.com/AJBeumer/faultforge-target/pull/1) itself, readable without an account. Qodo caught the bug.
+2. **A measurement, not a claim:** [docs/rules-before-after.md](docs/rules-before-after.md). The same four diffs reviewed before and after one house rule, each of the eight PRs named, with the limits of the sample stated.
+3. **The decisions, day by day:** [docs/decision-log.md](docs/decision-log.md). One entry per hackathon day: what was asked, built, measured and learned, with every PR and commit it rests on.
+4. **The plan as tickets:** the [issues](https://github.com/AJBeumer/faultforge/issues) and the [board](https://github.com/users/AJBeumer/projects/6). The whole 30-day plan, including the parts not built yet, has been public since 6 November (Day 3), so every result from Day 3 on can be checked against a ticket that came first. Days 1 and 2 predate the tickets; their plan is the [charter](docs/CHARTER.md).
+5. **The one command that works today:** plant a bug yourself in a throwaway clone of the target, following [Try it](#try-it) below. It takes a few seconds.
+
 ## Why
 
 Coding agents write code faster than anyone can read it, so we lean on AI code review. But how good is that review on *your* codebase, for *your* kinds of bugs? Most of us are guessing.
@@ -16,7 +26,7 @@ FaultForge replaces the guessing with evidence.
 
 ## How it works
 
-1. **Break it.** A saboteur injects a realistic bug into a TypeScript codebase using deterministic templates: a removed guard clause, a flipped comparison, a missing auth check, a broken idempotency check.
+1. **Break it.** A saboteur injects a realistic bug into a TypeScript codebase using deterministic templates, such as a removed guard clause, a flipped comparison, a missing auth check, or a broken idempotency check. A template is published only after its case is adjudicated; one is public so far.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
 3. **Prove it.** The answer key lives in a private ledger outside the repository, so the reviewer never gets a hint. Every finding is matched against it with a fixed rule: right file, overlapping lines, right kind of problem.
 
@@ -94,9 +104,9 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 
 | Day | Milestone | State |
 |---|---|---|
-| 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1), [case record](examples/FF-0001.json)) |
-| 2 | House rules: target `AGENTS.md` imported as Qodo review standards (configuration v3) | Done ([PR #2](https://github.com/AJBeumer/faultforge-target/pull/2)) |
-| 3 | Backlog as [GitHub Issues](https://github.com/AJBeumer/faultforge/issues) with a [project board](https://github.com/users/AJBeumer/projects/6); thirteen tickets delivered in both repos, each through its own PR, CI and Qodo review (57 findings, 50 fixed); `review:wait` reads Qodo's real review status; the `/factory` loop works tickets between the owner's gates; Qodo configurations v4 and v5 | Done ([decision log](docs/decision-log.md)) |
+| 1 | Booking API, first injected bug, first Qodo review (case FF-0001) | Done: Qodo caught it ([PR #1](https://github.com/AJBeumer/faultforge-target/pull/1), [case record](examples/FF-0001.json), [decision log](docs/decision-log.md#day-1-your-factorys-first-delivery)) |
+| 2 | House rules: target `AGENTS.md` imported as Qodo review standards (configuration v3) | Done ([PR #2](https://github.com/AJBeumer/faultforge-target/pull/2), [decision log](docs/decision-log.md#day-2-house-rules)) |
+| 3 | Backlog as [GitHub Issues](https://github.com/AJBeumer/faultforge/issues) with a [project board](https://github.com/users/AJBeumer/projects/6); thirteen tickets delivered in both repos, each through its own PR, CI and Qodo review (57 findings, 50 fixed); `review:wait` reads Qodo's real review status; the `/factory` loop works tickets between the owner's gates; Qodo configurations v4 and v5 | Done ([decision log](docs/decision-log.md#day-3-connect-your-factory-to-the-backlog)) |
 | 4 | The factory starts itself: a `ready-for-agent` label (or a schedule) starts a run in [GitHub Actions](.github/workflows/factory.yml) that works one ticket to a Qodo-reviewed PR, fixes confirmed findings, and stops for the owner. It trusts only the owner's text and checks what actually changed after each run. Two unattended runs delivered merged PRs (one fixed a Qodo finding on its own); 29 Qodo findings on the day's PRs | Done ([decision log](docs/decision-log.md#day-4-automate-your-factorys-first-job), [how it works](docs/factory-trigger.md)) |
 | 5 | The factory improves itself, with evidence: `rules:evidence` builds a citable table from the saved reviews, `rules:propose` opens proposal tickets when a pattern repeats, a blind session drafted candidates that were scored on held-out findings, and the owner adopted the first house rule ([AGENTS.md](AGENTS.md), [PR #91](https://github.com/AJBeumer/faultforge/pull/91), Qodo configuration v6). Its effect was then measured: the same four diffs reviewed with and without the rule ([before/after report](docs/rules-before-after.md)) | Done ([decision log](docs/decision-log.md#day-5-make-your-factory-self-improve)) |
 | 6 to 14 | Verify Qodo's structured review output, more bug templates, control PRs, first measured baseline | Planned |
@@ -120,20 +130,26 @@ npm install
 npm run check      # typecheck, lint and tests
 ```
 
-Planting a bug needs a checkout of [faultforge-target](https://github.com/AJBeumer/faultforge-target) next to this repository:
+Planting a bug needs a checkout of [faultforge-target](https://github.com/AJBeumer/faultforge-target) next to this repository, with `npm install` run in it, a clean working tree, and `main` checked out. Use a throwaway clone: the command creates a branch in it.
 
 ```bash
+git clone https://github.com/AJBeumer/faultforge-target ../faultforge-target
+(cd ../faultforge-target && npm install)
 npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --case FF-0001
 ```
 
-The command applies the template on a new branch in the target, runs the hidden proof test before and after, and keeps the change only if the test proves the bug. It writes the answer key to a local `private/` folder, which git ignores. A one-command audit for your own repository is planned (see Status).
+The command applies the template on a new branch in the target (`tidy-replay-lookup`), runs the hidden proof test on `main` and on the branch, runs the target's own tests and typecheck, and keeps the branch only if the proof test passes on `main` and fails on the branch. It then switches the target back to `main`. It takes a few seconds and prints what it proved and the path of the answer key. Here, it creates a `private/` folder, which git ignores: the answer key (`ground-truth.jsonl`), an audit event (`audit-events.jsonl`), and the run's logs and diff under `raw-artifacts/FF-0001/`, which it does not announce. Nothing is pushed anywhere. To run it again, delete the branch in the target first. A one-command audit for your own repository is planned (see Status).
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `packages/harness/` | The inject command and its checks |
+| `packages/harness/` | The inject command, the review capture, the factory runner and their checks |
 | `templates/seed/` | Bug templates and proof tests, published after their case is adjudicated |
+| `examples/` | Sanitized public case records, one per adjudicated case |
+| `schemas/` | JSON Schemas for the case record and `factory.json` |
+| `factory.json` | The two repositories the factory works in, described once |
+| `docs/CHARTER.md` | The plan: goals, principles, method, roadmap |
 | `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons |
 | `CLAUDE.md`, `.claude/` | Rules and tooling for the coding agent that helps build this project, including a hook that blocks hints from reaching the target repository |
 
