@@ -162,6 +162,16 @@ describe("factory policy: file edits", () => {
     expect(editViolation(join(RUN, "FaultForge", ".claude-notes.md"), RUN, TEMP)).toBeUndefined();
   });
 
+  it("blocks edits to the workflows, which the run's token can't push anyway (Qodo on PR 119)", () => {
+    expect(editViolation(join(RUN, "FaultForge", ".github", "workflows", "factory.yml"), RUN, TEMP)).toMatch(
+      /workflows/,
+    );
+    expect(editViolation(join(RUN, "faultforge-target", ".github", "workflows", "check.yml"), RUN, TEMP)).toMatch(
+      /workflows/,
+    );
+    expect(editViolation(join(RUN, "FaultForge", ".github", "pull_request_template.md"), RUN, TEMP)).toBeUndefined();
+  });
+
   it("follows a link inside the run folder to where it really lands", () => {
     const base = mkdtempSync(join(tmpdir(), "policy-link-"));
     const run = join(base, "run");

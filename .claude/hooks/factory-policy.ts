@@ -126,13 +126,17 @@ function inside(path: string, folder: string): boolean {
 
 /**
  * Why a file edit is not allowed, or undefined. Only the run's own folder and the temp folder may change,
- * and never a `.claude` folder: it holds the agent's own guardrails, which the agent must not edit.
+ * and never a `.claude` folder (it holds the agent's own guardrails) or `.github/workflows` (the factory's
+ * own controls, and the run's token has no Workflows permission, so a push would fail anyway; #103).
  */
 export function editViolation(path: string, runRoot: string | undefined, temp = tmpdir()): string | undefined {
   if (!runRoot) return "the run has no FAULTFORGE_RUN_ROOT, so no file may change";
   const real = realTarget(path);
   if ([resolve(path), real].some((p) => /(^|[/\\])\.claude([/\\]|$)/i.test(p))) {
     return "the agent can't change its own guardrails (.claude)";
+  }
+  if ([resolve(path), real].some((p) => /(^|[/\\])\.github[/\\]workflows([/\\]|$)/i.test(p))) {
+    return "the agent can't change the workflows (.github/workflows): the owner does, with a token that may";
   }
   if (inside(real, realTarget(runRoot)) || inside(real, realTarget(temp))) return undefined;
   return `only files under the run's folder may change, not ${path}`;

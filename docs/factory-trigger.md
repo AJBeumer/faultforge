@@ -46,7 +46,7 @@ Repo secrets, set once:
 | `QODO_API_KEY` | For `review:wait`. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | From `claude setup-token`. |
 
-Only the owner adding `ready-for-agent` starts a job, so nobody else's event reaches the secrets. Inside the job, the secrets go to the two steps that need them, not to the job; no checkout keeps its token in `.git/config` (`persist-credentials: false`), and git pushes through `gh auth setup-git`, which reads the token from the environment at push time. The agent starts with an empty MCP configuration and `--strict-mcp-config`, so no MCP server of the machine running the tick is reachable from a run. A first, cheap job checks whether any ticket is labelled; the run itself starts only when one is. Turn the factory off and on:
+Only the owner adding `ready-for-agent` starts a job, so nobody else's event reaches the secrets. Inside the job, the secrets go to the two steps that need them, not to the job; no checkout keeps its token in `.git/config` (`persist-credentials: false`), and git pushes through `gh auth setup-git`, which reads the token from the environment at push time. The agent starts with an empty MCP configuration and `--strict-mcp-config`, so no MCP server of the machine running the tick is reachable from a run. The token has no Workflows permission, so a run can't push a change under `.github/workflows/`; the policy hook refuses such an edit up front, and a ticket that needs one stops for the owner. A first, cheap job checks whether any ticket is labelled; the run itself starts only when one is. Turn the factory off and on:
 
 ```bash
 gh workflow disable factory.yml --repo AJBeumer/faultforge
