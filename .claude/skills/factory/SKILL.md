@@ -15,7 +15,7 @@ The loop runs on its own between these, and stops at them:
 
 1. **A ticket isn't ready.** `npm run ticket:ready` says why. The owner fixes the ticket; the loop doesn't fill the gap.
 2. **A PR is ready to merge.** Only the owner merges.
-3. **A review can't be settled by the loop:** Qodo skipped or didn't finish the review, a finding needs a decision about the product, or three review rounds left an action-required finding open.
+3. **A review can't be settled by the loop:** Qodo skipped or didn't finish the review, a finding needs a decision about the product, three review rounds left an action-required finding open, or `revert:check` didn't show the PR's tests failing without its change (exit 1 or 2).
 4. **Anything that changes the reviewer:** a ticket that edits a reviewed repo's `AGENTS.md` or `INVARIANTS.md` (a new Qodo configuration version). The loop builds it, but the owner approves the version before the PR is called ready.
 
 It never merges, never dismisses or replies to a Qodo finding, and never changes Qodo's settings.
@@ -31,8 +31,12 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
    - Exit 2: the tool couldn't run (usage, missing key, or `gh` or the API failing on every poll; a single failed poll is retried). Not a review result: fix the setup and run it again.
 4. **Act on the findings**, as `/work-ticket` says: reproduce each with a failing test first, fix what's real, explain what isn't, push, and run `review:wait` again. At most three rounds; an action-required finding still open after that is a gate.
 5. **Check the behaviour** on the running app (or with real commands for tooling), every criterion and a failure case. Save the transcript.
-6. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence.
-7. **Does it change the reviewer?** For a `reviewed` repo, list the PR's files (`gh pr diff <pr> --repo <github> --name-only`). If any of them is named `AGENTS.md` or `INVARIANTS.md`, in any folder, this is gate 4: log it as **waiting for the owner to approve a new Qodo configuration version**, never as ready to merge. Qodo picks up rule changes when they reach the default branch (seen on Day 3: about a minute after the merge), so the owner's merge is the moment the reviewer changes. Otherwise log it as **ready to merge**. Then go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
+6. **Prove the tests:** `npm run revert:check -- <repo> <pr>`. In a scratch copy it runs the PR's new or changed tests with the change (they must pass) and without it (at least one must fail). Paste its output into the PR body under "How I checked it". It saves its record under `<evidence>/revert-checks/`. Don't pipe its output.
+   - Exit 0: caught. A test fails without the change, as it should.
+   - Exit 1: not proven. Every test still passes without the change. That's a gate: log it; the PR waits for the owner.
+   - Exit 2: can't judge (no test file or no code file changed, the tests fail even with the change, or the copy couldn't be built). That's a gate too.
+7. **Finish the PR:** fill in the results tables with what was observed, tick the ticket's verified criteria, save the evidence.
+8. **Does it change the reviewer?** For a `reviewed` repo, list the PR's files (`gh pr diff <pr> --repo <github> --name-only`). If any of them is named `AGENTS.md` or `INVARIANTS.md`, in any folder, this is gate 4: log it as **waiting for the owner to approve a new Qodo configuration version**, never as ready to merge. Qodo picks up rule changes when they reach the default branch (seen on Day 3: about a minute after the merge), so the owner's merge is the moment the reviewer changes. Otherwise log it as **ready to merge**. Then go to the next ticket. Don't wait for the merge: a later ticket that depends on this one will be skipped as blocked, and picked up on the next run.
 
 ## The log
 

@@ -23,7 +23,7 @@
     "repo": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["github", "path", "guard", "check", "start", "tickets", "board"],
+      "required": ["github", "path", "guard", "check", "tests", "start", "tickets", "board"],
       "properties": {
         "github": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
         "path": { "description": "Local checkout, relative to this repo.", "type": "string" },
@@ -32,6 +32,11 @@
           "enum": ["lab", "reviewed"]
         },
         "check": { "description": "The command that must pass before a commit and in CI.", "type": "string" },
+        "tests": {
+          "description": "Regular expression for test files and test data (fixtures), matched against repo-relative paths. revert:check keeps these at the PR's version and takes away every other changed file.",
+          "type": "string",
+          "minLength": 1
+        },
         "start": {
           "description": "How to run the app for a live check, or null if there is nothing to run.",
           "oneOf": [

@@ -7,6 +7,7 @@
       "path": ".",
       "guard": "lab",
       "check": "npm run check",
+      "tests": "(\\.test\\.ts$|/fixtures/)",
       "start": null,
       "tickets": {
         "sections": ["Result", "Done when", "Must not break"],
@@ -19,7 +20,12 @@
       "path": "../faultforge-target",
       "guard": "reviewed",
       "check": "npm run check",
-      "start": { "command": "npx tsx src/server.ts", "port": 3000, "health": "/health" },
+      "tests": "(^test/|\\.test\\.ts$)",
+      "start": {
+        "command": "npx tsx src/server.ts",
+        "port": 3000,
+        "health": "/health"
+      },
       "tickets": {
         "sections": ["What", "Acceptance criteria", "Must not break"],
         "checklist": "Acceptance criteria"

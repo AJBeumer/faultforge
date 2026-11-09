@@ -7,6 +7,8 @@ export interface RepoConfig {
   path: string;
   guard: "lab" | "reviewed";
   check: string;
+  /** Regular expression for test files and test data, matched against repo-relative paths (`revert:check`). */
+  tests: string;
   start: { command: string; port: number; health: string } | null;
   tickets: { sections: string[]; checklist: string };
   board: boolean;
@@ -31,6 +33,11 @@ export function configProblems(config: unknown): string[] {
   for (const [key, repo] of Object.entries(repos)) {
     if (!repo.tickets.sections.includes(repo.tickets.checklist)) {
       problems.push(`${key}: checklist "${repo.tickets.checklist}" is not one of its sections`);
+    }
+    try {
+      new RegExp(repo.tests);
+    } catch {
+      problems.push(`${key}: tests "${repo.tests}" is not a valid regular expression`);
     }
   }
   return problems;
