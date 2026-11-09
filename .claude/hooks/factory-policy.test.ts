@@ -101,6 +101,16 @@ describe("factory policy: the run's ticket comes from the snapshot", () => {
     "gh api repos/AJBeumer/faultforge-target/issues/18",
     "gh api repos/AJBeumer/faultforge-target/issues/18/comments --paginate",
     "gh api graphql -f query='{ viewer { login } }'",
+    'gh issue view "$FAULTFORGE_TICKET_NUMBER"',
+    "gh issue view $N --comments",
+    "gh issue list --json number,title,body",
+    "gh issue status",
+    "gh issue view 180",
+    "gh search issues filter --repo AJBeumer/faultforge-target",
+    "gh api repos/AJBeumer/faultforge-target/issues/$N/comments",
+    'gh api "repos/AJBeumer/faultforge-target/issues/$(echo 18)"',
+    "gh api repos/AJBeumer/faultforge-target/issues?state=open",
+    "gh api search/issues?q=repo:AJBeumer/faultforge-target",
   ])("blocks %s in the run for ticket 18", (command) => {
     expect(commandViolations(command, "18")).toContain(
       "read the ticket from the runner's snapshot file, not live from GitHub",
@@ -108,7 +118,6 @@ describe("factory policy: the run's ticket comes from the snapshot", () => {
   });
 
   it.each([
-    "gh issue view 180",
     "gh api repos/AJBeumer/faultforge-target/issues/181/comments",
     "gh pr view 19 --json state",
     "gh api repos/AJBeumer/faultforge-target/pulls/19/comments",

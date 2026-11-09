@@ -78,11 +78,14 @@ export function commandViolations(command: string, ticket?: string): string[] {
   }
   if (ticket && /^\d+$/.test(ticket)) {
     const live = [
-      // gh issue view 18, #18, or a URL ending in /issues/18
-      new RegExp(String.raw`\bgh\s+issue\s+view\b[^\n|;&]*?(?:#|\s|/issues/)${ticket}\b`),
-      // gh api .../issues/18 and .../issues/18/comments (also covers PR numbers that collide: fails closed)
-      new RegExp(String.raw`\bgh\s+api\b[^\n|;&]*\bissues/${ticket}\b`),
-      // GraphQL can read any issue: not needed in a run
+      // Any issue view, list or status, whatever the number is written as ($VAR, "$N", #18, a URL).
+      /\bgh\s+issue\s+(view|list|status)\b/,
+      // Search can return issue bodies.
+      /\bgh\s+search\b/,
+      // gh api issue paths: this ticket, or any number given as a variable or expression.
+      new RegExp(String.raw`\bgh\s+api\b[^\n|;&]*\bissues/(${ticket}\b|[^\s/'"]*[$\x60(])`),
+      // gh api on a whole issue list or search endpoint, and GraphQL, which can read any issue.
+      /\bgh\s+api\b[^\n|;&]*\b(issues(\?|\s|["']|$)|search\/)/,
       /\bgh\s+api\s+graphql\b/,
     ];
     if (live.some((pattern) => pattern.test(command))) {

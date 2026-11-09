@@ -237,6 +237,8 @@ export interface TicketSnapshot {
   /** Title, body and every comment, as one Markdown text. */
   text: string;
   provenance: Provenance;
+  /** Who edited the body and how many edits each comment has: an edit undone later still shows here. */
+  history?: string;
 }
 
 /**
@@ -246,6 +248,9 @@ export interface TicketSnapshot {
 export function ticketChangeProblems(before: TicketSnapshot, after: TicketSnapshot, owner: string): string[] {
   const problems = provenanceProblems(after.provenance, owner).map((p) => `the ticket is now ${p}`);
   if (after.text !== before.text) problems.push("the ticket's text changed during the run");
+  else if ((after.history ?? "") !== (before.history ?? "")) {
+    problems.push("the ticket was edited during the run, even though its text is back as it was");
+  }
   return problems;
 }
 
@@ -622,6 +627,77 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   }
 }
 
+type Who = { login?: string } | null;
+type Page<T> = { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] };
+type SnapshotComment = {
+  author: Who;
+  body: string;
+  createdAt: string;
+  userContentEdits: { totalCount: number; nodes: { editor: Who }[] };
+};
+/** One GraphQL answer for the issue: its title, body and author, plus the one paged field asked for. */
+export type IssuePage = { title: string; body: string | null; author: Who; [field: string]: unknown };
+/** Fetches one page of `field` (`userContentEdits` or `comments`) after `cursor`, or the first page. */
+export type FetchIssuePage = (field: "userContentEdits" | "comments", cursor: string | null) => IssuePage;
+
+/** Every node of a paged field, following GitHub's cursors until it says there is no next page. */
+export function allPages<T>(
+  field: "userContentEdits" | "comments",
+  fetch: FetchIssuePage,
+): { issue: IssuePage; nodes: T[] } {
+  const nodes: T[] = [];
+  let cursor: string | null = null;
+  let issue: IssuePage;
+  const seen = new Set<string>();
+  do {
+    issue = fetch(field, cursor);
+    const page = issue[field] as Page<T>;
+    nodes.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    // A cursor that doesn't move would loop for ever: treat it as an error, never as the end.
+    if (cursor !== null) {
+      if (seen.has(cursor)) throw new Error(`GitHub repeated the ${field} cursor ${cursor}`);
+      seen.add(cursor);
+    }
+  } while (cursor !== null);
+  return { issue, nodes };
+}
+
+/**
+ * The ticket's snapshot from GitHub's pages: the text the agent will read, who wrote and edited each
+ * part, and its edit history. The history catches an edit that was later undone, which leaves the
+ * text and the authors unchanged.
+ */
+export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
+  const login = (who: Who) => who?.login ?? "(deleted user)";
+  const edits = allPages<{ editor: Who }>("userContentEdits", fetch);
+  const comments = allPages<SnapshotComment>("comments", fetch).nodes;
+  const { issue } = edits;
+  const text = [
+    `# ${issue.title}`,
+    "",
+    issue.body ?? "",
+    ...comments.flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
+  ].join("\n");
+  const history = JSON.stringify({
+    body: edits.nodes.map((n) => login(n.editor)),
+    comments: comments.map((c) => ({ at: c.createdAt, edits: c.userContentEdits.totalCount })),
+  });
+  return {
+    text,
+    history,
+    provenance: {
+      author: login(issue.author),
+      editors: edits.nodes.map((n) => login(n.editor)),
+      commenters: comments.map((c) => login(c.author)),
+      commentEditors: comments.flatMap((c) => c.userContentEdits.nodes.map((n) => login(n.editor))),
+      incomplete: comments
+        .filter((c) => c.userContentEdits.totalCount > c.userContentEdits.nodes.length)
+        .map((c) => `the edits of a comment from ${c.createdAt}`),
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Real side effects
 
@@ -778,67 +854,18 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
     snapshot(github, number) {
       const [owner, name] = github.split("/");
-      type Who = { login?: string } | null;
-      type Page<T> = { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] };
-      type Comment = {
-        author: Who;
-        body: string;
-        createdAt: string;
-        userContentEdits: { totalCount: number; nodes: { editor: Who }[] };
-      };
-      const login = (who: Who) => who?.login ?? "(deleted user)";
-      const ask = (part: string, after: string | null) => {
-        const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
-          repository(owner: $owner, name: $name) { issue(number: $number) { title body author { login } ${part} } } }`;
-        const args = ["api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`];
-        args.push("-F", `number=${number}`, ...(after ? ["-f", `after=${after}`] : []));
-        return JSON.parse(gh(...args)).data.repository.issue;
-      };
-      // Every page of body edits and of comments; each comment's own edits come with it.
-      const all = <T>(
-        field: string,
-        part: string,
-      ): { issue: { title: string; body: string; author: Who }; nodes: T[] } => {
-        const nodes: T[] = [];
-        let after: string | null = null;
-        let issue: { title: string; body: string; author: Who; [key: string]: unknown };
-        do {
-          issue = ask(part, after);
-          const page = issue[field] as Page<T>;
-          nodes.push(...page.nodes);
-          after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-        } while (after);
-        return { issue, nodes };
-      };
       const pageInfo = "pageInfo { hasNextPage endCursor }";
-      const edits = all<{ editor: Who }>(
-        "userContentEdits",
-        `userContentEdits(first: 100, after: $after) { ${pageInfo} nodes { editor { login } } }`,
-      );
-      const comments = all<Comment>(
-        "comments",
-        `comments(first: 100, after: $after) { ${pageInfo} nodes { author { login } body createdAt userContentEdits(first: 100) { totalCount nodes { editor { login } } } } }`,
-      ).nodes;
-      const { issue } = edits;
-      const incomplete = comments
-        .filter((c) => c.userContentEdits.totalCount > c.userContentEdits.nodes.length)
-        .map((c) => `the edits of a comment from ${c.createdAt}`);
-      const text = [
-        `# ${issue.title}`,
-        "",
-        issue.body ?? "",
-        ...comments.flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
-      ].join("\n");
-      return {
-        text,
-        provenance: {
-          author: login(issue.author),
-          editors: edits.nodes.map((n) => login(n.editor)),
-          commenters: comments.map((c) => login(c.author)),
-          commentEditors: comments.flatMap((c) => c.userContentEdits.nodes.map((n) => login(n.editor))),
-          incomplete,
-        },
+      const parts = {
+        userContentEdits: `userContentEdits(first: 100, after: $after) { ${pageInfo} nodes { editor { login } } }`,
+        comments: `comments(first: 100, after: $after) { ${pageInfo} nodes { author { login } body createdAt userContentEdits(first: 100) { totalCount nodes { editor { login } } } } }`,
       };
+      return buildSnapshot((field, cursor) => {
+        const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $name) { issue(number: $number) { title body author { login } ${parts[field]} } } }`;
+        const args = ["api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`];
+        args.push("-F", `number=${number}`, ...(cursor ? ["-f", `after=${cursor}`] : []));
+        return JSON.parse(gh(...args)).data.repository.issue;
+      });
     },
     writeTicket(ws, text) {
       const file = join(ws.root, "ticket.md");
