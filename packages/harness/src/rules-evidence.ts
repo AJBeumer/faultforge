@@ -61,6 +61,8 @@ export interface EvidenceRow {
 export interface EvidenceTable {
   builtAt: string;
   rows: EvidenceRow[];
+  /** Every PR the table covers, including ones whose reviews found nothing: those are citable too. */
+  prs: { repo: string; github: string; pr: number }[];
   prsCovered: number;
   casePrsExcluded: number;
 }
@@ -183,7 +185,13 @@ export function buildTable(
     }
   }
   rows.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id));
-  return { builtAt: now(), rows, prsCovered: byPr.size, casePrsExcluded: excludedPrs.size };
+  const prs = [...byPr.values()]
+    .map((group) => {
+      const { key, review } = group[0] as { key: string; review: SavedReview };
+      return { repo: key, github: review.repo, pr: review.pr };
+    })
+    .sort((a, b) => a.repo.localeCompare(b.repo) || a.pr - b.pr);
+  return { builtAt: now(), rows, prs, prsCovered: byPr.size, casePrsExcluded: excludedPrs.size };
 }
 
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
@@ -203,8 +211,8 @@ export function citationProblems(
   repoKeys?: Set<string>,
 ): { problems: string[]; cited: number } {
   const ids = new Set(table.rows.map((r) => r.id.toLowerCase()));
-  const prs = new Set(table.rows.flatMap((r) => [`${r.repo}#${r.pr}`, `${r.github.toLowerCase()}#${r.pr}`]));
-  const keys = repoKeys ?? new Set(table.rows.map((r) => r.repo));
+  const prs = new Set(table.prs.flatMap((p) => [`${p.repo}#${p.pr}`, `${p.github.toLowerCase()}#${p.pr}`]));
+  const keys = repoKeys ?? new Set(table.prs.map((p) => p.repo));
   const problems: string[] = [];
   let cited = 0;
   for (const [cite] of text.matchAll(UUID)) {

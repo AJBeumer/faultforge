@@ -64,6 +64,14 @@ describe("buildTable", () => {
     expect(table.prsCovered).toBe(1);
   });
 
+  it("lists a reviewed PR with no findings among the covered PRs, so it stays citable", () => {
+    const clean = review({ pr: 19, repo: "AJBeumer/faultforge-target", findings: [], openFindings: [] });
+    const table = buildTable([{ key: "target", review: clean }], nothingExcluded);
+    expect(table.rows).toEqual([]);
+    expect(table.prs).toEqual([{ repo: "target", github: "AJBeumer/faultforge-target", pr: 19 }]);
+    expect(table.prsCovered).toBe(1);
+  });
+
   it("never calls a finding closed on the word of an incomplete review", () => {
     const complete = review({ findings: [finding("f-raised")], openFindings: [finding("f-raised")] });
     const timedOut = review({
@@ -171,7 +179,11 @@ describe("citationProblems", () => {
         openAtLastReview: false,
       },
     ],
-    prsCovered: 1,
+    prs: [
+      { repo: "faultforge", github: "AJBeumer/faultforge", pr: 75 },
+      { repo: "target", github: "AJBeumer/faultforge-target", pr: 19 },
+    ],
+    prsCovered: 2,
     casePrsExcluded: 0,
   };
 
@@ -180,6 +192,10 @@ describe("citationProblems", () => {
       "Seen in finding 1a73417f-6d4d-44cf-836b-980e6f9ca61b on faultforge#75 " +
       "(https://github.com/AJBeumer/faultforge/pull/75). Ticket #41 and bare words like day#3 are not citations.";
     expect(citationProblems(text, table)).toEqual({ problems: [], cited: 3 });
+  });
+
+  it("accepts a covered PR whose review found nothing", () => {
+    expect(citationProblems("clean on target#19", table)).toEqual({ problems: [], cited: 1 });
   });
 
   it("names every citation that is not in the table", () => {
