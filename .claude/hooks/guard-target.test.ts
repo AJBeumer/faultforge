@@ -446,3 +446,61 @@ describe("guard-target hook fails closed (#104)", () => {
     expect(bash('git commit -m "Fix the planted bug"', TARGET)).toMatch(/says planted/);
   });
 });
+
+describe("guard-target hook sees every way into the reviewed repo (#105)", () => {
+  const powershell = (command: string, cwd = HARNESS) => decide("PowerShell", { command }, cwd);
+
+  describe("ways of moving into the checkout", () => {
+    it.each([
+      ["Set-Location", 'Set-Location ../faultforge-target; git commit -m "Fix the planted bug"'],
+      ["pushd", 'pushd /d/Projects/faultforge-target && git commit -m "Fix the planted bug"'],
+      ["git --work-tree", 'git --work-tree=/d/Projects/faultforge-target commit -m "Fix the planted bug"'],
+      ["git -C with a quoted Windows path", 'git -C "D:\\Projects\\faultforge-target" commit -m "Fix the planted bug"'],
+      ["cd with a quoted Windows path", 'cd "D:\\Projects\\faultforge-target"; git commit -m "Fix the planted bug"'],
+    ])("blocks a telltale commit after %s", (_name, command) => {
+      expect(bash(command)).toMatch(/says planted/);
+    });
+
+    it("still blocks a force push reached through pushd", () => {
+      expect(bash("pushd ../faultforge-target && git push --force origin main")).toMatch(/Force pushes/);
+    });
+
+    it("sees the checkout when a shell operator follows it with no space (a gap the Set-Location case found)", () => {
+      expect(bash('cd ../faultforge-target;git commit -m "Fix the planted bug"')).toMatch(/says planted/);
+      expect(bash('cd ../faultforge-target&&git commit -m "Fix the planted bug"')).toMatch(/says planted/);
+    });
+  });
+
+  describe("file content written from the shell", () => {
+    it.each([
+      ["a redirect", 'echo "Used by FaultForge" > ../faultforge-target/NOTES.md'],
+      ["an appending redirect, absolute path", 'echo "planted here" >> /d/Projects/faultforge-target/README.md'],
+      ["tee with a heredoc", "tee ../faultforge-target/docs/x.md <<'EOF'\nThe planted bug\nEOF"],
+      ["Out-File", 'Out-File -FilePath ../faultforge-target/x.txt -InputObject "planted"'],
+      ["Set-Content", "Set-Content -Path D:\\Projects\\faultforge-target\\x.txt -Value 'planted'"],
+    ])("checks %s into the reviewed repo for telltales, like an edit", (_name, command) => {
+      expect(bash(command)).toMatch(/says planted|names the lab/);
+    });
+
+    it("reads the source of a copy into the reviewed repo", () => {
+      const dir = mkdtempSync(join(tmpdir(), "guard-"));
+      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
+      expect(bash("cp notes.md ../faultforge-target/docs/notes.md", dir)).toMatch(/says planted/);
+      expect(powershell("Copy-Item notes.md D:\\Projects\\faultforge-target\\docs\\notes.md", dir)).toMatch(
+        /says planted/,
+      );
+      expect(bash("mv notes.md /d/Projects/faultforge-target/notes.md", dir)).toMatch(/says planted/);
+    });
+
+    it("denies a copy whose source it can't read, since it can't check what would land there", () => {
+      expect(bash("cp no-such-file.md ../faultforge-target/docs/notes.md")).toMatch(/doesn't exist/);
+    });
+
+    it("allows harmless content, reads from the reviewed repo, and writes elsewhere", () => {
+      expect(bash('echo "Release notes" > ../faultforge-target/NOTES.md')).toBeUndefined();
+      expect(bash("cat ../faultforge-target/README.md > ./readme-copy.md")).toBeUndefined();
+      expect(bash('echo "planted" > ./notes.md')).toBeUndefined();
+      expect(bash("cp ../faultforge-target/README.md ./readme-copy.md")).toBeUndefined();
+    });
+  });
+});

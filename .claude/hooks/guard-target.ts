@@ -3,8 +3,11 @@
  *
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. For each, it blocks:
  *  - force pushes
- *  - commits, pushes, PRs, comments and API writes whose text names the lab or the bug
- *  - file edits whose new content does the same
+ *  - commits, pushes, PRs, comments and API writes whose text, or whose posted files, name the lab or the bug
+ *  - file edits whose new content does the same: the Edit and Write tools, and shell writes into the
+ *    checkout (a redirect, tee, cp or mv, Copy-Item, Out-File, Set-Content), reading the copied source
+ * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
+ * (cd, pushd, Set-Location, git -C, git --work-tree), writes a file under it, or runs from inside it.
  * And everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo.
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
@@ -112,10 +115,68 @@ function explicitDestinations(command: string): string[] {
   return patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
 }
 
-/** True when the command moves into the repo's checkout itself (`cd` or `git -C`). */
+/**
+ * True when the command moves into the repo's checkout itself: `cd`, `pushd`, PowerShell's `Set-Location`
+ * (or `sl`), `git -C <path>`, or `git --work-tree=<path>` / `--git-dir`, with a relative, absolute or
+ * quoted path.
+ */
 function entersCheckout(command: string, repo: Reviewed): boolean {
   const folders = [repo.folder, repo.name].map(esc).join("|");
-  return new RegExp(`\\b(cd|git\\s+-C)\\s+["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s]|$)`, "i").test(command);
+  const into = `(?:\\b(?:cd|pushd|Set-Location|sl|git\\s+-C)\\s+|\\bgit\\s+--(?:work-tree|git-dir)[=\\s]\\s*)`;
+  // The folder may be followed by a separator, a quote, a path separator or a shell operator (`;`, `&&`, `|`).
+  return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i").test(command);
+}
+
+/**
+ * Files a shell command writes, and the files it copies them from. Destinations: redirects (`>`, `>>`),
+ * `tee`, the last argument of `cp` and `mv`, `Copy-Item`/`Move-Item`, and `Out-File`/`Set-Content`/
+ * `Add-Content`. Sources: the first argument of the copy and move forms, paired with their destination.
+ * Paths are left as written; `inCheckout` reads the folder names in them.
+ */
+function shellWrites(command: string): { destinations: string[]; copies: { from: string; to: string }[] } {
+  const path = `["']?([^\\s"'|;&<>]+)`;
+  const destinations: string[] = [];
+  const copies: { from: string; to: string }[] = [];
+  const first = (m: RegExpMatchArray, ...groups: number[]) => groups.map((g) => m[g]).find(Boolean) ?? "";
+  for (const m of command.matchAll(new RegExp(`(?<![<>])>{1,2}\\s*${path}`, "g"))) {
+    if (!m[1]?.startsWith("&")) destinations.push(m[1] ?? "");
+  }
+  for (const m of command.matchAll(new RegExp(`\\btee\\s+(?:-a\\s+|--append\\s+)?${path}`, "g")))
+    destinations.push(m[1] ?? "");
+  for (const m of command.matchAll(
+    new RegExp(`\\b(?:Out-File|Set-Content|Add-Content)\\s+(?:-(?:FilePath|Path|LiteralPath)\\s+)?${path}`, "gi"),
+  ))
+    destinations.push(m[1] ?? "");
+  for (const m of command.matchAll(new RegExp(`\\b(?:cp|mv)\\s+(?:-\\S+\\s+)*${path}["']?\\s+${path}`, "g"))) {
+    copies.push({ from: first(m, 1), to: first(m, 2) });
+  }
+  for (const m of command.matchAll(
+    new RegExp(
+      `\\b(?:Copy-Item|Move-Item)\\s+(?:-(?:Path|LiteralPath)\\s+)?${path}["']?\\s+(?:-Destination\\s+)?${path}`,
+      "gi",
+    ),
+  )) {
+    copies.push({ from: first(m, 1), to: first(m, 2) });
+  }
+  return { destinations: [...destinations, ...copies.map((c) => c.to)], copies };
+}
+
+/**
+ * Contents of the files a command copies into `repo`'s checkout, read so they can be checked for telltales
+ * like any other content written there. A source that doesn't exist is a deny: nothing can be checked.
+ */
+function copiedSources(command: string, repo: Reviewed): string[] {
+  return shellWrites(command)
+    .copies.filter((c) => inCheckout(c.to, repo))
+    .map((c) => {
+      const path = isAbsolute(c.from) ? c.from : resolve(cwd, c.from);
+      if (!existsSync(path)) {
+        deny(
+          `This command would copy ${c.from} into ${repo.name}, but the file doesn't exist, so the guard can't check it. Write it first, then run the command.`,
+        );
+      }
+      return readFileSync(path, "utf8");
+    });
 }
 
 /**
@@ -136,17 +197,21 @@ function inCheckout(path: string, repo: Reviewed): boolean {
 }
 
 function checkCommand(command: string) {
+  // Shell writes of file content into a reviewed checkout (a redirect, tee, a copy) count like an edit.
+  const written = shellWrites(command).destinations;
+  const writesFilesIn = (r: Reviewed) => written.some((d) => inCheckout(d, r));
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
-    (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
+    (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command)) ||
+    REVIEWED.some(writesFilesIn);
 
-  // Every reviewed repo the command touches, by any part of it: a named destination, or a `cd`/`git -C`
-  // into its checkout. The folder the command runs in only counts when it names no destination at
-  // all (say, `git commit` inside a checkout), so a post from there to another repo is judged by
-  // where it goes.
+  // Every reviewed repo the command touches, by any part of it: a named destination, a move into its
+  // checkout, or a file written under it. The folder the command runs in only counts when it names no
+  // destination at all (say, `git commit` inside a checkout), so a post from there to another repo is
+  // judged by where it goes.
   const destinations = explicitDestinations(command);
-  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
+  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r) || writesFilesIn(r);
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves
   // more than one repo must be split: each part then gets judged on its own. A chain that stays in
@@ -165,6 +230,7 @@ function checkCommand(command: string) {
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
       entersCheckout(command, r) ||
+      writesFilesIn(r) ||
       (!destinations.length && inCheckout(cwd, r)),
   );
   const repo = touched[0];
@@ -183,7 +249,7 @@ function checkCommand(command: string) {
   const onlyItself = touched.length === 1 && runsIn(repo) && destinations.every((d) => d === repo.github.toLowerCase());
   checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
 
-  const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
+  const text = [stripReviewedNames(command), ...referencedFiles(command), ...copiedSources(command, repo)].join("\n");
   const found = telltales(text);
   if (found.length) {
     deny(
