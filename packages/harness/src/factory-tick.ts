@@ -545,6 +545,41 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
   ].join("\n");
 }
 
+/**
+ * The headless agent's command line. Exported so the flags that keep a run closed can be tested: no MCP
+ * server of the machine running the tick is reachable (only the empty config in `mcpConfigFile`, with
+ * `--strict-mcp-config`), the run's deny rules come from `settingsFile`, and the budget is capped (#103).
+ */
+export function agentArgs(input: {
+  repoKey: string;
+  number: number;
+  budget: number;
+  settingsFile: string;
+  mcpConfigFile: string;
+  instructions: string;
+  extraDirs: string[];
+}): string[] {
+  return [
+    "-p",
+    `/factory ${input.repoKey} ${input.number}`,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "bypassPermissions",
+    "--max-budget-usd",
+    String(input.budget),
+    "--settings",
+    input.settingsFile,
+    "--mcp-config",
+    input.mcpConfigFile,
+    "--strict-mcp-config",
+    "--append-system-prompt",
+    input.instructions,
+    ...input.extraDirs,
+  ];
+}
+
 // ---------------------------------------------------------------------------------------------
 // The tick, with every side effect behind `TickDeps` so the stop paths can be tested with fakes.
 
@@ -1145,26 +1180,22 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     runAgent(ws, runId, repoKey, number, ticketFile, log) {
       const settingsFile = join(ws.root, "agent-settings.json");
       writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: DENY } }, null, 2));
+      // An empty MCP config, used with --strict-mcp-config: the agent reaches no MCP server of this machine.
+      const mcpConfigFile = join(ws.root, "agent-mcp.json");
+      writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: {} }, null, 2));
       const transcript = join(runs, `${runId}.agent.jsonl`);
       const extraDirs = Object.values(factory.repos)
         .filter((r) => r.path !== ".")
         .flatMap((r) => ["--add-dir", worktreeFor(ws.lab, r.path)]);
-      const args = [
-        "-p",
-        `/factory ${repoKey} ${number}`,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--permission-mode",
-        "bypassPermissions",
-        "--max-budget-usd",
-        String(options.budget),
-        "--settings",
+      const args = agentArgs({
+        repoKey,
+        number,
+        budget: options.budget,
         settingsFile,
-        "--append-system-prompt",
-        agentInstructions(ws.root, repoKey, number, ticketFile),
-        ...extraDirs,
-      ];
+        mcpConfigFile,
+        instructions: agentInstructions(ws.root, repoKey, number, ticketFile),
+        extraDirs,
+      });
       return new Promise((done) => {
         const child = spawn(claudeBinary(), args, {
           cwd: ws.lab,
