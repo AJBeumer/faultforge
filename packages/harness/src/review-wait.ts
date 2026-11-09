@@ -103,18 +103,25 @@ export interface WaitDeps {
   onPoll?: () => Promise<void>;
   /** Called when a poll fails; the wait goes on until the deadline. */
   onError?: (error: unknown) => void;
+  /**
+   * The PR's head now. When given, a finished review counts only if the head is still `headSha`:
+   * someone may have pushed again while Qodo was reviewing (PR 98).
+   */
+  readHead?: () => Promise<string>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 }
 
 export type WaitResult =
   | { state: "complete" | "skipped"; review: QodoReview; polls: number; seenCompleteAt: number }
+  | { state: "moved"; head: string; review: QodoReview; polls: number }
   | { state: "timeout"; review: QodoReview | undefined; polls: number };
 
 /**
  * Polls until the review of `headSha` is complete or `timeoutMs` has passed.
  * A failed poll is reported and retried. A finished review is reported only once its comments were saved
- * after it finished. At the deadline, the last error is thrown if no poll succeeded or the final save never did.
+ * after it finished, and, with `readHead`, only while the head is still `headSha` ("moved" otherwise).
+ * At the deadline, the last error is thrown if no poll succeeded or the final save never did.
  */
 export async function waitForReview(
   headSha: string,
@@ -145,6 +152,10 @@ export async function waitForReview(
       if (state === "complete" || state === "skipped") {
         // Qodo gives no end time; this is when it was first seen finished, at most one interval late.
         seenCompleteAt ??= deps.now();
+        if (deps.readHead) {
+          const head = await deps.readHead();
+          if (!sameCommit(head, headSha)) return { state: "moved", head, review, polls };
+        }
         // One last save: Qodo may have edited its comment between the poll and this answer.
         if (await save()) return { state, review, polls, seenCompleteAt };
       }
@@ -160,14 +171,16 @@ export async function waitForReview(
   }
 }
 
-export type HeadWaitResult = {
-  state: "reached" | "moved" | "timeout";
-  /** The PR head at the last read: the full id of the commit waited for, or the one that stopped the wait. */
-  head: string;
-  polls: number;
-  /** Every distinct head seen, in order. */
-  seen: string[];
-};
+export type HeadWaitResult =
+  | {
+      state: "reached" | "moved" | "timeout";
+      /** The PR head at the last read: the full id of the commit waited for, or the one that stopped the wait. */
+      head: string;
+      polls: number;
+      /** Every distinct head seen, in order. */
+      seen: string[];
+    }
+  | { state: "failed"; head: null; polls: number; seen: []; error: string };
 
 /** True when `head` (a full id) is the commit `target` names, in full or by a prefix of at least 7. */
 export function sameCommit(head: string, target: string): boolean {
@@ -178,7 +191,8 @@ export function sameCommit(head: string, target: string): boolean {
  * Polls the PR head until it is `target`. Right after a push GitHub can show the previous head for a
  * moment: on PR 65 a wait started within a second of a push reported the old commit's finished review
  * as the answer. That first head is waited out. Any other head means someone pushed again: "moved".
- * A failed read is reported and retried; if no read succeeded by the deadline, the last error is thrown.
+ * A failed read is reported and retried; if no read succeeded by the deadline, the result is "failed"
+ * with the last error, so the caller can record the attempt before it stops.
  */
 export async function waitForHead(
   target: string,
@@ -207,7 +221,10 @@ export async function waitForHead(
       deps.onError?.(error);
     }
     if (deps.now() + intervalMs > deadline) {
-      if (!seen.length) throw lastError;
+      if (!seen.length) {
+        const error = lastError instanceof Error ? lastError.message : String(lastError);
+        return { state: "failed", head: null, polls, seen: [], error };
+      }
       return { state: "timeout", head: seen.at(-1) as string, polls, seen };
     }
     await deps.sleep(intervalMs);
@@ -238,6 +255,34 @@ export function parseArgs(argv: string[]): Args | null {
   if (timeout === undefined || !Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) return null;
   if (commit === undefined || (commit !== null && !/^[0-9a-f]{7,40}$/i.test(commit))) return null;
   return { repoKey, pr, timeoutMinutes, commit };
+}
+
+/**
+ * Saves one poll of the two comment feeds (each the raw `gh api --paginate --slurp` text: an array of
+ * pages). The raw text is written first, every poll, so an answer that can't be parsed is still kept;
+ * then a new version file is written when the content changed and Qodo has commented. Returns the
+ * content to compare the next poll with. Throws when a feed doesn't parse, after the raw save.
+ */
+export function saveCommentFeeds(
+  raw: { pr: string; inline: string },
+  lastContent: string,
+  write: (file: string, text: string) => void,
+  short: string,
+): string {
+  write(`${short}.comments.latest.raw.json`, JSON.stringify(raw));
+  type Comment = { user: { login: string }; updated_at: string };
+  const pages = (text: string) => (JSON.parse(text) as Comment[][]).flat();
+  const comments = { pr: pages(raw.pr), inline: pages(raw.inline) };
+  const version = [...comments.pr, ...comments.inline]
+    .filter((c) => c.user.login.startsWith("qodo"))
+    .map((c) => c.updated_at)
+    .sort()
+    .pop();
+  // Compared by content: two edits in the same second share a timestamp but not their text.
+  const content = JSON.stringify(comments);
+  if (!version || content === lastContent) return lastContent;
+  write(`${short}.comments.${version.replace(/:/g, "")}.raw.json`, content);
+  return content;
 }
 
 /** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
@@ -292,6 +337,8 @@ async function main() {
       join(dir, `${commit.slice(0, 7)}.head-wait.json`),
       `${JSON.stringify({ repo: github, pr, commit, ...head, recordedAt: new Date().toISOString() }, null, 2)}\n`,
     );
+    // Every read failed: not a review result, so exit 2 like any other run that couldn't reach GitHub.
+    if (head.state === "failed") throw new Error(`reading the PR head failed on every poll: ${head.error}`);
     if (head.state !== "reached") {
       console.log(
         head.state === "moved"
@@ -313,26 +360,13 @@ async function main() {
   console.log(`Waiting for Qodo's review of ${repoKey} PR ${pr} at ${short} (up to ${timeoutMinutes} min)…`);
 
   // Save every version of Qodo's comments while waiting: the first version can be edited later.
-  let lastVersion = "";
   let lastContent = "";
   const onPoll = async () => {
-    type Comment = { user: { login: string }; updated_at: string };
-    const comments = {
-      pr: ghAll<Comment>(`repos/${github}/issues/${pr}/comments`),
-      inline: ghAll<Comment>(`repos/${github}/pulls/${pr}/comments`),
+    const raw = {
+      pr: gh("api", "--paginate", "--slurp", `repos/${github}/issues/${pr}/comments`),
+      inline: gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/comments`),
     };
-    const version = [...comments.pr, ...comments.inline]
-      .filter((c) => c.user.login.startsWith("qodo"))
-      .map((c) => c.updated_at)
-      .sort()
-      .pop();
-    // Compared by content: two edits in the same second share a timestamp but not their text.
-    const content = JSON.stringify(comments);
-    if (version && content !== lastContent) {
-      lastContent = content;
-      lastVersion = version;
-      writeFileSync(join(dir, `${short}.comments.${version.replace(/:/g, "")}.raw.json`), JSON.stringify(comments));
-    }
+    lastContent = saveCommentFeeds(raw, lastContent, (file, text) => writeFileSync(join(dir, file), text), short);
   };
 
   const api = new QodoApi();
@@ -353,6 +387,8 @@ async function main() {
       onPoll,
       onError: (error) =>
         console.error(`Poll failed, trying again: ${error instanceof Error ? error.message : String(error)}`),
+      // With --commit, a finished review counts only if nobody pushed again meanwhile.
+      readHead: commit === null ? undefined : readHead,
       now: Date.now,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     },
@@ -373,7 +409,13 @@ async function main() {
     repo: github,
     pr,
     headSha,
-    state: { complete: "complete", skipped: "skipped by Qodo", timeout: "review incomplete" }[result.state],
+    state: {
+      complete: "complete",
+      skipped: "skipped by Qodo",
+      timeout: "review incomplete",
+      moved: "head moved during the review",
+    }[result.state],
+    headMovedTo: result.state === "moved" ? result.head : null,
     pushSeenAt,
     reviewEffort: effort,
     reviewSeenCompleteAt: "seenCompleteAt" in result ? new Date(result.seenCompleteAt).toISOString() : null,
@@ -390,6 +432,12 @@ async function main() {
 
   if (result.state === "timeout") {
     console.log(`Review incomplete: no completed Qodo run for ${short} after ${timeoutMinutes} min. Saved in ${dir}`);
+    process.exit(1);
+  }
+  if (result.state === "moved") {
+    console.log(
+      `Qodo's review of ${short} finished, but the PR head is now ${result.head.slice(0, 7)}: not reporting a review of a commit that is no longer the head. Saved in ${dir}`,
+    );
     process.exit(1);
   }
   if (result.state === "skipped") {

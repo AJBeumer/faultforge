@@ -9,6 +9,7 @@ import {
   type QodoReview,
   reviewEffort,
   reviewState,
+  saveCommentFeeds,
   waitForHead,
   waitForReview,
 } from "./review-wait.ts";
@@ -353,11 +354,11 @@ describe("waitForHead (#67: review:wait on PR 65 read the old head right after a
     expect(result).toMatchObject({ state: "reached", head: PUSHED, polls: 2 });
   });
 
-  it("gives up with the error, not a timeout, when every read failed", async () => {
+  it("returns failed with the error, not a timeout, when every read failed, so the attempt can be recorded", async () => {
+    // Qodo on PR 98: a throw here skipped the head-wait record, leaving no trace of the attempts.
     const { deps } = heads(new Error("gh: 502"));
-    await expect(
-      waitForHead(PUSHED, { ...deps, onError: () => {} }, { timeoutMs: 10_000, intervalMs: 5_000 }),
-    ).rejects.toThrow("gh: 502");
+    const result = await waitForHead(PUSHED, { ...deps, onError: () => {} }, { timeoutMs: 10_000, intervalMs: 5_000 });
+    expect(result).toEqual({ state: "failed", head: null, polls: 3, seen: [], error: "gh: 502" });
   });
 });
 
@@ -390,5 +391,65 @@ describe("parseArgs", () => {
     expect(parseArgs(["target"])).toBeNull();
     expect(parseArgs(["target", "x"])).toBeNull();
     expect(parseArgs(["target", "9", "--timeout", "soon"])).toBeNull();
+  });
+});
+
+describe("review findings on PR 98", () => {
+  const HEAD = PR1_HEAD;
+  const NEWER = `56fb13c${"1".repeat(33)}`;
+
+  it("doesn't report a review complete when the PR head moved on while waiting", async () => {
+    // Head reached, review of it completes, but meanwhile someone pushed again.
+    const result = await waitForReview(HEAD, {
+      fetchReview: async () => pr1,
+      readHead: async () => NEWER,
+      now: () => 0,
+      sleep: async () => {},
+    });
+    expect(result).toMatchObject({ state: "moved", head: NEWER });
+  });
+
+  it("reports the review complete when the head is still the commit waited for", async () => {
+    const result = await waitForReview(HEAD, {
+      fetchReview: async () => pr1,
+      readHead: async () => HEAD,
+      now: () => 0,
+      sleep: async () => {},
+    });
+    expect(result.state).toBe("complete");
+  });
+
+  describe("saveCommentFeeds", () => {
+    const qodo = (at: string) => ({ user: { login: "qodo-code-review[bot]" }, updated_at: at });
+    const page = (...items: unknown[]) => JSON.stringify([items]);
+
+    it("saves the raw feeds before parsing, so a truncated answer is kept", () => {
+      const writes: [string, string][] = [];
+      const truncated = '[[{"user":{"login":"qodo';
+      expect(() =>
+        saveCommentFeeds({ pr: truncated, inline: "[[]]" }, "", (f, t) => writes.push([f, t]), "4950112"),
+      ).toThrow();
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.[0]).toBe("4950112.comments.latest.raw.json");
+      expect(JSON.parse(writes[0]?.[1] ?? "")).toEqual({ pr: truncated, inline: "[[]]" });
+    });
+
+    it("writes a new version only when the content changed", () => {
+      const writes: string[] = [];
+      const raw = { pr: page(qodo("2026-11-09T15:50:01Z")), inline: page() };
+      const last = saveCommentFeeds(raw, "", (f) => writes.push(f), "4950112");
+      saveCommentFeeds(raw, last, (f) => writes.push(f), "4950112");
+      expect(writes.filter((f) => !f.includes("latest"))).toEqual(["4950112.comments.2026-11-09T155001Z.raw.json"]);
+    });
+
+    it("reads every page and both feeds for the newest Qodo version", () => {
+      const writes: string[] = [];
+      const raw = {
+        pr: JSON.stringify([[qodo("2026-11-09T15:50:01Z")], [qodo("2026-11-09T15:52:00Z")]]),
+        inline: page(qodo("2026-11-09T15:51:00Z"), { user: { login: "someone" }, updated_at: "2026-11-09T16:00:00Z" }),
+      };
+      saveCommentFeeds(raw, "", (f) => writes.push(f), "abc1234");
+      expect(writes).toContain("abc1234.comments.2026-11-09T155200Z.raw.json");
+    });
   });
 });
