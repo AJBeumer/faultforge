@@ -398,6 +398,8 @@ describe("guard-target hook fails closed (#104)", () => {
       /doesn't exist/,
     );
     expect(bash(`git commit -F ${missing}`, TARGET)).toMatch(/doesn't exist/);
+    // The file name ends at the shell separator, so the reason names the file, not "file;".
+    expect(bash(`git commit -F ${missing}; echo done`, TARGET)).toMatch(/no-such-body-file\.md, which doesn't exist/);
     expect(bash(`gh pr create --repo AJBeumer/faultforge --title "Tidy" --body-file ${missing}`)).toMatch(
       /doesn't exist/,
     );
@@ -427,6 +429,16 @@ describe("guard-target hook fails closed (#104)", () => {
         "gh pr create --repo AJBeumer/faultforge --title T --body-file - <<'EOF'\nPass text with --body-file notes\nEOF",
       ),
     ).toBeUndefined();
+  });
+
+  it("reads a real file even when fake quoting surrounds the flag (Qodo on PR 115, round 3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    writeFileSync(join(dir, "secret.txt"), "The planted bug is here\n");
+    const commit = "git -C /d/Projects/faultforge-target commit -F secret.txt";
+    // A heredoc-looking marker in a comment, with a real heredoc later, must not hide the commit between them.
+    expect(bash(`# <<FAKE\n${commit}\ncat <<FAKE\nx\nFAKE`, dir)).toMatch(/says planted/);
+    // An escaped quote must not open a quoted span that swallows the real -F option.
+    expect(bash(`printf \\"; ${commit}; printf "ok"`, dir)).toMatch(/says planted/);
   });
 
   it("still allows and denies as before once the input is well-formed", () => {
