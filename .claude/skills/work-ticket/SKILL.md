@@ -11,9 +11,11 @@ Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` o
 
 Read `CLAUDE.md` first. In the target, also follow its `AGENTS.md`. This skill is for ordinary work. Planted-bug cases use `/new-case`.
 
-Every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. Run commands for a `reviewed` repo on their own, never chained with commands for another repo, and from inside its checkout: `cd <path> && gh pr create --repo <github> ...`. The guard allows a reviewed repo's PR or issue to link to its own tickets (such as `Ticket: <link>`) only when the command runs in that checkout, and refuses any command that writes to more than one repo.
+In an interactive session, every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set) the keys are already in the environment: `gh` and `review:wait` pick them up by themselves. Don't look for a token file, and never name, read, print or export a key. Run commands for a `reviewed` repo on their own, never chained with commands for another repo, and from inside its checkout: `cd <path> && gh pr create --repo <github> ...`. The guard allows a reviewed repo's PR or issue to link to its own tickets (such as `Ticket: <link>`) only when the command runs in that checkout, and refuses any command that writes to more than one repo.
 
 ## 1. Read the ticket
+
+In an interactive session:
 
 ```bash
 gh issue view <N> --repo <github>
@@ -22,6 +24,8 @@ gh issue view <N> --repo <github>
 - Check it's ready: `npm run ticket:ready -- <key> <N>`. It needs every section in `tickets.sections`, a checklist in `tickets.checklist`, and no open blockers.
 - If it isn't ready, **stop**. Tell the owner exactly what the command reported, and don't start until the ticket is fixed. Don't fill the gap yourself and carry on.
 - If `board` is true, move it to **In progress** on the project board. Repos with `board: false` stay off it, so a `reviewed` repo never links back here.
+
+In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set), the runner has already checked readiness, snapshotted the ticket and claimed it. Read the ticket from the snapshot file named by `FAULTFORGE_TICKET_FILE`, and from nothing else: `gh issue view`, `gh api` on issues and `gh search` are blocked for this ticket. Skip `ticket:ready` (it reads the live ticket), and skip the board move (a write the runner's audit can't see; `gh project` writes are blocked in a run). The runner labels the ticket and reports on it.
 
 ## 2. Branch and build
 
@@ -74,7 +78,7 @@ A clean review doesn't mean the ticket is done.
 - Run `PORT=<port> <start.command>` in `<path>`, in the background, and wait until `<start.health>` answers. Before checking anything, confirm the `pid` in the server's log is the process that owns the port.
 - Check every criterion and at least one edge or failure case with real requests. Show that a refused request left state unchanged by reading it back.
 - Save the transcript to `<evidence>/day-NN/<key>-ticket-<N>-live-check.txt` and put the results in the PR table.
-- Stop the server with its whole process tree (`taskkill //PID <pid> //T //F`). Stopping the background task only ends `npx` and leaves Node listening.
+- Stop the server with its whole process tree. Windows: `taskkill //PID <pid> //T //F`. Linux, where factory runs happen: `pkill -TERM -P <pid>; kill <pid>`, the children first, then the parent. Stopping the background task only ends `npx` and leaves Node listening.
 
 ## 6. Act on the findings
 
