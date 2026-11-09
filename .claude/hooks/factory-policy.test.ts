@@ -72,6 +72,14 @@ describe("factory policy: file edits", () => {
     expect(editViolation(`${RUN}/../a.ts`, RUN, TEMP)).toMatch(/only files under/);
   });
 
+  it("blocks edits to the guardrails inside the run folder", () => {
+    expect(editViolation(join(RUN, "FaultForge", ".claude", "hooks", "factory-policy.ts"), RUN, TEMP)).toMatch(
+      /own guardrails/,
+    );
+    expect(editViolation(join(RUN, "FaultForge", ".claude", "settings.json"), RUN, TEMP)).toMatch(/own guardrails/);
+    expect(editViolation(join(RUN, "FaultForge", ".claude-notes.md"), RUN, TEMP)).toBeUndefined();
+  });
+
   it("blocks every edit when the run folder is unknown", () => {
     expect(editViolation(join(RUN, "a.ts"), undefined, TEMP)).toMatch(/no FAULTFORGE_RUN_ROOT/);
   });

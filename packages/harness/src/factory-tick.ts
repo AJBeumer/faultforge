@@ -25,7 +25,17 @@
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
@@ -145,6 +155,13 @@ export function settle(
     };
   }
   if (result.outcome === "stuck") return { label: LABELS.help, reason: result.reason, pr: result.pr };
+  if (agent.exitCode !== 0 || (agent.subtype !== null && agent.subtype !== "success")) {
+    return {
+      label: LABELS.help,
+      reason: `the agent reported "${result.outcome}" but exited with code ${agent.exitCode} (${agent.subtype ?? "no result"})`,
+      pr: result.pr,
+    };
+  }
   const number = prNumber(result.pr, github);
   if (number === null) {
     return {
@@ -193,6 +210,71 @@ export function safeText(text: string, reviewed: boolean): string {
   return "The details are in the run log.";
 }
 
+/**
+ * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
+ * guard hook and the factory policy hook must run before every shell command and file edit.
+ */
+export function hookProblems(settingsText: string): string[] {
+  let hooks: { matcher?: string; hooks?: { command?: string }[] }[] = [];
+  try {
+    hooks = JSON.parse(settingsText).hooks?.PreToolUse ?? [];
+  } catch {
+    return ["its settings.json is missing or unreadable"];
+  }
+  const problems: string[] = [];
+  for (const hook of ["guard-target.ts", "factory-policy.ts"]) {
+    for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+      const covered = hooks.some(
+        (h) =>
+          (!h.matcher || h.matcher === "*" || new RegExp(`^(${h.matcher})$`).test(tool)) &&
+          (h.hooks ?? []).some((c) => c.command?.includes(hook)),
+      );
+      if (!covered) problems.push(`${hook} doesn't run before ${tool}`);
+    }
+  }
+  return problems;
+}
+
+/** Titles of the action-required findings still open in a `review:wait` record. */
+export function openActionRequired(record: {
+  openFindings?: { severity?: string | null; title?: string | null }[];
+}): string[] {
+  return (record.openFindings ?? [])
+    .filter((f) => f.severity === "action_required")
+    .map((f) => f.title ?? "(untitled)");
+}
+
+export interface WindowActivity {
+  /** Comments on any issue or PR, and inline review comments, by the agent's login. */
+  comments: { user: string; created_at: string; url: string }[];
+  /** Events on the ticket, such as labels or closing. */
+  ticketEvents: IssueEvent[];
+}
+
+/**
+ * Things the agent's GitHub identity did during the run that only the runner or the owner may do: a
+ * comment anywhere (a reply to a review finding, a PR comment) or a change to the ticket. The agent
+ * runs as the owner, so anything by that login inside the agent's window counts.
+ */
+export function windowProblems(activity: WindowActivity, login: string, from: string, to: string): string[] {
+  const inWindow = (at: string) => at >= from && at <= to;
+  const mine = (user: string | undefined) => user?.toLowerCase() === login.toLowerCase();
+  const problems: string[] = [];
+  for (const c of activity.comments) {
+    if (mine(c.user) && inWindow(c.created_at)) problems.push(`a comment was posted during the run (${c.url})`);
+  }
+  for (const e of activity.ticketEvents) {
+    if (inWindow(e.created_at))
+      problems.push(`the ticket was changed during the run (${e.event} by ${e.actor?.login ?? "?"})`);
+  }
+  return problems;
+}
+
+/** Where a run's log is saved, relative to this repo. */
+export function evidenceFile(factory: FactoryConfig, runId: string): string {
+  return `${factory.evidence}/factory-runs/${runId}.jsonl`;
+}
+
 /** A sortable run id from the start time and the ticket, e.g. `20261109-093012-target-18`. */
 export function runIdFor(now: Date, repoKey: string, number: number): string {
   const stamp = now.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
@@ -207,6 +289,8 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
     "private/ here is a worktree of the private repo on its own branch: save and commit evidence there, but don't push it. The runner pushes it.",
     "Don't comment on, label or close the ticket, and never reply to, resolve or dismiss a review finding: the runner and the owner do that.",
+    "Nothing under any .claude/ folder may change in this run, because it holds your own guardrails. If the ticket needs that, report stuck.",
+    "After you stop, the runner audits what changed (both repos' main, the owner's checkouts, comments and ticket changes during your run, the guardrail files) and stops for help on any surprise.",
     "Finish your final message with exactly one line, and nothing after it:",
     'FACTORY_RESULT {"outcome":"ready|owner-gate|stuck","pr":"<pull request URL or null>","reason":"<one plain sentence>"}',
     "ready: the PR is open, its checks pass, Qodo's review of the head commit is complete with no action-required finding open, and every criterion was checked live.",
@@ -227,6 +311,8 @@ export interface Workspace {
   private: string;
   /** Each repo's `main` commit when the run started. */
   mainAtStart: Record<string, string>;
+  /** Fingerprints taken before the agent starts, compared after it stops: the owner's checkouts and the guardrail files. */
+  fingerprints: Record<string, string>;
 }
 
 export interface TickDeps {
@@ -242,7 +328,8 @@ export interface TickDeps {
   workspace(runId: string): Workspace;
   runAgent(ws: Workspace, runId: string, repoKey: string, number: number, log: Logger): Promise<AgentRun>;
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
-  mainSha(github: string): string;
+  /** What actually changed while the agent ran: anything here is a stop for the owner. */
+  audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
   /** Saves the run log (and the agent's transcript) to the private repo and pushes it. */
   saveEvidence(runId: string, ws: Workspace | null): string;
   cleanup(ws: Workspace): void;
@@ -268,6 +355,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   let runId: string | null = null;
   let claimed: Candidate | null = null;
   let ws: Workspace | null = null;
+  let finalLabel: string | null = null;
   const log: Logger = (event, detail = {}) => {
     const entry = { t: deps.now().toISOString(), event, ...detail };
     deps.print(`${entry.t} ${event}${Object.keys(detail).length ? ` ${JSON.stringify(detail)}` : ""}`);
@@ -339,8 +427,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     ws = deps.workspace(runId);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
 
+    const agentFrom = deps.now().toISOString();
     log("agent-started", { command: `/factory ${pick.repoKey} ${pick.number}` });
     const agent = await deps.runAgent(ws, runId, pick.repoKey, pick.number, log);
+    const agentTo = deps.now().toISOString();
     const result = parseAgentResult(agent.resultText);
     log("agent-finished", {
       exitCode: agent.exitCode,
@@ -352,22 +442,25 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     });
 
     const workspace = ws;
-    const finish = settle(
+    // Effects, not just commands: the policy hook reads command text, which can't catch everything.
+    const audit = deps.audit(workspace, pick, agentFrom, agentTo);
+    log("audited", { from: agentFrom, to: agentTo, problems: audit });
+    const settled = settle(
       agent,
       result,
       (pr) => {
         const verification = deps.verifyPr(workspace, pick.repoKey, pr);
-        const before = workspace.mainAtStart[pick.repoKey];
-        const now = deps.mainSha(pick.github);
-        if (before && now !== before)
-          verification.problems.push(`main moved during the run (${before.slice(0, 7)} → ${now.slice(0, 7)})`);
         log("verified", { pr, problems: verification.problems });
         return verification;
       },
       pick.github,
       options.minutes,
     );
+    const finish: Finish = audit.length
+      ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
+      : settled;
     deps.relabel(pick.github, pick.number, [LABELS.working], [finish.label]);
+    finalLabel = finish.label;
     const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
     say(
       finish.label === LABELS.done
@@ -375,14 +468,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         : `Agent run \`${runId}\` stopped and needs help: ${finish.reason}.${prLine}`,
     );
     log("finished", { label: finish.label, reason: finish.reason, pr: finish.pr });
-    log("saved", { evidence: deps.saveEvidence(runId, ws) });
+    // Logged before the copy is made, so the saved log ends with it too.
+    log(finish.label === LABELS.done ? "cleanup" : "kept", { root: ws.root });
+    log("saved", { evidence: evidenceFile(factory, runId) });
+    deps.saveEvidence(runId, ws);
     if (finish.label === LABELS.done) deps.cleanup(ws);
-    else log("kept", { root: ws.root });
     return finish.label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    log("error", { message });
-    if (claimed) {
+    log("error", { message, afterLabel: finalLabel });
+    // Once the ticket has its final label, a later failure (saving, cleanup) must not add a second one.
+    if (claimed && !finalLabel) {
       try {
         deps.relabel(claimed.github, claimed.number, [LABELS.working], [LABELS.help]);
         const reviewed = repoConfig(factory, claimed.repoKey).guard === "reviewed";
@@ -424,8 +520,12 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function npm(cwd: string, ...args: string[]): { status: number | null; output: string } {
-  // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed strings.
-  const result = spawnSync("npm", args, { cwd, encoding: "utf8", shell: process.platform === "win32" });
+  // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words and
+  // numbers from this file, never ticket text, so joining them into one command line is safe.
+  const result =
+    process.platform === "win32"
+      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true })
+      : spawnSync("npm", args, { cwd, encoding: "utf8" });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
@@ -482,7 +582,7 @@ const DENY = [
   "Bash(setx:*)",
 ];
 
-function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
+export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
   const evidenceInPrivate = relative("private", factory.evidence); // e.g. raw-artifacts
@@ -560,26 +660,70 @@ function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
     workspace(runId) {
       const root = join(runs, runId);
       const lab = join(root, basename(LAB_ROOT));
+      const priv = join(lab, "private");
       const mainAtStart: Record<string, string> = {};
       mkdirSync(root, { recursive: true });
+      try {
+        for (const [key, repo] of Object.entries(factory.repos)) {
+          const source = resolve(LAB_ROOT, repo.path);
+          const target = repo.path === "." ? lab : worktreeFor(lab, repo.path);
+          git(source, "fetch", "--quiet", "origin", "main");
+          mainAtStart[key] = git(source, "rev-parse", "origin/main");
+          mkdirSync(dirname(target), { recursive: true });
+          git(source, "worktree", "add", "--detach", target, "origin/main");
+        }
+        git(privateRepo, "fetch", "--quiet", "origin", "main");
+        git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        for (const repo of Object.values(factory.repos)) {
+          const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
+          if (!existsSync(join(dir, "package.json"))) continue;
+          const install = npm(dir, "ci", "--no-audit", "--no-fund");
+          if (install.status !== 0) throw new Error(`npm ci failed in ${dir}: ${install.output.slice(-400)}`);
+        }
+        // The agent gets main's hooks, not the runner's: refuse to start it without both of them.
+        const settings = join(lab, ".claude", "settings.json");
+        const missing = hookProblems(existsSync(settings) ? readFileSync(settings, "utf8") : "");
+        if (missing.length)
+          throw new Error(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`);
+      } catch (error) {
+        // Undo whatever was set up, so a failed start leaves no worktree or branch behind.
+        const leftovers = teardown(root, lab, priv, runId);
+        if (leftovers.length)
+          throw new Error(`${(error as Error).message}; cleanup also failed: ${leftovers.join("; ")}`);
+        throw error;
+      }
+      return { root, lab, private: priv, mainAtStart, fingerprints: fingerprints(lab) };
+    },
+    audit(ws, ticket, from, to) {
+      const problems: string[] = [];
       for (const [key, repo] of Object.entries(factory.repos)) {
-        const source = resolve(LAB_ROOT, repo.path);
-        const target = repo.path === "." ? lab : worktreeFor(lab, repo.path);
-        git(source, "fetch", "--quiet", "origin", "main");
-        mainAtStart[key] = git(source, "rev-parse", "origin/main");
-        mkdirSync(dirname(target), { recursive: true });
-        git(source, "worktree", "add", "--detach", target, "origin/main");
+        const now = gh("api", `repos/${repo.github}/commits/main`, "--jq", ".sha").trim();
+        const before = ws.mainAtStart[key] ?? "";
+        if (now !== before) problems.push(`main of ${key} moved (${before.slice(0, 7)} → ${now.slice(0, 7)})`);
       }
-      const priv = join(lab, "private");
-      git(privateRepo, "fetch", "--quiet", "origin", "main");
-      git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
-      for (const repo of Object.values(factory.repos)) {
-        const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
-        if (!existsSync(join(dir, "package.json"))) continue;
-        const install = npm(dir, "ci", "--no-audit", "--no-fund");
-        if (install.status !== 0) throw new Error(`npm ci failed in ${dir}: ${install.output.slice(-400)}`);
+      const after = fingerprints(ws.lab);
+      for (const [what, value] of Object.entries(ws.fingerprints)) {
+        if (after[what] !== value) problems.push(`${what} changed during the run`);
       }
-      return { root, lab, private: priv, mainAtStart };
+      type Comment = { user?: { login: string }; created_at: string; html_url: string };
+      const comments = Object.values(factory.repos).flatMap((repo) =>
+        ["issues/comments", "pulls/comments"].flatMap((kind) =>
+          (
+            JSON.parse(
+              gh("api", "--paginate", "--slurp", `repos/${repo.github}/${kind}?since=${from}&per_page=100`),
+            ) as Comment[][]
+          )
+            .flat()
+            .map((c) => ({ user: c.user?.login ?? "", created_at: c.created_at, url: c.html_url })),
+        ),
+      );
+      const ticketEvents = (
+        JSON.parse(
+          gh("api", "--paginate", "--slurp", `repos/${ticket.github}/issues/${ticket.number}/events?per_page=100`),
+        ) as IssueEvent[][]
+      ).flat();
+      const owner = ticket.github.split("/")[0] ?? "";
+      return [...problems, ...windowProblems({ comments, ticketEvents }, owner, from, to)];
     },
     runAgent(ws, runId, repoKey, number, log) {
       const settingsFile = join(ws.root, "agent-settings.json");
@@ -661,7 +805,24 @@ function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
             `${JSON.stringify({ t: new Date().toISOString(), stderr: chunk.toString("utf8") })}\n`,
           ),
         );
+        let settled = false;
+        // A binary that can't start emits "error" and maybe never "close": report it, don't hang or crash.
+        child.on("error", (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          done({
+            exitCode: null,
+            timedOut: false,
+            resultText: null,
+            subtype: `could not start the agent: ${error.message}`,
+            costUsd: null,
+            turns: null,
+          });
+        });
         child.on("close", (code) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
           if (buffer) onLine(buffer);
           const result = final as Record<string, unknown> | null;
@@ -691,10 +852,25 @@ function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
         2: "review:wait couldn't run",
         3: "Qodo skipped the review of the head commit",
       };
-      if (review.status !== 0) problems.push(meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`);
+      if (review.status !== 0) {
+        problems.push(meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`);
+        return { problems };
+      }
+      // A complete review can still have findings open: only none action-required counts as ready.
+      const record = join(
+        ws.lab,
+        factory.evidence,
+        "reviews",
+        `${repoKey}-pr${pr}`,
+        `${String(view.headRefOid).slice(0, 7)}.review.json`,
+      );
+      if (!existsSync(record)) problems.push("review:wait saved no review record for the head commit");
+      else {
+        const open = openActionRequired(JSON.parse(readFileSync(record, "utf8")));
+        if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
+      }
       return { problems };
     },
-    mainSha: (github) => gh("api", `repos/${github}/commits/main`, "--jq", ".sha").trim(),
     record(runId, event) {
       appendFileSync(join(runs, `${runId}.jsonl`), `${JSON.stringify(event)}\n`);
     },
@@ -728,17 +904,69 @@ function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
       return join(factory.evidence, "factory-runs", `${runId}.jsonl`);
     },
     cleanup(ws) {
-      // The private worktree sits inside the lab's worktree: remove it first, through its own repo.
-      git(privateRepo, "worktree", "remove", "--force", ws.private);
-      git(privateRepo, "branch", "-D", `run-${basename(ws.root)}`);
-      for (const repo of Object.values(factory.repos)) {
-        if (repo.path === ".") continue;
-        git(resolve(LAB_ROOT, repo.path), "worktree", "remove", "--force", worktreeFor(ws.lab, repo.path));
-      }
-      git(LAB_ROOT, "worktree", "remove", "--force", ws.lab);
-      rmSync(ws.root, { recursive: true, force: true });
+      const leftovers = teardown(ws.root, ws.lab, ws.private, basename(ws.root));
+      if (leftovers.length) throw new Error(`cleanup failed: ${leftovers.join("; ")}`);
     },
   };
+
+  /**
+   * Removes a run's worktrees, its private branch and its folder, as far as they exist. Each step is
+   * tried on its own; returns what couldn't be removed. The private worktree sits inside the lab's
+   * worktree, so it goes first, through its own repo.
+   */
+  function teardown(root: string, lab: string, priv: string, runId: string): string[] {
+    const failed: string[] = [];
+    const attempt = (what: string, step: () => void) => {
+      try {
+        step();
+      } catch (error) {
+        failed.push(`${what}: ${(error as Error).message.split("\n")[0]}`);
+      }
+    };
+    const registered = (repo: string, path: string) =>
+      git(repo, "worktree", "list", "--porcelain")
+        .split("\n")
+        .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(path));
+    if (registered(privateRepo, priv))
+      attempt("private worktree", () => git(privateRepo, "worktree", "remove", "--force", priv));
+    if (git(privateRepo, "branch", "--list", `run-${runId}`))
+      attempt("private branch", () => git(privateRepo, "branch", "-D", `run-${runId}`));
+    for (const repo of Object.values(factory.repos)) {
+      const source = resolve(LAB_ROOT, repo.path);
+      const path = repo.path === "." ? lab : worktreeFor(lab, repo.path);
+      if (repo.path !== "." && registered(source, path))
+        attempt(`${basename(path)} worktree`, () => git(source, "worktree", "remove", "--force", path));
+    }
+    if (registered(LAB_ROOT, lab)) attempt("lab worktree", () => git(LAB_ROOT, "worktree", "remove", "--force", lab));
+    attempt("run folder", () => rmSync(root, { recursive: true, force: true }));
+    return failed;
+  }
+
+  /**
+   * Fingerprints of what the agent must not change: the owner's own checkouts (commit, branch and
+   * uncommitted changes) and the guardrail files in the run's lab worktree.
+   */
+  function fingerprints(lab: string): Record<string, string> {
+    const prints: Record<string, string> = {};
+    const checkouts = [LAB_ROOT, privateRepo, ...Object.values(factory.repos).map((r) => resolve(LAB_ROOT, r.path))];
+    for (const dir of new Set(checkouts)) {
+      prints[`the owner's checkout ${dir}`] = hash(
+        `${git(dir, "rev-parse", "HEAD")}\n${git(dir, "branch", "--show-current")}\n${git(dir, "status", "--porcelain")}`,
+      );
+    }
+    const guardrails = join(lab, ".claude");
+    const files = ["settings.json", ...readdirSync(join(guardrails, "hooks")).map((f) => `hooks/${f}`)].sort();
+    prints[`the run's guardrail files (${guardrails})`] = hash(
+      files
+        .map((f) => `${f}\n${existsSync(join(guardrails, f)) ? readFileSync(join(guardrails, f), "utf8") : ""}`)
+        .join("\n"),
+    );
+    return prints;
+  }
+}
+
+function hash(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /** A short name for the agent's shell commands worth showing on the timeline, or null. */

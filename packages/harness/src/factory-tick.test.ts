@@ -1,13 +1,17 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import {
   type AgentRun,
   agentStep,
   checkProblems,
+  hookProblems,
   type IssueEvent,
   LABELS,
   lastLabelled,
   oldest,
+  openActionRequired,
   parseAgentResult,
   prNumber,
   runIdFor,
@@ -16,6 +20,7 @@ import {
   type TickDeps,
   tick,
   type Workspace,
+  windowProblems,
 } from "./factory-tick.ts";
 
 const FACTORY: FactoryConfig = {
@@ -84,6 +89,7 @@ function fake(
     lab: "/runs/r/lab",
     private: "/runs/r/lab/private",
     mainAtStart: { target: "aaa", lab: "bbb" },
+    fingerprints: {},
   };
   let clock = Date.parse("2026-11-09T09:30:00Z");
   const deps: TickDeps = {
@@ -114,7 +120,7 @@ function fake(
       return AGENT_OK;
     },
     verifyPr: () => ({ problems: [] }),
-    mainSha: () => "aaa",
+    audit: () => [],
     saveEvidence: (runId, w) => {
       calls.push(`save ${w ? "with" : "without"} workspace`);
       return `private/raw-artifacts/factory-runs/${runId}.jsonl`;
@@ -202,8 +208,10 @@ describe("tick: stop paths", () => {
       "workspace",
       "agent-started",
       "agent-finished",
+      "audited",
       "verified",
       "finished",
+      "cleanup",
       "saved",
     ]);
   });
@@ -229,13 +237,57 @@ describe("tick: stop paths", () => {
     expect(f.comments[1]?.body).toMatch(/time limit of 120 minutes/);
   });
 
-  it("needs help when the agent says ready but the runner finds main moved", async () => {
+  it("needs help when the agent says ready but the audit finds a surprise, and audits the agent's window", async () => {
+    let window: string[] = [];
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
-      { mainSha: () => "ccc" },
+      {
+        audit: (_ws, _ticket, from, to) => {
+          window = [from, to];
+          return ["main of target moved (aaa → ccc)", "a comment was posted during the run (u)"];
+        },
+      },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
-    expect(f.comments[1]?.body).toMatch(/main moved during the run/);
+    expect(f.comments[1]?.body).toMatch(/audit found: main of target moved \(aaa → ccc\); a comment was posted/);
+    const started = f.events.find((e) => e.event === "agent-started")?.t as string;
+    const finished = f.events.find((e) => e.event === "agent-finished")?.t as string;
+    expect((window[0] ?? "") < started).toBe(true);
+    expect((window[1] ?? "") < finished).toBe(true);
+  });
+
+  it("never gives a ticket a second final label when saving fails after the label", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: () => {
+          throw new Error("push rejected");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
+      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working} +${LABELS.done}`,
+    ]);
+    expect(f.comments).toHaveLength(2);
+    expect(f.events.at(-1)).toMatchObject({ event: "error", message: "push rejected", afterLabel: LABELS.done });
+  });
+
+  it("logs the saved event before the copy is made, so the saved log ends with it", async () => {
+    let lastWhenSaved: unknown;
+    const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
+    const record = f.deps.record;
+    f.deps.saveEvidence = () => {
+      lastWhenSaved = f.events.at(-1);
+      return "";
+    };
+    f.deps.record = record;
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(lastWhenSaved).toMatchObject({
+      event: "saved",
+      evidence: "private/raw-artifacts/factory-runs/20261109-093001-target-18.jsonl",
+    });
   });
 
   it("needs help, and reports it on the ticket, when the runner itself fails after the claim", async () => {
@@ -300,6 +352,18 @@ describe("settle", () => {
     ).toMatch(/without a result, exit code 1 \(error_max_budget_usd\)/);
   });
 
+  it("needs help when the agent reports ready but didn't exit cleanly", () => {
+    expect(settle({ ...AGENT_OK, exitCode: 1 }, result, verified, "owner/target", 120).reason).toMatch(
+      /exited with code 1/,
+    );
+    expect(
+      settle({ ...AGENT_OK, subtype: "error_max_budget_usd" }, result, verified, "owner/target", 120),
+    ).toMatchObject({
+      label: LABELS.help,
+      reason: expect.stringMatching(/error_max_budget_usd/),
+    });
+  });
+
   it("passes an owner gate through as done, with its reason", () => {
     const gate = {
       outcome: "owner-gate" as const,
@@ -310,6 +374,90 @@ describe("settle", () => {
       label: LABELS.done,
       reason: "waiting for the owner: it changes AGENTS.md",
     });
+  });
+});
+
+describe("hookProblems", () => {
+  const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });
+  const both = [{ command: "node guard-target.ts" }, { command: "node factory-policy.ts" }];
+
+  it("accepts this repo's own settings", () => {
+    const text = readFileSync(join(import.meta.dirname, "../../../.claude/settings.json"), "utf8");
+    expect(hookProblems(text)).toEqual([]);
+  });
+
+  it("refuses settings without the policy hook, as on a main from before it existed", () => {
+    expect(
+      hookProblems(settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: [both[0]] }])),
+    ).toEqual([
+      "factory-policy.ts doesn't run before Bash",
+      "factory-policy.ts doesn't run before PowerShell",
+      "factory-policy.ts doesn't run before Write",
+      "factory-policy.ts doesn't run before Edit",
+      "factory-policy.ts doesn't run before MultiEdit",
+      "factory-policy.ts doesn't run before NotebookEdit",
+    ]);
+  });
+
+  it("refuses a matcher that leaves out file edits, and unreadable settings", () => {
+    expect(hookProblems(settings([{ matcher: "Bash", hooks: both }]))).toHaveLength(10);
+    expect(hookProblems("")).toEqual(["its settings.json is missing or unreadable"]);
+  });
+
+  it("treats an empty or * matcher as every tool", () => {
+    expect(hookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
+    expect(hookProblems(settings([{ hooks: both }]))).toEqual([]);
+  });
+});
+
+describe("audit helpers", () => {
+  const from = "2026-11-09T09:00:00Z";
+  const to = "2026-11-09T10:00:00Z";
+
+  it("flags the agent's own comments and ticket changes inside its window only", () => {
+    const problems = windowProblems(
+      {
+        comments: [
+          { user: "Owner", created_at: "2026-11-09T09:30:00Z", url: "reply-to-finding" },
+          { user: "owner", created_at: "2026-11-09T08:59:59Z", url: "runner-claim" },
+          { user: "qodo-merge[bot]", created_at: "2026-11-09T09:31:00Z", url: "review" },
+        ],
+        ticketEvents: [
+          { event: "unlabeled", created_at: "2026-11-09T09:40:00Z", actor: { login: "owner" } },
+          { event: "labeled", created_at: "2026-11-09T10:00:01Z", actor: { login: "owner" } },
+        ],
+      },
+      "owner",
+      from,
+      to,
+    );
+    expect(problems).toEqual([
+      "a comment was posted during the run (reply-to-finding)",
+      "the ticket was changed during the run (unlabeled by owner)",
+    ]);
+  });
+
+  it("lists only action-required findings as blocking", () => {
+    expect(
+      openActionRequired({
+        openFindings: [
+          { severity: "action_required", title: "Bug" },
+          { severity: "remediation_recommended", title: "Nit" },
+        ],
+      }),
+    ).toEqual(["Bug"]);
+    expect(openActionRequired({})).toEqual([]);
+  });
+
+  it("requires both hooks on notebook and PowerShell tools too", () => {
+    const settings = JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash|Write|Edit", hooks: [{ command: "guard-target.ts" }, { command: "factory-policy.ts" }] },
+        ],
+      },
+    });
+    expect(hookProblems(settings)).toContain("factory-policy.ts doesn't run before NotebookEdit");
   });
 });
 
