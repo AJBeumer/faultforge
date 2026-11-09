@@ -362,3 +362,35 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(decide("Bash", { command }, HARNESS, join(tmpdir(), "no-such-factory.json"))).toMatch(/names the lab/);
   });
 });
+
+describe("guard-target hook fails closed (#104)", () => {
+  /** Runs the hook with raw stdin text and returns its exit code and the deny reason, if any. */
+  function raw(stdin: string) {
+    const result = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: "utf8", env: process.env });
+    const reason = result.stdout.trim()
+      ? (JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason as string)
+      : undefined;
+    return { status: result.status, reason };
+  }
+
+  it("denies when its input is empty", () => {
+    const { status, reason } = raw("");
+    expect(status).toBe(0);
+    expect(reason).toMatch(/guard hook failed/);
+  });
+
+  it("denies when its input is not JSON", () => {
+    expect(raw("not json").reason).toMatch(/guard hook failed/);
+  });
+
+  it("denies a reviewed-repo post whose body file exists but can't be read (a folder)", () => {
+    // The folder exists, so the guard tries to read it as the body, and must refuse rather than skip it.
+    const command = `gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${tmpdir()}"`;
+    expect(bash(command)).toMatch(/guard hook failed/);
+  });
+
+  it("still allows and denies as before once the input is well-formed", () => {
+    expect(bash("npm run check")).toBeUndefined();
+    expect(bash('git commit -m "Fix the planted bug"', TARGET)).toMatch(/says planted/);
+  });
+});

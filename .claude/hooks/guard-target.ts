@@ -32,15 +32,36 @@ const TARGET: Reviewed = {
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const REVIEWED = reviewedRepos();
 
-const input = JSON.parse(readFileSync(0, "utf8"));
-const tool: string = input.tool_name ?? "";
-const args = input.tool_input ?? {};
-const cwd: string = input.cwd ?? process.cwd();
+// Filled in by main(); the check functions read them. `args` is the tool's input as parsed from JSON.
+let tool = "";
+let args: ReturnType<typeof JSON.parse> = {};
+let cwd = process.cwd();
 
-if (tool === "Bash" || tool === "PowerShell") {
-  checkCommand(String(args.command ?? ""));
-} else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-  checkFileEdit();
+main();
+
+/**
+ * Fails closed. Claude Code treats a hook that crashes as a non-blocking error and runs the tool
+ * anyway, so an exception here (unreadable input, a body file that is a folder) would be a bypass.
+ * Any error denies the action instead, and says so.
+ */
+function main() {
+  try {
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    tool = String(input.tool_name ?? "");
+    args = input.tool_input ?? {};
+    cwd = String(input.cwd ?? process.cwd());
+    if (tool === "Bash" || tool === "PowerShell") {
+      checkCommand(String(args.command ?? ""));
+    } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+      checkFileEdit();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    console.error(`guard-target hook failed: ${message}`);
+    deny(
+      `The guard hook failed (${message}), so this action is refused: a hook that can't check must not let anything through. Fix the hook or the input; don't work around it.`,
+    );
+  }
 }
 
 /**

@@ -214,6 +214,34 @@ describe("factory policy hook", () => {
     );
     expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
+
+  describe("fails closed (#104)", () => {
+    const rawRun = (env: Record<string, string>, stdin: string) =>
+      spawnSync(process.execPath, [HOOK], {
+        input: stdin,
+        encoding: "utf8",
+        env: { ...process.env, FAULTFORGE_FACTORY_RUN: "", FAULTFORGE_RUN_ROOT: "", ...env },
+      });
+    const inRun = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
+
+    it("denies inside a run when its input is not JSON, and says the hook failed", () => {
+      const result = rawRun(inRun, "not json");
+      expect(result.status).toBe(0);
+      const decision = JSON.parse(result.stdout).hookSpecificOutput;
+      expect(decision.permissionDecision).toBe("deny");
+      expect(decision.permissionDecisionReason).toMatch(/policy hook failed/);
+    });
+
+    it("denies inside a run when its input is empty", () => {
+      expect(JSON.parse(rawRun(inRun, "").stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    });
+
+    it("still does nothing outside a run, even on bad input: there is nothing to protect", () => {
+      const result = rawRun({}, "not json");
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("");
+    });
+  });
 });
 
 describe("factory policy: text that only quotes blocked words (#73)", () => {

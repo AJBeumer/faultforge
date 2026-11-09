@@ -152,21 +152,33 @@ export function denialReason(tool: string, reasons: string[]): string {
   return `Not allowed in an unattended factory run: ${reasons.join("; ")}.${hint} If the ticket needs this, stop and report it as stuck.`;
 }
 
+/**
+ * Fails closed. Claude Code treats a hook that crashes as a non-blocking error and runs the tool
+ * anyway, so an exception here (unreadable input, a path that can't be resolved) would be a bypass.
+ * Inside a run, any error denies the action instead.
+ */
 function main() {
   if (!process.env.FAULTFORGE_FACTORY_RUN) return;
-  const input = JSON.parse(readFileSync(0, "utf8"));
-  const tool: string = input.tool_name ?? "";
-  const args = input.tool_input ?? {};
-  const cwd: string = input.cwd ?? process.cwd();
+  let tool = "";
   let reasons: string[] = [];
-  if (tool === "Bash" || tool === "PowerShell")
-    reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
-  else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-    const reason = editViolation(
-      resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
-      process.env.FAULTFORGE_RUN_ROOT,
-    );
-    if (reason) reasons = [reason];
+  try {
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    tool = String(input.tool_name ?? "");
+    const args = input.tool_input ?? {};
+    const cwd: string = input.cwd ?? process.cwd();
+    if (tool === "Bash" || tool === "PowerShell")
+      reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
+    else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+      const reason = editViolation(
+        resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
+        process.env.FAULTFORGE_RUN_ROOT,
+      );
+      if (reason) reasons = [reason];
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    console.error(`factory-policy hook failed: ${message}`);
+    reasons = [`the policy hook failed (${message}) and a hook that can't check lets nothing through`];
   }
   if (!reasons.length) return;
   console.log(
