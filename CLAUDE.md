@@ -75,6 +75,7 @@ Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for ea
 
 ## Style
 
+- The house rules in `AGENTS.md` apply to all work in this repository. Check your own work against them; don't assume the reviewer will.
 - Plain English in docs, commit messages and posts. Short sentences.
 - No attribution trailers in commits or PRs.
 - Keep it lean: plain TypeScript scripts, no agent frameworks or orchestration platforms.
