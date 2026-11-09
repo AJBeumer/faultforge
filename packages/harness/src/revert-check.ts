@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 
@@ -53,17 +53,23 @@ export function runnableTests(tests: Change[]): string[] {
   return tests.filter((c) => c.status !== "D" && /\.(test|spec)\.[cm]?[jt]sx?$/.test(c.path)).map((c) => c.path);
 }
 
-/** Parses `git diff --name-status --no-renames` output. */
+/**
+ * Parses `git diff --name-status --no-renames -z` output: status and path alternate, NUL-separated.
+ * Without -z git quotes names with unusual characters, and the quoted spelling isn't a real path.
+ */
 export function parseNameStatus(output: string): Change[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [status = "", ...rest] = line.split("\t");
-      return { status: status.charAt(0), path: rest.join("\t") };
-    });
+  const fields = output.split("\0");
+  const changes: Change[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const status = fields[i] ?? "";
+    const path = fields[i + 1] ?? "";
+    if (status && path) changes.push({ status: status.charAt(0), path });
+  }
+  return changes;
 }
+
+/** Files that decide which packages are installed. The copy shares one install, so it can't test both sides. */
+const DEPENDENCY_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/;
 
 export interface TestRun {
   /** False when the runner produced no result at all: the copy couldn't run its tests. */
@@ -106,11 +112,22 @@ export interface Outcome {
   failedWithoutChange: string[];
 }
 
+/** Why the PR's files alone rule out a check, before anything runs; null when a check can run. */
+export function filesProblem(files: { tests: string[]; code: Change[] }): string | null {
+  if (!files.tests.length) return "the PR changes no test file, so there is nothing to prove";
+  if (!files.code.length) return "the PR changes no code file, so there is no change to take away";
+  const deps = files.code.filter((c) => DEPENDENCY_FILES.test(c.path)).map((c) => c.path);
+  if (deps.length) {
+    return `the PR changes its dependencies (${deps.join(", ")}), and the copy has only one set of installed packages, so it can't run both sides`;
+  }
+  return null;
+}
+
 /** The verdict, from the PR's files and the two runs. */
 export function verdict(files: { tests: string[]; code: Change[] }, withChange?: TestRun, without?: TestRun): Outcome {
   const none = (message: string): Outcome => ({ exit: 2, message, failedWithoutChange: [] });
-  if (!files.tests.length) return none("the PR changes no test file, so there is nothing to prove");
-  if (!files.code.length) return none("the PR changes no code file, so there is no change to take away");
+  const problem = filesProblem(files);
+  if (problem) return none(problem);
   if (!withChange?.ran)
     return none(`the PR's tests couldn't run in the scratch copy: ${withChange?.error ?? "no result"}`);
   if (withChange.failed.length) {
@@ -133,12 +150,21 @@ export function verdict(files: { tests: string[]; code: Change[] }, withChange?:
   };
 }
 
-/** Only what a test runner needs: no tokens, keys or other secrets from the caller's environment. */
-export function strippedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/**
+ * Only what a test runner needs: no tokens, keys or other secrets from the caller's environment, and
+ * `home` (the scratch folder) as the home directory, so tools that look for credentials there find none.
+ * This is not a sandbox: the tests still run with the caller's file access, exactly as `npm run check`
+ * already runs them. A real sandbox (no network, its own user) is the charter's Devil's Advocate work.
+ */
+export function strippedEnv(env: NodeJS.ProcessEnv, home?: string): NodeJS.ProcessEnv {
   const keep =
     /^(PATH|PATHEXT|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|HOME|USERPROFILE|TEMP|TMP|TMPDIR|LANG|LC_ALL|TZ)$/i;
   const out: NodeJS.ProcessEnv = { CI: "1", NODE_ENV: "test" };
   for (const [key, value] of Object.entries(env)) if (keep.test(key)) out[key] = value;
+  if (home) {
+    out.HOME = home;
+    out.USERPROFILE = home;
+  }
   return out;
 }
 
@@ -167,11 +193,13 @@ function git(repo: string, args: string[], env?: NodeJS.ProcessEnv): string {
  * without the change, removes the copy, and returns the verdict.
  */
 export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } {
-  const changes = parseNameStatus(git(input.repo, ["diff", "--name-status", "--no-renames", input.base, input.head]));
+  const changes = parseNameStatus(
+    git(input.repo, ["diff", "--name-status", "--no-renames", "-z", input.base, input.head]),
+  );
   const split = splitFiles(changes, input.tests);
   const files = { tests: runnableTests(split.tests), code: split.code };
-  const early = verdict(files);
-  if (!files.tests.length || !files.code.length) return { ...early, changes };
+  // Nothing to run (no tests, no code, or changed dependencies): answer without building a copy.
+  if (filesProblem(files)) return { ...verdict(files), changes };
 
   const scratch = mkdtempSync(join(input.temp ?? tmpdir(), "revert-check-"));
   const link = join(scratch, "copy", "node_modules");
@@ -217,14 +245,25 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
   }
 }
 
-/** Runs vitest on the files, in the folder, with the stripped environment, and reads its JSON report. */
-export function runVitest(dir: string, files: string[]): TestRun {
+type Spawn = (
+  command: string,
+  args: readonly string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; encoding: "utf8"; timeout: number },
+) => { status: number | null; stderr?: string; error?: Error };
+
+/**
+ * Runs vitest on the files, in the folder, with the stripped environment, and reads its JSON report.
+ * The report from an earlier run is removed first: a run that dies before writing one must read as
+ * "didn't run", never as the earlier run's result.
+ */
+export function runVitest(dir: string, files: string[], spawn: Spawn = spawnSync): TestRun {
   const vitest = join(dir, "node_modules", "vitest", "vitest.mjs");
   if (!existsSync(vitest)) return { ran: false, failed: [], passed: 0, error: "vitest isn't installed in the repo" };
   const report = join(dir, ".revert-check-report.json");
-  const result = spawnSync(process.execPath, [vitest, "run", ...files, "--reporter=json", `--outputFile=${report}`], {
+  rmSync(report, { force: true });
+  const result = spawn(process.execPath, [vitest, "run", ...files, "--reporter=json", `--outputFile=${report}`], {
     cwd: dir,
-    env: strippedEnv(process.env),
+    env: strippedEnv(process.env, dirname(dir)),
     encoding: "utf8",
     timeout: 10 * 60_000,
   });

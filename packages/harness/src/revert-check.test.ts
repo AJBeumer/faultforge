@@ -8,6 +8,7 @@ import {
   parseVitestReport,
   revertCheck,
   runnableTests,
+  runVitest,
   splitFiles,
   strippedEnv,
   type TestRun,
@@ -18,10 +19,10 @@ const TESTS = /(\.test\.ts$|\/fixtures\/)/;
 
 describe("splitting a PR's files", () => {
   const changes = parseNameStatus(
-    "M\tsrc/bookings/list.ts\nA\ttest/bookings.test.ts\nA\tpackages/harness/fixtures/review.json\nD\tsrc/old.test.ts\nM\tREADME.md\n",
+    "M\0src/bookings/list.ts\0A\0test/bookings.test.ts\0A\0packages/harness/fixtures/review.json\0D\0src/old.test.ts\0M\0README.md\0",
   );
 
-  it("reads git's name-status output", () => {
+  it("reads git's name-status -z output", () => {
     expect(changes[0]).toEqual({ status: "M", path: "src/bookings/list.ts" });
     expect(changes).toHaveLength(5);
   });
@@ -219,10 +220,92 @@ describe("revertCheck on a real git repository", () => {
     expect(outcome.exit).toBe(1);
   });
 
+  it("puts back a code file whose name git would quote (Qodo on PR 100)", () => {
+    const { repo, base } = repoWithPr("test\n");
+    sh(repo, "config", "core.quotePath", "true");
+    // Only these files: the helper's stand-in node_modules and work in progress stay uncommitted.
+    writeFileSync(join(repo, "src", "café.ts"), "export const v = 1;\n");
+    sh(repo, "add", "src/café.ts");
+    sh(repo, "commit", "-qm", "add café");
+    const before = sh(repo, "rev-parse", "HEAD");
+    sh(repo, "checkout", "-qb", "accent");
+    writeFileSync(join(repo, "src", "café.ts"), "export const v = 2;\n");
+    writeFileSync(join(repo, "src", "café.test.ts"), "test\n");
+    sh(repo, "add", "src/café.ts", "src/café.test.ts");
+    sh(repo, "commit", "-qm", "change café");
+    const head = sh(repo, "rev-parse", "HEAD");
+    sh(repo, "checkout", "-q", "main");
+    const versions: string[] = [];
+    const outcome = revertCheck({
+      repo,
+      base: before,
+      head,
+      tests: TESTS,
+      runTests: (dir) => {
+        const text = readFileSync(join(dir, "src", "café.ts"), "utf8");
+        versions.push(text.trim());
+        return { ran: true, failed: text.includes("2") ? [] : ["café"], passed: 1 };
+      },
+      temp: root,
+    });
+    expect(versions).toEqual(["export const v = 2;", "export const v = 1;"]);
+    expect(outcome.exit).toBe(0);
+    expect(base).not.toBe(before);
+  });
+
   it("can't judge a PR without a test file, and never builds a copy for it", () => {
     const { repo, base, head } = repoWithPr("test\n");
     const outcome = revertCheck({ repo, base, head, tests: /^nothing-matches$/, runTests, temp: root });
     expect(outcome.exit).toBe(2);
     expect(seen).toEqual([]);
+  });
+});
+
+describe("review findings on PR 100", () => {
+  it("reads git's -z output, so a name git would quote stays as it is", () => {
+    // Without -z, git prints "src/caf\303\251.ts" in quotes; -z keeps the real name.
+    expect(parseNameStatus("M\0src/café.ts\0A\0test/a b.test.ts\0")).toEqual([
+      { status: "M", path: "src/café.ts" },
+      { status: "A", path: "test/a b.test.ts" },
+    ]);
+  });
+
+  it("can't judge a PR that changes dependencies: the copy has only one set of installed packages", () => {
+    const outcome = verdict({
+      tests: ["test/a.test.ts"],
+      code: [
+        { status: "M", path: "src/a.ts" },
+        { status: "M", path: "package-lock.json" },
+      ],
+    });
+    expect(outcome.exit).toBe(2);
+    expect(outcome.message).toMatch(/dependenc/);
+  });
+
+  it("doesn't read an earlier run's report when a later run writes none", () => {
+    const dir = mkdtempSync(join(tmpdir(), "revert-check-vitest-"));
+    try {
+      mkdirSync(join(dir, "node_modules", "vitest"), { recursive: true });
+      writeFileSync(join(dir, "node_modules", "vitest", "vitest.mjs"), "");
+      let call = 0;
+      const spawn = (_cmd: string, args: readonly string[]) => {
+        call++;
+        const out = String(args.find((a) => a.startsWith("--outputFile="))).slice("--outputFile=".length);
+        // First run writes a passing report; the second dies before writing one.
+        if (call === 1)
+          writeFileSync(out, JSON.stringify({ testResults: [{ assertionResults: [{ status: "passed" }] }] }));
+        return { status: call === 1 ? 0 : 1, stderr: "killed" };
+      };
+      expect(runVitest(dir, ["a.test.ts"], spawn)).toMatchObject({ ran: true, passed: 1 });
+      expect(runVitest(dir, ["a.test.ts"], spawn)).toMatchObject({ ran: false });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives the tests the scratch folder as their home, not the caller's", () => {
+    const env = strippedEnv({ PATH: "/bin", HOME: "/home/owner", USERPROFILE: "C:Usersowner" }, "/scratch");
+    expect(env.HOME).toBe("/scratch");
+    expect(env.USERPROFILE).toBe("/scratch");
   });
 });
