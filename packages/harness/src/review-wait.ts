@@ -155,6 +155,11 @@ export async function waitForReview(
   }
 }
 
+/** "4.2 min" between two times, for the completion line; "0.0 min" for anything backwards. */
+export function minutesBetween(startMs: number, endMs: number): string {
+  return `${(Math.max(0, endMs - startMs) / 60_000).toFixed(1)} min`;
+}
+
 /** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
 function gh(...args: string[]): string {
   return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
@@ -217,6 +222,7 @@ async function main() {
   };
 
   const api = new QodoApi();
+  const startedWaitingAt = Date.now();
   const result = await waitForReview(
     headSha,
     {
@@ -279,7 +285,7 @@ async function main() {
     process.exit(3);
   }
   console.log(
-    `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}). Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
+    `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}) after ${minutesBetween(startedWaitingAt, Date.now())} of waiting. Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
   );
   console.log(`CI: ${ci}`);
   console.log(`${findings.length} finding(s) on ${short}; ${open.length} open on this PR in total:`);

@@ -284,3 +284,16 @@ describe("review findings on PR 61, third round", () => {
     await expect(run).rejects.toThrow("gh failed");
   });
 });
+
+describe("minutesBetween", () => {
+  it("prints tenths of a minute", async () => {
+    const { minutesBetween } = await import("./review-wait.ts");
+    expect(minutesBetween(0, 252_000)).toBe("4.2 min");
+    expect(minutesBetween(0, 0)).toBe("0.0 min");
+  });
+
+  it("never goes negative when clocks disagree", async () => {
+    const { minutesBetween } = await import("./review-wait.ts");
+    expect(minutesBetween(60_000, 0)).toBe("0.0 min");
+  });
+});
