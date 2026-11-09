@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import {
   type AgentRun,
+  agentInstructions,
   agentStep,
   buildSnapshot,
   checkProblems,
@@ -832,6 +833,15 @@ describe("helpers", () => {
     expect(agentStep("cd x && gh pr create --title t")).toBe("pr-opened");
     expect(agentStep("npm run review:wait -- target 19")).toBe("review-wait");
     expect(agentStep("ls")).toBeNull();
+  });
+});
+
+describe("agentInstructions (#73)", () => {
+  it("tells the agent to pass PR bodies, comments and commit messages as files", () => {
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md");
+    expect(text).toMatch(/--body-file/);
+    expect(text).toMatch(/git commit -F/);
+    expect(text).toMatch(/PR bodies, comments and commit messages/);
   });
 });
 
