@@ -98,3 +98,52 @@ One entry per daily challenge: what was asked, what was built, and what was lear
   - Lite reviews are shallower than standard ones, and Qodo chooses the depth. A PR whose only reviews were lite has had less review.
   - The merge gate on Qodo's run status ([#56](https://github.com/AJBeumer/faultforge/issues/56)) isn't built, so a PR can still look reviewed before Qodo has finished.
   - Qodo's local structured review (the charter's Day 2 gate, [#6](https://github.com/AJBeumer/faultforge/issues/6)) is still unverified.
+
+## Day 4: Automate your factory's first job
+
+- **Challenge requirement:** start the agent with a trigger (a schedule or a `ready-for-agent` label) without opening a session. The agent reads the ticket and the project rules, implements, runs the checks against the acceptance criteria, opens a PR for Qodo, fixes confirmed findings and repeats, with a retry limit, stopping for help when stuck. The owner decides on the merge. Try it and note the checks, reviews, retries and blockers.
+- **Increment delivered:**
+  - **The factory runs in GitHub Actions** ([`factory.yml`](../.github/workflows/factory.yml), [docs](factory-trigger.md)). The owner's `ready-for-agent` label on a ticket in this repo starts a run at once; a schedule every 15 minutes picks up target tickets. A cheap first job checks whether anything is labelled. One run takes one ticket, runs the `/factory` loop in headless Claude Code with a $25 budget, a 120-minute limit and at most three review rounds, and ends with `agent-done` or `agent-needs-help` and a comment saying why. It never merges. Keys are repo secrets; pushes use the owner's token, because Qodo ignores pushes by bots.
+  - **It doesn't take the agent's word.** After the agent stops, the runner checks effects, not just commands: `main` of all three repos, the guardrail files, every comment, review and ticket change by the agent's login during the run, and a fresh snapshot of the ticket. Then it verifies the PR itself: a clean agent exit, green checks, and Qodo's review of the head commit complete with no action-required finding open.
+  - **It trusts only the owner's text.** A ticket is refused unless the owner added the label and wrote, edited and commented every part of it (all pages, comment edits included). The agent works from a checked snapshot of the ticket; live reads of issues are blocked during a run.
+  - **A policy hook for unattended runs** ([`factory-policy.ts`](../.claude/hooks/factory-policy.ts)), next to the guard hook: no merges, PR comments or Qodo replies, ticket labels, `gh api` writes, force pushes, pushes to `main`, environment reads, HTTP outside localhost, edits outside the run (following links) or under `.claude`. The runner refuses to start an agent unless both hooks are switched on in the workspace it gets from `main`.
+  - **`factory:timeline`** prints a run's log as a table with a one-line summary. The factory built that summary itself (run 2 below).
+  - Tickets [#63](https://github.com/AJBeumer/faultforge/issues/63), [#68](https://github.com/AJBeumer/faultforge/issues/68), [#70](https://github.com/AJBeumer/faultforge/issues/70) and [#74](https://github.com/AJBeumer/faultforge/issues/74), in PRs [#65](https://github.com/AJBeumer/faultforge/pull/65), [#69](https://github.com/AJBeumer/faultforge/pull/69), [#72](https://github.com/AJBeumer/faultforge/pull/72) and [#75](https://github.com/AJBeumer/faultforge/pull/75).
+- **The runs, with nobody starting them:**
+
+  | | Run 1: [target 18](https://github.com/AJBeumer/faultforge-target/issues/18) "Filter my bookings by status" | Run 2: [#74](https://github.com/AJBeumer/faultforge/issues/74) "`factory:timeline` summary" |
+  |---|---|---|
+  | Trigger | label 09:25:56 UTC, picked up by the schedule at 09:34:35 | label 11:28:10 UTC, run started at 11:28:12 |
+  | Summary (`factory:timeline`) | label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost $1.62, 60 turns, 1 review round | label to result 8.4 min, waiting 0.5 min, agent 7.6 min, cost $1.89, 46 turns, 2 review rounds |
+  | Checks | `npm run check` (49 tests), live check of every criterion on the running API | `npm run check`, the summary run against the real logs |
+  | Qodo | standard review, 0 findings | 1 finding (tests read run logs that only exist in the private repo); the agent fixed it and pushed; 0 open after round 2. Both reviews were lite |
+  | Runner's audit and verify | nothing found | nothing found |
+  | Result | `agent-done`, [target PR 19](https://github.com/AJBeumer/faultforge-target/pull/19), merged by the owner | `agent-done`, [PR #75](https://github.com/AJBeumer/faultforge/pull/75), merged by the owner |
+
+  Before each merge the PR was checked again on the owner's side: Qodo's API, CI, and every criterion on the running app or with the real logs. Both held.
+- **Stop paths, shown live:** an idle tick; a busy tick and a stale lock; a ticket without its sections (drill [#66](https://github.com/AJBeumer/faultforge/issues/66): `agent-needs-help`, the missing sections listed, no agent); a label added by `github-actions[bot]` (drill [#71](https://github.com/AJBeumer/faultforge/issues/71): refused in 25 seconds, no agent); labels other than `ready-for-agent` skipped by the workflow; and a headless session in run mode asked to commit a planted-bug message, merge, force push, reply to a finding and write outside its folder: all five blocked, the harmless control allowed.
+- **What changed from the plan and why:**
+  - **The runner moved from a Windows scheduled task to GitHub Actions** after #65 was merged. The owner wanted the keys in GitHub, not in files on a PC that has to stay on. A fresh VM per run also replaced the worktrees.
+  - **Merging stays manual.** The challenge leaves it to the owner. Auto-merge comes back for a decision once [#56](https://github.com/AJBeumer/faultforge/issues/56) makes "Qodo's review is complete" a required check.
+  - **The revert check ([#64](https://github.com/AJBeumer/faultforge/issues/64)) wasn't built.** The security findings on the trigger came first.
+  - **A fourth review round on #72**, approved by the owner at the three-round gate, to end the pattern-chasing (below).
+- **Tests and Qodo evidence:** 289 tests at the end of the day. Qodo raised **29 findings** on the five PRs:
+
+  | Outcome | Count |
+  |---|---:|
+  | Real, fixed in the same PR | 25 |
+  | Real, raised after the merge of #69, fixed in #72 | 3 |
+  | Real, deliberately not changed: the broad rule also blocks a command that only quotes the blocked words, so it fails closed ([#73](https://github.com/AJBeumer/faultforge/issues/73) tells the agent the way around) | 1 |
+
+  Where possible, findings were reproduced against the old code before the fix. One was right about the bug and wrong about where it was: the audit window missed actions in the agent's last second, not its first. Found without Qodo: the workspace takes `main`'s hooks (hence the refusal to start without them), and `review:wait` run within a second of a push reported the previous commit's review ([#67](https://github.com/AJBeumer/faultforge/issues/67)). The IDE caught a workflow that used the `runner` context where GitHub doesn't allow it.
+- **Lesson or decision:**
+  - **Check effects, not just commands.** Qodo found a way past the policy hook's command patterns round after round: a script, a link, a fake hook entry, a repo-wide endpoint, a line continuation. A rule that lists bad commands can't be complete. The decision: the hook stays as a seatbelt, made broad where it matters (join continued lines, block any `gh api` call about issues), and the guarantee comes from checking afterwards what actually changed, and from never merging without the owner.
+  - **The label says who chose the ticket, not who wrote it.** Owner-only text, a snapshot, and a check of the snapshot after the run.
+  - **A clean review is not a finished job.** Twice the agent reported "ready", and twice the runner and then the owner checked it again before believing it. Both times it held; the checks are what made that knowable.
+  - **Qodo had a 12-minute outage** (`MT-UPSTREAM-DOWN`, 10:53 to 11:05 UTC). `review:wait` kept polling and picked up the review when it came; nothing counted as reviewed in between.
+  - No Qodo configuration change (still v5), and no case ran today.
+- **Remaining risk:**
+  - The fix loop has run unattended once, on one finding from a lite review.
+  - `FACTORY_GH_TOKEN` is the owner's broad hackathon token. A narrower one (three repos; contents, issues and pull requests only) is still to be made.
+  - Not yet seen live: a `workflow_dispatch` run, and a second trigger waiting behind a run in progress (#68).
+  - [#67](https://github.com/AJBeumer/faultforge/issues/67): `review:wait` can read a stale head right after a push.
