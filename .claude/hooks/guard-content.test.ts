@@ -42,6 +42,11 @@ describe("chainProblem: the steps a git chain may contain inside a reviewed chec
       /\$\(/,
     ],
     ["a backtick substitution inside an allowed step", "git status `cp a b` && git commit -m Tidy", /`/],
+    [
+      "an escaped backslash before a real substitution in a heredoc body (Qodo, round 5)",
+      "echo <<EOF\nliteral \\\\$(cp /tmp/payload ../app/notes.md)\nEOF\ngit add . && git commit -m Tidy",
+      /heredoc/,
+    ],
   ])("refuses %s", (_name, command, step) => {
     expect(chainProblem(command)).toMatch(step);
   });

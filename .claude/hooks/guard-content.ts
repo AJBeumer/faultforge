@@ -181,9 +181,10 @@ const ALLOWED_STEP = new RegExp(
  */
 export function chainProblem(command: string): string | undefined {
   // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command,
-  // unless the shell escape `\$(` or `` \` `` keeps it literal.
+  // unless the shell escape `\$(` or `` \` `` keeps it literal. An escaped backslash (`\\`) is removed
+  // first, so `\\$(…)` is seen for what the shell makes of it: a literal backslash and a real substitution.
   for (const m of command.matchAll(/<<-?\s*(["']?)(\w+)\1[^\n]*\n([\s\S]*?)\n\s*\2\s*(?:\n|$)/g)) {
-    const body = (m[3] ?? "").replace(/\\\$\(|\\`/g, "");
+    const body = (m[3] ?? "").replace(/\\\\/g, "").replace(/\\\$\(|\\`/g, "");
     if (!m[1] && /\$\(|`/.test(body)) return "a heredoc body that runs $(…)";
   }
   const steps = blankQuoted(command)
