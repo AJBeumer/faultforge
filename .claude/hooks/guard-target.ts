@@ -40,9 +40,10 @@ let cwd = process.cwd();
 main();
 
 /**
- * Fails closed. Claude Code treats a hook that crashes as a non-blocking error and runs the tool
- * anyway, so an exception here (unreadable input, a body file that is a folder) would be a bypass.
- * Any error denies the action instead, and says so.
+ * Fails closed. Claude Code treats a hook that crashes (exit 1, a stack trace) as a non-blocking error
+ * and runs the tool anyway, so an exception here (unreadable input, a body file that is a folder) would
+ * be a bypass. Any error becomes a blocking error instead: exit 2 with a one-line reason on stderr,
+ * which Claude Code shows to the agent and acts on by refusing the tool call.
  */
 function main() {
   try {
@@ -57,10 +58,10 @@ function main() {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    console.error(`guard-target hook failed: ${message}`);
-    deny(
-      `The guard hook failed (${message}), so this action is refused: a hook that can't check must not let anything through. Fix the hook or the input; don't work around it.`,
+    console.error(
+      `guard-target hook failed: ${message}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
     );
+    process.exit(2);
   }
 }
 
@@ -254,16 +255,32 @@ function postedArguments(command: string): string[] {
   return [...command.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 
-/** Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. */
+/**
+ * Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. A `gh api` field
+ * (`-F name=value`) is text, not a file, unless its value is `@file`, which gh reads from that file. A
+ * file that doesn't exist is a deny: the guard can't check what would be posted, so nothing is posted.
+ * One that exists but can't be read throws, and the hook then fails closed.
+ */
 function referencedFiles(command: string): string[] {
   const files: string[] = [];
   for (const match of command.matchAll(
     /(?:\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g,
   )) {
-    const file = match[1] ?? match[2] ?? match[3];
+    let file = match[1] ?? match[2] ?? match[3];
     if (!file || file === "-") continue;
+    const field = /^[\w-]+=(.*)$/s.exec(file);
+    if (field) {
+      if (!field[1]?.startsWith("@")) continue;
+      file = field[1].slice(1);
+      if (!file || file === "-") continue;
+    }
     const path = isAbsolute(file) ? file : resolve(cwd, file);
-    if (existsSync(path)) files.push(readFileSync(path, "utf8"));
+    if (!existsSync(path)) {
+      deny(
+        `This command would post the contents of ${file}, which doesn't exist, so the guard can't check it. Write the file first, then run the command.`,
+      );
+    }
+    files.push(readFileSync(path, "utf8"));
   }
   return files;
 }

@@ -224,16 +224,16 @@ describe("factory policy hook", () => {
       });
     const inRun = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
 
-    it("denies inside a run when its input is not JSON, and says the hook failed", () => {
+    it("blocks inside a run with exit 2 and a one-line reason when its input is not JSON", () => {
       const result = rawRun(inRun, "not json");
-      expect(result.status).toBe(0);
-      const decision = JSON.parse(result.stdout).hookSpecificOutput;
-      expect(decision.permissionDecision).toBe("deny");
-      expect(decision.permissionDecisionReason).toMatch(/policy hook failed/);
+      expect(result.status).toBe(2);
+      expect(result.stdout.trim()).toBe("");
+      expect(result.stderr.trim()).toMatch(/^factory-policy hook failed: .+/);
+      expect(result.stderr.trim().split("\n")).toHaveLength(1);
     });
 
-    it("denies inside a run when its input is empty", () => {
-      expect(JSON.parse(rawRun(inRun, "").stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    it("blocks inside a run when its input is empty", () => {
+      expect(rawRun(inRun, "").status).toBe(2);
     });
 
     it("still does nothing outside a run, even on bad input: there is nothing to protect", () => {

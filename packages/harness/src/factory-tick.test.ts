@@ -572,7 +572,16 @@ describe("hookProblems", () => {
 
 describe("hook self-test (#104)", () => {
   const LAB = join(import.meta.dirname, "../../..");
-  const deny = JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "no" } });
+  /** A decision as a hook prints it; `null` leaves out the hookEventName Claude Code requires. */
+  const decision = (permissionDecision: string, hookEventName: string | null = "PreToolUse") =>
+    JSON.stringify({
+      hookSpecificOutput: {
+        ...(hookEventName && { hookEventName }),
+        permissionDecision,
+        permissionDecisionReason: "no",
+      },
+    });
+  const deny = decision("deny");
   const allow = "";
   /** A fake hook: answers from a table keyed by hook and whether the stdin was JSON and what it asked. */
   const fake =
@@ -611,8 +620,37 @@ describe("hook self-test (#104)", () => {
       stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 1, ms: 5 },
     );
     expect(hookSelfTest(LAB, "/x/faultforge-target", 15, crashing)).toEqual([
-      expect.stringMatching(/guard-target\.ts let through input that is not JSON \(exit 1/),
-      expect.stringMatching(/factory-policy\.ts let through input that is not JSON \(exit 1/),
+      expect.stringMatching(/guard-target\.ts let through input that is not JSON \(decision invalid, exit 1/),
+      expect.stringMatching(/factory-policy\.ts let through input that is not JSON \(decision invalid, exit 1/),
+    ]);
+  });
+
+  it("counts a blocking exit (2, no output) on bad input as a deny, as Claude Code does", () => {
+    const blocking = fake((hook, stdin) =>
+      stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 2, ms: 5 },
+    );
+    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, blocking)).toEqual([]);
+  });
+
+  it("fails a hook whose deny is not a decision Claude Code accepts (no hookEventName) (Qodo on PR 115)", () => {
+    const malformed = fake((hook, stdin) => {
+      const answer = correct(hook, stdin);
+      return answer.stdout ? { ...answer, stdout: decision("deny", null) } : answer;
+    });
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, malformed);
+    expect(problems).toHaveLength(4);
+    expect(problems[0]).toMatch(/guard-target\.ts let through a telltale commit .*invalid/);
+  });
+
+  it("fails a hook that asks for approval on the harmless command: nobody is there to answer (Qodo on PR 115)", () => {
+    const asking = fake((hook, stdin) => {
+      const answer = correct(hook, stdin);
+      return stdin.includes("npm run check") ? { ...answer, stdout: decision("ask") } : answer;
+    });
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, asking);
+    expect(problems).toEqual([
+      expect.stringMatching(/guard-target\.ts refused a harmless command .*ask/),
+      expect.stringMatching(/factory-policy\.ts refused a harmless command inside a run .*ask/),
     ]);
   });
 

@@ -364,29 +364,50 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
 });
 
 describe("guard-target hook fails closed (#104)", () => {
-  /** Runs the hook with raw stdin text and returns its exit code and the deny reason, if any. */
+  /** Runs the hook with raw stdin text and returns how it exited and what it wrote. */
   function raw(stdin: string) {
     const result = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: "utf8", env: process.env });
-    const reason = result.stdout.trim()
-      ? (JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason as string)
-      : undefined;
-    return { status: result.status, reason };
+    return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
   }
 
-  it("denies when its input is empty", () => {
-    const { status, reason } = raw("");
-    expect(status).toBe(0);
-    expect(reason).toMatch(/guard hook failed/);
+  it("blocks with exit 2 and a one-line reason when its input is empty", () => {
+    const { status, stdout, stderr } = raw("");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^guard-target hook failed: .+/);
+    expect(stderr.split("\n")).toHaveLength(1);
   });
 
-  it("denies when its input is not JSON", () => {
-    expect(raw("not json").reason).toMatch(/guard hook failed/);
+  it("blocks with exit 2 when its input is not JSON", () => {
+    const { status, stderr } = raw("not json");
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/guard-target hook failed/);
   });
 
-  it("denies a reviewed-repo post whose body file exists but can't be read (a folder)", () => {
+  it("blocks a reviewed-repo post whose body file exists but can't be read (a folder)", () => {
     // The folder exists, so the guard tries to read it as the body, and must refuse rather than skip it.
     const command = `gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${tmpdir()}"`;
-    expect(bash(command)).toMatch(/guard hook failed/);
+    const { status, stderr } = raw(JSON.stringify({ tool_name: "Bash", cwd: HARNESS, tool_input: { command } }));
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/EISDIR/);
+  });
+
+  it("denies a post whose body file does not exist, since it can't check what would be posted", () => {
+    const missing = join(tmpdir(), "no-such-body-file.md");
+    expect(bash(`gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${missing}"`)).toMatch(
+      /doesn't exist/,
+    );
+    expect(bash(`git commit -F ${missing}`, TARGET)).toMatch(/doesn't exist/);
+    expect(bash(`gh pr create --repo AJBeumer/faultforge --title "Tidy" --body-file ${missing}`)).toMatch(
+      /doesn't exist/,
+    );
+  });
+
+  it("reads a gh api field's @file, and treats a plain field value as text, not a file", () => {
+    const route = "gh api repos/AJBeumer/faultforge-target/issues/1/comments";
+    expect(bash(`${route} -F body=@${join(tmpdir(), "no-such-body-file.md")}`)).toMatch(/doesn't exist/);
+    expect(bash(`${route} -F body=Thanks`)).toBeUndefined();
+    expect(bash(`${route} -F body="The planted bug"`)).toMatch(/says planted/);
   });
 
   it("still allows and denies as before once the input is well-formed", () => {

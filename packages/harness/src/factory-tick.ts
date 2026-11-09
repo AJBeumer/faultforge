@@ -365,12 +365,22 @@ export interface HookAnswer {
 /** Runs one hook file with stdin text and extra environment, as Claude Code would. */
 export type HookRunner = (hook: string, stdin: string, env: Record<string, string>) => HookAnswer;
 
-/** True when a hook's output is a deny decision. */
-function denies(answer: HookAnswer): boolean {
+/**
+ * What Claude Code would make of a hook's answer. Exit 2 is a blocking error (the tool call is refused);
+ * exit 0 with no output allows; exit 0 with a well-formed PreToolUse decision is that decision. Anything
+ * else is invalid: Claude Code ignores it and lets the tool run, so a deny printed without
+ * `hookEventName` is not a deny (Qodo on PR 115).
+ */
+export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "silent" | "invalid" {
+  if (answer.status === 2) return "deny";
+  if (answer.status !== 0) return "invalid";
+  if (!answer.stdout.trim()) return "silent";
   try {
-    return JSON.parse(answer.stdout).hookSpecificOutput?.permissionDecision === "deny";
+    const out = JSON.parse(answer.stdout).hookSpecificOutput;
+    if (out?.hookEventName !== "PreToolUse") return "invalid";
+    return ["deny", "allow", "ask"].includes(out.permissionDecision) ? out.permissionDecision : "invalid";
   } catch {
-    return false;
+    return "invalid";
   }
 }
 
@@ -421,15 +431,12 @@ export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: 
   const budgetMs = (limitSeconds * 1000) / 2;
   for (const c of cases) {
     const answer = run(c.hook, c.stdin, c.env);
-    const denied = denies(answer);
-    if (c.expectDeny && !denied)
-      problems.push(
-        `${c.hook} let through ${c.name} (exit ${answer.status}, output ${JSON.stringify(answer.stdout.trim().slice(0, 80))})`,
-      );
-    if (!c.expectDeny && (denied || answer.status !== 0))
-      problems.push(
-        `${c.hook} refused ${c.name} (exit ${answer.status}, output ${JSON.stringify(answer.stdout.trim().slice(0, 80))})`,
-      );
+    const decision = hookDecision(answer);
+    const detail = `decision ${decision}, exit ${answer.status}, output ${JSON.stringify(answer.stdout.trim().slice(0, 80))}`;
+    if (c.expectDeny && decision !== "deny") problems.push(`${c.hook} let through ${c.name} (${detail})`);
+    // A harmless command must pass without a question: in an unattended run nobody answers an "ask".
+    if (!c.expectDeny && decision !== "silent" && decision !== "allow")
+      problems.push(`${c.hook} refused ${c.name} (${detail})`);
     if (answer.ms > budgetMs)
       problems.push(
         `${c.hook} took ${answer.ms} ms on ${c.name}; it must answer within half its ${limitSeconds} s limit`,
