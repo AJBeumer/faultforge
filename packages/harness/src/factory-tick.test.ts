@@ -7,6 +7,7 @@ import {
   agentStep,
   buildSnapshot,
   checkProblems,
+  commitToVerify,
   hookProblems,
   type IssueEvent,
   LABELS,
@@ -16,6 +17,7 @@ import {
   parseAgentResult,
   prNumber,
   provenanceProblems,
+  prViewProblems,
   redact,
   runIdFor,
   runsHook,
@@ -828,5 +830,42 @@ describe("helpers", () => {
     expect(agentStep("cd x && gh pr create --title t")).toBe("pr-opened");
     expect(agentStep("npm run review:wait -- target 19")).toBe("review-wait");
     expect(agentStep("ls")).toBeNull();
+  });
+});
+
+describe("verifying the commit the agent pushed (Qodo on PR 98)", () => {
+  const OLD = `506f56d${"0".repeat(33)}`;
+  const PUSHED = `56fb13c${"1".repeat(33)}`;
+  const ok = [{ name: "npm run check", conclusion: "SUCCESS" }];
+
+  it("trusts the agent's branch tip over a PR view that still shows the old head", () => {
+    expect(commitToVerify(PUSHED, OLD)).toBe(PUSHED);
+  });
+
+  it("falls back to the PR view's head only when the branch isn't in the worktree", () => {
+    expect(commitToVerify(null, OLD)).toBe(OLD);
+  });
+
+  it("refuses anything that isn't a commit id, since it goes on an npm command line", () => {
+    expect(commitToVerify("main; echo hi", OLD)).toBeNull();
+    expect(commitToVerify(null, "")).toBeNull();
+  });
+
+  it("flags a PR view that still doesn't show the pushed commit after its review", () => {
+    expect(prViewProblems({ state: "OPEN", headRefOid: OLD, statusCheckRollup: ok }, PUSHED)[0]).toMatch(
+      /506f56d.*56fb13c/,
+    );
+  });
+
+  it("passes an open PR at the pushed commit with green checks", () => {
+    expect(prViewProblems({ state: "OPEN", headRefOid: PUSHED, statusCheckRollup: ok }, PUSHED)).toEqual([]);
+  });
+
+  it("still reports a closed PR and failing checks", () => {
+    const problems = prViewProblems(
+      { state: "CLOSED", headRefOid: PUSHED, statusCheckRollup: [{ name: "npm run check", conclusion: "FAILURE" }] },
+      PUSHED,
+    );
+    expect(problems).toHaveLength(2);
   });
 });

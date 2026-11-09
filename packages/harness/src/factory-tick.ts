@@ -190,6 +190,32 @@ export function settle(
 }
 
 /** Problems with a PR's checks: none may be pending or failed, and at least one must have run. */
+/**
+ * The commit the runner must see reviewed: the agent's own branch tip in its worktree. GitHub's PR view
+ * can still show the previous head right after a push (PR 65), so it is used only when the branch isn't
+ * in the worktree. Null when neither is a commit id: the result goes on an npm command line.
+ */
+export function commitToVerify(localTip: string | null, viewHead: string): string | null {
+  const commit = localTip ?? viewHead;
+  return /^[0-9a-f]{40}$/i.test(commit) ? commit : null;
+}
+
+/** Problems with the PR as GitHub shows it once the review of `pushed` is complete. */
+export function prViewProblems(
+  view: { state: string; headRefOid: string; statusCheckRollup?: Parameters<typeof checkProblems>[0] },
+  pushed: string,
+): string[] {
+  const problems: string[] = [];
+  if (view.state !== "OPEN") problems.push(`the pull request is ${String(view.state).toLowerCase()}, not open`);
+  if (view.headRefOid !== pushed) {
+    problems.push(
+      `GitHub shows the head as ${view.headRefOid.slice(0, 7)}, not the agent's last commit ${pushed.slice(0, 7)}`,
+    );
+  }
+  problems.push(...checkProblems(view.statusCheckRollup ?? []));
+  return problems;
+}
+
 export function checkProblems(
   rollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[],
 ): string[] {
@@ -1091,31 +1117,53 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       });
     },
     verifyPr(ws, repoKey, pr) {
-      const { github } = repoConfig(factory, repoKey);
-      const view = JSON.parse(
-        gh("pr", "view", String(pr), "--repo", github, "--json", "state,headRefOid,statusCheckRollup"),
-      );
-      const problems: string[] = [];
-      if (view.state !== "OPEN") problems.push(`the pull request is ${String(view.state).toLowerCase()}, not open`);
-      problems.push(...checkProblems(view.statusCheckRollup ?? []));
+      const repo = repoConfig(factory, repoKey);
+      const { github } = repo;
+      const first = JSON.parse(gh("pr", "view", String(pr), "--repo", github, "--json", "headRefOid,headRefName"));
+      // The agent's branch tip is what it pushed; GitHub's view of the head can lag a push.
+      const dir = repo.path === "." ? ws.lab : resolve(ws.lab, repo.path);
+      let localTip: string | null = null;
+      try {
+        localTip = git(dir, "rev-parse", "--verify", `refs/heads/${String(first.headRefName)}`);
+      } catch {
+        localTip = null;
+      }
+      const pushed = commitToVerify(localTip, String(first.headRefOid));
+      if (!pushed) return { problems: ["no commit id for the pull request's head"] };
       // review:wait runs in the run's worktree, so its evidence lands in the run's private branch.
-      const review = npm(ws.lab, "run", "-s", "review:wait", "--", repoKey, String(pr), "--timeout", "5");
+      // --commit: it waits until GitHub shows the pushed commit, then for that commit's review.
+      const review = npm(
+        ws.lab,
+        "run",
+        "-s",
+        "review:wait",
+        "--",
+        repoKey,
+        String(pr),
+        "--commit",
+        pushed,
+        "--timeout",
+        "5",
+      );
       const meaning: Record<number, string> = {
-        1: "Qodo's review of the head commit isn't complete",
+        1: "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
         2: "review:wait couldn't run",
         3: "Qodo skipped the review of the head commit",
       };
-      if (review.status !== 0) {
-        problems.push(meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`);
-        return { problems };
-      }
+      if (review.status !== 0)
+        return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`] };
+      // Read again after the review: state, head and checks must all be of the pushed commit.
+      const view = JSON.parse(
+        gh("pr", "view", String(pr), "--repo", github, "--json", "state,headRefOid,statusCheckRollup"),
+      );
+      const problems = prViewProblems(view, pushed);
       // A complete review can still have findings open: only none action-required counts as ready.
       const record = join(
         ws.lab,
         factory.evidence,
         "reviews",
         `${repoKey}-pr${pr}`,
-        `${String(view.headRefOid).slice(0, 7)}.review.json`,
+        `${pushed.slice(0, 7)}.review.json`,
       );
       if (!existsSync(record)) problems.push("review:wait saved no review record for the head commit");
       else {

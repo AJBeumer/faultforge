@@ -56,6 +56,10 @@ describe("factory policy: commands", () => {
     "git push origin maintenance-window",
     "git merge origin/main",
     "npm run review:wait -- target 12",
+    // #67: the /factory skill passes the pushed commit, and the runner passes the head it checked.
+    "npm run review:wait -- target 12 --commit $(git rev-parse HEAD)",
+    "npm run review:wait -- target 12 --commit $(git -C ../faultforge-target rev-parse HEAD)",
+    "npm run review:wait -- target 12 --commit 56fb13c1111111111111111111111111111111111 --timeout 5",
     "npm run check",
   ])("allows %s", (command) => {
     expect(commandViolations(command)).toEqual([]);
