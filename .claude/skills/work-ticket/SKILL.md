@@ -57,13 +57,13 @@ Fill the Result column only with what you actually observed. Leave it blank unti
 
 ## 4. Save Qodo's review straight away
 
-Qodo rewrites its review comment in place after every push, so the first version is lost if you wait. Poll every 20 seconds (up to 20 minutes) and save the raw comments as soon as "Code Review by Qodo" appears, and again after each new commit:
+Qodo rewrites its review comment in place after every push, so the first version is lost if you wait. Start `review:wait` straight after every push, with the commit you just pushed:
 
 ```bash
-D=<evidence>/day-NN
-gh api repos/<github>/issues/<pr>/comments > $D/<key>-pr<pr>-issue-comments.<commit>.raw.json
-gh api repos/<github>/pulls/<pr>/comments  > $D/<key>-pr<pr>-review-comments.<commit>.raw.json
+npm run review:wait -- <key> <pr> --commit $(git -C <path> rev-parse HEAD)
 ```
+
+It waits until the PR's head is that commit (right after a push GitHub can still show the old one), then until Qodo's API says the review of that commit is complete. On the way it saves every version of Qodo's comments, from every page of both comment feeds, plus the raw API answer and a `review.json` record, under `<evidence>/reviews/<key>-pr<pr>/`. It needs `QODO_KEY_FILE` (or `QODO_API_KEY`) and `GH_TOKEN`. Exit codes: 0 complete, 1 not complete in time or the head never became that commit, 2 couldn't run, 3 Qodo skipped the review (zero findings then does not mean clean).
 
 ## 5. Check the behaviour, not just the tests
 

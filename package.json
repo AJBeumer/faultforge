@@ -14,7 +14,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "rules:evidence": "tsx packages/harness/src/rules-evidence.ts",
-    "rules:propose": "tsx packages/harness/src/rules-propose.ts"
+    "rules:propose": "tsx packages/harness/src/rules-propose.ts",
+    "revert:check": "tsx packages/harness/src/revert-check.ts"
   },
   "repository": {
     "type": "git",
