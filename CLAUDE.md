@@ -73,6 +73,15 @@ Run `npm run check` before every commit, in this repo and in the target (planted
 
 Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for each ticket, and `/new-case` to run a case end to end. In short: read `private/BACKLOG.md` and the day's challenge, pick the smallest increment that meets it, build one testable slice, get it reviewed, record the entry in `docs/decision-log.md`, and push all three repositories.
 
+## Code layout
+
+- A unit test sits next to the code it tests, as `<name>.test.ts` in the same folder (`packages/harness/src/`, `.claude/hooks/`). It runs with `npm test` and in `npm run check`.
+- A slow or end-to-end test, one that needs a checkout of the target, a network, a real process or more than a few seconds, lives under `packages/<package>/test/`. It runs with `npm run test:integration`, never in `check`. Template proof tests are neither: they run only through `npm run inject`.
+- A helper two scripts need lives in a named module (`neutral.ts`, `factory-config.ts`), never as a copy in each script.
+- A module over 400 lines is split along its seams. `factory-tick.ts` is the standing exception until #109.
+- Every script documents its exit codes in its header comment, and each code means one thing.
+- Why colocated and not a mirrored `tests/` tree: in TypeScript with Vitest the test moves with its file, imports stay short, and a missing test is visible in the folder listing. A mirrored tree is a Java and Python convention that duplicates every path and breaks on every move. `factory.json`'s `tests` pattern names both places, so `revert:check` recognises them.
+
 ## Style
 
 - The house rules in `AGENTS.md` apply to all work in this repository. Check your own work against them; don't assume the reviewer will.

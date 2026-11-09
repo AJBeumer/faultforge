@@ -169,3 +169,7 @@ One entry per daily challenge: what was asked, what was built, and what was lear
   - The after-arm reviewed diffs the reviewer had seen before; its catches are not independent evidence (stated in the report).
   - One clause-rule ("read every page") was never linked to the finding it covers; per-clause linkage looks best-effort.
   - Four diffs measure a direction, not a rate.
+
+### Decisions made on 9 November, after the Day 5 entry
+
+- **Code layout, written down (#112).** Unit tests stay next to the code they test, as `<name>.test.ts`; slow and end-to-end tests get their own folder, `packages/<package>/test/`, and their own Vitest project, run by `npm run test:integration` and never by `check`. The owner asked whether a root `tests/` tree mirroring the source would be cleaner. Decision: no. In TypeScript with Vitest the colocated test moves with its file, imports stay short and a missing test shows in the folder listing; a mirrored tree duplicates every path and breaks on every move, and it would also change the `tests` pattern `revert:check` depends on. The rules are in `CLAUDE.md` under "Code layout", not in `AGENTS.md`, because Qodo imports `AGENTS.md` as review rules and that would be a new configuration version for a layout convention.
