@@ -1,0 +1,108 @@
+# The unattended factory. Adding `ready-for-agent` to a ticket in this repo starts a run at once; a
+# schedule picks up tickets in the other repos in factory.json. One run takes at most one ticket, with the
+# /factory loop in headless Claude Code, and reports on the ticket. It never merges. See
+# docs/factory-trigger.md.
+name: Factory
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time. A second trigger waits instead of cancelling the run in progress.
+concurrency:
+  group: factory
+  cancel-in-progress: false
+
+jobs:
+  look:
+    name: Any ticket ready?
+    # Only the owner's label starts anything, so nobody else's event reaches a job with secrets.
+    if: >-
+      github.event_name != 'issues' ||
+      (github.event.label.name == 'ready-for-agent' && github.event.sender.login == github.repository_owner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ready: ${{ steps.count.outputs.ready }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: factory.json
+      - id: count
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+        run: |
+          ready=0
+          for repo in $(node -e 'for (const r of Object.values(require("./factory.json").repos)) console.log(r.github)'); do
+            n=$(gh api "repos/$repo/issues?state=open&labels=ready-for-agent&per_page=100" --jq '[.[] | select(.pull_request | not)] | length')
+            echo "$repo: $n labelled"
+            ready=$((ready + n))
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+  tick:
+    name: Factory tick
+    needs: look
+    if: needs.look.outputs.ready != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      # The owner's token, so pushes and PRs come from the owner and Qodo reviews them (it ignores bots).
+      GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+      QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
+    steps:
+      # Same layout as the owner's folders: FaultForge/, FaultForge/private/ and faultforge-target/.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          path: FaultForge
+          fetch-depth: 0
+          token: ${{ secrets.FACTORY_GH_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AJBeumer/faultforge-target
+          ref: main
+          path: faultforge-target
+          fetch-depth: 0
+          token: ${{ secrets.FACTORY_GH_TOKEN }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AJBeumer/faultforge-private
+          ref: main
+          path: FaultForge/private
+          token: ${{ secrets.FACTORY_GH_TOKEN }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install dependencies and Claude Code
+        run: |
+          (cd FaultForge && npm ci --no-audit --no-fund)
+          (cd faultforge-target && npm ci --no-audit --no-fund)
+          npm install --global --no-audit --no-fund @anthropic-ai/claude-code@2.1.197
+      - name: Commit as the owner
+        run: |
+          git config --global user.name "$(gh api user --jq .login)"
+          git config --global user.email "$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"')"
+      - name: Run one tick
+        working-directory: FaultForge
+        run: npm run -s factory:tick -- --ci --minutes 120 --budget 25
+      # Only the event log: artifacts of a public repo are downloadable. The agent's full transcript is
+      # pushed to the private repo by the tick, and never uploaded here.
+      - name: Keep the run log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-run-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/faultforge-runs/*.jsonl
+            !${{ runner.temp }}/faultforge-runs/*.agent.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
