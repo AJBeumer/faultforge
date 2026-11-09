@@ -28,3 +28,8 @@ repository's first reviewed pull requests were variants of one failure: evidence
 (unread pages, unread endpoints, unsaved comment edits) or a failure recorded as if it were data.
 A capture that loses answers turns "measured" into "guessed", and when evidence is missing this
 project's answer must be "inconclusive", never "safe".
+
+**Why a review rule and not a check:** no test or hook can tell that a new capture path forgot a
+page, an endpoint or the raw-first save — tests pin the paths that exist, and a hook sees commands,
+not data flow. A reviewer reading the diff can. Per-script tests still pin each fixed instance;
+this rule is for the next script, which those tests don't reach.
