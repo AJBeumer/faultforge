@@ -59,8 +59,12 @@ const SECRET_RULES: [RegExp, string][] = [
 /** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
 
-/** Reasons a shell command is not allowed in a factory run, or an empty list. */
-export function commandViolations(command: string): string[] {
+/**
+ * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
+ * number: the agent must read the ticket from the runner's checked snapshot, never live from GitHub,
+ * where someone could have added text after the check.
+ */
+export function commandViolations(command: string, ticket?: string): string[] {
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
@@ -72,10 +76,22 @@ export function commandViolations(command: string): string[] {
       reasons.push("HTTP tools may only reach the app on localhost; GitHub goes through gh");
     }
   }
+  if (ticket && /^\d+$/.test(ticket)) {
+    const live = [
+      // gh issue view 18, #18, or a URL ending in /issues/18
+      new RegExp(String.raw`\bgh\s+issue\s+view\b[^\n|;&]*?(?:#|\s|/issues/)${ticket}\b`),
+      // gh api .../issues/18 and .../issues/18/comments (also covers PR numbers that collide: fails closed)
+      new RegExp(String.raw`\bgh\s+api\b[^\n|;&]*\bissues/${ticket}\b`),
+      // GraphQL can read any issue: not needed in a run
+      /\bgh\s+api\s+graphql\b/,
+    ];
+    if (live.some((pattern) => pattern.test(command))) {
+      reasons.push("read the ticket from the runner's snapshot file, not live from GitHub");
+    }
+  }
   return reasons;
 }
 
-/** True when `path` is inside `folder` (or is it). */
 /**
  * Where a path really lands on disk: the nearest existing folder is resolved through symlinks and
  * junctions, and the rest is appended. A link inside the run can't smuggle an edit outside it.
@@ -92,6 +108,7 @@ export function realTarget(path: string): string {
   return join(realpathSync.native(existing), ...rest);
 }
 
+/** True when `path` is inside `folder` (or is it). */
 function inside(path: string, folder: string): boolean {
   const rel = relative(resolve(folder), resolve(path));
   return (
@@ -120,7 +137,8 @@ function main() {
   const args = input.tool_input ?? {};
   const cwd: string = input.cwd ?? process.cwd();
   let reasons: string[] = [];
-  if (tool === "Bash" || tool === "PowerShell") reasons = commandViolations(String(args.command ?? ""));
+  if (tool === "Bash" || tool === "PowerShell")
+    reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
   else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
     const reason = editViolation(
       resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),

@@ -93,6 +93,35 @@ describe("factory policy: keys and network", () => {
   });
 });
 
+describe("factory policy: the run's ticket comes from the snapshot", () => {
+  it.each([
+    "gh issue view 18 --repo AJBeumer/faultforge-target",
+    "gh issue view #18",
+    "gh issue view https://github.com/AJBeumer/faultforge-target/issues/18 --comments",
+    "gh api repos/AJBeumer/faultforge-target/issues/18",
+    "gh api repos/AJBeumer/faultforge-target/issues/18/comments --paginate",
+    "gh api graphql -f query='{ viewer { login } }'",
+  ])("blocks %s in the run for ticket 18", (command) => {
+    expect(commandViolations(command, "18")).toContain(
+      "read the ticket from the runner's snapshot file, not live from GitHub",
+    );
+  });
+
+  it.each([
+    "gh issue view 180",
+    "gh api repos/AJBeumer/faultforge-target/issues/181/comments",
+    "gh pr view 19 --json state",
+    "gh api repos/AJBeumer/faultforge-target/pulls/19/comments",
+    "cat ../ticket.md",
+  ])("allows %s in the run for ticket 18", (command) => {
+    expect(commandViolations(command, "18")).toEqual([]);
+  });
+
+  it("reads tickets freely outside a run", () => {
+    expect(commandViolations("gh issue view 18")).toEqual([]);
+  });
+});
+
 describe("factory policy: file edits", () => {
   it("allows files in the run's folder and the temp folder", () => {
     expect(editViolation(join(RUN, "faultforge-target", "src", "a.ts"), RUN, TEMP)).toBeUndefined();
