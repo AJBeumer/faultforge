@@ -214,6 +214,12 @@ export function safeText(text: string, reviewed: boolean): string {
  * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
  * guard hook and the factory policy hook must run before every shell command and file edit.
  */
+/** True when a hook command runs exactly this repo's hook file with node, not merely mentions it. */
+export function runsHook(command: string, file: string): boolean {
+  const expected = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`;
+  return command.trim().replace(/\\/g, "/") === expected;
+}
+
 export function hookProblems(settingsText: string): string[] {
   let hooks: { matcher?: string; hooks?: { command?: string }[] }[] = [];
   try {
@@ -227,7 +233,7 @@ export function hookProblems(settingsText: string): string[] {
       const covered = hooks.some(
         (h) =>
           (!h.matcher || h.matcher === "*" || new RegExp(`^(${h.matcher})$`).test(tool)) &&
-          (h.hooks ?? []).some((c) => c.command?.includes(hook)),
+          (h.hooks ?? []).some((c) => runsHook(c.command ?? "", hook)),
       );
       if (!covered) problems.push(`${hook} doesn't run before ${tool}`);
     }
@@ -249,7 +255,12 @@ export interface WindowActivity {
   comments: { user: string; created_at: string; url: string }[];
   /** Events on the ticket, such as labels or closing. */
   ticketEvents: IssueEvent[];
+  /** Submitted PR reviews (approve, request changes, comment), which leave no comment of their own. */
+  reviews?: { user: string; created_at: string; url: string }[];
 }
+
+/** The key for the private evidence repo in `Workspace.mainAtStart`. */
+export const PRIVATE_KEY = "(private)";
 
 /**
  * Things the agent's GitHub identity did during the run that only the runner or the owner may do: a
@@ -257,11 +268,18 @@ export interface WindowActivity {
  * runs as the owner, so anything by that login inside the agent's window counts.
  */
 export function windowProblems(activity: WindowActivity, login: string, from: string, to: string): string[] {
-  const inWindow = (at: string) => at >= from && at <= to;
+  // GitHub records whole seconds and the run records milliseconds: widen the window to whole seconds,
+  // so an action in the same second as the agent's start or end still counts.
+  const start = Math.floor(Date.parse(from) / 1000) * 1000;
+  const end = Math.ceil(Date.parse(to) / 1000) * 1000;
+  const inWindow = (at: string) => Date.parse(at) >= start && Date.parse(at) <= end;
   const mine = (user: string | undefined) => user?.toLowerCase() === login.toLowerCase();
   const problems: string[] = [];
   for (const c of activity.comments) {
     if (mine(c.user) && inWindow(c.created_at)) problems.push(`a comment was posted during the run (${c.url})`);
+  }
+  for (const r of activity.reviews ?? []) {
+    if (mine(r.user) && inWindow(r.created_at)) problems.push(`a PR review was submitted during the run (${r.url})`);
   }
   for (const e of activity.ticketEvents) {
     if (inWindow(e.created_at))
@@ -673,6 +691,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
           git(source, "worktree", "add", "--detach", target, "origin/main");
         }
         git(privateRepo, "fetch", "--quiet", "origin", "main");
+        mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
         git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         for (const repo of Object.values(factory.repos)) {
           const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
@@ -701,6 +720,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
         const before = ws.mainAtStart[key] ?? "";
         if (now !== before) problems.push(`main of ${key} moved (${before.slice(0, 7)} → ${now.slice(0, 7)})`);
       }
+      // The agent may commit evidence to its private branch, but only the runner pushes it, after this audit.
+      const privateNow = git(privateRepo, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0] ?? "";
+      const privateBefore = ws.mainAtStart[PRIVATE_KEY] ?? "";
+      if (privateNow !== privateBefore)
+        problems.push(`main of the private repo moved (${privateBefore.slice(0, 7)} → ${privateNow.slice(0, 7)})`);
       const after = fingerprints(ws.lab);
       for (const [what, value] of Object.entries(ws.fingerprints)) {
         if (after[what] !== value) problems.push(`${what} changed during the run`);
@@ -722,8 +746,28 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
           gh("api", "--paginate", "--slurp", `repos/${ticket.github}/issues/${ticket.number}/events?per_page=100`),
         ) as IssueEvent[][]
       ).flat();
+      // Submitted reviews (approve, request changes) leave no comment: read them from every PR touched since.
+      type Pull = { number: number; updated_at: string };
+      type Review = { user?: { login: string }; submitted_at?: string; html_url: string };
+      const reviews = Object.values(factory.repos).flatMap((repo) =>
+        (
+          JSON.parse(
+            gh("api", `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50`),
+          ) as Pull[]
+        )
+          .filter((pull) => Date.parse(pull.updated_at) >= Math.floor(Date.parse(from) / 1000) * 1000)
+          .flatMap((pull) =>
+            (
+              JSON.parse(
+                gh("api", "--paginate", "--slurp", `repos/${repo.github}/pulls/${pull.number}/reviews?per_page=100`),
+              ) as Review[][]
+            ).flat(),
+          )
+          .filter((r) => r.submitted_at)
+          .map((r) => ({ user: r.user?.login ?? "", created_at: r.submitted_at ?? "", url: r.html_url })),
+      );
       const owner = ticket.github.split("/")[0] ?? "";
-      return [...problems, ...windowProblems({ comments, ticketEvents }, owner, from, to)];
+      return [...problems, ...windowProblems({ comments, ticketEvents, reviews }, owner, from, to)];
     },
     runAgent(ws, runId, repoKey, number, log) {
       const settingsFile = join(ws.root, "agent-settings.json");
@@ -954,12 +998,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
         `${git(dir, "rev-parse", "HEAD")}\n${git(dir, "branch", "--show-current")}\n${git(dir, "status", "--porcelain")}`,
       );
     }
+    // Every file under .claude: settings, hooks and the skills the agent follows.
     const guardrails = join(lab, ".claude");
-    const files = ["settings.json", ...readdirSync(join(guardrails, "hooks")).map((f) => `hooks/${f}`)].sort();
+    const files = (readdirSync(guardrails, { recursive: true, withFileTypes: true }) as import("node:fs").Dirent[])
+      .filter((entry) => entry.isFile())
+      .map((entry) => relative(guardrails, join(entry.parentPath, entry.name)).replace(/\\/g, "/"))
+      .sort();
     prints[`the run's guardrail files (${guardrails})`] = hash(
-      files
-        .map((f) => `${f}\n${existsSync(join(guardrails, f)) ? readFileSync(join(guardrails, f), "utf8") : ""}`)
-        .join("\n"),
+      files.map((f) => `${f}\n${readFileSync(join(guardrails, f), "utf8")}`).join("\n"),
     );
     return prints;
   }

@@ -58,6 +58,15 @@ describe("guard-target hook", () => {
     it("a commit made from inside the target that mentions the ledger", () => {
       expect(bash('git commit -m "Update ledger"', TARGET)).toMatch(/ledger/);
     });
+
+    it("a notebook edit in the target whose new source names the bug", () => {
+      expect(
+        decide("NotebookEdit", {
+          notebook_path: `${TARGET}\\notes\\demo.ipynb`,
+          new_source: "# the planted bug is here",
+        }),
+      ).toMatch(/says planted/);
+    });
   });
 
   describe("allows", () => {

@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { commandViolations, editViolation } from "./factory-policy.ts";
@@ -78,6 +80,22 @@ describe("factory policy: file edits", () => {
     );
     expect(editViolation(join(RUN, "FaultForge", ".claude", "settings.json"), RUN, TEMP)).toMatch(/own guardrails/);
     expect(editViolation(join(RUN, "FaultForge", ".claude-notes.md"), RUN, TEMP)).toBeUndefined();
+  });
+
+  it("follows a link inside the run folder to where it really lands", () => {
+    const base = mkdtempSync(join(tmpdir(), "policy-link-"));
+    const run = join(base, "run");
+    const owner = join(base, "owner-checkout");
+    mkdirSync(run);
+    mkdirSync(owner);
+    // A junction needs no admin rights on Windows; elsewhere it is an ordinary directory symlink.
+    symlinkSync(owner, join(run, "linked"), "junction");
+    try {
+      expect(editViolation(join(run, "linked", "README.md"), run, join(base, "temp"))).toMatch(/only files under/);
+      expect(editViolation(join(run, "own", "new-file.ts"), run, join(base, "temp"))).toBeUndefined();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it("blocks every edit when the run folder is unknown", () => {

@@ -15,6 +15,7 @@ import {
   parseAgentResult,
   prNumber,
   runIdFor,
+  runsHook,
   safeText,
   settle,
   type TickDeps,
@@ -379,7 +380,10 @@ describe("settle", () => {
 
 describe("hookProblems", () => {
   const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });
-  const both = [{ command: "node guard-target.ts" }, { command: "node factory-policy.ts" }];
+  const both = [
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' },
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"' },
+  ];
 
   it("accepts this repo's own settings", () => {
     const text = readFileSync(join(import.meta.dirname, "../../../.claude/settings.json"), "utf8");
@@ -435,6 +439,49 @@ describe("audit helpers", () => {
       "a comment was posted during the run (reply-to-finding)",
       "the ticket was changed during the run (unlabeled by owner)",
     ]);
+  });
+
+  it("counts comments in the same second as the agent's start or end, and its submitted reviews", () => {
+    const problems = windowProblems(
+      {
+        comments: [
+          { user: "owner", created_at: "2026-11-09T09:00:00Z", url: "same-second" },
+          { user: "owner", created_at: "2026-11-09T10:00:00Z", url: "last-second" },
+        ],
+        ticketEvents: [],
+        reviews: [
+          { user: "owner", created_at: "2026-11-09T09:20:00Z", url: "approve" },
+          { user: "qodo-merge[bot]", created_at: "2026-11-09T09:21:00Z", url: "bot-review" },
+        ],
+      },
+      "owner",
+      "2026-11-09T09:00:00.700Z",
+      "2026-11-09T10:00:00.100Z",
+    );
+    expect(problems).toEqual([
+      "a comment was posted during the run (same-second)",
+      "a comment was posted during the run (last-second)",
+      "a PR review was submitted during the run (approve)",
+    ]);
+  });
+
+  it("accepts only the exact hook command, not one that merely names the file", () => {
+    expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"', "factory-policy.ts")).toBe(true);
+    expect(runsHook("echo factory-policy.ts", "factory-policy.ts")).toBe(false);
+    expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts" || true', "factory-policy.ts")).toBe(
+      false,
+    );
+    const fake = JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
+            hooks: [{ command: "echo guard-target.ts" }, { command: "echo factory-policy.ts" }],
+          },
+        ],
+      },
+    });
+    expect(hookProblems(fake)).toHaveLength(12);
   });
 
   it("lists only action-required findings as blocking", () => {

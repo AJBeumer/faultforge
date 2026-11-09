@@ -15,9 +15,9 @@
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const COMMAND_RULES: [RegExp, string][] = [
@@ -47,6 +47,22 @@ export function commandViolations(command: string): string[] {
 }
 
 /** True when `path` is inside `folder` (or is it). */
+/**
+ * Where a path really lands on disk: the nearest existing folder is resolved through symlinks and
+ * junctions, and the rest is appended. A link inside the run can't smuggle an edit outside it.
+ */
+export function realTarget(path: string): string {
+  let existing = resolve(path);
+  const rest: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return resolve(path);
+    rest.unshift(basename(existing));
+    existing = parent;
+  }
+  return join(realpathSync.native(existing), ...rest);
+}
+
 function inside(path: string, folder: string): boolean {
   const rel = relative(resolve(folder), resolve(path));
   return (
@@ -60,8 +76,11 @@ function inside(path: string, folder: string): boolean {
  */
 export function editViolation(path: string, runRoot: string | undefined, temp = tmpdir()): string | undefined {
   if (!runRoot) return "the run has no FAULTFORGE_RUN_ROOT, so no file may change";
-  if (/(^|[/\\])\.claude([/\\]|$)/i.test(resolve(path))) return "the agent can't change its own guardrails (.claude)";
-  if (inside(path, runRoot) || inside(path, temp)) return undefined;
+  const real = realTarget(path);
+  if ([resolve(path), real].some((p) => /(^|[/\\])\.claude([/\\]|$)/i.test(p))) {
+    return "the agent can't change its own guardrails (.claude)";
+  }
+  if (inside(real, realTarget(runRoot)) || inside(real, realTarget(temp))) return undefined;
   return `only files under the run's folder may change, not ${path}`;
 }
 
