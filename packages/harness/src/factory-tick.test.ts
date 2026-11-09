@@ -14,6 +14,8 @@ import {
   openActionRequired,
   parseAgentResult,
   prNumber,
+  provenanceProblems,
+  redact,
   runIdFor,
   runsHook,
   safeText,
@@ -109,6 +111,7 @@ function fake(
         .map(([key, value]) => ({ number: Number(key.split("#")[1]), title: value.title })),
     events: (github, number) => issues[`${github}#${number}`]?.events ?? [],
     ready: () => ({ title: "t", problems: [] }),
+    provenance: () => ({ author: "owner", editors: ["owner"], commenters: [] }),
     relabel: (github, number, remove, add) =>
       calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`),
     comment: (github, number, body) => comments.push({ github, number, body }),
@@ -178,6 +181,39 @@ describe("tick: stop paths", () => {
   it("matches the owner's login case-insensitively", async () => {
     const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("Owner", "2026-11-09T08:00:00Z")] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+  });
+
+  it("refuses an owner-labelled ticket whose text someone else edited, and starts nothing", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { provenance: () => ({ author: "owner", editors: ["owner", "mallory"], commenters: ["eve"] }) },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("refused");
+    expect(f.calls).toEqual(["relabel owner/target#18 -ready-for-agent +", "save without workspace"]);
+    expect(f.comments[0]?.body).toMatch(/edited by mallory; commented on by eve/);
+  });
+
+  it("never logs a secret value, in the printed or the saved log", async () => {
+    const secret = "ghp_example_secret_value_123";
+    const before = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = secret;
+    try {
+      const f = fake(
+        { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+        {
+          runAgent: async () => ({
+            ...AGENT_OK,
+            resultText: `FACTORY_RESULT {"outcome":"stuck","pr":null,"reason":"token ${secret} rejected"}`,
+          }),
+        },
+      );
+      await tick(FACTORY, f.deps, OPTIONS);
+      expect(JSON.stringify(f.events) + f.printed.join("\n")).not.toContain(secret);
+      expect(JSON.stringify(f.events)).toContain("token *** rejected");
+    } finally {
+      if (before === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = before;
+    }
   });
 
   it("refuses a ticket that isn't ready, with the reasons, and starts nothing", async () => {
@@ -411,6 +447,26 @@ describe("hookProblems", () => {
   it("treats an empty or * matcher as every tool", () => {
     expect(hookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
     expect(hookProblems(settings([{ hooks: both }]))).toEqual([]);
+  });
+});
+
+describe("trust helpers", () => {
+  it("trusts only the owner's own text", () => {
+    expect(provenanceProblems({ author: "Owner", editors: ["owner"], commenters: ["OWNER"] }, "owner")).toEqual([]);
+    expect(provenanceProblems({ author: "bob", editors: [], commenters: ["bob", "bob"] }, "owner")).toEqual([
+      "written by bob",
+      "commented on by bob",
+    ]);
+  });
+
+  it("redacts every known secret value, and ignores short or empty ones", () => {
+    const env = {
+      GH_TOKEN: "github_pat_ABCDEFGH",
+      QODO_API_KEY: "qodo-1234567890",
+      CLAUDE_CODE_OAUTH_TOKEN: "short",
+      ANTHROPIC_API_KEY: "",
+    };
+    expect(redact("a github_pat_ABCDEFGH b qodo-1234567890 c short", env)).toBe("a *** b *** c short");
   });
 });
 

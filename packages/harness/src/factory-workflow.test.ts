@@ -17,9 +17,11 @@ describe("factory workflow", () => {
     expect(workflow).toMatch(/workflow_dispatch:/);
   });
 
-  it("only reacts to the owner adding ready-for-agent, so nobody else's event reaches the secrets", () => {
+  it("only reacts to the owner's label, the owner's dispatch, or the schedule", () => {
     expect(workflow).toContain("github.event.label.name == 'ready-for-agent'");
     expect(workflow).toContain("github.event.sender.login == github.repository_owner");
+    expect(workflow).toContain("(github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner)");
+    expect(workflow).not.toMatch(/github\.event_name != /);
   });
 
   it("runs one at a time without cancelling a run in progress", () => {
@@ -55,6 +57,11 @@ describe("factory workflow", () => {
     expect(workflow).not.toMatch(/echo[^\n]*secrets\./);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
     expect(workflow).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
+  });
+
+  it("uses the runner context only where GitHub allows it (steps, not the job's env)", () => {
+    const jobEnv = workflow.match(/name: Factory tick[\s\S]*?\n {4}env:\n([\s\S]*?)\n {4}steps:/)?.[1] ?? "";
+    expect(jobEnv).not.toContain("runner.");
   });
 
   it("pins every action to a full commit", () => {

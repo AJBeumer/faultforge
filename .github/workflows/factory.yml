@@ -22,10 +22,14 @@ concurrency:
 jobs:
   look:
     name: Any ticket ready?
-    # Only the owner's label starts anything, so nobody else's event reaches a job with secrets.
+    # Only the owner starts a run: the owner's label, the owner's manual dispatch, or the schedule (which
+    # runs the workflow as it is on main). Any other event stops here, before a job with secrets. The tick
+    # then also refuses a ticket whose label, text, edits or comments aren't all the owner's.
     if: >-
-      github.event_name != 'issues' ||
-      (github.event.label.name == 'ready-for-agent' && github.event.sender.login == github.repository_owner)
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner) ||
+      (github.event_name == 'issues' && github.event.label.name == 'ready-for-agent' &&
+       github.event.sender.login == github.repository_owner)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -57,7 +61,6 @@ jobs:
       GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
       QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
     steps:
       # Same layout as the owner's folders: FaultForge/, FaultForge/private/ and faultforge-target/.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -93,6 +96,9 @@ jobs:
           git config --global user.email "$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"')"
       - name: Run one tick
         working-directory: FaultForge
+        # The runner context exists in a step's env, not in the job's.
+        env:
+          FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
         run: npm run -s factory:tick -- --ci --minutes 120 --budget 25
       # Only the event log: artifacts of a public repo are downloadable. The agent's full transcript is
       # pushed to the private repo by the tick, and never uploaded here.

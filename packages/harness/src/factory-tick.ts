@@ -204,6 +204,46 @@ export function checkProblems(
     : [];
 }
 
+export interface Provenance {
+  author: string;
+  /** Everyone who edited the ticket's body. */
+  editors: string[];
+  /** Everyone who commented on it. */
+  commenters: string[];
+}
+
+/**
+ * Why a ticket's text can't be trusted as the agent's instructions, or an empty list. The label shows
+ * the owner chose the ticket, not who wrote what the agent will read.
+ */
+export function provenanceProblems(p: Provenance, owner: string): string[] {
+  const others = (logins: string[]) => [...new Set(logins.filter((l) => l.toLowerCase() !== owner.toLowerCase()))];
+  const problems: string[] = [];
+  if (others([p.author]).length) problems.push(`written by ${p.author}`);
+  if (others(p.editors).length) problems.push(`edited by ${others(p.editors).join(", ")}`);
+  if (others(p.commenters).length) problems.push(`commented on by ${others(p.commenters).join(", ")}`);
+  return problems;
+}
+
+/** The secret names whose values must never reach a log. */
+export const SECRET_NAMES = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "QODO_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+];
+
+/** Replaces every secret value from the environment (8 characters or longer) with three stars. */
+export function redact(text: string, env: Record<string, string | undefined> = process.env): string {
+  let out = text;
+  for (const name of SECRET_NAMES) {
+    const value = env[name]?.trim();
+    if (value && value.length >= 8) out = out.split(value).join("***");
+  }
+  return out;
+}
+
 /** Text for a ticket comment; in a reviewed repo, anything that would give the lab away is replaced. */
 export function safeText(text: string, reviewed: boolean): string {
   if (!reviewed || !telltales(text).length) return text;
@@ -308,6 +348,7 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
     "private/ here is a worktree of the private repo on its own branch: save and commit evidence there, but don't push it. The runner pushes it.",
     "Don't comment on, label or close the ticket, and never reply to, resolve or dismiss a review finding: the runner and the owner do that.",
     "Nothing under any .claude/ folder may change in this run, because it holds your own guardrails. If the ticket needs that, report stuck.",
+    "The keys are already in your environment: gh and npm run review:wait pick them up by themselves. Never name, read, print or export them, and don't look for a token file. HTTP tools may only reach the app on localhost.",
     "After you stop, the runner audits what changed (both repos' main, the owner's checkouts, comments and ticket changes during your run, the guardrail files) and stops for help on any surprise.",
     "Finish your final message with exactly one line, and nothing after it:",
     'FACTORY_RESULT {"outcome":"ready|owner-gate|stuck","pr":"<pull request URL or null>","reason":"<one plain sentence>"}',
@@ -341,6 +382,8 @@ export interface TickDeps {
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
   ready(repoKey: string, number: number): { title: string; problems: string[] };
+  /** Who wrote, edited and commented on the ticket: its text becomes the agent's instructions. */
+  provenance(github: string, number: number): Provenance;
   relabel(github: string, number: number, remove: string[], add: string[]): void;
   comment(github: string, number: number, body: string): void;
   workspace(runId: string): Workspace;
@@ -375,8 +418,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   let ws: Workspace | null = null;
   let finalLabel: string | null = null;
   const log: Logger = (event, detail = {}) => {
-    const entry = { t: deps.now().toISOString(), event, ...detail };
-    deps.print(`${entry.t} ${event}${Object.keys(detail).length ? ` ${JSON.stringify(detail)}` : ""}`);
+    // Every logged value is scrubbed of the secrets in the environment: the log can be public.
+    const entry = JSON.parse(redact(JSON.stringify({ t: deps.now().toISOString(), event, ...detail })));
+    const shown = Object.keys(detail).length ? ` ${redact(JSON.stringify(detail))}` : "";
+    deps.print(`${entry.t} ${event}${shown}`);
     if (runId) deps.record(runId, entry);
   };
   try {
@@ -420,6 +465,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
       );
       log("refused", { reason: `label added by ${pick.labelledBy}, not the owner ${owner}` });
+      deps.saveEvidence(runId, null);
+      return "refused";
+    }
+
+    const authors = provenanceProblems(deps.provenance(pick.github, pick.number), owner);
+    if (authors.length) {
+      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      say(
+        `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
+      );
+      log("refused", { reason: authors.join("; ") });
       deps.saveEvidence(runId, null);
       return "refused";
     }
@@ -676,6 +732,35 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ) as IssueEvent[][]
       ).flat(),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
+    provenance(github, number) {
+      const [owner, name] = github.split("/");
+      const query = `query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) { issue(number: $number) {
+          author { login }
+          userContentEdits(first: 100) { nodes { editor { login } } }
+          comments(first: 100) { nodes { author { login } } }
+        } } }`;
+      const issue = JSON.parse(
+        gh(
+          "api",
+          "graphql",
+          "-f",
+          `query=${query}`,
+          "-f",
+          `owner=${owner}`,
+          "-f",
+          `name=${name}`,
+          "-F",
+          `number=${number}`,
+        ),
+      ).data.repository.issue;
+      const login = (who: { login?: string } | null) => who?.login ?? "(deleted user)";
+      return {
+        author: login(issue.author),
+        editors: issue.userContentEdits.nodes.map((n: { editor: { login?: string } | null }) => login(n.editor)),
+        commenters: issue.comments.nodes.map((n: { author: { login?: string } | null }) => login(n.author)),
+      };
+    },
     relabel(github, number, remove, add) {
       for (const label of remove) {
         try {
@@ -834,17 +919,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
               const step = agentStep(command);
               if (step) {
                 commands.set(part.id ?? "", step);
-                log("agent-step", { step, command: command.slice(0, 200) });
+                log("agent-step", { step, command: command.slice(0, 120) });
               }
             } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
-              const text = Array.isArray(part.content)
-                ? part.content.map((c: { text?: string }) => c.text ?? "").join("")
-                : String(part.content ?? "");
-              log("agent-step-result", {
-                step: commands.get(part.tool_use_id ?? ""),
-                error: Boolean(part.is_error),
-                output: text.slice(-300),
-              });
+              // No output here: the event log can be public (an Actions log or artifact). The full
+              // output stays in the agent transcript, which only goes to the private repo.
+              log("agent-step-result", { step: commands.get(part.tool_use_id ?? ""), error: Boolean(part.is_error) });
             }
           }
         };
