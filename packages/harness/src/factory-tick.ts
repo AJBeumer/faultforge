@@ -204,6 +204,46 @@ export function checkProblems(
     : [];
 }
 
+export interface Provenance {
+  author: string;
+  /** Everyone who edited the ticket's body. */
+  editors: string[];
+  /** Everyone who commented on it. */
+  commenters: string[];
+}
+
+/**
+ * Why a ticket's text can't be trusted as the agent's instructions, or an empty list. The label shows
+ * the owner chose the ticket, not who wrote what the agent will read.
+ */
+export function provenanceProblems(p: Provenance, owner: string): string[] {
+  const others = (logins: string[]) => [...new Set(logins.filter((l) => l.toLowerCase() !== owner.toLowerCase()))];
+  const problems: string[] = [];
+  if (others([p.author]).length) problems.push(`written by ${p.author}`);
+  if (others(p.editors).length) problems.push(`edited by ${others(p.editors).join(", ")}`);
+  if (others(p.commenters).length) problems.push(`commented on by ${others(p.commenters).join(", ")}`);
+  return problems;
+}
+
+/** The secret names whose values must never reach a log. */
+export const SECRET_NAMES = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "QODO_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+];
+
+/** Replaces every secret value from the environment (8 characters or longer) with three stars. */
+export function redact(text: string, env: Record<string, string | undefined> = process.env): string {
+  let out = text;
+  for (const name of SECRET_NAMES) {
+    const value = env[name]?.trim();
+    if (value && value.length >= 8) out = out.split(value).join("***");
+  }
+  return out;
+}
+
 /** Text for a ticket comment; in a reviewed repo, anything that would give the lab away is replaced. */
 export function safeText(text: string, reviewed: boolean): string {
   if (!reviewed || !telltales(text).length) return text;
@@ -308,6 +348,7 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
     "private/ here is a worktree of the private repo on its own branch: save and commit evidence there, but don't push it. The runner pushes it.",
     "Don't comment on, label or close the ticket, and never reply to, resolve or dismiss a review finding: the runner and the owner do that.",
     "Nothing under any .claude/ folder may change in this run, because it holds your own guardrails. If the ticket needs that, report stuck.",
+    "The keys are already in your environment: gh and npm run review:wait pick them up by themselves. Never name, read, print or export them, and don't look for a token file. HTTP tools may only reach the app on localhost.",
     "After you stop, the runner audits what changed (both repos' main, the owner's checkouts, comments and ticket changes during your run, the guardrail files) and stops for help on any surprise.",
     "Finish your final message with exactly one line, and nothing after it:",
     'FACTORY_RESULT {"outcome":"ready|owner-gate|stuck","pr":"<pull request URL or null>","reason":"<one plain sentence>"}',
@@ -341,6 +382,8 @@ export interface TickDeps {
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
   ready(repoKey: string, number: number): { title: string; problems: string[] };
+  /** Who wrote, edited and commented on the ticket: its text becomes the agent's instructions. */
+  provenance(github: string, number: number): Provenance;
   relabel(github: string, number: number, remove: string[], add: string[]): void;
   comment(github: string, number: number, body: string): void;
   workspace(runId: string): Workspace;
@@ -375,8 +418,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   let ws: Workspace | null = null;
   let finalLabel: string | null = null;
   const log: Logger = (event, detail = {}) => {
-    const entry = { t: deps.now().toISOString(), event, ...detail };
-    deps.print(`${entry.t} ${event}${Object.keys(detail).length ? ` ${JSON.stringify(detail)}` : ""}`);
+    // Every logged value is scrubbed of the secrets in the environment: the log can be public.
+    const entry = JSON.parse(redact(JSON.stringify({ t: deps.now().toISOString(), event, ...detail })));
+    const shown = Object.keys(detail).length ? ` ${redact(JSON.stringify(detail))}` : "";
+    deps.print(`${entry.t} ${event}${shown}`);
     if (runId) deps.record(runId, entry);
   };
   try {
@@ -420,6 +465,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
       );
       log("refused", { reason: `label added by ${pick.labelledBy}, not the owner ${owner}` });
+      deps.saveEvidence(runId, null);
+      return "refused";
+    }
+
+    const authors = provenanceProblems(deps.provenance(pick.github, pick.number), owner);
+    if (authors.length) {
+      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      say(
+        `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
+      );
+      log("refused", { reason: authors.join("; ") });
       deps.saveEvidence(runId, null);
       return "refused";
     }
@@ -600,7 +656,14 @@ const DENY = [
   "Bash(setx:*)",
 ];
 
-export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps {
+/**
+ * `local`: the owner's PC. Worktrees per run, a lock file, and the owner's checkouts are fingerprinted.
+ * `ci`: a GitHub Actions run on a fresh VM. The workflow has checked out every repo next to this one, in
+ * the same layout; those checkouts are the workspace. The workflow's concurrency group is the lock.
+ */
+export type RunMode = "local" | "ci";
+
+export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
   const evidenceInPrivate = relative("private", factory.evidence); // e.g. raw-artifacts
@@ -609,7 +672,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
   /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
   const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
 
-  return {
+  /** Refuses to start the agent unless both hooks run before every shell command and file edit. */
+  const requireHooks = (lab: string) => {
+    const settings = join(lab, ".claude", "settings.json");
+    const missing = hookProblems(existsSync(settings) ? readFileSync(settings, "utf8") : "");
+    if (missing.length) throw new Error(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`);
+  };
+
+  const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
     lock() {
@@ -662,6 +732,35 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
         ) as IssueEvent[][]
       ).flat(),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
+    provenance(github, number) {
+      const [owner, name] = github.split("/");
+      const query = `query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) { issue(number: $number) {
+          author { login }
+          userContentEdits(first: 100) { nodes { editor { login } } }
+          comments(first: 100) { nodes { author { login } } }
+        } } }`;
+      const issue = JSON.parse(
+        gh(
+          "api",
+          "graphql",
+          "-f",
+          `query=${query}`,
+          "-f",
+          `owner=${owner}`,
+          "-f",
+          `name=${name}`,
+          "-F",
+          `number=${number}`,
+        ),
+      ).data.repository.issue;
+      const login = (who: { login?: string } | null) => who?.login ?? "(deleted user)";
+      return {
+        author: login(issue.author),
+        editors: issue.userContentEdits.nodes.map((n: { editor: { login?: string } | null }) => login(n.editor)),
+        commenters: issue.comments.nodes.map((n: { author: { login?: string } | null }) => login(n.author)),
+      };
+    },
     relabel(github, number, remove, add) {
       for (const label of remove) {
         try {
@@ -700,10 +799,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
           if (install.status !== 0) throw new Error(`npm ci failed in ${dir}: ${install.output.slice(-400)}`);
         }
         // The agent gets main's hooks, not the runner's: refuse to start it without both of them.
-        const settings = join(lab, ".claude", "settings.json");
-        const missing = hookProblems(existsSync(settings) ? readFileSync(settings, "utf8") : "");
-        if (missing.length)
-          throw new Error(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`);
+        requireHooks(lab);
       } catch (error) {
         // Undo whatever was set up, so a failed start leaves no worktree or branch behind.
         const leftovers = teardown(root, lab, priv, runId);
@@ -823,17 +919,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
               const step = agentStep(command);
               if (step) {
                 commands.set(part.id ?? "", step);
-                log("agent-step", { step, command: command.slice(0, 200) });
+                log("agent-step", { step, command: command.slice(0, 120) });
               }
             } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
-              const text = Array.isArray(part.content)
-                ? part.content.map((c: { text?: string }) => c.text ?? "").join("")
-                : String(part.content ?? "");
-              log("agent-step-result", {
-                step: commands.get(part.tool_use_id ?? ""),
-                error: Boolean(part.is_error),
-                output: text.slice(-300),
-              });
+              // No output here: the event log can be public (an Actions log or artifact). The full
+              // output stays in the agent transcript, which only goes to the private repo.
+              log("agent-step-result", { step: commands.get(part.tool_use_id ?? ""), error: Boolean(part.is_error) });
             }
           }
         };
@@ -952,6 +1043,39 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
       if (leftovers.length) throw new Error(`cleanup failed: ${leftovers.join("; ")}`);
     },
   };
+  if (mode === "local") return deps;
+
+  return {
+    ...deps,
+    // The workflow's concurrency group allows one run at a time.
+    lock: () => ({ acquired: true, release: () => {} }),
+    workspace() {
+      const mainAtStart: Record<string, string> = {};
+      for (const [key, repo] of Object.entries(factory.repos)) {
+        const dir = resolve(LAB_ROOT, repo.path);
+        git(dir, "fetch", "--quiet", "origin", "main");
+        const head = git(dir, "rev-parse", "HEAD");
+        const main = git(dir, "rev-parse", "origin/main");
+        if (head !== main)
+          throw new Error(`the ${key} checkout is at ${head.slice(0, 7)}, not origin/main ${main.slice(0, 7)}`);
+        if (!existsSync(join(dir, "node_modules")) && existsSync(join(dir, "package.json")))
+          throw new Error(`the ${key} checkout has no node_modules: the workflow must run npm ci first`);
+        mainAtStart[key] = main;
+      }
+      git(privateRepo, "fetch", "--quiet", "origin", "main");
+      mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
+      requireHooks(LAB_ROOT);
+      return {
+        root: dirname(LAB_ROOT),
+        lab: LAB_ROOT,
+        private: privateRepo,
+        mainAtStart,
+        fingerprints: fingerprints(LAB_ROOT),
+      };
+    },
+    // The VM is thrown away after the run.
+    cleanup: () => {},
+  };
 
   /**
    * Removes a run's worktrees, its private branch and its folder, as far as they exist. Each step is
@@ -992,7 +1116,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions): TickDeps
    */
   function fingerprints(lab: string): Record<string, string> {
     const prints: Record<string, string> = {};
-    const checkouts = [LAB_ROOT, privateRepo, ...Object.values(factory.repos).map((r) => resolve(LAB_ROOT, r.path))];
+    // In CI the checkouts are the agent's own workspace, and no owner checkout exists to protect.
+    const checkouts =
+      mode === "ci"
+        ? []
+        : [LAB_ROOT, privateRepo, ...Object.values(factory.repos).map((r) => resolve(LAB_ROOT, r.path))];
     for (const dir of new Set(checkouts)) {
       prints[`the owner's checkout ${dir}`] = hash(
         `${git(dir, "rev-parse", "HEAD")}\n${git(dir, "branch", "--show-current")}\n${git(dir, "status", "--porcelain")}`,
@@ -1030,7 +1158,9 @@ function option(args: string[], name: string, fallback: number): number {
   const index = args.indexOf(name);
   const value = index >= 0 ? Number(args[index + 1]) : fallback;
   if (!Number.isFinite(value) || value <= 0) {
-    console.error(`usage: npm run factory:tick -- [--minutes N] [--budget USD]   (${name} must be a positive number)`);
+    console.error(
+      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (${name} must be a positive number)`,
+    );
     process.exit(2);
   }
   return value;
@@ -1039,6 +1169,7 @@ function option(args: string[], name: string, fallback: number): number {
 async function main() {
   const args = process.argv.slice(2);
   const options = { minutes: option(args, "--minutes", 120), budget: option(args, "--budget", 25) };
+  const mode: RunMode = args.includes("--ci") ? "ci" : "local";
   if (!process.env.GH_TOKEN && process.env.GH_TOKEN_FILE)
     process.env.GH_TOKEN = readFileSync(process.env.GH_TOKEN_FILE, "utf8").trim();
   if (!process.env.GH_TOKEN) {
@@ -1046,7 +1177,7 @@ async function main() {
     process.exit(2);
   }
   const factory = loadFactory();
-  const outcome = await tick(factory, realDeps(factory, options), options);
+  const outcome = await tick(factory, realDeps(factory, options, mode), options);
   process.exit(outcome === "needs-help" ? 1 : 0);
 }
 

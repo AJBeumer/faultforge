@@ -41,9 +41,38 @@ const COMMAND_RULES: [RegExp, string][] = [
   [/\bdismiss/i, "never dismiss a finding"],
 ];
 
+/**
+ * The run's keys live in its environment. These rules make reading them, or sending anything out,
+ * a deliberate act the hook sees. Like every text rule they are a seatbelt, not a wall: the runner's
+ * after-run audit and a narrow token are the other layers.
+ */
+const SECRET_RULES: [RegExp, string][] = [
+  [
+    /\b(GH_TOKEN|GITHUB_TOKEN|QODO_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|FACTORY_GH_TOKEN)\b/,
+    "the run's keys are off limits",
+  ],
+  [/(^|[\s;&|(])(env|printenv|set|export\s+-p|declare\s+-x)(\s*($|[;&|>)]))/m, "no dumping the environment"],
+  [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
+  [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
+];
+
+/** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+
 /** Reasons a shell command is not allowed in a factory run, or an empty list. */
 export function commandViolations(command: string): string[] {
-  return COMMAND_RULES.filter(([pattern]) => pattern.test(command)).map(([, reason]) => reason);
+  const reasons = [...COMMAND_RULES, ...SECRET_RULES]
+    .filter(([pattern]) => pattern.test(command))
+    .map(([, reason]) => reason);
+  if (/\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i.test(command)) {
+    const hosts = [...command.matchAll(/\b(?:https?|ftp):\/\/([^/\s:'"]+|\[[^\]]+\])/gi)].map((m) =>
+      (m[1] ?? "").toLowerCase(),
+    );
+    if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h))) {
+      reasons.push("HTTP tools may only reach the app on localhost; GitHub goes through gh");
+    }
+  }
+  return reasons;
 }
 
 /** True when `path` is inside `folder` (or is it). */
