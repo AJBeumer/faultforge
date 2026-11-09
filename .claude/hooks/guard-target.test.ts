@@ -1,19 +1,60 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const HOOK = join(import.meta.dirname, "guard-target.ts");
 const HARNESS = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
+const FACTORY = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
+
+/**
+ * A temporary git repository with one commit, standing in for a reviewed checkout so the guard reads pending
+ * content from it and never from the owner's real checkout. With `withOrigin`, a bare `origin` tracks its
+ * `main`; without one, every local commit counts as unpushed, which the tests that don't push don't mind.
+ */
+function tempRepo(withOrigin = false) {
+  const dir = mkdtempSync(join(tmpdir(), "guard-repo-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "README.md"), "# App\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "Start");
+  if (withOrigin) {
+    const remote = mkdtempSync(join(tmpdir(), "guard-remote-"));
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git("remote", "add", "origin", remote);
+    git("push", "-q", "-u", "origin", "main");
+  }
+  return { dir, git };
+}
+
+/** factory.json with the target's checkout pointed at a fixture repo, written to its own temp file. */
+function configWithTarget(checkout: string, extra?: (config: typeof FACTORY) => void): string {
+  const config = structuredClone(FACTORY);
+  config.repos.target.path = checkout;
+  extra?.(config);
+  const file = join(mkdtempSync(join(tmpdir(), "guard-config-")), "factory.json");
+  writeFileSync(file, JSON.stringify(config));
+  return file;
+}
+
+// Every test runs the hook against this fixture as the target's checkout, not the owner's real one. It has
+// an origin so nothing in it counts as unpushed, which keeps the push scan to one git call per test.
+const TARGET_FIXTURE = tempRepo(true).dir;
+const DEFAULT_CONFIG = configWithTarget(TARGET_FIXTURE);
 
 /** Runs the hook with a payload and returns the deny reason, or undefined if allowed. */
-function decide(tool: string, toolInput: object, cwd = HARNESS, config?: string): string | undefined {
+function decide(tool: string, toolInput: object, cwd = HARNESS, config = DEFAULT_CONFIG): string | undefined {
   const result = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput }),
     encoding: "utf8",
-    env: config ? { ...process.env, FAULTFORGE_CONFIG: config } : process.env,
+    env: { ...process.env, FAULTFORGE_CONFIG: config },
   });
   expect(result.status).toBe(0);
   if (!result.stdout.trim()) return undefined;
@@ -482,27 +523,12 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
   });
 
   describe("content about to travel, read from git whatever the command text says", () => {
-    /** A temporary git repo standing in for a reviewed checkout, with a bare `origin` whose `main` it tracks. */
-    function reviewedRepo() {
-      const dir = mkdtempSync(join(tmpdir(), "guard-repo-"));
-      const git = (...args: string[]) =>
-        execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      git("init", "-q", "-b", "main");
-      writeFileSync(join(dir, "README.md"), "# App\n");
-      git("add", ".");
-      git("commit", "-q", "-m", "Start");
-      const remote = mkdtempSync(join(tmpdir(), "guard-remote-"));
-      execFileSync("git", ["init", "-q", "--bare", remote]);
-      git("remote", "add", "origin", remote);
-      git("push", "-q", "-u", "origin", "main");
-      // The config names this folder as a reviewed repo; its basename is the folder the guard looks for.
-      const factory = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
-      factory.repos.other = { ...factory.repos.target, github: "AJBeumer/other-app", path: dir };
-      const config = join(dir, "..", `${basename(dir)}-factory.json`);
-      writeFileSync(config, JSON.stringify(factory));
+    /** A fixture repo named as a second reviewed repo, `other-app`; the folder's own name is what the guard looks for. */
+    function reviewedRepo(withOrigin = false) {
+      const { dir, git } = tempRepo(withOrigin);
+      const config = configWithTarget(TARGET_FIXTURE, (c) => {
+        c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: dir };
+      });
       return { dir, git, config };
     }
 
@@ -538,21 +564,117 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
     });
 
     it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
-      const { dir, git, config } = reviewedRepo();
+      const { dir, git, config } = reviewedRepo(true);
       writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
       git("add", "notes.md");
       git("commit", "-q", "-m", "Tidy"); // made directly, as a bypass of the commit check would be
       expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toMatch(
-        /other-app holds content[\s\S]*not yet on origin\/main[\s\S]*says planted/,
+        /other-app holds content[\s\S]*not yet on any remote branch[\s\S]*says planted/,
       );
       git("reset", "-q", "--hard", "origin/main");
       expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toBeUndefined();
     });
 
     it("denies when git can't answer for a reviewed checkout, rather than guessing", () => {
-      const { dir, git, config } = reviewedRepo();
-      git("remote", "remove", "origin"); // no origin/main to compare against
+      const { dir, config } = reviewedRepo();
+      writeFileSync(join(dir, ".git", "HEAD"), "not a ref\n"); // git can no longer read the repository
       expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/can't inspect other-app/);
+    });
+
+    describe("what Qodo found in round 2 (PR 120)", () => {
+      it("reads whole file contents, so a line starting with ++ and a binary file are both checked", () => {
+        const { dir, git, config } = reviewedRepo();
+        writeFileSync(join(dir, "a.md"), "++ the planted bug\n");
+        git("add", "a.md");
+        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
+        git("reset", "-q", "HEAD", "a.md");
+        rmSync(join(dir, "a.md"));
+        writeFileSync(
+          join(dir, "img.bin"),
+          Buffer.concat([Buffer.from([0, 1, 2, 255, 254]), Buffer.from("planted"), Buffer.from([0, 0])]),
+        );
+        git("add", "img.bin");
+        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
+      });
+
+      it("scans every local commit not on a remote, whatever branch the push names, commit by commit", () => {
+        const { dir, git, config } = reviewedRepo();
+        git("checkout", "-q", "-b", "feature");
+        writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
+        git("add", "notes.md");
+        git("commit", "-q", "-m", "Tidy");
+        git("rm", "-q", "notes.md");
+        git("commit", "-q", "-m", "Tidy more"); // the net diff is clean, the first commit is not
+        git("checkout", "-q", "main"); // HEAD is clean; the push names the other branch
+        expect(decide("Bash", { command: "git push origin feature" }, dir, config)).toMatch(/says planted/);
+      });
+
+      it("scans the commit messages that would travel too", () => {
+        const { dir, git, config } = reviewedRepo();
+        writeFileSync(join(dir, "README.md"), "# App\n\nMore.\n");
+        git("add", "README.md");
+        git("commit", "-q", "-m", "Fix the planted bug");
+        expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
+      });
+
+      it("includes ignored files only when the command forces them in", () => {
+        const { dir, git, config } = reviewedRepo();
+        writeFileSync(join(dir, ".gitignore"), "secret.md\n");
+        git("add", ".gitignore");
+        git("commit", "-q", "-m", "Ignore secrets");
+        writeFileSync(join(dir, "secret.md"), "planted\n");
+        expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toBeUndefined();
+        expect(decide("Bash", { command: 'git add -f secret.md && git commit -m "Tidy"' }, dir, config)).toMatch(
+          /says planted/,
+        );
+      });
+
+      it("reads an untracked file whose name git would quote", () => {
+        const { dir, config } = reviewedRepo();
+        writeFileSync(join(dir, "café notes.md"), "planted\n");
+        expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
+      });
+
+      it("refuses a chain that writes files or hides git behind a function before committing in the checkout", () => {
+        const { dir, config } = reviewedRepo();
+        writeFileSync(join(tmpdir(), "guard-src.md"), "planted\n");
+        expect(
+          decide(
+            "Bash",
+            { command: `cp ${join(tmpdir(), "guard-src.md")} . && git add . && git commit -m Tidy` },
+            dir,
+            config,
+          ),
+        ).toMatch(/on its own/);
+        expect(decide("Bash", { command: 'f(){ git "$@"; }; f commit -m Tidy' }, dir, config)).toMatch(/on its own/);
+        expect(
+          decide("Bash", { command: 'echo "x" > notes.md; git add . && git commit -m Tidy' }, dir, config),
+        ).toMatch(/on its own/);
+      });
+
+      it("still allows the ordinary chain of git steps, and any chain outside a reviewed checkout", () => {
+        const { dir, config } = reviewedRepo();
+        writeFileSync(join(dir, "msg.txt"), "Add release notes\n");
+        expect(
+          decide("Bash", { command: "git add -A && git commit -F msg.txt && git push -u origin HEAD" }, dir, config),
+        ).toBeUndefined();
+        expect(
+          decide("Bash", { command: "npm run check && git add -A && git commit -F msg.txt" }, dir, config),
+        ).toBeUndefined();
+        expect(
+          decide("Bash", { command: "cp a.md b.md && git add . && git commit -m Tidy" }, HARNESS, config),
+        ).toBeUndefined();
+      });
+
+      it("denies a commit aimed at a reviewed checkout the guard can't find", () => {
+        const missing = join(tmpdir(), "no-such-other-app");
+        const config = configWithTarget(TARGET_FIXTURE, (c) => {
+          c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: missing };
+        });
+        expect(decide("Bash", { command: `git -C ${missing} commit -m Tidy` }, HARNESS, config)).toMatch(/can't find/);
+        // A commit elsewhere is not held up by a reviewed checkout that isn't there.
+        expect(decide("Bash", { command: "git commit -m Tidy" }, HARNESS, config)).toBeUndefined();
+      });
     });
   });
 });

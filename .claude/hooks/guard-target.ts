@@ -15,10 +15,10 @@
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
+import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
 
 interface Reviewed {
   /** owner/name on GitHub */
@@ -162,75 +162,37 @@ function navigatesInto(command: string, repo: Reviewed): boolean {
 }
 
 /**
- * Runs git in a reviewed checkout and returns its output, or denies when git can't answer: a checkout the
- * guard can't inspect is a checkout it can't clear.
- */
-function gitIn(repo: Reviewed, args: string[]): string {
-  const result = spawnSync("git", ["-C", repo.checkout, ...args], { encoding: "utf8", timeout: 10_000 });
-  if (result.status !== 0) {
-    deny(
-      `The guard can't inspect ${repo.name}'s pending content (git ${args[0]} failed: ${(result.stderr || result.error?.message || "").trim().split("\n")[0]}), so nothing may be committed or pushed until it can.`,
-    );
-  }
-  return result.stdout;
-}
-
-/** The added lines of a unified diff, without the `+` and without the file headers. */
-function addedLines(diff: string): string {
-  return diff
-    .split("\n")
-    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
-    .map((line) => line.slice(1))
-    .join("\n");
-}
-
-/**
- * The reasons the content about to leave a reviewed checkout would give the lab away, or an empty list.
- * For a commit: every change to tracked files (staged or not, since `-a` commits both) plus every untracked
- * file (a chained `git add` would stage it), by content and by name. For a push: every line and file name
- * added by the commits not yet on `origin/main`. Read from git itself, so it doesn't matter how the content
- * got there: a redirect, a copy, a script, an editor.
- */
-function pendingTelltales(repo: Reviewed, moment: "commit" | "push"): { reasons: string[]; where: string } {
-  if (!existsSync(join(repo.checkout, ".git"))) return { reasons: [], where: "" };
-  if (moment === "commit") {
-    const untracked = gitIn(repo, ["ls-files", "--others", "--exclude-standard"])
-      .split("\n")
-      .map((f) => f.trim())
-      .filter(Boolean);
-    const contents = untracked.map((file) => {
-      const path = join(repo.checkout, file);
-      return statSync(path).isFile() ? readFileSync(path, "utf8") : "";
-    });
-    const names = gitIn(repo, ["diff", "HEAD", "--name-only"]);
-    const text = [
-      addedLines(gitIn(repo, ["diff", "HEAD", "--unified=0", "--no-color"])),
-      names,
-      ...untracked,
-      ...contents,
-    ];
-    return { reasons: telltales(text.join("\n")), where: "the changes not yet committed" };
-  }
-  const range = "origin/main...HEAD";
-  const names = gitIn(repo, ["diff", range, "--name-only"]);
-  const text = [addedLines(gitIn(repo, ["diff", range, "--unified=0", "--no-color"])), names];
-  return { reasons: telltales(text.join("\n")), where: "the commits not yet on origin/main" };
-}
-
-/**
  * Before any `git commit` or `git push`, wherever it runs, refuses if a reviewed checkout holds pending
- * content that names the lab or the bug. This is the check that doesn't depend on reading the command right.
+ * content that names the lab or the bug (see guard-content.ts). This is the check that doesn't depend on
+ * reading the command right. A reviewed checkout the guard can't find is skipped unless the command is
+ * aimed at it; one git can't read is a deny.
  */
-function checkPendingContent(command: string) {
+function checkPendingContent(command: string, touched: Reviewed[]) {
   const commits = /\bgit\b[^|;&\n]*\bcommit\b/.test(command);
   const pushes = /\bgit\b[^|;&\n]*\bpush\b/.test(command);
+  const forceIgnored = /\badd\b[^|;&\n]*\s(-\w*f\w*|--force)\b/.test(command);
   for (const moment of [commits && "commit", pushes && "push"] as const) {
     if (!moment) continue;
     for (const repo of REVIEWED) {
-      const pending = pendingTelltales(repo, moment);
-      if (pending.reasons.length) {
+      if (!existsSync(join(repo.checkout, ".git"))) {
+        if (touched.includes(repo)) {
+          deny(
+            `The guard can't find ${repo.name}'s checkout at ${repo.checkout} (from factory.json), so it can't check what this ${moment} would carry. Fix the path before committing or pushing there.`,
+          );
+        }
+        continue;
+      }
+      try {
+        const pending = moment === "commit" ? pendingCommit(repo.checkout, forceIgnored) : pendingPush(repo.checkout);
+        if (pending.reasons.length) {
+          deny(
+            `${repo.name} holds content that would give the lab away in ${pending.where} (${pending.reasons.join(", ")}). Remove it from the checkout before any commit or push.`,
+          );
+        }
+      } catch (error) {
+        if (!(error instanceof Uninspectable)) throw error;
         deny(
-          `${repo.name} holds content that would give the lab away in ${pending.where} (${pending.reasons.join(", ")}). Remove it from the checkout before any commit or push.`,
+          `The guard can't inspect ${repo.name}'s pending content (${error.message}), so nothing may be committed or pushed until it can.`,
         );
       }
     }
@@ -243,10 +205,7 @@ function checkPendingContent(command: string) {
  * text, so they are ignored, except double-quoted text that runs `$(...)` or backticks.
  */
 function isChained(command: string): boolean {
-  const bare = command
-    .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
-    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (/^"[\s\S]*(\$\(|`)/.test(quoted) ? quoted : " "));
-  return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(bare.trim());
+  return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(blankQuoted(command).trim());
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
@@ -260,15 +219,17 @@ function checkCommand(command: string) {
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  // What would travel: the content pending in every reviewed checkout, read from git, whatever this
-  // command's text says about where it runs.
-  checkPendingContent(command);
-
   // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its
   // checkout. The folder the command runs in only counts when it names no destination at all (say,
   // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
   const destinations = explicitDestinations(command);
   const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
+  const touched = REVIEWED.filter(
+    (r) =>
+      destinations.includes(r.github.toLowerCase()) ||
+      entersCheckout(command, r) ||
+      (!destinations.length && inCheckout(cwd, r)),
+  );
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves
   // more than one repo must be split: each part then gets judged on its own. A chain that stays in
@@ -283,20 +244,28 @@ function checkCommand(command: string) {
     }
   }
 
-  const touched = REVIEWED.filter(
-    (r) =>
-      destinations.includes(r.github.toLowerCase()) ||
-      entersCheckout(command, r) ||
-      (!destinations.length && inCheckout(cwd, r)),
-  );
   const repo = touched[0];
   if (!repo) {
     if (writes) checkLinks(command, REVIEWED);
+    // Even from elsewhere, a commit or push is checked against every reviewed checkout's pending content.
+    checkPendingContent(command, touched);
     return;
   }
 
   if (/\bgit\b[^|;&\n]*\bpush\b[^|;&\n]*(\s--force(-with-lease)?\b|\s-f\b|\s\+\S)/.test(command)) {
     deny(`Force pushes to ${repo.name} are not allowed: its history is evidence for recorded cases.`);
+  }
+
+  // Inside a reviewed checkout, a chain that mentions git may hold only steps that can't change the
+  // checkout's content behind the guard's back (it looks before the command runs): no copies, redirects,
+  // scripts or shell functions in the same command as a commit or push. Those run first, on their own.
+  if (isChained(command) && /\bgit\b/.test(command)) {
+    const step = chainProblem(command);
+    if (step !== undefined) {
+      deny(
+        `In ${repo.name}, a command that writes files or hides a command ("${step.slice(0, 60)}") must run on its own, and the commit or push in a separate command: the guard checks the checkout's content before a command runs, and can't see what an earlier part of the same command would write.`,
+      );
+    }
   }
   if (!writes) return;
 
@@ -316,6 +285,10 @@ function checkCommand(command: string) {
       `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
     );
   }
+
+  // The command's own text is clean; now what would travel: the content pending in every reviewed
+  // checkout, read from git, whatever the text says about where it runs.
+  checkPendingContent(command, touched);
 }
 
 function checkFileEdit() {
