@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadFactory, type RepoConfig } from "./factory-config.ts";
+import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
 
 type Sections = RepoConfig["tickets"];
 
@@ -65,35 +65,40 @@ function gh(...args: string[]): string {
   return execFileSync("gh", args, { encoding: "utf8" });
 }
 
-function main() {
-  const factory = loadFactory();
-  const [repoKey, number] = process.argv.slice(2);
-  const config = repoKey ? factory.repos[repoKey] : undefined;
-  if (!config || !number) {
-    console.error(`usage: npm run ticket:ready -- <${Object.keys(factory.repos).join("|")}> <issue number>`);
-    process.exit(2);
-  }
-  const repo = config.github;
-  const sections = config.tickets;
-  const issue = JSON.parse(gh("api", `repos/${repo}/issues/${number}`));
+/** Reads a ticket from GitHub and returns its title and readiness problems (empty when ready). */
+export function checkTicket(
+  factory: FactoryConfig,
+  repoKey: string,
+  number: number,
+  run: (...args: string[]) => string = gh,
+): { title: string; problems: string[] } {
+  const { github: repo, tickets: sections } = repoConfig(factory, repoKey);
+  const issue = JSON.parse(run("api", `repos/${repo}/issues/${number}`));
   const body: string = issue.body ?? "";
   // Native "blocked by" links, every page, plus blockers only written in the Depends on text.
   const linked = openNumbers(
-    JSON.parse(gh("api", "--paginate", "--slurp", `repos/${repo}/issues/${number}/dependencies/blocked_by`)),
+    JSON.parse(run("api", "--paginate", "--slurp", `repos/${repo}/issues/${number}/dependencies/blocked_by`)),
   );
   const written = writtenDependencies(body).filter(
-    (n) => !linked.includes(n) && gh("api", `repos/${repo}/issues/${n}`, "--jq", ".state").trim() === "open",
+    (n) => !linked.includes(n) && run("api", `repos/${repo}/issues/${n}`, "--jq", ".state").trim() === "open",
   );
-  const problems = readinessProblems(
-    body,
-    sections,
-    [...linked, ...written].sort((a, b) => a - b),
-  );
+  const blockers = [...linked, ...written].sort((a, b) => a - b);
+  return { title: issue.title, problems: readinessProblems(body, sections, blockers) };
+}
+
+function main() {
+  const factory = loadFactory();
+  const [repoKey, number] = process.argv.slice(2);
+  if (!repoKey || !factory.repos[repoKey] || !number) {
+    console.error(`usage: npm run ticket:ready -- <${Object.keys(factory.repos).join("|")}> <issue number>`);
+    process.exit(2);
+  }
+  const { title, problems } = checkTicket(factory, repoKey, Number(number));
   if (problems.length) {
     console.log(`${repoKey} #${number} is not ready:\n${problems.map((p) => `- ${p}`).join("\n")}`);
     process.exit(1);
   }
-  console.log(`${repoKey} #${number} is ready: ${issue.title}`);
+  console.log(`${repoKey} #${number} is ready: ${title}`);
 }
 
 // Run only when called as a script, not when the tests import it.

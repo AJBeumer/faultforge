@@ -30,6 +30,12 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts\"",
             "timeout": 15,
             "statusMessage": "Checking for hints aimed at the target repo"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts\"",
+            "timeout": 15,
+            "statusMessage": "Checking the unattended-run policy"
           }
         ]
       }
