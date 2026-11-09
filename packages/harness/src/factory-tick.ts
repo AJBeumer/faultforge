@@ -1303,7 +1303,9 @@ async function main() {
     try {
       proposeAfterRun(LAB_ROOT, mode, console.log);
     } catch (error) {
-      console.error(`rules:propose failed (run outcome unchanged): ${error instanceof Error ? error.message : error}`);
+      console.error(
+        `rules:propose failed (run outcome unchanged): ${error instanceof Error ? (error.stack ?? error.message) : error}`,
+      );
     }
   }
   process.exit(outcome === "needs-help" ? 1 : 0);

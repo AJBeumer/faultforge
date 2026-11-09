@@ -56,8 +56,17 @@ export function proposalTitle(pattern: Pattern): string {
  */
 export function proposalBody(pattern: Pattern, lab: string): string {
   const prName = (row: EvidenceRow) => (row.github === lab ? `#${row.pr}` : `${row.repo} ${row.pr}`);
+  // Review-written text is data: stripped of table and code markup and shown as code, so a title
+  // can't change the ticket's rendering, mention anyone, or link anywhere.
+  const safe = (text: string) =>
+    `\`${
+      text
+        .replace(/[|`\\]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim() || "(no title)"
+    }\``;
   const lines = pattern.findings
-    .map((f) => `| ${prName(f)} | \`${f.id}\` | ${f.title ?? "(no title)"} | ${f.severity ?? "?"} |`)
+    .map((f) => `| ${prName(f)} | \`${f.id}\` | ${safe(f.title ?? "(no title)")} | ${f.severity ?? "?"} |`)
     .join("\n");
   return `The factory's saved reviews repeat a pattern: **${pattern.findings.length} ${pattern.category} findings across ${pattern.prs.length} PRs** in \`${pattern.repo}\` (threshold: ${THRESHOLD.findings} findings over ${THRESHOLD.prs} PRs). Case PRs are never counted.
 
@@ -114,10 +123,11 @@ export function propose(
   };
   const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
   const patterns = findPatterns(table.rows);
+  print(
+    `A pattern is at least ${THRESHOLD.findings} findings with one category over ${THRESHOLD.prs} PRs in one repo.`,
+  );
   if (patterns.length === 0) {
-    print(
-      `No pattern over the threshold (${THRESHOLD.findings} findings over ${THRESHOLD.prs} PRs). Nothing proposed.`,
-    );
+    print("No pattern over the threshold. Nothing proposed.");
     return { patterns, proposed: [], opened: [] };
   }
   const proposed = newPatterns(patterns, listTitles(lab));
@@ -151,13 +161,18 @@ export function propose(
 }
 
 /**
- * The factory runner's step, once after a finished run. In CI the private clone predates the run's
- * pushed evidence, so it is brought up to date first. Throws are the caller's to swallow: a
- * proposal failure must never change the run's outcome.
+ * The factory runner's step, once after a finished run. A run pushes its evidence to the private
+ * repo's origin, not to this checkout, so the checkout is brought up to date first in both modes;
+ * when that fails (offline, or the owner's checkout has local work) the scan runs on what is
+ * there, and says so. Throws are the caller's to swallow: a proposal failure must never change
+ * the run's outcome. Two concurrent `--open` runs could double-propose a pattern; the runner is
+ * serialized by the tick lock, so only concurrent manual runs can race.
  */
-export function proposeAfterRun(root: string, mode: "ci" | "local", print: (line: string) => void): ProposeResult {
-  if (mode === "ci") {
+export function proposeAfterRun(root: string, _mode: "ci" | "local", print: (line: string) => void): ProposeResult {
+  try {
     execFileSync("git", ["-C", join(root, "private"), "pull", "--ff-only", "--quiet"], { timeout: 60_000 });
+  } catch (error) {
+    print(`private checkout not refreshed (${error instanceof Error ? error.message : error}); scanning as-is`);
   }
   return propose(loadFactory(), root, { open: true }, undefined, undefined, print);
 }

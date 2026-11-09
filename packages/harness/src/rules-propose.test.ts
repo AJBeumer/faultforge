@@ -137,6 +137,19 @@ describe("propose", () => {
 });
 
 describe("proposalBody", () => {
+  it("shows review-written titles as plain code: no table breaks, links, mentions or code escapes", () => {
+    const pattern = {
+      repo: "faultforge",
+      category: "Correctness",
+      prs: [59],
+      findings: [row({ id: "f1", title: "Pipe | breaks `tables` and\npings @someone [here](https://x.example)" })],
+    };
+    const body = proposalBody(pattern, "AJBeumer/faultforge");
+    expect(body).toContain("`Pipe breaks tables and pings @someone [here](https://x.example)`");
+    const tableRow = body.split("\n").find((l) => l.includes("f1"));
+    expect(tableRow?.split("|")).toHaveLength(6);
+  });
+
   it("links PRs in this repo, names reviewed-repo PRs as plain text, and quotes the threshold", () => {
     const pattern = {
       repo: "target",
