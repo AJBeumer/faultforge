@@ -210,6 +210,10 @@ export interface Provenance {
   editors: string[];
   /** Everyone who commented on it. */
   commenters: string[];
+  /** Everyone who edited one of its comments: a comment's text is theirs too. */
+  commentEditors?: string[];
+  /** Parts that couldn't be read completely, such as a comment with more edits than one page. */
+  incomplete?: string[];
 }
 
 /**
@@ -222,6 +226,31 @@ export function provenanceProblems(p: Provenance, owner: string): string[] {
   if (others([p.author]).length) problems.push(`written by ${p.author}`);
   if (others(p.editors).length) problems.push(`edited by ${others(p.editors).join(", ")}`);
   if (others(p.commenters).length) problems.push(`commented on by ${others(p.commenters).join(", ")}`);
+  const commentEditors = others(p.commentEditors ?? []);
+  if (commentEditors.length) problems.push(`a comment edited by ${commentEditors.join(", ")}`);
+  if (p.incomplete?.length) problems.push(`not fully readable: ${p.incomplete.join(", ")}`);
+  return problems;
+}
+
+/** The ticket as the agent will read it, and who wrote each part. */
+export interface TicketSnapshot {
+  /** Title, body and every comment, as one Markdown text. */
+  text: string;
+  provenance: Provenance;
+  /** Who edited the body and how many edits each comment has: an edit undone later still shows here. */
+  history?: string;
+}
+
+/**
+ * Why the ticket can't be trusted after the run: anything changed since the snapshot the agent worked
+ * from, or someone else's text is now on it. Empty when it is exactly as it was.
+ */
+export function ticketChangeProblems(before: TicketSnapshot, after: TicketSnapshot, owner: string): string[] {
+  const problems = provenanceProblems(after.provenance, owner).map((p) => `the ticket is now ${p}`);
+  if (after.text !== before.text) problems.push("the ticket's text changed during the run");
+  else if ((after.history ?? "") !== (before.history ?? "")) {
+    problems.push("the ticket was edited during the run, even though its text is back as it was");
+  }
   return problems;
 }
 
@@ -340,10 +369,12 @@ export function runIdFor(now: Date, repoKey: string, number: number): string {
 }
 
 /** The instructions added to the agent's system prompt for an unattended run. */
-export function agentInstructions(runRoot: string, repoKey: string, number: number): string {
+export function agentInstructions(runRoot: string, repoKey: string, number: number, ticketFile: string): string {
   return [
     `You are running unattended: a scheduled task started you for ${repoKey} ticket ${number}. Nobody is watching or will answer, so never ask a question or wait for one.`,
     "Work only this ticket, with the /factory routine. At most three review rounds.",
+    `The ticket's text, as the runner checked it, is in ${ticketFile}. Read the ticket from that file only: never with gh issue view or gh api, which are blocked for this ticket in this run.`,
+    "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
     "private/ here is a worktree of the private repo on its own branch: save and commit evidence there, but don't push it. The runner pushes it.",
     "Don't comment on, label or close the ticket, and never reply to, resolve or dismiss a review finding: the runner and the owner do that.",
@@ -382,12 +413,21 @@ export interface TickDeps {
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
   ready(repoKey: string, number: number): { title: string; problems: string[] };
-  /** Who wrote, edited and commented on the ticket: its text becomes the agent's instructions. */
-  provenance(github: string, number: number): Provenance;
+  /** The ticket's full text and who wrote, edited and commented on it: its text becomes the agent's instructions. */
+  snapshot(github: string, number: number): TicketSnapshot;
+  /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
+  writeTicket(ws: Workspace, text: string): string;
   relabel(github: string, number: number, remove: string[], add: string[]): void;
   comment(github: string, number: number, body: string): void;
   workspace(runId: string): Workspace;
-  runAgent(ws: Workspace, runId: string, repoKey: string, number: number, log: Logger): Promise<AgentRun>;
+  runAgent(
+    ws: Workspace,
+    runId: string,
+    repoKey: string,
+    number: number,
+    ticketFile: string,
+    log: Logger,
+  ): Promise<AgentRun>;
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
@@ -469,7 +509,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return "refused";
     }
 
-    const authors = provenanceProblems(deps.provenance(pick.github, pick.number), owner);
+    const authors = provenanceProblems(deps.snapshot(pick.github, pick.number).provenance, owner);
     if (authors.length) {
       deps.relabel(pick.github, pick.number, [LABELS.ready], []);
       say(
@@ -501,9 +541,16 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     ws = deps.workspace(runId);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
 
+    // The agent works from this exact text, taken after the claim, so nothing added later can steer it.
+    const snapshot = deps.snapshot(pick.github, pick.number);
+    const late = provenanceProblems(snapshot.provenance, owner);
+    if (late.length) throw new Error(`the ticket changed before the run started: ${late.join("; ")}`);
+    const ticketFile = deps.writeTicket(ws, snapshot.text);
+    log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
+
     const agentFrom = deps.now().toISOString();
     log("agent-started", { command: `/factory ${pick.repoKey} ${pick.number}` });
-    const agent = await deps.runAgent(ws, runId, pick.repoKey, pick.number, log);
+    const agent = await deps.runAgent(ws, runId, pick.repoKey, pick.number, ticketFile, log);
     const agentTo = deps.now().toISOString();
     const result = parseAgentResult(agent.resultText);
     log("agent-finished", {
@@ -517,7 +564,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const workspace = ws;
     // Effects, not just commands: the policy hook reads command text, which can't catch everything.
-    const audit = deps.audit(workspace, pick, agentFrom, agentTo);
+    const audit = [
+      ...deps.audit(workspace, pick, agentFrom, agentTo),
+      ...ticketChangeProblems(snapshot, deps.snapshot(pick.github, pick.number), owner),
+    ];
     log("audited", { from: agentFrom, to: agentTo, problems: audit });
     const settled = settle(
       agent,
@@ -576,6 +626,77 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   } finally {
     lock.release();
   }
+}
+
+type Who = { login?: string } | null;
+type Page<T> = { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] };
+type SnapshotComment = {
+  author: Who;
+  body: string;
+  createdAt: string;
+  userContentEdits: { totalCount: number; nodes: { editor: Who }[] };
+};
+/** One GraphQL answer for the issue: its title, body and author, plus the one paged field asked for. */
+export type IssuePage = { title: string; body: string | null; author: Who; [field: string]: unknown };
+/** Fetches one page of `field` (`userContentEdits` or `comments`) after `cursor`, or the first page. */
+export type FetchIssuePage = (field: "userContentEdits" | "comments", cursor: string | null) => IssuePage;
+
+/** Every node of a paged field, following GitHub's cursors until it says there is no next page. */
+export function allPages<T>(
+  field: "userContentEdits" | "comments",
+  fetch: FetchIssuePage,
+): { issue: IssuePage; nodes: T[] } {
+  const nodes: T[] = [];
+  let cursor: string | null = null;
+  let issue: IssuePage;
+  const seen = new Set<string>();
+  do {
+    issue = fetch(field, cursor);
+    const page = issue[field] as Page<T>;
+    nodes.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    // A cursor that doesn't move would loop for ever: treat it as an error, never as the end.
+    if (cursor !== null) {
+      if (seen.has(cursor)) throw new Error(`GitHub repeated the ${field} cursor ${cursor}`);
+      seen.add(cursor);
+    }
+  } while (cursor !== null);
+  return { issue, nodes };
+}
+
+/**
+ * The ticket's snapshot from GitHub's pages: the text the agent will read, who wrote and edited each
+ * part, and its edit history. The history catches an edit that was later undone, which leaves the
+ * text and the authors unchanged.
+ */
+export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
+  const login = (who: Who) => who?.login ?? "(deleted user)";
+  const edits = allPages<{ editor: Who }>("userContentEdits", fetch);
+  const comments = allPages<SnapshotComment>("comments", fetch).nodes;
+  const { issue } = edits;
+  const text = [
+    `# ${issue.title}`,
+    "",
+    issue.body ?? "",
+    ...comments.flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
+  ].join("\n");
+  const history = JSON.stringify({
+    body: edits.nodes.map((n) => login(n.editor)),
+    comments: comments.map((c) => ({ at: c.createdAt, edits: c.userContentEdits.totalCount })),
+  });
+  return {
+    text,
+    history,
+    provenance: {
+      author: login(issue.author),
+      editors: edits.nodes.map((n) => login(n.editor)),
+      commenters: comments.map((c) => login(c.author)),
+      commentEditors: comments.flatMap((c) => c.userContentEdits.nodes.map((n) => login(n.editor))),
+      incomplete: comments
+        .filter((c) => c.userContentEdits.totalCount > c.userContentEdits.nodes.length)
+        .map((c) => `the edits of a comment from ${c.createdAt}`),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -732,34 +853,25 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ) as IssueEvent[][]
       ).flat(),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
-    provenance(github, number) {
+    snapshot(github, number) {
       const [owner, name] = github.split("/");
-      const query = `query($owner: String!, $name: String!, $number: Int!) {
-        repository(owner: $owner, name: $name) { issue(number: $number) {
-          author { login }
-          userContentEdits(first: 100) { nodes { editor { login } } }
-          comments(first: 100) { nodes { author { login } } }
-        } } }`;
-      const issue = JSON.parse(
-        gh(
-          "api",
-          "graphql",
-          "-f",
-          `query=${query}`,
-          "-f",
-          `owner=${owner}`,
-          "-f",
-          `name=${name}`,
-          "-F",
-          `number=${number}`,
-        ),
-      ).data.repository.issue;
-      const login = (who: { login?: string } | null) => who?.login ?? "(deleted user)";
-      return {
-        author: login(issue.author),
-        editors: issue.userContentEdits.nodes.map((n: { editor: { login?: string } | null }) => login(n.editor)),
-        commenters: issue.comments.nodes.map((n: { author: { login?: string } | null }) => login(n.author)),
+      const pageInfo = "pageInfo { hasNextPage endCursor }";
+      const parts = {
+        userContentEdits: `userContentEdits(first: 100, after: $after) { ${pageInfo} nodes { editor { login } } }`,
+        comments: `comments(first: 100, after: $after) { ${pageInfo} nodes { author { login } body createdAt userContentEdits(first: 100) { totalCount nodes { editor { login } } } } }`,
       };
+      return buildSnapshot((field, cursor) => {
+        const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $name) { issue(number: $number) { title body author { login } ${parts[field]} } } }`;
+        const args = ["api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`];
+        args.push("-F", `number=${number}`, ...(cursor ? ["-f", `after=${cursor}`] : []));
+        return JSON.parse(gh(...args)).data.repository.issue;
+      });
+    },
+    writeTicket(ws, text) {
+      const file = join(ws.root, "ticket.md");
+      writeFileSync(file, `${text}\n`);
+      return file;
     },
     relabel(github, number, remove, add) {
       for (const label of remove) {
@@ -865,7 +977,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const owner = ticket.github.split("/")[0] ?? "";
       return [...problems, ...windowProblems({ comments, ticketEvents, reviews }, owner, from, to)];
     },
-    runAgent(ws, runId, repoKey, number, log) {
+    runAgent(ws, runId, repoKey, number, ticketFile, log) {
       const settingsFile = join(ws.root, "agent-settings.json");
       writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: DENY } }, null, 2));
       const transcript = join(runs, `${runId}.agent.jsonl`);
@@ -885,13 +997,18 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         "--settings",
         settingsFile,
         "--append-system-prompt",
-        agentInstructions(ws.root, repoKey, number),
+        agentInstructions(ws.root, repoKey, number, ticketFile),
         ...extraDirs,
       ];
       return new Promise((done) => {
         const child = spawn(claudeBinary(), args, {
           cwd: ws.lab,
-          env: { ...process.env, FAULTFORGE_FACTORY_RUN: runId, FAULTFORGE_RUN_ROOT: ws.root },
+          env: {
+            ...process.env,
+            FAULTFORGE_FACTORY_RUN: runId,
+            FAULTFORGE_RUN_ROOT: ws.root,
+            FAULTFORGE_TICKET_NUMBER: String(number),
+          },
           stdio: ["ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
         });

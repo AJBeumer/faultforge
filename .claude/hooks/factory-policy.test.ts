@@ -93,6 +93,51 @@ describe("factory policy: keys and network", () => {
   });
 });
 
+describe("factory policy: the run's ticket comes from the snapshot", () => {
+  it.each([
+    "gh issue view 18 --repo AJBeumer/faultforge-target",
+    "gh issue view #18",
+    "gh issue view https://github.com/AJBeumer/faultforge-target/issues/18 --comments",
+    "gh api repos/AJBeumer/faultforge-target/issues/18",
+    "gh api repos/AJBeumer/faultforge-target/issues/18/comments --paginate",
+    "gh api graphql -f query='{ viewer { login } }'",
+    'gh issue view "$FAULTFORGE_TICKET_NUMBER"',
+    "gh issue view $N --comments",
+    "gh issue list --json number,title,body",
+    "gh issue status",
+    "gh issue view 180",
+    "gh search issues filter --repo AJBeumer/faultforge-target",
+    "gh api repos/AJBeumer/faultforge-target/issues/$N/comments",
+    'gh api "repos/AJBeumer/faultforge-target/issues/$(echo 18)"',
+    "gh api repos/AJBeumer/faultforge-target/issues?state=open",
+    "gh api search/issues?q=repo:AJBeumer/faultforge-target",
+    "gh api repos/AJBeumer/faultforge-target/issues/comments --paginate",
+    "gh api 'repos/AJBeumer/faultforge-target/issues/comments?since=2026-11-09T00:00:00Z'",
+    "gh api \\\nrepos/AJBeumer/faultforge-target/issues/comments",
+    "gh api repos/AJBeumer/faultforge-target/issues; echo done",
+    "gh api repos/AJBeumer/faultforge-target/issues/181/comments",
+    "P=repos/AJBeumer/faultforge-target/issues; gh api $P",
+    "gh `\napi repos/AJBeumer/faultforge-target/issues/18",
+    "gh --repo x api graphql -f query=q",
+  ])("blocks %s in the run for ticket 18", (command) => {
+    expect(commandViolations(command, "18")).toContain(
+      "read the ticket from the runner's snapshot file, not live from GitHub",
+    );
+  });
+
+  it.each([
+    "gh pr view 19 --json state",
+    "gh api repos/AJBeumer/faultforge-target/pulls/19/comments",
+    "cat ../ticket.md",
+  ])("allows %s in the run for ticket 18", (command) => {
+    expect(commandViolations(command, "18")).toEqual([]);
+  });
+
+  it("reads tickets freely outside a run", () => {
+    expect(commandViolations("gh issue view 18")).toEqual([]);
+  });
+});
+
 describe("factory policy: file edits", () => {
   it("allows files in the run's folder and the temp folder", () => {
     expect(editViolation(join(RUN, "faultforge-target", "src", "a.ts"), RUN, TEMP)).toBeUndefined();
