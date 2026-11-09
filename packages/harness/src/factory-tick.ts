@@ -40,6 +40,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { telltales } from "./neutral.ts";
+import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
 export const LABELS = {
@@ -1295,6 +1296,18 @@ async function main() {
   }
   const factory = loadFactory();
   const outcome = await tick(factory, realDeps(factory, options, mode), options);
+  if (outcome === "done" || outcome === "needs-help") {
+    // After a finished run, ask whether the saved reviews now repeat a pattern worth a rule. The
+    // owner decides on the proposal ticket; a failure here is reported and never changes the
+    // run's outcome or labels.
+    try {
+      proposeAfterRun(LAB_ROOT, mode, console.log);
+    } catch (error) {
+      console.error(
+        `rules:propose failed (run outcome unchanged): ${error instanceof Error ? (error.stack ?? error.message) : error}`,
+      );
+    }
+  }
   process.exit(outcome === "needs-help" ? 1 : 0);
 }
 
