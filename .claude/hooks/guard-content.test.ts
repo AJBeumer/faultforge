@@ -14,6 +14,7 @@ describe("chainProblem: the steps a git chain may contain inside a reviewed chec
     "git status 2>&1 && git commit -m Tidy",
     "npm run check > /dev/null && git commit -m Tidy",
     "echo <<'EOF'\n$(not run: the delimiter is quoted)\nEOF\ngit add . && git commit -m Tidy",
+    "echo <<EOF\nliteral \\$(not run: escaped) and \\`neither\\`\nEOF\ngit add . && git commit -m Tidy",
   ])("allows %s", (command) => {
     expect(chainProblem(command)).toBeUndefined();
   });
@@ -35,6 +36,12 @@ describe("chainProblem: the steps a git chain may contain inside a reviewed chec
       "git stash pop && git commit -m Tidy",
       /stash/,
     ],
+    [
+      "a command substitution inside an allowed step (Qodo, round 4)",
+      "git -C ../app status $(cp /tmp/payload ../app/notes.md) && git -C ../app add . && git -C ../app commit -m Tidy",
+      /\$\(/,
+    ],
+    ["a backtick substitution inside an allowed step", "git status `cp a b` && git commit -m Tidy", /`/],
   ])("refuses %s", (_name, command, step) => {
     expect(chainProblem(command)).toMatch(step);
   });

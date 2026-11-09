@@ -180,15 +180,19 @@ const ALLOWED_STEP = new RegExp(
  * redirect other than to `/dev/null` or a descriptor, and no heredoc body that expands `$(…)`.
  */
 export function chainProblem(command: string): string | undefined {
-  // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command.
+  // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command,
+  // unless the shell escape `\$(` or `` \` `` keeps it literal.
   for (const m of command.matchAll(/<<-?\s*(["']?)(\w+)\1[^\n]*\n([\s\S]*?)\n\s*\2\s*(?:\n|$)/g)) {
-    if (!m[1] && /\$\(|`/.test(m[3] ?? "")) return "a heredoc body that runs $(…)";
+    const body = (m[3] ?? "").replace(/\\\$\(|\\`/g, "");
+    if (!m[1] && /\$\(|`/.test(body)) return "a heredoc body that runs $(…)";
   }
   const steps = blankQuoted(command)
     .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
     .map((s) => s.trim())
     .filter(Boolean);
   for (const step of steps) {
+    // A substitution runs whatever is inside it, whatever the step around it is allowed to do.
+    if (/\$\(|`/.test(step)) return step;
     const harmless = step.replace(/\d*>&\d+/g, "").replace(/\d*>\s*\/dev\/null/g, "");
     if (/>/.test(harmless) || !ALLOWED_STEP.test(step)) return step;
   }
