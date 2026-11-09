@@ -111,6 +111,8 @@ describe("factory policy: the run's ticket comes from the snapshot", () => {
     'gh api "repos/AJBeumer/faultforge-target/issues/$(echo 18)"',
     "gh api repos/AJBeumer/faultforge-target/issues?state=open",
     "gh api search/issues?q=repo:AJBeumer/faultforge-target",
+    "gh api repos/AJBeumer/faultforge-target/issues/comments --paginate",
+    "gh api 'repos/AJBeumer/faultforge-target/issues/comments?since=2026-11-09T00:00:00Z'",
   ])("blocks %s in the run for ticket 18", (command) => {
     expect(commandViolations(command, "18")).toContain(
       "read the ticket from the runner's snapshot file, not live from GitHub",

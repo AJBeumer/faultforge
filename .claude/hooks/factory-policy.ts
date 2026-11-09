@@ -84,8 +84,8 @@ export function commandViolations(command: string, ticket?: string): string[] {
       /\bgh\s+search\b/,
       // gh api issue paths: this ticket, or any number given as a variable or expression.
       new RegExp(String.raw`\bgh\s+api\b[^\n|;&]*\bissues/(${ticket}\b|[^\s/'"]*[$\x60(])`),
-      // gh api on a whole issue list or search endpoint, and GraphQL, which can read any issue.
-      /\bgh\s+api\b[^\n|;&]*\b(issues(\?|\s|["']|$)|search\/)/,
+      // gh api on a whole-repo issue list, all issue comments, or search; and GraphQL, which can read any issue.
+      /\bgh\s+api\b[^\n|;&]*\b(issues(\?|\s|["']|$)|issues\/comments\b|search\/)/,
       /\bgh\s+api\s+graphql\b/,
     ];
     if (live.some((pattern) => pattern.test(command))) {
