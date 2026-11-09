@@ -198,11 +198,11 @@ async function main() {
   let lastContent = "";
   const onPoll = async () => {
     type Comment = { user: { login: string }; updated_at: string };
+    // The review summary lives in the issue-comment feed.
     const comments = {
       pr: ghAll<Comment>(`repos/${github}/issues/${pr}/comments`),
-      inline: ghAll<Comment>(`repos/${github}/pulls/${pr}/comments`),
     };
-    const version = [...comments.pr, ...comments.inline]
+    const version = comments.pr
       .filter((c) => c.user.login.startsWith("qodo"))
       .map((c) => c.updated_at)
       .sort()
