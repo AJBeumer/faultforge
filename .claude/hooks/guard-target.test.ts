@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const HOOK = join(import.meta.dirname, "guard-target.ts");
@@ -453,12 +453,14 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
   describe("ways of moving into the checkout", () => {
     it.each([
       ["Set-Location", 'Set-Location ../faultforge-target; git commit -m "Fix the planted bug"'],
+      ["Set-Location -Path", "Set-Location -Path ../faultforge-target; git commit -m 'Fix the planted bug'"],
       ["pushd", 'pushd /d/Projects/faultforge-target && git commit -m "Fix the planted bug"'],
       ["git --work-tree", 'git --work-tree=/d/Projects/faultforge-target commit -m "Fix the planted bug"'],
+      ["git -C with no space", "git -C/d/Projects/faultforge-target commit -m 'Fix the planted bug'"],
       ["git -C with a quoted Windows path", 'git -C "D:\\Projects\\faultforge-target" commit -m "Fix the planted bug"'],
       ["cd with a quoted Windows path", 'cd "D:\\Projects\\faultforge-target"; git commit -m "Fix the planted bug"'],
     ])("blocks a telltale commit after %s", (_name, command) => {
-      expect(bash(command)).toMatch(/says planted/);
+      expect(powershell(command)).toMatch(/says planted/);
     });
 
     it("still blocks a force push reached through pushd", () => {
@@ -469,38 +471,88 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
       expect(bash('cd ../faultforge-target;git commit -m "Fix the planted bug"')).toMatch(/says planted/);
       expect(bash('cd ../faultforge-target&&git commit -m "Fix the planted bug"')).toMatch(/says planted/);
     });
+
+    it("gives the own-ticket link exemption only to a real move, not to one quoted in a message (Qodo on PR 120)", () => {
+      const quoted = "git commit -m 'Set-Location /d/Projects/faultforge-target; see faultforge-target#6'";
+      expect(bash(quoted)).toMatch(/link to the target/);
+      expect(
+        bash('cd ../faultforge-target && gh pr create --title "Tidy" --body "Ticket: faultforge-target#6"'),
+      ).toBeUndefined();
+    });
   });
 
-  describe("file content written from the shell", () => {
-    it.each([
-      ["a redirect", 'echo "Used by FaultForge" > ../faultforge-target/NOTES.md'],
-      ["an appending redirect, absolute path", 'echo "planted here" >> /d/Projects/faultforge-target/README.md'],
-      ["tee with a heredoc", "tee ../faultforge-target/docs/x.md <<'EOF'\nThe planted bug\nEOF"],
-      ["Out-File", 'Out-File -FilePath ../faultforge-target/x.txt -InputObject "planted"'],
-      ["Set-Content", "Set-Content -Path D:\\Projects\\faultforge-target\\x.txt -Value 'planted'"],
-    ])("checks %s into the reviewed repo for telltales, like an edit", (_name, command) => {
-      expect(bash(command)).toMatch(/says planted|names the lab/);
-    });
+  describe("content about to travel, read from git whatever the command text says", () => {
+    /** A temporary git repo standing in for a reviewed checkout, with a bare `origin` whose `main` it tracks. */
+    function reviewedRepo() {
+      const dir = mkdtempSync(join(tmpdir(), "guard-repo-"));
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(dir, "README.md"), "# App\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "Start");
+      const remote = mkdtempSync(join(tmpdir(), "guard-remote-"));
+      execFileSync("git", ["init", "-q", "--bare", remote]);
+      git("remote", "add", "origin", remote);
+      git("push", "-q", "-u", "origin", "main");
+      // The config names this folder as a reviewed repo; its basename is the folder the guard looks for.
+      const factory = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
+      factory.repos.other = { ...factory.repos.target, github: "AJBeumer/other-app", path: dir };
+      const config = join(dir, "..", `${basename(dir)}-factory.json`);
+      writeFileSync(config, JSON.stringify(factory));
+      return { dir, git, config };
+    }
 
-    it("reads the source of a copy into the reviewed repo", () => {
-      const dir = mkdtempSync(join(tmpdir(), "guard-"));
-      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
-      expect(bash("cp notes.md ../faultforge-target/docs/notes.md", dir)).toMatch(/says planted/);
-      expect(powershell("Copy-Item notes.md D:\\Projects\\faultforge-target\\docs\\notes.md", dir)).toMatch(
-        /says planted/,
+    it("refuses a commit anywhere while a reviewed checkout holds a staged telltale, however it got there", () => {
+      const { dir, git, config } = reviewedRepo();
+      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n"); // as a redirect or a copy would
+      git("add", "notes.md");
+      expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(
+        /other-app holds content[\s\S]*says planted/,
       );
-      expect(bash("mv notes.md /d/Projects/faultforge-target/notes.md", dir)).toMatch(/says planted/);
+      // Attribution-independent: the same commit started from this repo's folder is refused too.
+      expect(decide("Bash", { command: 'git commit -m "Tidy"' }, HARNESS, config)).toMatch(/other-app holds content/);
     });
 
-    it("denies a copy whose source it can't read, since it can't check what would land there", () => {
-      expect(bash("cp no-such-file.md ../faultforge-target/docs/notes.md")).toMatch(/doesn't exist/);
+    it("refuses a chained add-and-commit while an untracked file holds a telltale, or is named with one", () => {
+      const { dir, config } = reviewedRepo();
+      writeFileSync(join(dir, "todo.md"), "fix the planted bug\n");
+      expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
+      rmSync(join(dir, "todo.md"));
+      writeFileSync(join(dir, "FF-0002-notes.md"), "nothing much\n");
+      expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(
+        /contains a case id/,
+      );
     });
 
-    it("allows harmless content, reads from the reviewed repo, and writes elsewhere", () => {
-      expect(bash('echo "Release notes" > ../faultforge-target/NOTES.md')).toBeUndefined();
-      expect(bash("cat ../faultforge-target/README.md > ./readme-copy.md")).toBeUndefined();
-      expect(bash('echo "planted" > ./notes.md')).toBeUndefined();
-      expect(bash("cp ../faultforge-target/README.md ./readme-copy.md")).toBeUndefined();
+    it("lets a harmless change be committed, and ignores pending content when nothing is committed or pushed", () => {
+      const { dir, git, config } = reviewedRepo();
+      writeFileSync(join(dir, "README.md"), "# App\n\nRelease notes.\n");
+      git("add", "README.md");
+      expect(decide("Bash", { command: 'git commit -m "Add release notes"' }, dir, config)).toBeUndefined();
+      writeFileSync(join(dir, "scratch.md"), "planted\n");
+      expect(decide("Bash", { command: "npm run check" }, dir, config)).toBeUndefined();
+    });
+
+    it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
+      const { dir, git, config } = reviewedRepo();
+      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
+      git("add", "notes.md");
+      git("commit", "-q", "-m", "Tidy"); // made directly, as a bypass of the commit check would be
+      expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toMatch(
+        /other-app holds content[\s\S]*not yet on origin\/main[\s\S]*says planted/,
+      );
+      git("reset", "-q", "--hard", "origin/main");
+      expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toBeUndefined();
+    });
+
+    it("denies when git can't answer for a reviewed checkout, rather than guessing", () => {
+      const { dir, git, config } = reviewedRepo();
+      git("remote", "remove", "origin"); // no origin/main to compare against
+      expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/can't inspect other-app/);
     });
   });
 });

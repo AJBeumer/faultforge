@@ -4,15 +4,19 @@
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. For each, it blocks:
  *  - force pushes
  *  - commits, pushes, PRs, comments and API writes whose text, or whose posted files, name the lab or the bug
- *  - file edits whose new content does the same: the Edit and Write tools, and shell writes into the
- *    checkout (a redirect, tee, cp or mv, Copy-Item, Out-File, Set-Content), reading the copied source
+ *  - file edits by the Edit and Write tools whose new content does the same
+ *  - any `git commit` or `git push`, wherever it runs, while a reviewed checkout holds pending content
+ *    (staged, unstaged or untracked for a commit; unpushed commits for a push) that names the lab or the bug.
+ *    Shell text can't show what a redirect, a copy or a script wrote, so the content is read from git at
+ *    the moment it would travel. That is the guarantee; the text checks are the early warning.
  * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
- * (cd, pushd, Set-Location, git -C, git --work-tree), writes a file under it, or runs from inside it.
+ * (cd, pushd, Set-Location, git -C, git --work-tree), or runs from inside it.
  * And everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo.
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 
@@ -23,13 +27,18 @@ interface Reviewed {
   name: string;
   /** The local checkout's folder name, from its configured path. */
   folder: string;
+  /** The local checkout, resolved from this repo's root, where pending content is read from git. */
+  checkout: string;
 }
+
+const LAB_ROOT = join(import.meta.dirname, "../..");
 
 /** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
 const TARGET: Reviewed = {
   github: "AJBeumer/faultforge-target",
   name: "faultforge-target",
   folder: "faultforge-target",
+  checkout: resolve(LAB_ROOT, "../faultforge-target"),
 };
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -81,9 +90,19 @@ function reviewedRepos(): Reviewed[] {
     );
     for (const entry of entries) {
       if (entry.guard !== "reviewed" || typeof entry.github !== "string" || typeof entry.path !== "string") continue;
-      if (repos.some((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase())) continue;
+      const known = repos.find((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase());
+      if (known) {
+        // The config may keep the target's checkout somewhere else; its protection stays either way.
+        known.checkout = resolve(LAB_ROOT, entry.path);
+        continue;
+      }
       const name = entry.github.split("/")[1] ?? entry.github;
-      repos.push({ github: entry.github, name, folder: basename(entry.path) || name });
+      repos.push({
+        github: entry.github,
+        name,
+        folder: basename(entry.path) || name,
+        checkout: resolve(LAB_ROOT, entry.path),
+      });
     }
   } catch {
     // keep the target alone
@@ -116,67 +135,106 @@ function explicitDestinations(command: string): string[] {
 }
 
 /**
- * True when the command moves into the repo's checkout itself: `cd`, `pushd`, PowerShell's `Set-Location`
- * (or `sl`), `git -C <path>`, or `git --work-tree=<path>` / `--git-dir`, with a relative, absolute or
- * quoted path.
+ * The ways a command moves into a checkout: `cd`, `pushd`, PowerShell's `Set-Location` (or `sl`), each
+ * with an optional `-Path`/`-LiteralPath`, `git -C<path>` with or without a space, and `git --work-tree=` /
+ * `--git-dir`. The path may be relative, absolute or quoted, and the folder may be followed by a path
+ * separator, a quote, whitespace or a shell operator (`;`, `&&`, `|`).
  */
-function entersCheckout(command: string, repo: Reviewed): boolean {
+function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
   const folders = [repo.folder, repo.name].map(esc).join("|");
-  const into = `(?:\\b(?:cd|pushd|Set-Location|sl|git\\s+-C)\\s+|\\bgit\\s+--(?:work-tree|git-dir)[=\\s]\\s*)`;
-  // The folder may be followed by a separator, a quote, a path separator or a shell operator (`;`, `&&`, `|`).
-  return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i").test(command);
+  const lead = atSegmentStart ? "(?:^|[;&|\\n]\\s*)" : "\\b";
+  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+-C\\s*|${lead}git\\s+--(?:work-tree|git-dir)[=\\s]\\s*)`;
+  return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
+}
+
+/** True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. */
+function entersCheckout(command: string, repo: Reviewed): boolean {
+  return checkoutPattern(repo, false).test(command);
 }
 
 /**
- * Files a shell command writes, and the files it copies them from. Destinations: redirects (`>`, `>>`),
- * `tee`, the last argument of `cp` and `mv`, `Copy-Item`/`Move-Item`, and `Out-File`/`Set-Content`/
- * `Add-Content`. Sources: the first argument of the copy and move forms, paired with their destination.
- * Paths are left as written; `inCheckout` reads the folder names in them.
+ * True only when the move into the checkout is a command of its own (at the start of the command or after a
+ * shell operator), not words inside a message. The own-ticket link exemption needs this stricter form, so a
+ * quoted `Set-Location <target>` in a commit message can't earn it.
  */
-function shellWrites(command: string): { destinations: string[]; copies: { from: string; to: string }[] } {
-  const path = `["']?([^\\s"'|;&<>]+)`;
-  const destinations: string[] = [];
-  const copies: { from: string; to: string }[] = [];
-  const first = (m: RegExpMatchArray, ...groups: number[]) => groups.map((g) => m[g]).find(Boolean) ?? "";
-  for (const m of command.matchAll(new RegExp(`(?<![<>])>{1,2}\\s*${path}`, "g"))) {
-    if (!m[1]?.startsWith("&")) destinations.push(m[1] ?? "");
-  }
-  for (const m of command.matchAll(new RegExp(`\\btee\\s+(?:-a\\s+|--append\\s+)?${path}`, "g")))
-    destinations.push(m[1] ?? "");
-  for (const m of command.matchAll(
-    new RegExp(`\\b(?:Out-File|Set-Content|Add-Content)\\s+(?:-(?:FilePath|Path|LiteralPath)\\s+)?${path}`, "gi"),
-  ))
-    destinations.push(m[1] ?? "");
-  for (const m of command.matchAll(new RegExp(`\\b(?:cp|mv)\\s+(?:-\\S+\\s+)*${path}["']?\\s+${path}`, "g"))) {
-    copies.push({ from: first(m, 1), to: first(m, 2) });
-  }
-  for (const m of command.matchAll(
-    new RegExp(
-      `\\b(?:Copy-Item|Move-Item)\\s+(?:-(?:Path|LiteralPath)\\s+)?${path}["']?\\s+(?:-Destination\\s+)?${path}`,
-      "gi",
-    ),
-  )) {
-    copies.push({ from: first(m, 1), to: first(m, 2) });
-  }
-  return { destinations: [...destinations, ...copies.map((c) => c.to)], copies };
+function navigatesInto(command: string, repo: Reviewed): boolean {
+  return checkoutPattern(repo, true).test(command);
 }
 
 /**
- * Contents of the files a command copies into `repo`'s checkout, read so they can be checked for telltales
- * like any other content written there. A source that doesn't exist is a deny: nothing can be checked.
+ * Runs git in a reviewed checkout and returns its output, or denies when git can't answer: a checkout the
+ * guard can't inspect is a checkout it can't clear.
  */
-function copiedSources(command: string, repo: Reviewed): string[] {
-  return shellWrites(command)
-    .copies.filter((c) => inCheckout(c.to, repo))
-    .map((c) => {
-      const path = isAbsolute(c.from) ? c.from : resolve(cwd, c.from);
-      if (!existsSync(path)) {
+function gitIn(repo: Reviewed, args: string[]): string {
+  const result = spawnSync("git", ["-C", repo.checkout, ...args], { encoding: "utf8", timeout: 10_000 });
+  if (result.status !== 0) {
+    deny(
+      `The guard can't inspect ${repo.name}'s pending content (git ${args[0]} failed: ${(result.stderr || result.error?.message || "").trim().split("\n")[0]}), so nothing may be committed or pushed until it can.`,
+    );
+  }
+  return result.stdout;
+}
+
+/** The added lines of a unified diff, without the `+` and without the file headers. */
+function addedLines(diff: string): string {
+  return diff
+    .split("\n")
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1))
+    .join("\n");
+}
+
+/**
+ * The reasons the content about to leave a reviewed checkout would give the lab away, or an empty list.
+ * For a commit: every change to tracked files (staged or not, since `-a` commits both) plus every untracked
+ * file (a chained `git add` would stage it), by content and by name. For a push: every line and file name
+ * added by the commits not yet on `origin/main`. Read from git itself, so it doesn't matter how the content
+ * got there: a redirect, a copy, a script, an editor.
+ */
+function pendingTelltales(repo: Reviewed, moment: "commit" | "push"): { reasons: string[]; where: string } {
+  if (!existsSync(join(repo.checkout, ".git"))) return { reasons: [], where: "" };
+  if (moment === "commit") {
+    const untracked = gitIn(repo, ["ls-files", "--others", "--exclude-standard"])
+      .split("\n")
+      .map((f) => f.trim())
+      .filter(Boolean);
+    const contents = untracked.map((file) => {
+      const path = join(repo.checkout, file);
+      return statSync(path).isFile() ? readFileSync(path, "utf8") : "";
+    });
+    const names = gitIn(repo, ["diff", "HEAD", "--name-only"]);
+    const text = [
+      addedLines(gitIn(repo, ["diff", "HEAD", "--unified=0", "--no-color"])),
+      names,
+      ...untracked,
+      ...contents,
+    ];
+    return { reasons: telltales(text.join("\n")), where: "the changes not yet committed" };
+  }
+  const range = "origin/main...HEAD";
+  const names = gitIn(repo, ["diff", range, "--name-only"]);
+  const text = [addedLines(gitIn(repo, ["diff", range, "--unified=0", "--no-color"])), names];
+  return { reasons: telltales(text.join("\n")), where: "the commits not yet on origin/main" };
+}
+
+/**
+ * Before any `git commit` or `git push`, wherever it runs, refuses if a reviewed checkout holds pending
+ * content that names the lab or the bug. This is the check that doesn't depend on reading the command right.
+ */
+function checkPendingContent(command: string) {
+  const commits = /\bgit\b[^|;&\n]*\bcommit\b/.test(command);
+  const pushes = /\bgit\b[^|;&\n]*\bpush\b/.test(command);
+  for (const moment of [commits && "commit", pushes && "push"] as const) {
+    if (!moment) continue;
+    for (const repo of REVIEWED) {
+      const pending = pendingTelltales(repo, moment);
+      if (pending.reasons.length) {
         deny(
-          `This command would copy ${c.from} into ${repo.name}, but the file doesn't exist, so the guard can't check it. Write it first, then run the command.`,
+          `${repo.name} holds content that would give the lab away in ${pending.where} (${pending.reasons.join(", ")}). Remove it from the checkout before any commit or push.`,
         );
       }
-      return readFileSync(path, "utf8");
-    });
+    }
+  }
 }
 
 /**
@@ -197,21 +255,20 @@ function inCheckout(path: string, repo: Reviewed): boolean {
 }
 
 function checkCommand(command: string) {
-  // Shell writes of file content into a reviewed checkout (a redirect, tee, a copy) count like an edit.
-  const written = shellWrites(command).destinations;
-  const writesFilesIn = (r: Reviewed) => written.some((d) => inCheckout(d, r));
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
-    (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command)) ||
-    REVIEWED.some(writesFilesIn);
+    (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  // Every reviewed repo the command touches, by any part of it: a named destination, a move into its
-  // checkout, or a file written under it. The folder the command runs in only counts when it names no
-  // destination at all (say, `git commit` inside a checkout), so a post from there to another repo is
-  // judged by where it goes.
+  // What would travel: the content pending in every reviewed checkout, read from git, whatever this
+  // command's text says about where it runs.
+  checkPendingContent(command);
+
+  // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its
+  // checkout. The folder the command runs in only counts when it names no destination at all (say,
+  // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
   const destinations = explicitDestinations(command);
-  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r) || writesFilesIn(r);
+  const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves
   // more than one repo must be split: each part then gets judged on its own. A chain that stays in
@@ -230,7 +287,6 @@ function checkCommand(command: string) {
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
       entersCheckout(command, r) ||
-      writesFilesIn(r) ||
       (!destinations.length && inCheckout(cwd, r)),
   );
   const repo = touched[0];
@@ -244,12 +300,16 @@ function checkCommand(command: string) {
   }
   if (!writes) return;
 
-  // A reviewed repo may link to its own tickets only when the command really runs in its checkout
-  // and goes nowhere else. Words in a message (a quoted --repo, say) can't grant that.
-  const onlyItself = touched.length === 1 && runsIn(repo) && destinations.every((d) => d === repo.github.toLowerCase());
+  // A reviewed repo may link to its own tickets only when the command really runs in its checkout (the
+  // hook's folder, or a `cd`/`git -C` that is a command of its own) and goes nowhere else. Words in a
+  // message (a quoted --repo or a quoted Set-Location, say) can't grant that.
+  const onlyItself =
+    touched.length === 1 &&
+    (inCheckout(cwd, repo) || navigatesInto(command, repo)) &&
+    destinations.every((d) => d === repo.github.toLowerCase());
   checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
 
-  const text = [stripReviewedNames(command), ...referencedFiles(command), ...copiedSources(command, repo)].join("\n");
+  const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
   const found = telltales(text);
   if (found.length) {
     deny(
