@@ -7,7 +7,7 @@
       "path": ".",
       "guard": "lab",
       "check": "npm run check",
-      "tests": "(\\.test\\.ts$|/fixtures/)",
+      "tests": "(\\.test\\.ts$|/fixtures/|^packages/[^/]+/test/)",
       "start": null,
       "tickets": {
         "sections": ["Result", "Done when", "Must not break"],

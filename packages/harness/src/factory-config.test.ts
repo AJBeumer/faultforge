@@ -33,6 +33,20 @@ describe("factory.json", () => {
   it("holds no secrets or token paths", () => {
     expect(raw).not.toMatch(/token|secret|password|PAT_|key\.txt|\.github[/\\]PAT|\\Users\\/i);
   });
+
+  it("recognises tests in both places the layout rules allow, and fixtures, but not code (#112)", () => {
+    const tests = new RegExp(repoConfig(factory, "faultforge").tests);
+    for (const path of [
+      "packages/harness/src/inject.test.ts",
+      ".claude/hooks/guard-target.test.ts",
+      "packages/harness/test/inject-e2e.test.ts",
+      "packages/harness/test/helpers/clone.ts",
+      "packages/harness/fixtures/qodo-target-pr1.json",
+    ])
+      expect(tests.test(path), path).toBe(true);
+    for (const path of ["packages/harness/src/inject.ts", "packages/harness/testing.ts", "docs/decision-log.md"])
+      expect(tests.test(path), path).toBe(false);
+  });
 });
 
 describe("configProblems", () => {
