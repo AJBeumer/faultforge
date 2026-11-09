@@ -64,6 +64,22 @@ describe("factory workflow", () => {
     expect(jobEnv).not.toContain("runner.");
   });
 
+  it("keeps no token on disk: every checkout sets persist-credentials: false, and git pushes through gh (#103)", () => {
+    const steps = workflow.split(/\n {6}- /).filter((step) => step.includes("actions/checkout@"));
+    expect(steps.length).toBeGreaterThanOrEqual(4);
+    for (const step of steps) expect(step).toContain("persist-credentials: false");
+    expect(workflow).toContain("gh auth setup-git");
+  });
+
+  it("gives secrets to the steps that need them, never to the whole job (#103)", () => {
+    expect(workflow).not.toMatch(/name: Factory tick[\s\S]*?\n {4}env:/);
+    const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
+    for (const secret of ["FACTORY_GH_TOKEN", "QODO_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])
+      expect(tick).toContain(`secrets.${secret}`);
+    const install = workflow.match(/name: Install dependencies[\s\S]*?run:/)?.[0] ?? "";
+    expect(install).not.toContain("secrets.");
+  });
+
   it("pins every action to a full commit", () => {
     for (const [, ref] of workflow.matchAll(/uses: [\w./-]+@(\S+)/g)) expect(ref).toMatch(/^[0-9a-f]{40}$/);
   });

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import {
   type AgentRun,
+  agentArgs,
   agentInstructions,
   agentStep,
   buildSnapshot,
@@ -842,6 +843,32 @@ describe("agentInstructions (#73)", () => {
     expect(text).toMatch(/--body-file/);
     expect(text).toMatch(/git commit -F/);
     expect(text).toMatch(/PR bodies, comments and commit messages/);
+  });
+});
+
+describe("agentArgs (#103)", () => {
+  const args = agentArgs({
+    repoKey: "target",
+    number: 18,
+    budget: 25,
+    settingsFile: "/runs/r/agent-settings.json",
+    mcpConfigFile: "/runs/r/agent-mcp.json",
+    instructions: "do the ticket",
+    extraDirs: ["--add-dir", "/runs/r/faultforge-target"],
+  });
+  const value = (flag: string) => args[args.indexOf(flag) + 1];
+
+  it("reaches no MCP server of the machine: an explicit config, used strictly", () => {
+    expect(value("--mcp-config")).toBe("/runs/r/agent-mcp.json");
+    expect(args).toContain("--strict-mcp-config");
+  });
+
+  it("keeps the run's other limits: the deny settings, the budget, the prompt and the extra folders", () => {
+    expect(value("--settings")).toBe("/runs/r/agent-settings.json");
+    expect(value("--max-budget-usd")).toBe("25");
+    expect(value("-p")).toBe("/factory target 18");
+    expect(value("--append-system-prompt")).toBe("do the ticket");
+    expect(value("--add-dir")).toBe("/runs/r/faultforge-target");
   });
 });
 
