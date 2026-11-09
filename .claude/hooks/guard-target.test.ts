@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -360,5 +360,89 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   it("falls back to protecting the target if factory.json can't be read", () => {
     const command = 'gh pr comment 1 --repo AJBeumer/faultforge-target --body "FaultForge"';
     expect(decide("Bash", { command }, HARNESS, join(tmpdir(), "no-such-factory.json"))).toMatch(/names the lab/);
+  });
+});
+
+describe("guard-target hook fails closed (#104)", () => {
+  /** Runs the hook with raw stdin text and returns how it exited and what it wrote. */
+  function raw(stdin: string) {
+    const result = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: "utf8", env: process.env });
+    return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+  }
+
+  it("blocks with exit 2 and a one-line reason when its input is empty", () => {
+    const { status, stdout, stderr } = raw("");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^guard-target hook failed: .+/);
+    expect(stderr.split("\n")).toHaveLength(1);
+  });
+
+  it("blocks with exit 2 when its input is not JSON", () => {
+    const { status, stderr } = raw("not json");
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/guard-target hook failed/);
+  });
+
+  it("blocks a reviewed-repo post whose body file exists but can't be read (a folder)", () => {
+    // The folder exists, so the guard tries to read it as the body, and must refuse rather than skip it.
+    const command = `gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${tmpdir()}"`;
+    const { status, stderr } = raw(JSON.stringify({ tool_name: "Bash", cwd: HARNESS, tool_input: { command } }));
+    expect(status).toBe(2);
+    expect(stderr).toMatch(/EISDIR/);
+  });
+
+  it("denies a post whose body file does not exist, since it can't check what would be posted", () => {
+    const missing = join(tmpdir(), "no-such-body-file.md");
+    expect(bash(`gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${missing}"`)).toMatch(
+      /doesn't exist/,
+    );
+    expect(bash(`git commit -F ${missing}`, TARGET)).toMatch(/doesn't exist/);
+    // The file name ends at the shell separator, so the reason names the file, not "file;".
+    expect(bash(`git commit -F ${missing}; echo done`, TARGET)).toMatch(/no-such-body-file\.md, which doesn't exist/);
+    expect(bash(`gh pr create --repo AJBeumer/faultforge --title "Tidy" --body-file ${missing}`)).toMatch(
+      /doesn't exist/,
+    );
+  });
+
+  it("reads a gh api field's @file, and treats a plain field value as text, not a file", () => {
+    const route = "gh api repos/AJBeumer/faultforge-target/issues/1/comments";
+    expect(bash(`${route} -F body=@${join(tmpdir(), "no-such-body-file.md")}`)).toMatch(/doesn't exist/);
+    expect(bash(`${route} -F body=Thanks`)).toBeUndefined();
+    expect(bash(`${route} -F body="The planted bug"`)).toMatch(/says planted/);
+  });
+
+  it("reads a file whose name looks like a field, such as message=hidden.txt (Qodo on PR 115)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    writeFileSync(join(dir, "message=hidden.txt"), "The planted bug is here\n");
+    expect(bash("git -C /d/Projects/faultforge-target commit -F message=hidden.txt", dir)).toMatch(/says planted/);
+    expect(bash("gh api repos/AJBeumer/faultforge-target/issues/1/comments -F message=hidden.txt", dir)).toMatch(
+      /says planted/,
+    );
+  });
+
+  it("lets a message mention a file flag as words: only a real flag names a file (Qodo on PR 115)", () => {
+    expect(bash('git commit -m "Document --body-file usage"')).toBeUndefined();
+    expect(bash('git commit -m "Document the --body-file usage"', TARGET)).toBeUndefined();
+    expect(
+      bash(
+        "gh pr create --repo AJBeumer/faultforge --title T --body-file - <<'EOF'\nPass text with --body-file notes\nEOF",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("reads a real file even when fake quoting surrounds the flag (Qodo on PR 115, round 3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    writeFileSync(join(dir, "secret.txt"), "The planted bug is here\n");
+    const commit = "git -C /d/Projects/faultforge-target commit -F secret.txt";
+    // A heredoc-looking marker in a comment, with a real heredoc later, must not hide the commit between them.
+    expect(bash(`# <<FAKE\n${commit}\ncat <<FAKE\nx\nFAKE`, dir)).toMatch(/says planted/);
+    // An escaped quote must not open a quoted span that swallows the real -F option.
+    expect(bash(`printf \\"; ${commit}; printf "ok"`, dir)).toMatch(/says planted/);
+  });
+
+  it("still allows and denies as before once the input is well-formed", () => {
+    expect(bash("npm run check")).toBeUndefined();
+    expect(bash('git commit -m "Fix the planted bug"', TARGET)).toMatch(/says planted/);
   });
 });

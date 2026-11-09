@@ -152,21 +152,36 @@ export function denialReason(tool: string, reasons: string[]): string {
   return `Not allowed in an unattended factory run: ${reasons.join("; ")}.${hint} If the ticket needs this, stop and report it as stuck.`;
 }
 
+/**
+ * Fails closed. Claude Code treats a hook that crashes (exit 1, a stack trace) as a non-blocking error
+ * and runs the tool anyway, so an exception here (unreadable input, a path that can't be resolved) would
+ * be a bypass. Inside a run, any error becomes a blocking error instead: exit 2 with a one-line reason
+ * on stderr, which Claude Code shows to the agent and acts on by refusing the tool call.
+ */
 function main() {
   if (!process.env.FAULTFORGE_FACTORY_RUN) return;
-  const input = JSON.parse(readFileSync(0, "utf8"));
-  const tool: string = input.tool_name ?? "";
-  const args = input.tool_input ?? {};
-  const cwd: string = input.cwd ?? process.cwd();
+  let tool = "";
   let reasons: string[] = [];
-  if (tool === "Bash" || tool === "PowerShell")
-    reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
-  else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-    const reason = editViolation(
-      resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
-      process.env.FAULTFORGE_RUN_ROOT,
+  try {
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    tool = String(input.tool_name ?? "");
+    const args = input.tool_input ?? {};
+    const cwd: string = input.cwd ?? process.cwd();
+    if (tool === "Bash" || tool === "PowerShell")
+      reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
+    else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+      const reason = editViolation(
+        resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
+        process.env.FAULTFORGE_RUN_ROOT,
+      );
+      if (reason) reasons = [reason];
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    console.error(
+      `factory-policy hook failed: ${message}. Not allowed in an unattended factory run: a hook that can't check lets nothing through. If the ticket needs this, stop and report it as stuck.`,
     );
-    if (reason) reasons = [reason];
+    process.exit(2);
   }
   if (!reasons.length) return;
   console.log(

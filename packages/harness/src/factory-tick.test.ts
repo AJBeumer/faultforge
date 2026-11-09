@@ -9,7 +9,11 @@ import {
   buildSnapshot,
   checkProblems,
   commitToVerify,
+  type HookAnswer,
+  type HookRunner,
   hookProblems,
+  hookSelfTest,
+  hookTimeoutSeconds,
   type IssueEvent,
   LABELS,
   lastLabelled,
@@ -19,6 +23,7 @@ import {
   prNumber,
   provenanceProblems,
   prViewProblems,
+  realHookRunner,
   redact,
   runIdFor,
   runsHook,
@@ -562,6 +567,127 @@ describe("hookProblems", () => {
   it("treats an empty or * matcher as every tool", () => {
     expect(hookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
     expect(hookProblems(settings([{ hooks: both }]))).toEqual([]);
+  });
+});
+
+describe("hook self-test (#104)", () => {
+  const LAB = join(import.meta.dirname, "../../..");
+  /** A decision as a hook prints it; `null` leaves out the hookEventName Claude Code requires. */
+  const decision = (permissionDecision: string, hookEventName: string | null = "PreToolUse") =>
+    JSON.stringify({
+      hookSpecificOutput: {
+        ...(hookEventName && { hookEventName }),
+        permissionDecision,
+        permissionDecisionReason: "no",
+      },
+    });
+  const deny = decision("deny");
+  const allow = "";
+  /** A fake hook: answers from a table keyed by hook and whether the stdin was JSON and what it asked. */
+  const fake =
+    (answer: (hook: string, stdin: string) => HookAnswer): HookRunner =>
+    (hook, stdin) =>
+      answer(hook, stdin);
+  const correct = (hook: string, stdin: string): HookAnswer => {
+    let json: { tool_input?: { command?: string } } | undefined;
+    try {
+      json = JSON.parse(stdin);
+    } catch {
+      return { stdout: deny, status: 0, ms: 5 };
+    }
+    const command = json?.tool_input?.command ?? "";
+    const bad = hook === "guard-target.ts" ? /planted/.test(command) : /gh pr merge/.test(command);
+    return { stdout: bad ? deny : allow, status: 0, ms: 5 };
+  };
+
+  it("passes hooks that deny what they must, allow the harmless command, and deny bad input quickly", () => {
+    expect(hookSelfTest(LAB, join(LAB, "../faultforge-target"), 15, fake(correct))).toEqual([]);
+  });
+
+  it("fails a hook that lets the forbidden command through", () => {
+    const lax = fake((hook, stdin) =>
+      hook === "guard-target.ts" ? { stdout: allow, status: 0, ms: 5 } : correct(hook, stdin),
+    );
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, lax);
+    expect(problems).toEqual([
+      expect.stringMatching(/guard-target\.ts let through a telltale commit/),
+      expect.stringMatching(/guard-target\.ts let through input that is not JSON/),
+    ]);
+  });
+
+  it("fails a hook that crashes on bad input instead of denying", () => {
+    const crashing = fake((hook, stdin) =>
+      stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 1, ms: 5 },
+    );
+    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, crashing)).toEqual([
+      expect.stringMatching(/guard-target\.ts let through input that is not JSON \(decision invalid, exit 1/),
+      expect.stringMatching(/factory-policy\.ts let through input that is not JSON \(decision invalid, exit 1/),
+    ]);
+  });
+
+  it("counts a blocking exit (2, no output) on bad input as a deny, as Claude Code does", () => {
+    const blocking = fake((hook, stdin) =>
+      stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 2, ms: 5 },
+    );
+    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, blocking)).toEqual([]);
+  });
+
+  it("fails a hook whose deny is not a decision Claude Code accepts (no hookEventName) (Qodo on PR 115)", () => {
+    const malformed = fake((hook, stdin) => {
+      const answer = correct(hook, stdin);
+      return answer.stdout ? { ...answer, stdout: decision("deny", null) } : answer;
+    });
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, malformed);
+    expect(problems).toHaveLength(4);
+    expect(problems[0]).toMatch(/guard-target\.ts let through a telltale commit .*invalid/);
+  });
+
+  it("fails a hook that asks for approval on the harmless command: nobody is there to answer (Qodo on PR 115)", () => {
+    const asking = fake((hook, stdin) => {
+      const answer = correct(hook, stdin);
+      return stdin.includes("npm run check") ? { ...answer, stdout: decision("ask") } : answer;
+    });
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, asking);
+    expect(problems).toEqual([
+      expect.stringMatching(/guard-target\.ts refused a harmless command .*ask/),
+      expect.stringMatching(/factory-policy\.ts refused a harmless command inside a run .*ask/),
+    ]);
+  });
+
+  it("fails a hook that refuses the harmless command, or exits non-zero on it", () => {
+    const strict = fake((hook, stdin) =>
+      hook === "factory-policy.ts" ? { stdout: deny, status: 0, ms: 5 } : correct(hook, stdin),
+    );
+    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, strict)).toEqual([
+      expect.stringMatching(/factory-policy\.ts refused a harmless command inside a run/),
+    ]);
+    const flaky = fake((hook, stdin) => ({ ...correct(hook, stdin), status: stdin.includes("npm run check") ? 1 : 0 }));
+    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, flaky)).toHaveLength(2);
+  });
+
+  it("fails a hook that answers slower than half its time limit", () => {
+    const slow = fake((hook, stdin) => ({ ...correct(hook, stdin), ms: hook === "guard-target.ts" ? 9000 : 5 }));
+    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, slow);
+    expect(problems).toHaveLength(3);
+    expect(problems[0]).toMatch(/guard-target\.ts took 9000 ms .* within half its 15 s limit/);
+  });
+
+  it("reads the hooks' time limit from the settings, defaulting to Claude Code's 60 s", () => {
+    const text = readFileSync(join(LAB, ".claude/settings.json"), "utf8");
+    expect(hookTimeoutSeconds(text)).toBe(15);
+    expect(hookTimeoutSeconds("")).toBe(60);
+    expect(
+      hookTimeoutSeconds(
+        JSON.stringify({
+          hooks: { PreToolUse: [{ hooks: [{ command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' }] }] },
+        }),
+      ),
+    ).toBe(60);
+  });
+
+  it("passes this repo's real hooks, run with node as settings.json runs them", () => {
+    const limit = hookTimeoutSeconds(readFileSync(join(LAB, ".claude/settings.json"), "utf8"));
+    expect(hookSelfTest(LAB, join(LAB, "../faultforge-target"), limit, realHookRunner(LAB, limit))).toEqual([]);
   });
 });
 

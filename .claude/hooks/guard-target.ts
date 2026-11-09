@@ -32,15 +32,37 @@ const TARGET: Reviewed = {
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const REVIEWED = reviewedRepos();
 
-const input = JSON.parse(readFileSync(0, "utf8"));
-const tool: string = input.tool_name ?? "";
-const args = input.tool_input ?? {};
-const cwd: string = input.cwd ?? process.cwd();
+// Filled in by main(); the check functions read them. `args` is the tool's input as parsed from JSON.
+let tool = "";
+let args: ReturnType<typeof JSON.parse> = {};
+let cwd = process.cwd();
 
-if (tool === "Bash" || tool === "PowerShell") {
-  checkCommand(String(args.command ?? ""));
-} else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-  checkFileEdit();
+main();
+
+/**
+ * Fails closed. Claude Code treats a hook that crashes (exit 1, a stack trace) as a non-blocking error
+ * and runs the tool anyway, so an exception here (unreadable input, a body file that is a folder) would
+ * be a bypass. Any error becomes a blocking error instead: exit 2 with a one-line reason on stderr,
+ * which Claude Code shows to the agent and acts on by refusing the tool call.
+ */
+function main() {
+  try {
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    tool = String(input.tool_name ?? "");
+    args = input.tool_input ?? {};
+    cwd = String(input.cwd ?? process.cwd());
+    if (tool === "Bash" || tool === "PowerShell") {
+      checkCommand(String(args.command ?? ""));
+    } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+      checkFileEdit();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    console.error(
+      `guard-target hook failed: ${message}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
+    );
+    process.exit(2);
+  }
 }
 
 /**
@@ -233,16 +255,61 @@ function postedArguments(command: string): string[] {
   return [...command.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 
-/** Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. */
+/**
+ * For each position in the command, whether it looks to sit inside quoted text or a heredoc body. This
+ * is a pattern over shell text, so fake quoting can fool it (a `<<X` in a comment, an escaped quote).
+ * It therefore only ever softens a decision: a missing file behind a flag written here is words in a
+ * message rather than a deny. It never stops a file that exists from being read.
+ */
+function quotedPositions(command: string): boolean[] {
+  const quoted = new Array<boolean>(command.length).fill(false);
+  // A quoted span starts at an unescaped quote: `printf \"` opens nothing.
+  const spans = [/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, /(?<!\\)"(?:[^"\\]|\\.)*"|(?<!\\)'[^']*'/g];
+  for (const span of spans) {
+    for (const m of command.matchAll(span)) {
+      for (let i = m.index; i < m.index + m[0].length; i++) quoted[i] = true;
+    }
+  }
+  return quoted;
+}
+
+/**
+ * Contents of message or body files the command reads, e.g. `git commit -F msg.txt` or `--body-file`.
+ * Every file that exists behind such a flag is read, however the flag is quoted: a file the command
+ * would really post exists when the hook runs, and reading one more file is harmless. A `gh api` field
+ * (`-F name=value`) is text unless its value is `@file`, which gh reads from that file; a file really
+ * named `name=value` is read too, because `git commit -F` would read it. A flag whose file doesn't
+ * exist is words in a message when it sits in quoted text or a heredoc body, and otherwise a deny: the
+ * guard can't check what would be posted, so nothing is posted. A file that exists but can't be read
+ * throws, and the hook then fails closed.
+ */
 function referencedFiles(command: string): string[] {
   const files: string[] = [];
+  const quoted = quotedPositions(command);
+  const ghApi = /\bgh\s+api\b/.test(command);
+  // A bare file name ends at whitespace, a quote or a shell separator: `-F msg.txt; echo` names msg.txt.
   for (const match of command.matchAll(
-    /(?:\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g,
+    /(\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/g,
   )) {
-    const file = match[1] ?? match[2] ?? match[3];
+    let file = match[2] ?? match[3] ?? match[4];
     if (!file || file === "-") continue;
+    const field = ghApi ? /^[\w-]+=(.*)$/s.exec(file) : null;
+    if (field && !existsSync(resolve(cwd, file))) {
+      if (!field[1]?.startsWith("@")) continue;
+      file = field[1].slice(1);
+      if (!file || file === "-") continue;
+    }
     const path = isAbsolute(file) ? file : resolve(cwd, file);
-    if (existsSync(path)) files.push(readFileSync(path, "utf8"));
+    if (existsSync(path)) {
+      files.push(readFileSync(path, "utf8"));
+      continue;
+    }
+    // The flag's own position: for ` -F` that is after the leading space.
+    const flagAt = match.index + match[0].length - match[0].trimStart().length;
+    if (quoted[flagAt]) continue;
+    deny(
+      `This command would post the contents of ${file}, which doesn't exist, so the guard can't check it. Write the file first, then run the command.`,
+    );
   }
   return files;
 }

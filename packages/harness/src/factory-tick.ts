@@ -337,6 +337,134 @@ export function hookProblems(settingsText: string): string[] {
   return problems;
 }
 
+/**
+ * The shortest time limit (seconds) the settings give either hook. Claude Code's default is 60. A hook
+ * that exceeds its limit is a non-blocking error, so the self-test below also checks speed.
+ */
+export function hookTimeoutSeconds(settingsText: string): number {
+  let hooks: { hooks?: { command?: string; timeout?: number }[] }[] = [];
+  try {
+    hooks = JSON.parse(settingsText).hooks?.PreToolUse ?? [];
+  } catch {
+    return 60;
+  }
+  const limits = hooks
+    .flatMap((h) => h.hooks ?? [])
+    .filter((c) => ["guard-target.ts", "factory-policy.ts"].some((f) => runsHook(c.command ?? "", f)))
+    .map((c) => (typeof c.timeout === "number" && c.timeout > 0 ? c.timeout : 60));
+  return limits.length ? Math.min(...limits) : 60;
+}
+
+/** One answer from a hook run with a payload: what it printed, how it exited, and how long it took. */
+export interface HookAnswer {
+  stdout: string;
+  status: number | null;
+  ms: number;
+}
+
+/** Runs one hook file with stdin text and extra environment, as Claude Code would. */
+export type HookRunner = (hook: string, stdin: string, env: Record<string, string>) => HookAnswer;
+
+/**
+ * What Claude Code would make of a hook's answer. Exit 2 is a blocking error (the tool call is refused);
+ * exit 0 with no output allows; exit 0 with a well-formed PreToolUse decision is that decision. Anything
+ * else is invalid: Claude Code ignores it and lets the tool run, so a deny printed without
+ * `hookEventName` is not a deny (Qodo on PR 115).
+ */
+export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "silent" | "invalid" {
+  if (answer.status === 2) return "deny";
+  if (answer.status !== 0) return "invalid";
+  if (!answer.stdout.trim()) return "silent";
+  try {
+    const out = JSON.parse(answer.stdout).hookSpecificOutput;
+    if (out?.hookEventName !== "PreToolUse") return "invalid";
+    return ["deny", "allow", "ask"].includes(out.permissionDecision) ? out.permissionDecision : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
+/**
+ * Proves both hooks work before an agent runs: each must deny what it exists to deny, allow a harmless
+ * command, and deny when its input is not JSON (a crash would otherwise let the tool run). Each answer
+ * must come well inside the time limit, since a hook that times out is also a bypass. `reviewedFolder`
+ * is a reviewed repo's checkout, where the guard must block a telltale commit message. Returns the
+ * problems found, or an empty list.
+ */
+export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: number, run: HookRunner): string[] {
+  const payload = (tool: string, input: object, cwd: string) =>
+    JSON.stringify({ tool_name: tool, cwd, tool_input: input });
+  const runEnv = { FAULTFORGE_FACTORY_RUN: "self-test", FAULTFORGE_RUN_ROOT: lab };
+  const cases: { hook: string; name: string; stdin: string; env: Record<string, string>; expectDeny: boolean }[] = [
+    {
+      hook: "guard-target.ts",
+      name: "a telltale commit in a reviewed repo",
+      stdin: payload("Bash", { command: 'git commit -m "Fix the planted bug"' }, reviewedFolder),
+      env: {},
+      expectDeny: true,
+    },
+    {
+      hook: "guard-target.ts",
+      name: "a harmless command",
+      stdin: payload("Bash", { command: "npm run check" }, lab),
+      env: {},
+      expectDeny: false,
+    },
+    { hook: "guard-target.ts", name: "input that is not JSON", stdin: "not json", env: {}, expectDeny: true },
+    {
+      hook: "factory-policy.ts",
+      name: "a merge inside a run",
+      stdin: payload("Bash", { command: "gh pr merge 1 --squash" }, lab),
+      env: runEnv,
+      expectDeny: true,
+    },
+    {
+      hook: "factory-policy.ts",
+      name: "a harmless command inside a run",
+      stdin: payload("Bash", { command: "npm run check" }, lab),
+      env: runEnv,
+      expectDeny: false,
+    },
+    { hook: "factory-policy.ts", name: "input that is not JSON", stdin: "not json", env: runEnv, expectDeny: true },
+  ];
+  const problems: string[] = [];
+  const budgetMs = (limitSeconds * 1000) / 2;
+  for (const c of cases) {
+    const answer = run(c.hook, c.stdin, c.env);
+    const decision = hookDecision(answer);
+    const detail = `decision ${decision}, exit ${answer.status}, output ${JSON.stringify(answer.stdout.trim().slice(0, 80))}`;
+    if (c.expectDeny && decision !== "deny") problems.push(`${c.hook} let through ${c.name} (${detail})`);
+    // A harmless command must pass without a question: in an unattended run nobody answers an "ask".
+    if (!c.expectDeny && decision !== "silent" && decision !== "allow")
+      problems.push(`${c.hook} refused ${c.name} (${detail})`);
+    if (answer.ms > budgetMs)
+      problems.push(
+        `${c.hook} took ${answer.ms} ms on ${c.name}; it must answer within half its ${limitSeconds} s limit`,
+      );
+  }
+  return problems;
+}
+
+/** Runs a hook file from the workspace's `.claude/hooks` with node, the way settings.json does. */
+export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
+  return (hook, stdin, env) => {
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [join(lab, ".claude", "hooks", hook)], {
+      input: stdin,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAULTFORGE_FACTORY_RUN: "",
+        FAULTFORGE_RUN_ROOT: "",
+        FAULTFORGE_TICKET_NUMBER: "",
+        ...env,
+      },
+      timeout: limitSeconds * 1000,
+    });
+    return { stdout: result.stdout ?? "", status: result.status, ms: Date.now() - started };
+  };
+}
+
 /** Titles of the action-required findings still open in a `review:wait` record. */
 export function openActionRequired(record: {
   openFindings?: { severity?: string | null; title?: string | null }[];
@@ -821,11 +949,20 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
   const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
 
-  /** Refuses to start the agent unless both hooks run before every shell command and file edit. */
+  /**
+   * Refuses to start the agent unless both hooks run before every shell command and file edit, and
+   * unless each hook, run once with payloads it must deny and allow, answers as it should and in time.
+   */
   const requireHooks = (lab: string) => {
     const settings = join(lab, ".claude", "settings.json");
-    const missing = hookProblems(existsSync(settings) ? readFileSync(settings, "utf8") : "");
+    const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
+    const missing = hookProblems(text);
     if (missing.length) throw new Error(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`);
+    const reviewed = Object.values(factory.repos).find((r) => r.guard === "reviewed");
+    const reviewedFolder = reviewed ? worktreeFor(lab, reviewed.path) : lab;
+    const limit = hookTimeoutSeconds(text);
+    const failed = hookSelfTest(lab, reviewedFolder, limit, realHookRunner(lab, limit));
+    if (failed.length) throw new Error(`the workspace's hooks failed their self-test: ${failed.join("; ")}`);
   };
 
   const deps: TickDeps = {
