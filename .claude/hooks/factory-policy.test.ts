@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { commandViolations, editViolation } from "./factory-policy.ts";
+import { commandViolations, denialReason, editViolation } from "./factory-policy.ts";
 
 const HOOK = join(import.meta.dirname, "factory-policy.ts");
 // Native absolute paths, so the tests mean the same on Windows and on CI's Linux.
@@ -209,5 +209,38 @@ describe("factory policy hook", () => {
       { tool_name: "Edit", cwd: RUN, tool_input: { file_path: resolve("/Projects/FaultForge/README.md") } },
     );
     expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+});
+
+describe("factory policy: text that only quotes blocked words (#73)", () => {
+  // Qodo on PR 72: the broad issues rule also blocks a command that only quotes those words.
+  const BODY = "The runner blocks gh api reads of issues during a run.";
+
+  it("blocks the text passed inline, and allows the same text passed as a file", () => {
+    expect(commandViolations(`gh pr create --title 'Run notes' --body '${BODY}'`, "18")).not.toEqual([]);
+    expect(commandViolations("gh pr create --title 'Run notes' --body-file pr.md", "18")).toEqual([]);
+  });
+
+  it("does the same for a commit message", () => {
+    expect(commandViolations(`git commit -m '${BODY}'`, "18")).not.toEqual([]);
+    expect(commandViolations("git commit -F commit-message.txt", "18")).toEqual([]);
+  });
+
+  it("still blocks a real call written in a file-passing command", () => {
+    // The way around must not reopen the rule: a body file doesn't make a gh api read allowed.
+    expect(commandViolations("gh api repos/a/b/issues/18 > pr.md && gh pr create --body-file pr.md", "18")).not.toEqual(
+      [],
+    );
+  });
+
+  it("tells the agent the way that works in the denial of a command", () => {
+    const reason = denialReason("Bash", ["read the ticket from the runner's snapshot file, not live from GitHub"]);
+    expect(reason).toMatch(/--body-file/);
+    expect(reason).toMatch(/git commit -F/);
+    expect(reason).toMatch(/Write tool/);
+  });
+
+  it("doesn't add the hint to a denied file edit, where it doesn't apply", () => {
+    expect(denialReason("Edit", ["only files under the run's folder may change"])).not.toMatch(/--body-file/);
   });
 });

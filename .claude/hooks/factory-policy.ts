@@ -11,7 +11,8 @@
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
- * whole command, so a blocked word inside a quoted message also blocks: it fails closed.
+ * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
+ * goes through a file (`--body-file`, `git commit -F`), and a denied command says so.
  *
  * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
  */
@@ -137,6 +138,20 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
   return `only files under the run's folder may change, not ${path}`;
 }
 
+/**
+ * Patterns read the whole command, so a message that only quotes a blocked word is blocked too (#73).
+ * Telling a quote from a real call would need a shell parser, and simpler tests reopen bypasses, so
+ * the rules stay broad. This is the way around that keeps them closed: text goes through a file.
+ */
+export const TEXT_AS_FILE_HINT =
+  "If the block came only from words inside a message, write the text with the Write tool to a file in the run's folder or the temp folder and pass the file: gh pr create/edit --body-file, git commit -F";
+
+/** The reason shown to the agent for a denied tool call. */
+export function denialReason(tool: string, reasons: string[]): string {
+  const hint = tool === "Bash" || tool === "PowerShell" ? ` ${TEXT_AS_FILE_HINT}.` : "";
+  return `Not allowed in an unattended factory run: ${reasons.join("; ")}.${hint} If the ticket needs this, stop and report it as stuck.`;
+}
+
 function main() {
   if (!process.env.FAULTFORGE_FACTORY_RUN) return;
   const input = JSON.parse(readFileSync(0, "utf8"));
@@ -159,7 +174,7 @@ function main() {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `Not allowed in an unattended factory run: ${reasons.join("; ")}. If the ticket needs this, stop and report it as stuck.`,
+        permissionDecisionReason: denialReason(tool, reasons),
       },
     }),
   );
