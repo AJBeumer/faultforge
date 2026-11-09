@@ -39,7 +39,7 @@ const cwd: string = input.cwd ?? process.cwd();
 
 if (tool === "Bash" || tool === "PowerShell") {
   checkCommand(String(args.command ?? ""));
-} else if (["Write", "Edit", "MultiEdit"].includes(tool)) {
+} else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
   checkFileEdit();
 }
 
@@ -171,10 +171,15 @@ function checkCommand(command: string) {
 }
 
 function checkFileEdit() {
-  const path = resolve(cwd, String(args.file_path ?? ""));
+  const path = resolve(cwd, String(args.file_path ?? args.notebook_path ?? ""));
   const repo = REVIEWED.find((r) => inCheckout(path, r));
   if (!repo) return;
-  const text = [args.content, args.new_string, ...(args.edits ?? []).map((e: { new_string?: string }) => e.new_string)]
+  const text = [
+    args.content,
+    args.new_string,
+    args.new_source,
+    ...(args.edits ?? []).map((e: { new_string?: string }) => e.new_string),
+  ]
     .filter(Boolean)
     .join("\n");
   const found = telltales(stripReviewedNames(text));

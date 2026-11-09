@@ -6,6 +6,8 @@
     "inject": "tsx packages/harness/src/inject.ts",
     "ticket:ready": "tsx packages/harness/src/ticket-ready.ts",
     "review:wait": "tsx packages/harness/src/review-wait.ts",
+    "factory:tick": "tsx packages/harness/src/factory-tick.ts",
+    "factory:timeline": "tsx packages/harness/src/factory-timeline.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm test",

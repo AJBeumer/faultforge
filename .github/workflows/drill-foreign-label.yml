@@ -1,0 +1,24 @@
+# Fire drill for the factory trigger: adds ready-for-agent to a ticket as github-actions[bot], not as
+# the owner. The next factory tick must refuse it, remove the label and start nothing.
+name: Drill - label added by a bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number in this repo to label
+        required: true
+        type: number
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add ready-for-agent as github-actions[bot]
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+        run: gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label ready-for-agent
