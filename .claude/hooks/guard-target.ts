@@ -256,20 +256,40 @@ function postedArguments(command: string): string[] {
 }
 
 /**
- * Contents of message or body files the command reads, e.g. `git commit -F msg.txt`. A `gh api` field
- * (`-F name=value`) is text, not a file, unless its value is `@file`, which gh reads from that file. A
- * file that doesn't exist is a deny: the guard can't check what would be posted, so nothing is posted.
- * One that exists but can't be read throws, and the hook then fails closed.
+ * For each position in the command, whether it sits inside quoted text or a heredoc body. A flag
+ * written there is words in a message, not an option the shell would run.
+ */
+function quotedPositions(command: string): boolean[] {
+  const quoted = new Array<boolean>(command.length).fill(false);
+  const spans = [/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, /"(?:[^"\\]|\\.)*"|'[^']*'/g];
+  for (const span of spans) {
+    for (const m of command.matchAll(span)) {
+      for (let i = m.index; i < m.index + m[0].length; i++) quoted[i] = true;
+    }
+  }
+  return quoted;
+}
+
+/**
+ * Contents of message or body files the command reads, e.g. `git commit -F msg.txt` or `--body-file`.
+ * A flag inside quoted text or a heredoc body is words, not an option, so it names no file. A `gh api`
+ * field (`-F name=value`) is text unless its value is `@file`, which gh reads from that file; but if a
+ * file really named `name=value` exists, it is read too, because `git commit -F` would read it. A real
+ * flag whose file doesn't exist is a deny: the guard can't check what would be posted, so nothing is
+ * posted. A file that exists but can't be read throws, and the hook then fails closed.
  */
 function referencedFiles(command: string): string[] {
   const files: string[] = [];
-  for (const match of command.matchAll(
-    /(?:\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g,
-  )) {
-    let file = match[1] ?? match[2] ?? match[3];
+  const quoted = quotedPositions(command);
+  const ghApi = /\bgh\s+api\b/.test(command);
+  for (const match of command.matchAll(/(\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g)) {
+    let file = match[2] ?? match[3] ?? match[4];
     if (!file || file === "-") continue;
-    const field = /^[\w-]+=(.*)$/s.exec(file);
-    if (field) {
+    // The flag's own position: for ` -F` that is after the leading space.
+    const flagAt = match.index + match[0].length - match[0].trimStart().length;
+    if (quoted[flagAt]) continue;
+    const field = ghApi ? /^[\w-]+=(.*)$/s.exec(file) : null;
+    if (field && !existsSync(resolve(cwd, file))) {
       if (!field[1]?.startsWith("@")) continue;
       file = field[1].slice(1);
       if (!file || file === "-") continue;

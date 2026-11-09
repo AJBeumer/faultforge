@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -408,6 +408,25 @@ describe("guard-target hook fails closed (#104)", () => {
     expect(bash(`${route} -F body=@${join(tmpdir(), "no-such-body-file.md")}`)).toMatch(/doesn't exist/);
     expect(bash(`${route} -F body=Thanks`)).toBeUndefined();
     expect(bash(`${route} -F body="The planted bug"`)).toMatch(/says planted/);
+  });
+
+  it("reads a file whose name looks like a field, such as message=hidden.txt (Qodo on PR 115)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-"));
+    writeFileSync(join(dir, "message=hidden.txt"), "The planted bug is here\n");
+    expect(bash("git -C /d/Projects/faultforge-target commit -F message=hidden.txt", dir)).toMatch(/says planted/);
+    expect(bash("gh api repos/AJBeumer/faultforge-target/issues/1/comments -F message=hidden.txt", dir)).toMatch(
+      /says planted/,
+    );
+  });
+
+  it("lets a message mention a file flag as words: only a real flag names a file (Qodo on PR 115)", () => {
+    expect(bash('git commit -m "Document --body-file usage"')).toBeUndefined();
+    expect(bash('git commit -m "Document the --body-file usage"', TARGET)).toBeUndefined();
+    expect(
+      bash(
+        "gh pr create --repo AJBeumer/faultforge --title T --body-file - <<'EOF'\nPass text with --body-file notes\nEOF",
+      ),
+    ).toBeUndefined();
   });
 
   it("still allows and denies as before once the input is well-formed", () => {
