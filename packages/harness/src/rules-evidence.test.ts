@@ -93,6 +93,31 @@ describe("buildTable", () => {
     expect(onlyIncomplete.rows.every((r) => r.openAtLastReview)).toBe(true);
   });
 
+  it("keeps a finding open when it first appears after the last complete review", () => {
+    const completeFirst = review({ findings: [], openFindings: [] });
+    const timedOutLater = review({
+      headSha: "bbb2222",
+      state: "timeout",
+      recordedAt: "2026-11-09T12:00:00Z",
+      findings: [finding("f-late")],
+      openFindings: [],
+    });
+    const table = buildTable(
+      [
+        { key: "faultforge", review: completeFirst },
+        { key: "faultforge", review: timedOutLater },
+      ],
+      nothingExcluded,
+    );
+    expect(table.rows.map((r) => [r.id, r.openAtLastReview])).toEqual([["f-late", true]]);
+  });
+
+  it("does not list a PR as citable on a skipped or timed-out review alone", () => {
+    const skipped = review({ pr: 90, state: "skipped by Qodo", findings: [], openFindings: [] });
+    const table = buildTable([{ key: "faultforge", review: skipped }], nothingExcluded);
+    expect(table.prs).toEqual([]);
+  });
+
   it("leaves case PRs out, by case record and by answer-key commit, and reports only counts", () => {
     const byRecord = review({ repo: "AJBeumer/faultforge-target", pr: 1, findings: [finding("f-exam")] });
     const byCommitEarly = review({ repo: "AJBeumer/faultforge-target", pr: 2, findings: [finding("f-exam2a")] });
@@ -213,13 +238,18 @@ describe("citationProblems", () => {
     expect(problems).toEqual(["PR target#9 is not in the table"]);
   });
 
-  it("refuses a bare PR number as uncheckable", () => {
+  it("accepts a bare PR number only when exactly one covered PR has it", () => {
     const { problems, cited } = citationProblems("fixed in PR 75 and PR #9", table);
-    expect(problems).toEqual([
-      '"PR 75" names no repository; write it as <repoKey>#<number>',
-      '"PR #9" names no repository; write it as <repoKey>#<number>',
-    ]);
+    expect(problems).toEqual(['"PR #9" is not in the table']);
     expect(cited).toBe(2);
+
+    const twoRepos = {
+      ...table,
+      prs: [...table.prs, { repo: "target", github: "AJBeumer/faultforge-target", pr: 75 }],
+    };
+    expect(citationProblems("see PR 75", twoRepos).problems).toEqual([
+      '"PR 75" is ambiguous (faultforge#75, target#75); name the repository',
+    ]);
   });
 
   it("counts nothing when there are no citations", () => {

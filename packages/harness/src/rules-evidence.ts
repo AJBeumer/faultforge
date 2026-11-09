@@ -160,6 +160,7 @@ export function buildTable(
     const complete = group.filter((g) => (g.review.state ?? "complete") === "complete");
     const last = complete[complete.length - 1];
     const openIds = last ? new Set((last.review.openFindings ?? []).map((f) => f.id)) : null;
+    const lastCompleteAt = last?.review.recordedAt;
     const seen = new Set<string>();
     for (const { key, review } of group) {
       for (const finding of [...(review.findings ?? []), ...(review.openFindings ?? [])]) {
@@ -179,13 +180,17 @@ export function buildTable(
           description: finding.description ?? null,
           reviewDepth: review.reviewEffort ?? null,
           recordedAt: review.recordedAt,
-          openAtLastReview: openIds ? openIds.has(finding.id) : true,
+          // A finding first seen after the last complete review can't be judged by it: stays open.
+          openAtLastReview:
+            !openIds || (lastCompleteAt && review.recordedAt > lastCompleteAt) ? true : openIds.has(finding.id),
         });
       }
     }
   }
   rows.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id));
+  // Citable only with a complete review: a skipped or timed-out save proves nothing was reviewed.
   const prs = [...byPr.values()]
+    .filter((group) => group.some((g) => (g.review.state ?? "complete") === "complete"))
     .map((group) => {
       const { key, review } = group[0] as { key: string; review: SavedReview };
       return { repo: key, github: review.repo, pr: review.pr };
@@ -202,8 +207,8 @@ const PR_BARE = /\bPR\s+#?(\d+)\b/g;
 /**
  * Citations in `text` that are not in the table. A citation is a finding id (UUID), a PR written
  * as `<repoKey>#<N>` for any configured repo key (other `word#N` references, such as tickets, are
- * ignored), or a PR URL. A bare `PR <N>` is always a problem: it names no repository, so it can't
- * be checked, and an uncheckable citation must not pass.
+ * ignored), a PR URL, or a bare `PR <N>`. A bare number passes only when exactly one covered PR
+ * has that number; with none it is not in the table, and with several it is ambiguous.
  */
 export function citationProblems(
   text: string,
@@ -228,9 +233,14 @@ export function citationProblems(
     cited++;
     if (!prs.has(`${(github as string).toLowerCase()}#${pr}`)) problems.push(`PR ${github}#${pr} is not in the table`);
   }
-  for (const [cite] of text.matchAll(PR_BARE)) {
+  for (const [cite, number] of text.matchAll(PR_BARE)) {
     cited++;
-    problems.push(`"${cite}" names no repository; write it as <repoKey>#<number>`);
+    const candidates = table.prs.filter((p) => p.pr === Number(number));
+    if (candidates.length === 0) problems.push(`"${cite}" is not in the table`);
+    else if (candidates.length > 1)
+      problems.push(
+        `"${cite}" is ambiguous (${candidates.map((p) => `${p.repo}#${p.pr}`).join(", ")}); name the repository`,
+      );
   }
   return { problems: [...new Set(problems)], cited };
 }
