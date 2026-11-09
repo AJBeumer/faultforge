@@ -1,27 +1,55 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseLog, summarize } from "./factory-timeline.ts";
+import { summarize } from "./factory-timeline.ts";
 
-const root = join(import.meta.dirname, "../../..");
-const fixture = (name: string) =>
-  parseLog(readFileSync(join(root, "private/raw-artifacts/factory-runs", `${name}.jsonl`), "utf8"));
+// Event shapes mirror the real run logs under private/raw-artifacts/factory-runs/, which aren't
+// committed to this repo (.gitignore excludes private/) and so can't be read in tests.
+
+const finishedRun = [
+  { t: "2026-11-09T09:35:04.414Z", event: "picked", labelledAt: "2026-11-09T09:25:56Z" },
+  { t: "2026-11-09T09:35:10.868Z", event: "agent-started" },
+  { t: "2026-11-09T09:37:52.223Z", event: "agent-step", step: "review-wait" },
+  { t: "2026-11-09T09:40:00.566Z", event: "agent-finished", costUsd: 1.6207198000000003, turns: 60 },
+  { t: "2026-11-09T09:40:11.510Z", event: "finished", label: "agent-done" },
+];
+
+const refusedRun = [
+  {
+    t: "2026-11-09T09:49:24.452Z",
+    event: "picked",
+    repo: "faultforge",
+    ticket: 71,
+    labelledAt: "2026-11-09T09:42:31Z",
+    labelledBy: "github-actions[bot]",
+  },
+  { t: "2026-11-09T09:49:26.619Z", event: "refused", reason: "label added by github-actions[bot], not the owner" },
+];
+
+const notReadyRun = [
+  {
+    t: "2026-11-09T08:29:07.977Z",
+    event: "picked",
+    repo: "faultforge",
+    ticket: 66,
+    labelledAt: "2026-11-09T08:28:55Z",
+  },
+  { t: "2026-11-09T08:29:13.380Z", event: "not-ready", problems: ["missing section"] },
+];
 
 describe("summarize", () => {
   it("sums up a finished run", () => {
-    expect(summarize(fixture("20261109-093504-target-18"))).toBe(
+    expect(summarize(finishedRun)).toBe(
       "Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost $1.62, 60 turns, 1 review round, outcome agent-done",
     );
   });
 
   it("sums up a refused run as waiting and the outcome, with no agent numbers", () => {
-    const summary = summarize(fixture("20261109-094924-faultforge-71"));
+    const summary = summarize(refusedRun);
     expect(summary).toBe("Summary: waiting 6.9 min, outcome refused");
     expect(summary).not.toMatch(/\b0 min\b|\$0\.00|\b0 turns\b/);
   });
 
   it("sums up a not-ready run the same way", () => {
-    expect(summarize(fixture("20261109-082907-faultforge-66"))).toBe("Summary: waiting 0.2 min, outcome not-ready");
+    expect(summarize(notReadyRun)).toBe("Summary: waiting 0.2 min, outcome not-ready");
   });
 
   it("shows a missing value as n/a, never 0 or NaN", () => {
