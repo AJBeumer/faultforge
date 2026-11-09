@@ -3,11 +3,16 @@
  *
  *   npm run review:wait -- faultforge 55
  *   npm run review:wait -- target 9 --timeout 30
+ *   npm run review:wait -- target 9 --commit $(git rev-parse HEAD)
  *
  * A Qodo comment is not a finished review: on Day 3 it twice said "no open findings" and was edited
  * minutes later to add findings. Only Qodo's API saying the run for the head commit is `completed`
- * counts. Read-only throughout. Exits 0 when the review is complete, 1 when it timed out, 3 when
- * Qodo finished the run but skipped reviewing it.
+ * counts. Read-only throughout. Exits 0 when the review is complete, 1 when it timed out (or, with
+ * `--commit`, the head never became that commit or moved past it), 3 when Qodo finished the run but
+ * skipped reviewing it.
+ *
+ * After a push, pass `--commit`: right after a push GitHub can still show the previous head, and
+ * without it the previous commit's finished review would be reported as the answer (PR 65, 9 Nov).
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -155,6 +160,86 @@ export async function waitForReview(
   }
 }
 
+export type HeadWaitResult = {
+  state: "reached" | "moved" | "timeout";
+  /** The PR head at the last read: the full id of the commit waited for, or the one that stopped the wait. */
+  head: string;
+  polls: number;
+  /** Every distinct head seen, in order. */
+  seen: string[];
+};
+
+/** True when `head` (a full id) is the commit `target` names, in full or by a prefix of at least 7. */
+export function sameCommit(head: string, target: string): boolean {
+  return target.length >= 7 && head.toLowerCase().startsWith(target.toLowerCase());
+}
+
+/**
+ * Polls the PR head until it is `target`. Right after a push GitHub can show the previous head for a
+ * moment: on PR 65 a wait started within a second of a push reported the old commit's finished review
+ * as the answer. That first head is waited out. Any other head means someone pushed again: "moved".
+ * A failed read is reported and retried; if no read succeeded by the deadline, the last error is thrown.
+ */
+export async function waitForHead(
+  target: string,
+  deps: {
+    readHead: () => Promise<string>;
+    onError?: (error: unknown) => void;
+    now: () => number;
+    sleep: (ms: number) => Promise<void>;
+  },
+  { timeoutMs = 20 * 60_000, intervalMs = 5_000 } = {},
+): Promise<HeadWaitResult> {
+  const deadline = deps.now() + timeoutMs;
+  const seen: string[] = [];
+  let lastError: unknown;
+  let polls = 0;
+  for (;;) {
+    polls++;
+    try {
+      const head = await deps.readHead();
+      if (seen.at(-1) !== head) seen.push(head);
+      if (sameCommit(head, target)) return { state: "reached", head, polls, seen };
+      // The first head seen may be the stale one; a second, different one is a new push.
+      if (seen.length > 1) return { state: "moved", head, polls, seen };
+    } catch (error) {
+      lastError = error;
+      deps.onError?.(error);
+    }
+    if (deps.now() + intervalMs > deadline) {
+      if (!seen.length) throw lastError;
+      return { state: "timeout", head: seen.at(-1) as string, polls, seen };
+    }
+    await deps.sleep(intervalMs);
+  }
+}
+
+export interface Args {
+  repoKey: string;
+  pr: number;
+  timeoutMinutes: number;
+  /** The commit the PR's head must be before its review counts; null to take whatever head GitHub shows. */
+  commit: string | null;
+}
+
+/** The command line, or null when it's wrong. */
+export function parseArgs(argv: string[]): Args | null {
+  const [repoKey, prArg, ...rest] = argv;
+  const option = (name: string): string | null | undefined => {
+    const i = rest.indexOf(name);
+    if (i < 0) return null;
+    return rest[i + 1];
+  };
+  const timeout = option("--timeout");
+  const commit = option("--commit");
+  const pr = Number(prArg);
+  const timeoutMinutes = timeout === null ? 20 : Number(timeout);
+  if (!repoKey || !Number.isInteger(pr) || pr <= 0) return null;
+  if (timeout === undefined || !Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) return null;
+  if (commit === undefined || (commit !== null && !/^[0-9a-f]{7,40}$/i.test(commit))) return null;
+  return { repoKey, pr, timeoutMinutes, commit };
+}
+
 /** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
 function gh(...args: string[]): string {
   return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
@@ -167,28 +252,62 @@ function ghAll<T>(path: string, pick: (page: unknown) => T[] = (page) => page as
 
 async function main() {
   const factory = loadFactory();
-  const [repoKey, prArg, ...rest] = process.argv.slice(2);
-  const timeoutIndex = rest.indexOf("--timeout");
-  const timeoutMinutes = timeoutIndex >= 0 ? Number(rest[timeoutIndex + 1]) : 20;
-  if (!repoKey || !prArg || !Number.isFinite(timeoutMinutes)) {
-    console.error(`usage: npm run review:wait -- <${Object.keys(factory.repos).join("|")}> <pr> [--timeout minutes]`);
+  const args = parseArgs(process.argv.slice(2));
+  if (!args) {
+    console.error(
+      `usage: npm run review:wait -- <${Object.keys(factory.repos).join("|")}> <pr> [--commit <sha>] [--timeout minutes]`,
+    );
     process.exit(2);
   }
+  const { repoKey, pr, timeoutMinutes, commit } = args;
   const { github } = repoConfig(factory, repoKey);
-  const pr = Number(prArg);
-  const headSha = gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim();
-  // GitHub has no push time; the first check suite for the commit is created when the push arrives.
-  const suites = ghAll<{ created_at: string }>(
-    `repos/${github}/commits/${headSha}/check-suites`,
-    (p) => (p as { check_suites: { created_at: string }[] }).check_suites,
-  );
-  const pushSeenAt = suites.map((s) => s.created_at).sort()[0] ?? null;
+  const deadline = Date.now() + timeoutMinutes * 60_000;
   const dir = resolve(
     fileURLToPath(new URL("../../..", import.meta.url)),
     factory.evidence,
     "reviews",
     `${repoKey}-pr${pr}`,
   );
+  const readHead = async () => gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim();
+  let headSha: string;
+  if (commit === null) headSha = await readHead();
+  else {
+    console.log(`Waiting for ${repoKey} PR ${pr} to show ${commit.slice(0, 7)} as its head…`);
+    const head = await waitForHead(
+      commit,
+      {
+        readHead,
+        onError: (error) =>
+          console.error(
+            `Reading the PR head failed, trying again: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        now: Date.now,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      },
+      { timeoutMs: timeoutMinutes * 60_000 },
+    );
+    // Saved whatever the outcome, so a stopped wait shows which heads it saw and when it gave up.
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${commit.slice(0, 7)}.head-wait.json`),
+      `${JSON.stringify({ repo: github, pr, commit, ...head, recordedAt: new Date().toISOString() }, null, 2)}\n`,
+    );
+    if (head.state !== "reached") {
+      console.log(
+        head.state === "moved"
+          ? `The PR head moved to ${head.head.slice(0, 7)} while waiting for ${commit.slice(0, 7)}: not reviewing a commit nobody asked for.`
+          : `The PR head is still ${head.head.slice(0, 7)} after ${timeoutMinutes} min; it never became ${commit.slice(0, 7)}.`,
+      );
+      process.exit(1);
+    }
+    headSha = head.head;
+  }
+  // GitHub has no push time; the first check suite for the commit is created when the push arrives.
+  const suites = ghAll<{ created_at: string }>(
+    `repos/${github}/commits/${headSha}/check-suites`,
+    (p) => (p as { check_suites: { created_at: string }[] }).check_suites,
+  );
+  const pushSeenAt = suites.map((s) => s.created_at).sort()[0] ?? null;
   mkdirSync(dir, { recursive: true });
   const short = headSha.slice(0, 7);
   console.log(`Waiting for Qodo's review of ${repoKey} PR ${pr} at ${short} (up to ${timeoutMinutes} min)…`);
@@ -237,7 +356,8 @@ async function main() {
       now: Date.now,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     },
-    { timeoutMs: timeoutMinutes * 60_000 },
+    // One time budget for the whole run: waiting for the head used part of it.
+    { timeoutMs: Math.max(deadline - Date.now(), 0) },
   );
 
   if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));

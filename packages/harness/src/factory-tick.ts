@@ -1099,7 +1099,20 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (view.state !== "OPEN") problems.push(`the pull request is ${String(view.state).toLowerCase()}, not open`);
       problems.push(...checkProblems(view.statusCheckRollup ?? []));
       // review:wait runs in the run's worktree, so its evidence lands in the run's private branch.
-      const review = npm(ws.lab, "run", "-s", "review:wait", "--", repoKey, String(pr), "--timeout", "5");
+      // --commit: the review must be of the head checked above, not one GitHub shows a moment later or earlier.
+      const review = npm(
+        ws.lab,
+        "run",
+        "-s",
+        "review:wait",
+        "--",
+        repoKey,
+        String(pr),
+        "--commit",
+        String(view.headRefOid),
+        "--timeout",
+        "5",
+      );
       const meaning: Record<number, string> = {
         1: "Qodo's review of the head commit isn't complete",
         2: "review:wait couldn't run",

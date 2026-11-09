@@ -2,7 +2,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseRpcBody, parseToolText, QodoApi } from "./qodo-api.ts";
-import { findingsFor, openFindings, type QodoReview, reviewEffort, reviewState, waitForReview } from "./review-wait.ts";
+import {
+  findingsFor,
+  openFindings,
+  parseArgs,
+  type QodoReview,
+  reviewEffort,
+  reviewState,
+  waitForHead,
+  waitForReview,
+} from "./review-wait.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
@@ -282,5 +291,104 @@ describe("review findings on PR 61, third round", () => {
       { timeoutMs: 60_000, intervalMs: 20_000 },
     );
     await expect(run).rejects.toThrow("gh failed");
+  });
+});
+
+describe("waitForHead (#67: review:wait on PR 65 read the old head right after a push)", () => {
+  // PR 65 on 9 Nov: GitHub still showed 506f56d a second after 56fb13c was pushed.
+  const OLD = `506f56d${"0".repeat(33)}`;
+  const PUSHED = `56fb13c${"1".repeat(33)}`;
+  const OTHER = `9abcdef${"2".repeat(33)}`;
+
+  /** A fake PR head that answers from a script, one entry per poll; an Error entry is a failed read. */
+  function heads(...script: (string | Error)[]) {
+    let i = 0;
+    let t = 0;
+    const seen: string[] = [];
+    return {
+      seen,
+      deps: {
+        readHead: async () => {
+          const next = script[Math.min(i++, script.length - 1)] as string | Error;
+          if (next instanceof Error) throw next;
+          seen.push(next);
+          return next;
+        },
+        now: () => t,
+        sleep: async (ms: number) => {
+          t += ms;
+        },
+      },
+    };
+  }
+
+  it("waits out the old head for the first polls, then returns the pushed commit", async () => {
+    const { deps } = heads(OLD, OLD, PUSHED);
+    const result = await waitForHead(PUSHED, deps, { timeoutMs: 60_000, intervalMs: 5_000 });
+    expect(result).toEqual({ state: "reached", head: PUSHED, polls: 3, seen: [OLD, PUSHED] });
+  });
+
+  it("accepts the short form of the commit and returns the full one", async () => {
+    const { deps } = heads(PUSHED);
+    const result = await waitForHead("56fb13c", deps, { timeoutMs: 60_000, intervalMs: 5_000 });
+    expect(result).toMatchObject({ state: "reached", head: PUSHED });
+  });
+
+  it("stops when the head moves to a third commit, naming it", async () => {
+    const { deps } = heads(OLD, OTHER, PUSHED);
+    const result = await waitForHead(PUSHED, deps, { timeoutMs: 60_000, intervalMs: 5_000 });
+    expect(result).toMatchObject({ state: "moved", head: OTHER, polls: 2 });
+  });
+
+  it("times out naming the head it saw when the commit never arrives", async () => {
+    const { deps } = heads(OLD);
+    const result = await waitForHead(PUSHED, deps, { timeoutMs: 20_000, intervalMs: 5_000 });
+    // Reads at 0, 5, 10, 15 and 20 seconds: one last look at the deadline itself.
+    expect(result).toEqual({ state: "timeout", head: OLD, polls: 5, seen: [OLD] });
+  });
+
+  it("keeps polling through a failed read", async () => {
+    const { deps } = heads(new Error("gh: 502"), PUSHED);
+    const result = await waitForHead(PUSHED, { ...deps, onError: () => {} }, { timeoutMs: 60_000, intervalMs: 5_000 });
+    expect(result).toMatchObject({ state: "reached", head: PUSHED, polls: 2 });
+  });
+
+  it("gives up with the error, not a timeout, when every read failed", async () => {
+    const { deps } = heads(new Error("gh: 502"));
+    await expect(
+      waitForHead(PUSHED, { ...deps, onError: () => {} }, { timeoutMs: 10_000, intervalMs: 5_000 }),
+    ).rejects.toThrow("gh: 502");
+  });
+});
+
+describe("parseArgs", () => {
+  it("behaves as before without --commit", () => {
+    expect(parseArgs(["faultforge", "92"])).toEqual({
+      repoKey: "faultforge",
+      pr: 92,
+      timeoutMinutes: 20,
+      commit: null,
+    });
+  });
+
+  it("reads --commit and --timeout in any order", () => {
+    expect(parseArgs(["target", "9", "--commit", "56fb13c", "--timeout", "5"])).toEqual({
+      repoKey: "target",
+      pr: 9,
+      timeoutMinutes: 5,
+      commit: "56fb13c",
+    });
+  });
+
+  it("refuses a commit that isn't a hex id of at least 7 characters", () => {
+    expect(parseArgs(["target", "9", "--commit", "HEAD"])).toBeNull();
+    expect(parseArgs(["target", "9", "--commit", "56fb1"])).toBeNull();
+    expect(parseArgs(["target", "9", "--commit"])).toBeNull();
+  });
+
+  it("refuses a missing PR number or a bad timeout", () => {
+    expect(parseArgs(["target"])).toBeNull();
+    expect(parseArgs(["target", "x"])).toBeNull();
+    expect(parseArgs(["target", "9", "--timeout", "soon"])).toBeNull();
   });
 });
