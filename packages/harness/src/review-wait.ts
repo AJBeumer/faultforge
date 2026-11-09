@@ -160,9 +160,9 @@ function gh(...args: string[]): string {
   return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
 }
 
-/** Every item of a paginated list endpoint. */
+/** The items of a list endpoint. */
 function ghAll<T>(path: string, pick: (page: unknown) => T[] = (page) => page as T[]): T[] {
-  return (JSON.parse(gh("api", "--paginate", "--slurp", path)) as unknown[]).flatMap(pick);
+  return pick(JSON.parse(gh("api", path)));
 }
 
 async function main() {
