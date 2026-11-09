@@ -7,6 +7,7 @@ import {
   casePrs,
   citationProblems,
   type EvidenceTable,
+  groundTruthCommits,
   readSavedReviews,
   type SavedReview,
 } from "./rules-evidence.ts";
@@ -28,6 +29,7 @@ const review = (overrides: Partial<SavedReview>): SavedReview => ({
   repo: "AJBeumer/faultforge",
   pr: 75,
   headSha: "aaa1111",
+  state: "complete",
   reviewEffort: "lite",
   recordedAt: "2026-11-09T11:00:00Z",
   findings: [],
@@ -35,8 +37,10 @@ const review = (overrides: Partial<SavedReview>): SavedReview => ({
   ...overrides,
 });
 
+const nothingExcluded = { prs: new Set<string>(), commits: new Set<string>() };
+
 describe("buildTable", () => {
-  it("keeps one row per finding and marks open only what the last review still lists", () => {
+  it("keeps one row per finding and marks open only what the last complete review still lists", () => {
     const first = review({ findings: [finding("f-closed"), finding("f-open")], openFindings: [finding("f-closed")] });
     const last = review({
       headSha: "bbb2222",
@@ -50,44 +54,75 @@ describe("buildTable", () => {
         { key: "faultforge", review: last },
         { key: "faultforge", review: first },
       ],
-      new Set(),
+      nothingExcluded,
     );
 
     expect(table.rows.map((r) => r.id)).toEqual(["f-closed", "f-open", "f-new"]);
     expect(table.rows.map((r) => r.openAtLastReview)).toEqual([false, true, true]);
     const closed = table.rows[0];
-    expect(closed).toMatchObject({ commit: "aaa1111", reviewDepth: "lite", repo: "faultforge", pr: 75 });
+    expect(closed).toMatchObject({ firstSeenCommit: "aaa1111", reviewDepth: "lite", repo: "faultforge", pr: 75 });
     expect(table.prsCovered).toBe(1);
   });
 
-  it("leaves case PRs out and reports only their count", () => {
-    const exam = review({ repo: "AJBeumer/faultforge-target", pr: 1, findings: [finding("f-exam")] });
+  it("never calls a finding closed on the word of an incomplete review", () => {
+    const complete = review({ findings: [finding("f-raised")], openFindings: [finding("f-raised")] });
+    const timedOut = review({
+      headSha: "bbb2222",
+      state: "timeout",
+      recordedAt: "2026-11-09T12:00:00Z",
+      openFindings: [],
+    });
+    const table = buildTable(
+      [
+        { key: "faultforge", review: complete },
+        { key: "faultforge", review: timedOut },
+      ],
+      nothingExcluded,
+    );
+    expect(table.rows.map((r) => r.openAtLastReview)).toEqual([true]);
+
+    const onlyIncomplete = buildTable([{ key: "faultforge", review: timedOut }], nothingExcluded);
+    expect(onlyIncomplete.rows.every((r) => r.openAtLastReview)).toBe(true);
+  });
+
+  it("leaves case PRs out, by case record and by answer-key commit, and reports only counts", () => {
+    const byRecord = review({ repo: "AJBeumer/faultforge-target", pr: 1, findings: [finding("f-exam")] });
+    const byCommitEarly = review({ repo: "AJBeumer/faultforge-target", pr: 2, findings: [finding("f-exam2a")] });
+    const byCommitLate = review({
+      repo: "AJBeumer/faultforge-target",
+      pr: 2,
+      headSha: "inj9999",
+      recordedAt: "2026-11-09T12:00:00Z",
+      findings: [finding("f-exam2b")],
+    });
     const ordinary = review({ findings: [finding("f-ok")] });
     const table = buildTable(
       [
-        { key: "target", review: exam },
+        { key: "target", review: byRecord },
+        { key: "target", review: byCommitEarly },
+        { key: "target", review: byCommitLate },
         { key: "faultforge", review: ordinary },
       ],
-      new Set(["AJBeumer/faultforge-target#1"]),
+      { prs: new Set(["AJBeumer/faultforge-target#1"]), commits: new Set(["inj9999"]) },
     );
 
     expect(table.rows.map((r) => r.id)).toEqual(["f-ok"]);
-    expect(table.casePrsExcluded).toBe(1);
-    expect(JSON.stringify(table)).not.toContain("f-exam");
+    expect(table.casePrsExcluded).toBe(2);
+    expect(JSON.stringify(table)).not.toContain("exam");
   });
 
   it("builds an empty table from no reviews", () => {
-    expect(buildTable([], new Set()).rows).toEqual([]);
+    expect(buildTable([], nothingExcluded).rows).toEqual([]);
   });
 });
 
-describe("readSavedReviews and casePrs", () => {
+describe("readSavedReviews, casePrs and groundTruthCommits", () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reads review files per PR folder and case PRs from the records", () => {
+  it("reads review files per PR folder, case PRs from the records, commits from the answer key", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);
     mkdirSync(join(dir, "reviews", "faultforge-pr75"), { recursive: true });
@@ -99,12 +134,24 @@ describe("readSavedReviews and casePrs", () => {
       join(dir, "cases", "FF-0001.json"),
       JSON.stringify({ caseId: "FF-0001", pr: { repo: "AJBeumer/faultforge-target", number: 1 } }),
     );
+    writeFileSync(
+      join(dir, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-0001", injectionCommit: "inj9999" })}\n\n${JSON.stringify({ caseId: "FF-0002", injectionCommit: "inj8888", reviewedCommit: "rev7777" })}\n`,
+    );
 
     const reviews = readSavedReviews(join(dir, "reviews"));
     expect(reviews).toHaveLength(1);
     expect(reviews[0]).toMatchObject({ key: "faultforge", review: { pr: 75 } });
     expect(casePrs(join(dir, "cases"))).toEqual(new Set(["AJBeumer/faultforge-target#1"]));
-    expect(casePrs(join(dir, "missing"))).toEqual(new Set());
+    expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["inj9999", "inj8888", "rev7777"]));
+  });
+
+  it("fails closed: an unreadable folder or answer key is an error, never an empty result", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
+    dirs.push(dir);
+    expect(() => readSavedReviews(join(dir, "missing-reviews"))).toThrow(/cannot read the saved reviews/);
+    expect(() => casePrs(join(dir, "missing-cases"))).toThrow(/cannot read the case records/);
+    expect(() => groundTruthCommits(join(dir, "missing.jsonl"))).toThrow(/cannot read the answer key/);
   });
 });
 
@@ -118,7 +165,7 @@ describe("citationProblems", () => {
         repo: "faultforge",
         github: "AJBeumer/faultforge",
         pr: 75,
-        commit: "aaa1111",
+        firstSeenCommit: "aaa1111",
         reviewDepth: "lite",
         recordedAt: "2026-11-09T11:00:00Z",
         openAtLastReview: false,
@@ -143,6 +190,20 @@ describe("citationProblems", () => {
       "PR faultforge#9 is not in the table",
       "PR AJBeumer/faultforge#9 is not in the table",
     ]);
+  });
+
+  it("checks a configured repo key even when the table has no rows for it", () => {
+    const { problems } = citationProblems("see target#9", table, new Set(["faultforge", "target"]));
+    expect(problems).toEqual(["PR target#9 is not in the table"]);
+  });
+
+  it("refuses a bare PR number as uncheckable", () => {
+    const { problems, cited } = citationProblems("fixed in PR 75 and PR #9", table);
+    expect(problems).toEqual([
+      '"PR 75" names no repository; write it as <repoKey>#<number>',
+      '"PR #9" names no repository; write it as <repoKey>#<number>',
+    ]);
+    expect(cited).toBe(2);
   });
 
   it("counts nothing when there are no citations", () => {

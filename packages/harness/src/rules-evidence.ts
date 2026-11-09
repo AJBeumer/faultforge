@@ -6,9 +6,10 @@
  *   npm run rules:evidence -- --out <file>
  *   npm run rules:evidence -- --check <file>    # every citation in <file> must be in the table
  *
- * The table is built from the `*.review.json` files `review:wait` saves. PRs named in the private
- * case records are left out, and only their count is reported: the factory learns from its own
- * work, never from the exam.
+ * The table is built from the `*.review.json` files `review:wait` saves. Case PRs (the exam) are
+ * left out, and only their count is reported: the factory learns from its own work, never from the
+ * exam. Exclusion fails closed: if the case records or the answer key can't be read, the command
+ * stops instead of writing a table that might contain exam findings.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -21,19 +22,31 @@ export interface SavedReview {
   repo: string;
   pr: number;
   headSha: string;
+  state?: string;
   reviewEffort?: string | null;
   recordedAt: string;
   findings?: Finding[];
   openFindings?: Finding[];
 }
 
-/** One finding, with where it was seen and whether the PR's last saved review still listed it. */
+/** PRs and commits that belong to cases and must never enter the table. */
+export interface Excluded {
+  prs: Set<string>;
+  commits: Set<string>;
+}
+
+/**
+ * One finding, where it was first seen in the saved archive, and whether the PR's last saved
+ * complete review still listed it. `firstSeenCommit` is the head commit of the earliest saved
+ * review that lists the finding, which can be later than the commit Qodo raised it on when the
+ * earlier review was not saved.
+ */
 export interface EvidenceRow {
   id: string;
   repo: string;
   github: string;
   pr: number;
-  commit: string;
+  firstSeenCommit: string;
   file: string | null;
   lines: [number, number] | null;
   title: string | null;
@@ -52,14 +65,17 @@ export interface EvidenceTable {
   casePrsExcluded: number;
 }
 
-/** Case PRs as "owner/name#number", read from the case records. Missing dir means no cases. */
+/**
+ * Case PRs as "owner/name#number", read from the case records. An unreadable directory is an
+ * error, never an empty set: a missing exclusion list must stop the build, not weaken it.
+ */
 export function casePrs(casesDir: string): Set<string> {
   const keys = new Set<string>();
   let files: string[];
   try {
     files = readdirSync(casesDir).filter((f) => f.endsWith(".json"));
-  } catch {
-    return keys;
+  } catch (error) {
+    throw new Error(`cannot read the case records at ${casesDir}: ${(error as Error).message}`);
   }
   for (const file of files) {
     const record = JSON.parse(readFileSync(join(casesDir, file), "utf8"));
@@ -68,14 +84,39 @@ export function casePrs(casesDir: string): Set<string> {
   return keys;
 }
 
-/** Every saved review under `<reviewsDir>/<repoKey>-pr<N>/*.review.json`, with its repo key. */
+/**
+ * Injected commits from the answer key. A case's reviews can be saved before its case record is
+ * written, so a PR is also excluded when a reviewed commit appears in the answer key. Unreadable
+ * is an error, for the same reason as `casePrs`.
+ */
+export function groundTruthCommits(groundTruthFile: string): Set<string> {
+  let text: string;
+  try {
+    text = readFileSync(groundTruthFile, "utf8");
+  } catch (error) {
+    throw new Error(`cannot read the answer key at ${groundTruthFile}: ${(error as Error).message}`);
+  }
+  const commits = new Set<string>();
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const entry = JSON.parse(line);
+    for (const sha of [entry.injectionCommit, entry.reviewedCommit]) if (typeof sha === "string") commits.add(sha);
+  }
+  return commits;
+}
+
+/**
+ * Every saved review under `<reviewsDir>/<repoKey>-pr<N>/*.review.json`, with its repo key.
+ * An unreadable reviews directory is an error: an empty result would silently overwrite an
+ * existing table with zero rows.
+ */
 export function readSavedReviews(reviewsDir: string): { key: string; review: SavedReview }[] {
   const out: { key: string; review: SavedReview }[] = [];
   let dirs: string[];
   try {
     dirs = readdirSync(reviewsDir);
-  } catch {
-    return out;
+  } catch (error) {
+    throw new Error(`cannot read the saved reviews at ${reviewsDir}: ${(error as Error).message}`);
   }
   for (const dir of dirs) {
     const match = /^(.+)-pr(\d+)$/.exec(dir);
@@ -89,30 +130,34 @@ export function readSavedReviews(reviewsDir: string): { key: string; review: Sav
 }
 
 /**
- * One row per finding. A finding keeps the review where it was first seen (commit, depth, time),
- * and is open only if the PR's last saved review still lists it among the open findings.
+ * One row per finding. A finding keeps the review where it was first seen in the archive, and is
+ * open only if the PR's last saved *complete* review still lists it among the open findings. With
+ * no complete review saved for a PR, nothing there is called closed: an incomplete answer can be
+ * missing findings, and absence from it is not resolution.
  */
 export function buildTable(
   reviews: { key: string; review: SavedReview }[],
-  excluded: Set<string>,
+  excluded: Excluded,
   now: () => string = () => new Date().toISOString(),
 ): EvidenceTable {
   const byPr = new Map<string, { key: string; review: SavedReview }[]>();
   const excludedPrs = new Set<string>();
   for (const entry of reviews) {
     const prKey = `${entry.review.repo}#${entry.review.pr}`;
-    if (excluded.has(prKey)) {
+    if (excluded.prs.has(prKey) || excluded.commits.has(entry.review.headSha)) {
       excludedPrs.add(prKey);
+      byPr.delete(prKey);
       continue;
     }
-    byPr.set(prKey, [...(byPr.get(prKey) ?? []), entry]);
+    if (!excludedPrs.has(prKey)) byPr.set(prKey, [...(byPr.get(prKey) ?? []), entry]);
   }
 
   const rows: EvidenceRow[] = [];
   for (const group of byPr.values()) {
     group.sort((a, b) => a.review.recordedAt.localeCompare(b.review.recordedAt));
-    const last = group[group.length - 1] as { key: string; review: SavedReview };
-    const openIds = new Set((last.review.openFindings ?? []).map((f) => f.id));
+    const complete = group.filter((g) => (g.review.state ?? "complete") === "complete");
+    const last = complete[complete.length - 1];
+    const openIds = last ? new Set((last.review.openFindings ?? []).map((f) => f.id)) : null;
     const seen = new Set<string>();
     for (const { key, review } of group) {
       for (const finding of [...(review.findings ?? []), ...(review.openFindings ?? [])]) {
@@ -123,7 +168,7 @@ export function buildTable(
           repo: key,
           github: review.repo,
           pr: review.pr,
-          commit: review.headSha,
+          firstSeenCommit: review.headSha,
           file: finding.file ?? null,
           lines: finding.lines ?? null,
           title: finding.title ?? null,
@@ -132,7 +177,7 @@ export function buildTable(
           description: finding.description ?? null,
           reviewDepth: review.reviewEffort ?? null,
           recordedAt: review.recordedAt,
-          openAtLastReview: openIds.has(finding.id),
+          openAtLastReview: openIds ? openIds.has(finding.id) : true,
         });
       }
     }
@@ -144,15 +189,22 @@ export function buildTable(
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const PR_REF = /\b([\w-]+)#(\d+)\b/g;
 const PR_URL = /github\.com\/([\w-]+\/[\w-]+)\/pull\/(\d+)/g;
+const PR_BARE = /\bPR\s+#?(\d+)\b/g;
 
 /**
  * Citations in `text` that are not in the table. A citation is a finding id (UUID), a PR written
- * as `<repoKey>#<N>` (other `word#N` references are ignored), or a PR URL.
+ * as `<repoKey>#<N>` for any configured repo key (other `word#N` references, such as tickets, are
+ * ignored), or a PR URL. A bare `PR <N>` is always a problem: it names no repository, so it can't
+ * be checked, and an uncheckable citation must not pass.
  */
-export function citationProblems(text: string, table: EvidenceTable): { problems: string[]; cited: number } {
+export function citationProblems(
+  text: string,
+  table: EvidenceTable,
+  repoKeys?: Set<string>,
+): { problems: string[]; cited: number } {
   const ids = new Set(table.rows.map((r) => r.id.toLowerCase()));
   const prs = new Set(table.rows.flatMap((r) => [`${r.repo}#${r.pr}`, `${r.github.toLowerCase()}#${r.pr}`]));
-  const repoKeys = new Set(table.rows.map((r) => r.repo));
+  const keys = repoKeys ?? new Set(table.rows.map((r) => r.repo));
   const problems: string[] = [];
   let cited = 0;
   for (const [cite] of text.matchAll(UUID)) {
@@ -160,13 +212,17 @@ export function citationProblems(text: string, table: EvidenceTable): { problems
     if (!ids.has(cite.toLowerCase())) problems.push(`finding ${cite} is not in the table`);
   }
   for (const [, key, pr] of text.matchAll(PR_REF)) {
-    if (!repoKeys.has(key as string)) continue;
+    if (!keys.has(key as string)) continue;
     cited++;
     if (!prs.has(`${key}#${pr}`)) problems.push(`PR ${key}#${pr} is not in the table`);
   }
   for (const [, github, pr] of text.matchAll(PR_URL)) {
     cited++;
     if (!prs.has(`${(github as string).toLowerCase()}#${pr}`)) problems.push(`PR ${github}#${pr} is not in the table`);
+  }
+  for (const [cite] of text.matchAll(PR_BARE)) {
+    cited++;
+    problems.push(`"${cite}" names no repository; write it as <repoKey>#<number>`);
   }
   return { problems: [...new Set(problems)], cited };
 }
@@ -181,11 +237,20 @@ function main(): void {
   const factory = loadFactory();
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
   const evidence = resolve(root, factory.evidence);
-  const table = buildTable(readSavedReviews(join(evidence, "reviews")), casePrs(join(dirname(evidence), "cases")));
+  const privateDir = dirname(evidence);
+  const excluded: Excluded = {
+    prs: casePrs(join(privateDir, "cases")),
+    commits: groundTruthCommits(join(privateDir, "ground-truth.jsonl")),
+  };
+  const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
 
   const checkFile = flag("--check");
   if (checkFile) {
-    const { problems, cited } = citationProblems(readFileSync(checkFile, "utf8"), table);
+    const { problems, cited } = citationProblems(
+      readFileSync(checkFile, "utf8"),
+      table,
+      new Set(Object.keys(factory.repos)),
+    );
     if (problems.length) {
       console.error(`${checkFile}: ${problems.length} citation(s) not in the table:`);
       for (const problem of problems) console.error(`  - ${problem}`);
@@ -196,7 +261,7 @@ function main(): void {
     return;
   }
 
-  const out = flag("--out") ?? join(dirname(evidence), "rules", "evidence.json");
+  const out = flag("--out") ?? join(privateDir, "rules", "evidence.json");
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, `${JSON.stringify(table, null, 2)}\n`);
 
