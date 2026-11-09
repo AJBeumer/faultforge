@@ -64,7 +64,10 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
  * number: the agent must read the ticket from the runner's checked snapshot, never live from GitHub,
  * where someone could have added text after the check.
  */
-export function commandViolations(command: string, ticket?: string): string[] {
+export function commandViolations(raw: string, ticket?: string): string[] {
+  // One logical line per command: a backslash (bash) or backtick (PowerShell) line continuation can't
+  // split a command into pieces that no rule sees whole.
+  const command = raw.replace(/[\\`]\r?\n/g, " ");
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
@@ -82,13 +85,14 @@ export function commandViolations(command: string, ticket?: string): string[] {
       /\bgh\s+issue\s+(view|list|status)\b/,
       // Search can return issue bodies.
       /\bgh\s+search\b/,
-      // gh api issue paths: this ticket, or any number given as a variable or expression.
-      new RegExp(String.raw`\bgh\s+api\b[^\n|;&]*\bissues/(${ticket}\b|[^\s/'"]*[$\x60(])`),
-      // gh api on a whole-repo issue list, all issue comments, or search; and GraphQL, which can read any issue.
-      /\bgh\s+api\b[^\n|;&]*\b(issues(\?|\s|["']|$)|issues\/comments\b|search\/)/,
-      /\bgh\s+api\s+graphql\b/,
+      // GraphQL can read any issue.
+      /\bgh\b[\s\S]*\bgraphql\b/i,
     ];
-    if (live.some((pattern) => pattern.test(command))) {
+    // Any gh api call in a command that mentions issues or search anywhere, in any order (a path can be
+    // built in a variable first). Deliberately broad: after three rounds of new spellings, a rule that
+    // lists endpoints can't be complete. The agent doesn't need these: review:wait saves Qodo's comments.
+    const apiOnIssues = /\bgh\b[\s\S]*\bapi\b/i.test(command) && /\b(issues|search)\b/i.test(command);
+    if (apiOnIssues || live.some((pattern) => pattern.test(command))) {
       reasons.push("read the ticket from the runner's snapshot file, not live from GitHub");
     }
   }
