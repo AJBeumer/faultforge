@@ -221,15 +221,13 @@ async function main() {
     headSha,
     {
       fetchReview: async () => {
-        try {
-          return (await api.call("get-pr-review-findings", {
-            pr_url: `https://github.com/${github}/pull/${pr}`,
-            extended: true,
-          })) as QodoReview;
-        } finally {
-          // Raw first: kept even when the answer can't be parsed.
-          if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);
-        }
+        const review = (await api.call("get-pr-review-findings", {
+          pr_url: `https://github.com/${github}/pull/${pr}`,
+          extended: true,
+        })) as QodoReview;
+        // Save the snapshot once the answer is valid.
+        if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);
+        return review;
       },
       onPoll,
       onError: (error) =>
