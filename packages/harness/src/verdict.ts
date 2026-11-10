@@ -8,24 +8,30 @@
  *
  * Reads the case's ground-truth entry (`readLedger`, #10) for the injected file, lines and template,
  * and the saved review (one of the `*.review.json` files `review:wait` writes) for the commit it
- * reviewed, found by matching `headSha` against the entry's `injectionCommit`. Prints every finding's
- * match against the fixed rule (`applyMatchRule`, #18): file, lines, width, category and summary, then
- * the overall catch.
+ * reviewed, found by matching `headSha` against the entry's `injectionCommit` (a `--review <path>` is
+ * refused if its own `headSha` differs). Prints every finding's match against the fixed rule
+ * (`applyMatchRule`, #18): file, lines, width, category and summary, then the overall catch. When the
+ * saved review's own `state` is not `"complete"` (skipped, timed out, or the head moved on), a warning
+ * is printed and the only verdict on offer is `review incomplete`: a clean result from an unfinished
+ * review proves nothing.
  *
  * It then asks the owner, on the terminal: the verdict on the planted bug (`detected`, `missed` or
- * `review incomplete`, with a reason), and a judgement on every other finding — every one Qodo raised
- * that did not match the planted bug — as `real`, `false alarm` or `open`, with a reason. A blank
- * answer leaves a finding `open`; it is never recorded as a false alarm. Nothing is written until every
- * question is answered. The event — case id, commit reviewed, owner's login, UTC time, disposition,
- * its reason and the judgements — is appended to `private/audit-events.jsonl` as one `case.adjudicated`
- * line, or printed instead of written with `--dry-run`.
+ * `review incomplete`, with a nonblank reason — retried, then refused, if left blank), and a judgement
+ * on every other finding — every one Qodo raised that did not match the planted bug — as `real`,
+ * `false alarm` or `open`, each with a nonblank reason. A blank answer instead leaves a finding `open`
+ * at once, unjudged, with no reason asked; it is never recorded as a false alarm. Nothing is written
+ * until every question is answered. The event — case id, commit reviewed, owner's login, UTC time, an
+ * `inputHash` of the ground truth, the template and the review (so its exact inputs can be checked
+ * later), the disposition, its reason and the judgements — is appended to `private/audit-events.jsonl`
+ * as one `case.adjudicated` line, or printed instead of written with `--dry-run`.
  *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
  * there is nobody to ask — the match is printed, nothing is written; 2 the case, its review or its
- * template can't be read, or the owner's answer couldn't be parsed after retrying.
+ * template can't be read, the review doesn't match the injected commit, the event couldn't be appended,
+ * or an answer couldn't be parsed after retrying.
  */
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join, resolve } from "node:path";
@@ -52,6 +58,8 @@ export interface SavedReview {
   repo?: string;
   pr?: number;
   headSha: string;
+  /** "complete" when absent; anything else means the review did not finish, so a clean result proves nothing. */
+  state?: string;
   findings?: SavedFinding[];
 }
 
@@ -70,6 +78,8 @@ export interface AdjudicationEvent {
   by: string;
   tool: string;
   environment: string;
+  /** sha256 of the ground-truth entry, the template and the saved review, so the inputs can be checked later. */
+  inputHash: string;
   disposition: string;
   reason: string;
   judgements: Judgement[];
@@ -118,9 +128,14 @@ export function toMatchFinding(finding: SavedFinding): MatchFinding {
 
 /**
  * The saved review whose `headSha` is `commit`, searched under `<reviewsDir>/<repoKey>-pr<N>/*.review.json`
- * (the layout `review:wait` writes). Undefined when the directory can't be read or no file matches.
+ * (the layout `review:wait` writes). Undefined when the directory can't be read or no file matches. A
+ * subfolder, or a `.review.json` file, that can't be listed, read or parsed is skipped, not thrown: one
+ * case's malformed evidence must never abort the scan for a different case's valid review.
  */
-export function findSavedReview(reviewsDir: string, commit: string): { path: string; review: SavedReview } | undefined {
+export function findSavedReview(
+  reviewsDir: string,
+  commit: string,
+): { path: string; text: string; review: SavedReview } | undefined {
   let dirs: string[];
   try {
     dirs = readdirSync(reviewsDir);
@@ -129,12 +144,23 @@ export function findSavedReview(reviewsDir: string, commit: string): { path: str
   }
   for (const dir of dirs) {
     const full = join(reviewsDir, dir);
-    if (!statSync(full).isDirectory()) continue;
-    for (const file of readdirSync(full)) {
+    let files: string[];
+    try {
+      if (!statSync(full).isDirectory()) continue;
+      files = readdirSync(full);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
       if (!file.endsWith(".review.json")) continue;
       const path = join(full, file);
-      const review = JSON.parse(readFileSync(path, "utf8")) as SavedReview;
-      if (review.headSha === commit) return { path, review };
+      try {
+        const text = readFileSync(path, "utf8");
+        const review = JSON.parse(text) as SavedReview;
+        if (review.headSha === commit) return { path, text, review };
+      } catch {
+        // Malformed or unreadable: not a candidate, but not fatal to the scan either.
+      }
     }
   }
   return undefined;
@@ -180,6 +206,10 @@ function defaultAppend(path: string, value: object): void {
   appendFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
+function sha256(data: string): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
 /** Asks until the answer (trimmed, lower-cased) is one of `valid`, or gives up after a few tries. */
 async function askOneOf(ask: AskFn, question: string, valid: string[]): Promise<string | undefined> {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -189,12 +219,27 @@ async function askOneOf(ask: AskFn, question: string, valid: string[]): Promise<
   return undefined;
 }
 
-/** A finding judgement: blank stays "open" at once; anything else must be real, false alarm or open. */
-async function askJudgement(ask: AskFn, question: string): Promise<Judgement["verdict"] | undefined> {
+/** Asks until the answer (trimmed) is nonblank, or gives up after a few tries. */
+async function askNonBlank(ask: AskFn, question: string): Promise<string | undefined> {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const answer = (await ask(question)).trim();
+    if (answer !== "") return answer;
+  }
+  return undefined;
+}
+
+/**
+ * A finding judgement: blank stays "open" at once, unjudged, and is never asked for a reason. Anything
+ * else must be real, false alarm or open, and `explicit` tells the caller to require a reason for it.
+ */
+async function askJudgement(
+  ask: AskFn,
+  question: string,
+): Promise<{ verdict: Judgement["verdict"]; explicit: boolean } | undefined> {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const answer = (await ask(question)).trim().toLowerCase();
-    if (answer === "") return "open";
-    if (FINDING_VERDICTS.has(answer)) return answer as Judgement["verdict"];
+    if (answer === "") return { verdict: "open", explicit: false };
+    if (FINDING_VERDICTS.has(answer)) return { verdict: answer as Judgement["verdict"], explicit: true };
   }
   return undefined;
 }
@@ -239,12 +284,18 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   let reviewPath = options.reviewPath;
+  let reviewText: string;
   let review: SavedReview;
   if (reviewPath) {
     try {
-      review = JSON.parse(readFileSync(reviewPath, "utf8"));
+      reviewText = readFileSync(reviewPath, "utf8");
+      review = JSON.parse(reviewText);
     } catch (e) {
       error(`verdict: can't read ${reviewPath}: ${message(e)}`);
+      return 2;
+    }
+    if (review.headSha !== injectionCommit) {
+      error(`verdict: ${reviewPath} reviewed ${review.headSha}, not ${caseId}'s injected commit ${injectionCommit}`);
       return 2;
     }
   } else {
@@ -254,6 +305,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       return 2;
     }
     reviewPath = found.path;
+    reviewText = found.text;
     review = found.review;
   }
 
@@ -262,9 +314,11 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error(`verdict: template ${templateId} not found in private/templates or templates/seed`);
     return 2;
   }
+  let templateText: string;
   let kindTerms: string[];
   try {
-    kindTerms = kindTermsOf(JSON.parse(readFileSync(join(dir, "template.json"), "utf8")), `${dir}/template.json`);
+    templateText = readFileSync(join(dir, "template.json"), "utf8");
+    kindTerms = kindTermsOf(JSON.parse(templateText), `${dir}/template.json`);
   } catch (e) {
     error(`verdict: can't use ${dir}/template.json: ${message(e)}`);
     return 2;
@@ -273,6 +327,15 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const findings = (review.findings ?? []).map(toMatchFinding);
   const result = applyMatchRule({ file: injectedFile, lines: injectedLines as [number, number] }, findings, kindTerms);
   printReport(log, findings, result);
+
+  // "complete" only when review:wait finished reviewing this exact commit; anything else (skipped,
+  // timed out, head moved) means a clean result proves nothing, so only "review incomplete" is offered.
+  const reviewIncomplete = typeof review.state === "string" && review.state !== "complete";
+  if (reviewIncomplete) {
+    log(
+      `WARNING: the saved review's state is "${review.state}", not complete. A missing finding may mean the review never finished, not that nothing was found; only "review incomplete" can be recorded.`,
+    );
+  }
 
   const isTTY = options.isTTY ?? process.stdin.isTTY === true;
   if (!isTTY) {
@@ -289,31 +352,44 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const ask = options.ask ?? defaultAsk;
+  const allowedBugWords = reviewIncomplete ? ["review incomplete"] : Object.keys(BUG_VERDICTS);
   const bugAnswer = await askOneOf(
     ask,
     "Verdict on the planted bug (detected/missed/review incomplete): ",
-    Object.keys(BUG_VERDICTS),
+    allowedBugWords,
   );
   if (!bugAnswer) {
     error("verdict: no valid answer (detected, missed or review incomplete) for the planted bug's verdict");
     return 2;
   }
-  const bugReason = (await ask("Reason: ")).trim();
+  const bugReason = await askNonBlank(ask, "Reason: ");
+  if (bugReason === undefined) {
+    error("verdict: no reason given for the planted bug's verdict");
+    return 2;
+  }
 
   const judgements: Judgement[] = [];
   for (const finding of result.findings) {
     if (result.matchedFindingIds.includes(finding.id)) continue;
     const source = findings.find((f) => f.id === finding.id);
-    const verdict = await askJudgement(
+    const judged = await askJudgement(
       ask,
       `Judge ${finding.id}${source?.title ? ` "${source.title}"` : ""} (real/false alarm/open, blank = open): `,
     );
-    if (verdict === undefined) {
+    if (judged === undefined) {
       error(`verdict: no valid answer (real, false alarm or open) for finding ${finding.id}`);
       return 2;
     }
-    const reason = (await ask("Reason: ")).trim();
-    judgements.push({ id: finding.id, verdict, reason });
+    let reason = "";
+    if (judged.explicit) {
+      const given = await askNonBlank(ask, "Reason: ");
+      if (given === undefined) {
+        error(`verdict: no reason given for finding ${finding.id}'s judgement`);
+        return 2;
+      }
+      reason = given;
+    }
+    judgements.push({ id: finding.id, verdict: judged.verdict, reason });
   }
 
   const event: AdjudicationEvent = {
@@ -325,6 +401,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     by,
     tool: TOOL,
     environment: `${platform()}-${arch()}-node${process.versions.node}`,
+    inputHash: sha256(`${JSON.stringify(entry)}\n${templateText}\n${reviewText}`),
     disposition: BUG_VERDICTS[bugAnswer] as string,
     reason: bugReason,
     judgements,
@@ -335,7 +412,12 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     log(JSON.stringify(event, null, 2));
     return 0;
   }
-  (options.append ?? defaultAppend)(auditEventsPath, event);
+  try {
+    (options.append ?? defaultAppend)(auditEventsPath, event);
+  } catch (e) {
+    error(`verdict: can't append to ${auditEventsPath}: ${message(e)}`);
+    return 2;
+  }
   log(`recorded: ${caseId} ${event.disposition}, ${judgements.length} other finding(s) judged`);
   return 0;
 }
@@ -363,5 +445,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     console.error("usage: npm run verdict -- <caseId> [--dry-run] [--review <path>]");
     process.exit(2);
   }
-  run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath }).then((code) => process.exit(code));
+  run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath }).then(
+    (code) => process.exit(code),
+    (e) => {
+      console.error(`verdict: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(2);
+    },
+  );
 }
