@@ -125,6 +125,9 @@ const proofs: Proof[] =
 const artefactDir = validateOnly
   ? mkdtempSync(join(tmpdir(), "faultforge-validate-"))
   : join(PRIVATE_DIR, "raw-artifacts", caseId as string);
+// Registered as soon as the folder exists, so a refusal on any later precondition still cleans it up:
+// nothing from --validate-only may survive, not even a scratch folder outside private storage.
+if (validateOnly) process.on("exit", () => rmSync(artefactDir, { recursive: true, force: true }));
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");
 
 if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) {
@@ -141,9 +144,11 @@ if (!validateOnly) mkdirSync(artefactDir, { recursive: true });
 
 log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
 
-const proofsOnBase: Record<string, Outcome> = {};
-for (const proof of proofs) proofsOnBase[proof.invariantId] = runProof("base", proof);
-const failingOnBase = proofs.filter((p) => proofsOnBase[p.invariantId] !== "pass");
+// Indexed by position in `proofs`, never by invariantId: alsoBreaks may name the same invariant twice
+// (collateral the template didn't separate), and keying by invariantId would let a later proof's result
+// silently overwrite an earlier one's.
+const proofsOnBase: Outcome[] = proofs.map((proof) => runProof("base", proof));
+const failingOnBase = proofs.filter((_, i) => proofsOnBase[i] !== "pass");
 if (failingOnBase.length) {
   fail(
     `proof test fails on the base commit, so it cannot prove anything: ${failingOnBase.map((p) => p.invariantId).join(", ")}`,
@@ -154,7 +159,7 @@ let injectionCommit: string | undefined;
 let injectedLines: [number, number] = [0, 0];
 let typecheck: Outcome = "pass";
 let publicTests: Outcome = "pass";
-const proofsOnVariant: Record<string, Outcome> = {};
+let proofsOnVariant: Outcome[] = [];
 let failure: string | undefined;
 
 git("switch", "--quiet", "-c", template.publish.branch);
@@ -171,9 +176,9 @@ try {
     ]);
     publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
   }
-  for (const proof of proofs) proofsOnVariant[proof.invariantId] = runProof("variant", proof);
+  proofsOnVariant = proofs.map((proof) => runProof("variant", proof));
 
-  const stillPassing = proofs.filter((p) => proofsOnVariant[p.invariantId] === "pass").map((p) => p.invariantId);
+  const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
   if (stillPassing.length) {
     failure = `proof test still passes on the variant, so the mutation is not validated: ${stillPassing.join(", ")}`;
   } else if (!validateOnly && typecheck !== "pass") {
@@ -194,7 +199,6 @@ try {
   } else {
     git("switch", "--quiet", baseBranch);
   }
-  if (validateOnly) rmSync(artefactDir, { recursive: true, force: true });
 }
 if (failure) fail(failure);
 
@@ -206,38 +210,58 @@ if (validateOnly) {
 }
 if (!injectionCommit) fail("variant was not committed");
 
-for (const proof of proofs) copyFileSync(join(templateDir, proof.proofTest), join(artefactDir, proof.proofTest));
+for (const proof of proofs) {
+  const dest = join(artefactDir, proof.proofTest);
+  mkdirSync(dirname(dest), { recursive: true });
+  copyFileSync(join(templateDir, proof.proofTest), dest);
+}
 const createdAt = new Date().toISOString();
 
-const entry = {
-  caseId,
-  kind: "sabotage",
-  templateId: template.id,
-  invariantId: template.invariantId,
-  defectClass: template.defectClass,
-  targetRepo: git("remote", "get-url", "origin"),
-  targetCommit: baseCommit,
-  injectionCommit,
-  branch: template.publish.branch,
-  injectedFile: template.file,
-  injectedLines,
-  validation: {
-    proofs: proofs.map((proof) => ({
-      invariantId: proof.invariantId,
-      proofTest: `${template.id}/${proof.proofTest}@sha256:${sha256(readFileSync(join(templateDir, proof.proofTest)))}`,
-      proofOnBase: proofsOnBase[proof.invariantId],
-      proofOnVariant: proofsOnVariant[proof.invariantId],
-    })),
-    typecheck,
-    publicTests,
-  },
-  validated: true,
-  createdAt,
-};
+const entry =
+  template.kind === "bug"
+    ? {
+        caseId,
+        kind: "sabotage",
+        templateId: template.id,
+        invariantId: template.invariantId,
+        defectClass: template.defectClass,
+        targetRepo: git("remote", "get-url", "origin"),
+        targetCommit: baseCommit,
+        injectionCommit,
+        branch: template.publish.branch,
+        injectedFile: template.file,
+        injectedLines,
+        validation: {
+          proofs: proofs.map((proof, i) => ({
+            invariantId: proof.invariantId,
+            proofTest: `${template.id}/${proof.proofTest}@sha256:${sha256(readFileSync(join(templateDir, proof.proofTest)))}`,
+            proofOnBase: proofsOnBase[i],
+            proofOnVariant: proofsOnVariant[i],
+          })),
+          typecheck,
+          publicTests,
+        },
+        validated: true,
+        createdAt,
+      }
+    : {
+        caseId,
+        kind: "control",
+        templateId: template.id,
+        targetRepo: git("remote", "get-url", "origin"),
+        targetCommit: baseCommit,
+        injectionCommit,
+        branch: template.publish.branch,
+        injectedFile: template.file,
+        injectedLines,
+        validation: { typecheck, publicTests },
+        validated: true,
+        createdAt,
+      };
 appendJsonl(ledgerPath, entry);
 appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
   eventId: randomUUID(),
-  type: "sabotage.injected",
+  type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
   at: createdAt,
   caseId,
   tool: TOOL,
@@ -273,7 +297,9 @@ function applyMutation(): [number, number] {
 function runProof(stage: "base" | "variant", proof: Proof): Outcome {
   const scratch = mkdtempSync(join(tmpdir(), "faultforge-proof-"));
   try {
-    copyFileSync(join(templateDir, proof.proofTest), join(scratch, proof.proofTest));
+    const dest = join(scratch, proof.proofTest);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(join(templateDir, proof.proofTest), dest);
     const outcome = runStep(
       `proof-${stage}-${proof.invariantId}`,
       process.execPath,
