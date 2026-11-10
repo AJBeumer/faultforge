@@ -13,11 +13,18 @@ export function privateDir(env: NodeJS.ProcessEnv = process.env): string {
   return resolve(env.FAULTFORGE_PRIVATE_DIR ?? join(ROOT, "private"));
 }
 
+/** A template id is one folder name: letters, digits, dots, dashes and underscores, nothing that moves up or across. */
+export function isTemplateId(id: unknown): id is string {
+  return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !id.includes("..");
+}
+
 /**
  * The folder holding `template.json` for `id`: private storage first (unreleased templates live there),
- * then `templates/seed` (adjudicated ones are copied there after their case). Undefined when neither has it.
+ * then `templates/seed` (adjudicated ones are copied there after their case). Undefined when neither has it,
+ * and for an id that isn't a plain folder name, so a record can't point the lookup outside the templates.
  */
 export function templateDir(id: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!isTemplateId(id)) return undefined;
   return [join(privateDir(env), "templates", id), join(ROOT, "templates", "seed", id)].find((dir) =>
     existsSync(join(dir, "template.json")),
   );

@@ -14,6 +14,13 @@ describe("templateDir: where inject and match both look", () => {
     expect(templateDir("no-such-template", env)).toBeUndefined();
   });
 
+  it.each(["../../examples/FF-0001", "a/b", "a\\b", ".hidden", "", "x/../../y"])(
+    "finds nothing for %j, which isn't a plain folder name (Qodo on PR 128, round 2)",
+    (id) => {
+      expect(templateDir(id, {})).toBeUndefined();
+    },
+  );
+
   it("prefers the private copy, read from FAULTFORGE_PRIVATE_DIR", () => {
     const dir = mkdtempSync(join(tmpdir(), "templates-"));
     mkdirSync(join(dir, "templates", SEED), { recursive: true });

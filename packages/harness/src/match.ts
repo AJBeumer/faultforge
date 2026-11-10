@@ -70,12 +70,29 @@ export function disagreements(record: CaseRecord, result: MatchRuleResult): stri
   return problems;
 }
 
+/** True for a finding's field that is text, null or absent: anything else the rule can't read. */
+const textual = (value: unknown) => value === undefined || value === null || typeof value === "string";
+
+/** True for a finding's placement: null, or two numbers (the rule itself judges a reversed pair). */
+const placement = (lines: unknown) =>
+  lines === null || (Array.isArray(lines) && lines.length === 2 && lines.every((n) => typeof n === "number"));
+
 /** Why the parsed file can't be matched, or undefined. The schema is checked elsewhere; this is the minimum. */
 function shapeProblem(record: unknown): string | undefined {
   if (!record || typeof record !== "object") return "is not a JSON object";
   const r = record as Partial<CaseRecord>;
   if (!Array.isArray(r.findings)) return "has no findings list";
-  if (!r.findings.every((f) => f && typeof f.id === "string")) return "has a finding without an id";
+  for (const f of r.findings as unknown[]) {
+    const finding = f as Partial<MatchFinding> | null;
+    if (!finding || typeof finding !== "object" || typeof finding.id !== "string") return "has a finding without an id";
+    if (
+      !(typeof finding.file === "string" || finding.file === null) ||
+      !placement(finding.lines) ||
+      ![finding.title, finding.summary, finding.category].every(textual)
+    ) {
+      return `has a finding (${finding.id}) whose file, lines, title, summary or category isn't what a finding holds`;
+    }
+  }
   if (!r.injection) return "has no injection to match against";
   const { templateId, file, lines } = r.injection;
   if (typeof templateId !== "string" || typeof file !== "string" || !isRange(lines)) {

@@ -65,6 +65,24 @@ describe("npm run match: what it refuses with exit 2", () => {
     expect(refused.err).toContain("has no findings list");
   });
 
+  it("a finding whose fields aren't what a finding holds (Qodo on PR 128, round 2)", () => {
+    for (const bad of [{ file: 7 }, { lines: "33" }, { lines: [33] }, { title: 5 }, { category: {} }]) {
+      const record = ff0001();
+      Object.assign(record.findings[0], bad);
+      const refused = runOn(record);
+      expect(refused.code).toBe(2);
+      expect(refused.err).toContain("isn't what a finding holds");
+    }
+  });
+
+  it("a template id that would leave the templates folder (Qodo on PR 128, round 2)", () => {
+    const record = ff0001();
+    record.injection.templateId = "../../examples/FF-0001";
+    const refused = runOn(record);
+    expect(refused.code).toBe(2);
+    expect(refused.err).toContain("not found");
+  });
+
   it("a record whose template can't be found", () => {
     const record = ff0001();
     record.injection.templateId = "no-such-template";
