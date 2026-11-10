@@ -77,9 +77,7 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
  * where someone could have added text after the check.
  */
 export function commandViolations(raw: string, ticket?: string): string[] {
-  // One logical line per command: a backslash (bash) or backtick (PowerShell) line continuation can't
-  // split a command into pieces that no rule sees whole.
-  const command = raw.replace(/[\\`]\r?\n/g, " ");
+  const command = oneLine(raw);
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
@@ -112,6 +110,16 @@ export function commandViolations(raw: string, ticket?: string): string[] {
 }
 
 /**
+ * One logical line per command: a backslash (bash) or backtick (PowerShell) line continuation can't split
+ * a command into pieces that no rule sees whole. The pair is removed, as the shell removes it, so a name
+ * split across lines (`review:\` newline `wait`) reads as the shell runs it. Every rule reads the command
+ * through this.
+ */
+function oneLine(raw: string): string {
+  return raw.replace(/[\\`]\r?\n/g, "");
+}
+
+/**
  * A shell's own ways of putting a command in the background: a single `&` (not `&&`, not a `>&` or `|&`
  * redirect), `nohup`, `setsid`, `disown`, PowerShell's `Start-Job` and `Start-Process`, cmd's `start /b`.
  */
@@ -127,7 +135,8 @@ const RUNS_REVIEW_WAIT = /\breview[:-]wait\b/i;
  * ways of backgrounding count the same (Qodo on PR 132). Starting the app in the background for a live check
  * stays allowed.
  */
-export function backgroundViolation(command: string, background: boolean): string | undefined {
+export function backgroundViolation(raw: string, background: boolean): string | undefined {
+  const command = oneLine(raw);
   if (!RUNS_REVIEW_WAIT.test(command)) return undefined;
   if (!background && !SHELL_BACKGROUND.test(command)) return undefined;
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
