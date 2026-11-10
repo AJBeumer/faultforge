@@ -1,41 +1,27 @@
+/**
+ * The guard's decisions as read from the command text and the payload. The decisions that read a reviewed
+ * checkout's pending content from git fixtures are in guard-target.pending.test.ts (#121).
+ */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tempRepo } from "./fixtures.ts";
+import { type FACTORY, guardConfig, guardDecision, tempRepo } from "./fixtures.ts";
+import { decide as guardDecide } from "./guard-target.ts";
 
 const HOOK = join(import.meta.dirname, "guard-target.ts");
 const HARNESS = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
-const FACTORY = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
-
-/** factory.json with the target's checkout pointed at a fixture repo, written to its own temp file. */
-function configWithTarget(checkout: string, extra?: (config: typeof FACTORY) => void): string {
-  const config = structuredClone(FACTORY);
-  config.repos.target.path = checkout;
-  extra?.(config);
-  const file = join(mkdtempSync(join(tmpdir(), "guard-config-")), "factory.json");
-  writeFileSync(file, JSON.stringify(config));
-  return file;
-}
 
 // Every test runs the hook against this fixture as the target's checkout, not the owner's real one. It has
 // an origin so nothing in it counts as unpushed, which keeps the push scan to one git call per test.
 const TARGET_FIXTURE = tempRepo(true).dir;
-const DEFAULT_CONFIG = configWithTarget(TARGET_FIXTURE);
+const DEFAULT_CONFIG = guardConfig(TARGET_FIXTURE);
 
-/** Runs the hook with a payload and returns the deny reason, or undefined if allowed. */
-function decide(tool: string, toolInput: object, cwd = HARNESS, config = DEFAULT_CONFIG): string | undefined {
-  const result = spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput }),
-    encoding: "utf8",
-    env: { ...process.env, FAULTFORGE_CONFIG: config },
-  });
-  expect(result.status).toBe(0);
-  if (!result.stdout.trim()) return undefined;
-  return JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason;
-}
+/** The deny reason for one tool call, or undefined if allowed; see guardDecision. */
+const decide = (tool: string, toolInput: object, cwd = HARNESS, config = DEFAULT_CONFIG) =>
+  guardDecision(tool, toolInput, cwd, config);
 
 const bash = (command: string, cwd?: string) => decide("Bash", { command }, cwd);
 
@@ -213,15 +199,15 @@ describe("guard-target hook", () => {
 });
 
 describe("guard-target hook reads the reviewed repos from factory.json", () => {
-  const factory = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
-
-  /** factory.json plus a third reviewed repo, added as one entry. */
+  /**
+   * The fixture config plus a third reviewed repo, added as one entry. Its checkout is a folder under the temp
+   * folder that is never created: the guard skips a checkout it can't find, and never looks beside the lab.
+   */
   function withThirdRepo(): string {
-    const config = structuredClone(factory);
-    config.repos.other = { ...config.repos.target, github: "AJBeumer/other-app", path: "../other-app" };
-    const file = join(tmpdir(), "factory-with-third-repo.json");
-    writeFileSync(file, JSON.stringify(config));
-    return file;
+    const checkout = join(mkdtempSync(join(tmpdir(), "guard-third-")), "other-app");
+    return guardConfig(TARGET_FIXTURE, (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: checkout };
+    });
   }
 
   it("protects a third repo once it has an entry", () => {
@@ -250,17 +236,13 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(bash('gh pr create --repo AJBeumer/other-app --title "x" --body "FaultForge case"')).toBeUndefined();
   });
 
-  /** factory.json changed by `edit`, written to a temp file. */
-  function configWith(name: string, edit: (config: typeof factory) => void): string {
-    const config = structuredClone(factory);
-    edit(config);
-    const file = join(tmpdir(), `factory-${name}.json`);
-    writeFileSync(file, JSON.stringify(config));
-    return file;
+  /** The fixture config changed by `edit`, written to its own temp file: never the owner's checkouts. */
+  function configWith(edit: (config: typeof FACTORY) => void): string {
+    return guardConfig(TARGET_FIXTURE, edit);
   }
 
   it("keeps protecting the target when the config wrongly marks it as lab", () => {
-    const config = configWith("target-as-lab", (c) => {
+    const config = configWith((c) => {
       c.repos.target.guard = "lab";
       c.repos.other = { ...c.repos.faultforge, github: "AJBeumer/other-app", guard: "reviewed" };
     });
@@ -269,7 +251,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   });
 
   it("protects a reviewed checkout whose folder name differs from its GitHub name", () => {
-    const config = configWith("other-folder", (c) => {
+    const config = configWith((c) => {
       c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: "../checkout-two" };
     });
     expect(
@@ -367,7 +349,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   });
 
   it("doesn't let a reviewed repo's name hide a forbidden word", () => {
-    const config = configWith("named-ledger", (c) => {
+    const config = configWith((c) => {
       c.repos.other = { ...c.repos.target, github: "AJBeumer/ledger", path: "../ledger" };
     });
     const command = 'gh pr create --repo AJBeumer/faultforge-target --title "Update ledger" --body "x"';
@@ -381,32 +363,29 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
 });
 
 describe("guard-target hook fails closed (#104)", () => {
-  /** Runs the hook with raw stdin text and returns how it exited and what it wrote. */
-  function raw(stdin: string) {
-    const result = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: "utf8", env: process.env });
-    return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
-  }
+  /** The decision for raw payload text, with the fixture config. */
+  const rawDecision = (stdin: string) => guardDecide(stdin, { ...process.env, FAULTFORGE_CONFIG: DEFAULT_CONFIG });
 
-  it("blocks with exit 2 and a one-line reason when its input is empty", () => {
-    const { status, stdout, stderr } = raw("");
-    expect(status).toBe(2);
-    expect(stdout).toBe("");
-    expect(stderr).toMatch(/^guard-target hook failed: .+/);
-    expect(stderr.split("\n")).toHaveLength(1);
+  it("answers a blocking error, with a one-line reason, when its input is empty", () => {
+    const decision = rawDecision("");
+    expect(decision.kind).toBe("error");
+    if (decision.kind !== "error") return;
+    expect(decision.message).toMatch(/^guard-target hook failed: .+/);
+    expect(decision.message.split("\n")).toHaveLength(1);
   });
 
-  it("blocks with exit 2 when its input is not JSON", () => {
-    const { status, stderr } = raw("not json");
-    expect(status).toBe(2);
-    expect(stderr).toMatch(/guard-target hook failed/);
+  it("answers a blocking error when its input is not JSON", () => {
+    expect(rawDecision("not json")).toMatchObject({
+      kind: "error",
+      message: expect.stringMatching(/guard-target hook failed/),
+    });
   });
 
   it("blocks a reviewed-repo post whose body file exists but can't be read (a folder)", () => {
     // The folder exists, so the guard tries to read it as the body, and must refuse rather than skip it.
     const command = `gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file "${tmpdir()}"`;
-    const { status, stderr } = raw(JSON.stringify({ tool_name: "Bash", cwd: HARNESS, tool_input: { command } }));
-    expect(status).toBe(2);
-    expect(stderr).toMatch(/EISDIR/);
+    const decision = rawDecision(JSON.stringify({ tool_name: "Bash", cwd: HARNESS, tool_input: { command } }));
+    expect(decision).toMatchObject({ kind: "error", message: expect.stringMatching(/EISDIR/) });
   });
 
   it("denies a post whose body file does not exist, since it can't check what would be posted", () => {
@@ -497,202 +476,57 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
       ).toBeUndefined();
     });
   });
+});
 
-  describe("content about to travel, read from git whatever the command text says", () => {
-    /** A fixture repo named as a second reviewed repo, `other-app`; the folder's own name is what the guard looks for. */
-    function reviewedRepo(withOrigin = false) {
-      const { dir, git } = tempRepo(withOrigin);
-      const config = configWithTarget(TARGET_FIXTURE, (c) => {
-        c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: dir };
-      });
-      return { dir, git, config };
-    }
-
-    it("refuses a commit anywhere while a reviewed checkout holds a staged telltale, however it got there", () => {
-      const { dir, git, config } = reviewedRepo();
-      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n"); // as a redirect or a copy would
-      git("add", "notes.md");
-      expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(
-        /other-app holds content[\s\S]*says planted/,
-      );
-      // Attribution-independent: the same commit started from this repo's folder is refused too.
-      expect(decide("Bash", { command: 'git commit -m "Tidy"' }, HARNESS, config)).toMatch(/other-app holds content/);
+describe("guard-target hook as a process (node <file>), the way Claude Code runs it", () => {
+  /** Runs the hook file with raw stdin text and returns how it exited and what it wrote. */
+  function raw(stdin: string) {
+    const result = spawnSync(process.execPath, [HOOK], {
+      input: stdin,
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_CONFIG: DEFAULT_CONFIG },
     });
+    return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+  }
+  const payload = (tool: string, toolInput: object, cwd: string) =>
+    JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput });
 
-    it("refuses a chained add-and-commit while an untracked file holds a telltale, or is named with one", () => {
-      const { dir, config } = reviewedRepo();
-      writeFileSync(join(dir, "todo.md"), "fix the planted bug\n");
-      expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
-      rmSync(join(dir, "todo.md"));
-      writeFileSync(join(dir, "FF-0002-notes.md"), "nothing much\n");
-      expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(
-        /contains a case id/,
-      );
+  it("as a process: a deny is a PreToolUse decision on stdout with exit 0", () => {
+    const telltale = payload("Bash", { command: 'git commit -m "Fix the planted bug"' }, TARGET);
+    const { status, stdout, stderr } = raw(telltale);
+    expect(status).toBe(0);
+    expect(stderr).toBe("");
+    const decision = JSON.parse(stdout).hookSpecificOutput;
+    expect(decision.hookEventName).toBe("PreToolUse");
+    expect(decision.permissionDecision).toBe("deny");
+    expect(decision.permissionDecisionReason).toMatch(/says planted/);
+  });
+
+  it("as a process: an allow prints nothing and exits 0", () => {
+    const { status, stdout, stderr } = raw(payload("Bash", { command: "npm run check" }, HARNESS));
+    expect(status).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+  });
+
+  it("as a process: a blocking error is exit 2 with one line on stderr and nothing on stdout", () => {
+    const { status, stdout, stderr } = raw("not json");
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/^guard-target hook failed: .+/);
+    expect(stderr.split("\n")).toHaveLength(1);
+  });
+
+  it("as a process: a stdin it can't read is a blocking error too, not a crash (Qodo on PR 131)", () => {
+    const folder = openSync(tmpdir(), "r"); // reading a folder fails with EISDIR
+    const result = spawnSync(process.execPath, [HOOK], {
+      stdio: [folder, "pipe", "pipe"],
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_CONFIG: DEFAULT_CONFIG },
     });
-
-    it("lets a harmless change be committed, and ignores pending content when nothing is committed or pushed", () => {
-      const { dir, git, config } = reviewedRepo();
-      writeFileSync(join(dir, "README.md"), "# App\n\nRelease notes.\n");
-      git("add", "README.md");
-      expect(decide("Bash", { command: 'git commit -m "Add release notes"' }, dir, config)).toBeUndefined();
-      writeFileSync(join(dir, "scratch.md"), "planted\n");
-      expect(decide("Bash", { command: "npm run check" }, dir, config)).toBeUndefined();
-    });
-
-    it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
-      const { dir, git, config } = reviewedRepo(true);
-      writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
-      git("add", "notes.md");
-      git("commit", "-q", "-m", "Tidy"); // made directly, as a bypass of the commit check would be
-      expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toMatch(
-        /other-app holds content[\s\S]*not yet on any remote branch[\s\S]*says planted/,
-      );
-      git("reset", "-q", "--hard", "origin/main");
-      expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toBeUndefined();
-    });
-
-    it("denies when git can't answer for a reviewed checkout, rather than guessing", () => {
-      const { dir, config } = reviewedRepo();
-      writeFileSync(join(dir, ".git", "HEAD"), "not a ref\n"); // git can no longer read the repository
-      expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/can't inspect other-app/);
-    });
-
-    describe("what Qodo found in round 2 (PR 120)", () => {
-      it("reads whole file contents, so a line starting with ++ and a binary file are both checked", () => {
-        const { dir, git, config } = reviewedRepo();
-        writeFileSync(join(dir, "a.md"), "++ the planted bug\n");
-        git("add", "a.md");
-        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
-        git("reset", "-q", "HEAD", "a.md");
-        rmSync(join(dir, "a.md"));
-        writeFileSync(
-          join(dir, "img.bin"),
-          Buffer.concat([Buffer.from([0, 1, 2, 255, 254]), Buffer.from("planted"), Buffer.from([0, 0])]),
-        );
-        git("add", "img.bin");
-        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
-      });
-
-      it("scans every local commit not on a remote, whatever branch the push names, commit by commit", () => {
-        const { dir, git, config } = reviewedRepo();
-        git("checkout", "-q", "-b", "feature");
-        writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
-        git("add", "notes.md");
-        git("commit", "-q", "-m", "Tidy");
-        git("rm", "-q", "notes.md");
-        git("commit", "-q", "-m", "Tidy more"); // the net diff is clean, the first commit is not
-        git("checkout", "-q", "main"); // HEAD is clean; the push names the other branch
-        expect(decide("Bash", { command: "git push origin feature" }, dir, config)).toMatch(/says planted/);
-      });
-
-      it("scans the commit messages that would travel too", () => {
-        const { dir, git, config } = reviewedRepo();
-        writeFileSync(join(dir, "README.md"), "# App\n\nMore.\n");
-        git("add", "README.md");
-        git("commit", "-q", "-m", "Fix the planted bug");
-        expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
-      });
-
-      it("includes ignored files only when the command forces them in", () => {
-        const { dir, git, config } = reviewedRepo();
-        writeFileSync(join(dir, ".gitignore"), "secret.md\n");
-        git("add", ".gitignore");
-        git("commit", "-q", "-m", "Ignore secrets");
-        writeFileSync(join(dir, "secret.md"), "planted\n");
-        expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toBeUndefined();
-        expect(decide("Bash", { command: 'git add -f secret.md && git commit -m "Tidy"' }, dir, config)).toMatch(
-          /says planted/,
-        );
-      });
-
-      it("reads an untracked file whose name git would quote", () => {
-        const { dir, config } = reviewedRepo();
-        writeFileSync(join(dir, "café notes.md"), "planted\n");
-        expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
-      });
-
-      it("refuses a chain that writes files or hides git behind a function before committing in the checkout", () => {
-        const { dir, config } = reviewedRepo();
-        writeFileSync(join(tmpdir(), "guard-src.md"), "planted\n");
-        expect(
-          decide(
-            "Bash",
-            { command: `cp ${join(tmpdir(), "guard-src.md")} . && git add . && git commit -m Tidy` },
-            dir,
-            config,
-          ),
-        ).toMatch(/on its own/);
-        expect(decide("Bash", { command: 'f(){ git "$@"; }; f commit -m Tidy' }, dir, config)).toMatch(/on its own/);
-        expect(
-          decide("Bash", { command: 'echo "x" > notes.md; git add . && git commit -m Tidy' }, dir, config),
-        ).toMatch(/on its own/);
-      });
-
-      it("still allows the ordinary chain of git steps, and any chain outside a reviewed checkout", () => {
-        const { dir, config } = reviewedRepo();
-        writeFileSync(join(dir, "msg.txt"), "Add release notes\n");
-        expect(
-          decide("Bash", { command: "git add -A && git commit -F msg.txt && git push -u origin HEAD" }, dir, config),
-        ).toBeUndefined();
-        expect(
-          decide("Bash", { command: "npm run check && git add -A && git commit -F msg.txt" }, dir, config),
-        ).toBeUndefined();
-        expect(
-          decide("Bash", { command: "cp a.md b.md && git add . && git commit -m Tidy" }, HARNESS, config),
-        ).toBeUndefined();
-      });
-
-      it("denies a commit aimed at a reviewed checkout the guard can't find", () => {
-        const missing = join(tmpdir(), "no-such-other-app");
-        const config = configWithTarget(TARGET_FIXTURE, (c) => {
-          c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: missing };
-        });
-        expect(decide("Bash", { command: `git -C ${missing} commit -m Tidy` }, HARNESS, config)).toMatch(/can't find/);
-        // A commit elsewhere is not held up by a reviewed checkout that isn't there.
-        expect(decide("Bash", { command: "git commit -m Tidy" }, HARNESS, config)).toBeUndefined();
-      });
-    });
-
-    describe("what Qodo found in round 3 (PR 120), through the hook", () => {
-      it("refuses a chain with a numbered redirect or an expanding heredoc, and allows git -C steps", () => {
-        const { dir, config } = reviewedRepo();
-        expect(
-          decide("Bash", { command: 'echo "$X" 1>notes.md && git add . && git commit -m Tidy' }, dir, config),
-        ).toMatch(/on its own/);
-        expect(
-          decide(
-            "Bash",
-            { command: "echo <<EOF\n$(echo planted > n.md)\nEOF\ngit add . && git commit -m Tidy" },
-            dir,
-            config,
-          ),
-        ).toMatch(/on its own/);
-        expect(
-          decide("Bash", { command: `git -C ${dir} add -A && git -C ${dir} commit -m Tidy` }, HARNESS, config),
-        ).toBeUndefined();
-      });
-
-      it("refuses a push whose merge commit introduced a telltale while resolving", () => {
-        const { dir, git, config } = reviewedRepo(true);
-        git("checkout", "-q", "-b", "feature");
-        writeFileSync(join(dir, "feature.md"), "fine\n");
-        git("add", "feature.md");
-        git("commit", "-q", "-m", "Feature");
-        git("checkout", "-q", "main");
-        git("merge", "-q", "--no-ff", "--no-commit", "feature");
-        writeFileSync(join(dir, "resolved.md"), "The planted bug\n");
-        git("add", "resolved.md");
-        git("commit", "-q", "-m", "Merge feature");
-        expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
-      });
-
-      it("refuses a commit of a file staged and then deleted from the working tree", () => {
-        const { dir, git, config } = reviewedRepo();
-        writeFileSync(join(dir, "notes.md"), "The planted bug\n");
-        git("add", "notes.md");
-        rmSync(join(dir, "notes.md"));
-        expect(decide("Bash", { command: 'git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
-      });
-    });
+    closeSync(folder);
+    expect(result.status).toBe(2);
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr.trim()).toMatch(/^guard-target hook failed: EISDIR/);
   });
 });

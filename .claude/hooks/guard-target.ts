@@ -10,113 +10,73 @@
  *    Shell text can't show what a redirect, a copy or a script wrote, so the content is read from git at
  *    the moment it would travel. That is the guarantee; the text checks are the early warning.
  * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
- * (cd, pushd, Set-Location, git -C, git --work-tree), or runs from inside it.
+ * (cd, pushd, Set-Location, git -C, git --work-tree), or runs from inside it. Which repos those are, and
+ * how a checkout is recognised, is in guard-repos.ts.
  * And everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo.
  *
- * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
+ * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
+ * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
+ * a deny decision as JSON, nothing to allow, or exit 2 with one line on stderr when it couldn't check.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
+import {
+  entersCheckout,
+  esc,
+  inCheckout,
+  linkPattern,
+  navigatesInto,
+  type Reviewed,
+  reviewedRepos,
+} from "./guard-repos.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 
-interface Reviewed {
-  /** owner/name on GitHub */
-  github: string;
-  /** The repo name on GitHub. */
-  name: string;
-  /** The local checkout's folder name, from its configured path. */
-  folder: string;
-  /** The local checkout, resolved from this repo's root, where pending content is read from git. */
-  checkout: string;
+/** What one decision is made against: the folder the tool runs in, and the repos under guard. */
+interface Context {
+  cwd: string;
+  reviewed: Reviewed[];
 }
 
-const LAB_ROOT = join(import.meta.dirname, "../..");
+/** A tool's input as parsed from the payload: whatever Claude Code sent. */
+type ToolInput = ReturnType<typeof JSON.parse>;
 
-/** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
-const TARGET: Reviewed = {
-  github: "AJBeumer/faultforge-target",
-  name: "faultforge-target",
-  folder: "faultforge-target",
-  checkout: resolve(LAB_ROOT, "../faultforge-target"),
-};
-
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const REVIEWED = reviewedRepos();
-
-// Filled in by main(); the check functions read them. `args` is the tool's input as parsed from JSON.
-let tool = "";
-let args: ReturnType<typeof JSON.parse> = {};
-let cwd = process.cwd();
-
-main();
+/** Thrown by `deny()` and turned into a deny decision by `decide()`. */
+class Denied extends Error {}
 
 /**
- * Fails closed. Claude Code treats a hook that crashes (exit 1, a stack trace) as a non-blocking error
- * and runs the tool anyway, so an exception here (unreadable input, a body file that is a folder) would
- * be a bypass. Any error becomes a blocking error instead: exit 2 with a one-line reason on stderr,
- * which Claude Code shows to the agent and acts on by refusing the tool call.
+ * The decision for one hook payload. Fails closed: an exception (unreadable input, a body file that is a
+ * folder) is a blocking error, never an allow, because Claude Code treats a hook that crashes as a
+ * non-blocking error and runs the tool anyway. `env` supplies `FAULTFORGE_CONFIG`.
  */
-function main() {
+export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Decision {
   try {
-    const input = JSON.parse(readFileSync(0, "utf8"));
-    tool = String(input.tool_name ?? "");
-    args = input.tool_input ?? {};
-    cwd = String(input.cwd ?? process.cwd());
+    const input = JSON.parse(stdin);
+    const tool = String(input.tool_name ?? "");
+    const args: ToolInput = input.tool_input ?? {};
+    const ctx: Context = {
+      cwd: String(input.cwd ?? process.cwd()),
+      reviewed: reviewedRepos(env.FAULTFORGE_CONFIG),
+    };
     if (tool === "Bash" || tool === "PowerShell") {
-      checkCommand(String(args.command ?? ""));
+      checkCommand(ctx, String(args.command ?? ""));
     } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-      checkFileEdit();
+      checkFileEdit(ctx, args);
     }
+    return ALLOW;
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    console.error(
-      `guard-target hook failed: ${message}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
-    );
-    process.exit(2);
+    if (error instanceof Denied) return { kind: "deny", reason: error.message };
+    return failed(error);
   }
 }
 
-/**
- * The target, plus every repo marked reviewed in `factory.json` (or `FAULTFORGE_CONFIG`). A missing,
- * broken or wrong config can only fail to add a repo; it can never switch off the target's guard.
- */
-function reviewedRepos(): Reviewed[] {
-  const repos = [TARGET];
-  try {
-    const path = process.env.FAULTFORGE_CONFIG ?? join(import.meta.dirname, "../../factory.json");
-    const entries: { github?: unknown; path?: unknown; guard?: unknown }[] = Object.values(
-      JSON.parse(readFileSync(path, "utf8")).repos ?? {},
-    );
-    for (const entry of entries) {
-      if (entry.guard !== "reviewed" || typeof entry.github !== "string" || typeof entry.path !== "string") continue;
-      const known = repos.find((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase());
-      if (known) {
-        // The config may keep the target's checkout somewhere else; its protection stays either way.
-        known.checkout = resolve(LAB_ROOT, entry.path);
-        continue;
-      }
-      const name = entry.github.split("/")[1] ?? entry.github;
-      repos.push({
-        github: entry.github,
-        name,
-        folder: basename(entry.path) || name,
-        checkout: resolve(LAB_ROOT, entry.path),
-      });
-    }
-  } catch {
-    // keep the target alone
-  }
-  return repos;
-}
-
-/** A link GitHub turns into a "mentioned in" event on one of these repos' issues or PRs. */
-function linkPattern(repos: Reviewed[]): RegExp | undefined {
-  if (!repos.length) return undefined;
-  return new RegExp(
-    repos.map((r) => `github\\.com/${esc(r.github)}/(issues|pull)/\\d+|${esc(r.name)}#\\d+`).join("|"),
-    "i",
-  );
+/** The hook's own failure as a blocking error: the tool call is refused, never let through. */
+function failed(error: unknown): Decision {
+  return {
+    kind: "error",
+    message: `guard-target hook failed: ${firstLine(error)}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
+  };
 }
 
 /**
@@ -135,45 +95,18 @@ function explicitDestinations(command: string): string[] {
 }
 
 /**
- * The ways a command moves into a checkout: `cd`, `pushd`, PowerShell's `Set-Location` (or `sl`), each
- * with an optional `-Path`/`-LiteralPath`, `git -C<path>` with or without a space, and `git --work-tree=` /
- * `--git-dir`. The path may be relative, absolute or quoted, and the folder may be followed by a path
- * separator, a quote, whitespace or a shell operator (`;`, `&&`, `|`).
- */
-function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
-  const folders = [repo.folder, repo.name].map(esc).join("|");
-  const lead = atSegmentStart ? "(?:^|[;&|\\n]\\s*)" : "\\b";
-  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+-C\\s*|${lead}git\\s+--(?:work-tree|git-dir)[=\\s]\\s*)`;
-  return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
-}
-
-/** True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. */
-function entersCheckout(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, false).test(command);
-}
-
-/**
- * True only when the move into the checkout is a command of its own (at the start of the command or after a
- * shell operator), not words inside a message. The own-ticket link exemption needs this stricter form, so a
- * quoted `Set-Location <target>` in a commit message can't earn it.
- */
-function navigatesInto(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, true).test(command);
-}
-
-/**
  * Before any `git commit` or `git push`, wherever it runs, refuses if a reviewed checkout holds pending
  * content that names the lab or the bug (see guard-content.ts). This is the check that doesn't depend on
  * reading the command right. A reviewed checkout the guard can't find is skipped unless the command is
  * aimed at it; one git can't read is a deny.
  */
-function checkPendingContent(command: string, touched: Reviewed[]) {
+function checkPendingContent(ctx: Context, command: string, touched: Reviewed[]) {
   const commits = /\bgit\b[^|;&\n]*\bcommit\b/.test(command);
   const pushes = /\bgit\b[^|;&\n]*\bpush\b/.test(command);
   const forceIgnored = /\badd\b[^|;&\n]*\s(-\w*f\w*|--force)\b/.test(command);
   for (const moment of [commits && "commit", pushes && "push"] as const) {
     if (!moment) continue;
-    for (const repo of REVIEWED) {
+    for (const repo of ctx.reviewed) {
       if (!existsSync(join(repo.checkout, ".git"))) {
         if (touched.includes(repo)) {
           deny(
@@ -208,12 +141,8 @@ function isChained(command: string): boolean {
   return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(blankQuoted(command).trim());
 }
 
-/** True when a local path is inside the repo's checkout folder (whole folder names only). */
-function inCheckout(path: string, repo: Reviewed): boolean {
-  return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
-}
-
-function checkCommand(command: string) {
+function checkCommand(ctx: Context, command: string) {
+  const { cwd, reviewed } = ctx;
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
@@ -224,7 +153,7 @@ function checkCommand(command: string) {
   // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
   const destinations = explicitDestinations(command);
   const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
-  const touched = REVIEWED.filter(
+  const touched = reviewed.filter(
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
       entersCheckout(command, r) ||
@@ -236,7 +165,7 @@ function checkCommand(command: string) {
   // one repo (cd target && git add && git commit && git push) is fine.
   if (writes && isChained(command)) {
     const involved = new Set(destinations);
-    for (const r of REVIEWED) if (runsIn(r)) involved.add(r.github.toLowerCase());
+    for (const r of reviewed) if (runsIn(r)) involved.add(r.github.toLowerCase());
     if (involved.size > 1) {
       deny(
         "This command writes and involves more than one repo. Run the parts for different repos as separate commands.",
@@ -246,9 +175,9 @@ function checkCommand(command: string) {
 
   const repo = touched[0];
   if (!repo) {
-    if (writes) checkLinks(command, REVIEWED);
+    if (writes) checkLinks(ctx, command, reviewed);
     // Even from elsewhere, a commit or push is checked against every reviewed checkout's pending content.
-    checkPendingContent(command, touched);
+    checkPendingContent(ctx, command, touched);
     return;
   }
 
@@ -276,9 +205,9 @@ function checkCommand(command: string) {
     touched.length === 1 &&
     (inCheckout(cwd, repo) || navigatesInto(command, repo)) &&
     destinations.every((d) => d === repo.github.toLowerCase());
-  checkLinks(command, onlyItself ? REVIEWED.filter((r) => r !== repo) : REVIEWED);
+  checkLinks(ctx, command, onlyItself ? reviewed.filter((r) => r !== repo) : reviewed);
 
-  const text = [stripReviewedNames(command), ...referencedFiles(command)].join("\n");
+  const text = [stripReviewedNames(reviewed, command), ...referencedFiles(cwd, command)].join("\n");
   const found = telltales(text);
   if (found.length) {
     deny(
@@ -288,12 +217,12 @@ function checkCommand(command: string) {
 
   // The command's own text is clean; now what would travel: the content pending in every reviewed
   // checkout, read from git, whatever the text says about where it runs.
-  checkPendingContent(command, touched);
+  checkPendingContent(ctx, command, touched);
 }
 
-function checkFileEdit() {
-  const path = resolve(cwd, String(args.file_path ?? args.notebook_path ?? ""));
-  const repo = REVIEWED.find((r) => inCheckout(path, r));
+function checkFileEdit(ctx: Context, args: ToolInput) {
+  const path = resolve(ctx.cwd, String(args.file_path ?? args.notebook_path ?? ""));
+  const repo = ctx.reviewed.find((r) => inCheckout(path, r));
   if (!repo) return;
   const text = [
     args.content,
@@ -303,7 +232,7 @@ function checkFileEdit() {
   ]
     .filter(Boolean)
     .join("\n");
-  const found = telltales(stripReviewedNames(text));
+  const found = telltales(stripReviewedNames(ctx.reviewed, text));
   if (found.length) {
     deny(
       `This edit would put a hint into ${repo.name} (${found.join(", ")}). Keep its files free of any mention of the lab.`,
@@ -315,7 +244,7 @@ function checkFileEdit() {
  * Links only go one way: posts may name reviewed work as plain text ("target 3"), but never link to
  * one of `repos`' issues or PRs. A link would show on that repo's timeline, where its reviewer reads it.
  */
-function checkLinks(command: string, repos: Reviewed[]) {
+function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
   // Only when `gh pr create` is a command being run, not words inside a message.
   if (/(?:^|[;&|\n]\s*)gh\s+pr\s+create\b[^|;&\n"']*\s--fill(-first|-verbose)?\b/.test(command)) {
     deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
@@ -324,7 +253,7 @@ function checkLinks(command: string, repos: Reviewed[]) {
   // Text read from stdin (a pipe or heredoc) or built from shell variables is in the command
   // itself, not in the extracted arguments, so check the whole command for those.
   const indirect = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command) || posted.some((p) => /[$`]/.test(p));
-  const text = [...(indirect ? [command] : posted), ...referencedFiles(command)].join("\n");
+  const text = [...(indirect ? [command] : posted), ...referencedFiles(ctx.cwd, command)].join("\n");
   const linked = repos.find((r) => linkPattern([r])?.test(text));
   if (linked) {
     deny(
@@ -337,8 +266,8 @@ function checkLinks(command: string, repos: Reviewed[]) {
  * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
  * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
  */
-function stripReviewedNames(text: string): string {
-  const repoWords = REVIEWED.flatMap((r) => [r.name, r.folder]).map(esc);
+function stripReviewedNames(reviewed: Reviewed[], text: string): string {
+  const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
   const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
   return text.replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (identifies.test(token) ? " " : token));
 }
@@ -373,16 +302,16 @@ function quotedPositions(command: string): boolean[] {
 }
 
 /**
- * Contents of message or body files the command reads, e.g. `git commit -F msg.txt` or `--body-file`.
- * Every file that exists behind such a flag is read, however the flag is quoted: a file the command
- * would really post exists when the hook runs, and reading one more file is harmless. A `gh api` field
- * (`-F name=value`) is text unless its value is `@file`, which gh reads from that file; a file really
- * named `name=value` is read too, because `git commit -F` would read it. A flag whose file doesn't
- * exist is words in a message when it sits in quoted text or a heredoc body, and otherwise a deny: the
- * guard can't check what would be posted, so nothing is posted. A file that exists but can't be read
- * throws, and the hook then fails closed.
+ * Contents of message or body files the command reads, e.g. `git commit -F msg.txt` or `--body-file`,
+ * with relative names resolved from `cwd`. Every file that exists behind such a flag is read, however the
+ * flag is quoted: a file the command would really post exists when the hook runs, and reading one more
+ * file is harmless. A `gh api` field (`-F name=value`) is text unless its value is `@file`, which gh reads
+ * from that file; a file really named `name=value` is read too, because `git commit -F` would read it. A
+ * flag whose file doesn't exist is words in a message when it sits in quoted text or a heredoc body, and
+ * otherwise a deny: the guard can't check what would be posted, so nothing is posted. A file that exists
+ * but can't be read throws, and the hook then fails closed.
  */
-function referencedFiles(command: string): string[] {
+function referencedFiles(cwd: string, command: string): string[] {
   const files: string[] = [];
   const quoted = quotedPositions(command);
   const ghApi = /\bgh\s+api\b/.test(command);
@@ -413,11 +342,13 @@ function referencedFiles(command: string): string[] {
   return files;
 }
 
+/** Ends the check with a deny; `decide()` turns it into the decision. */
 function deny(reason: string): never {
-  console.log(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
-    }),
-  );
-  process.exit(0);
+  throw new Denied(reason);
 }
+
+function main() {
+  respond(hookAnswer(readStdin, decide, failed));
+}
+
+if (isEntry(import.meta.url)) main();

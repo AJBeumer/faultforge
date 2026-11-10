@@ -14,12 +14,14 @@
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
  * goes through a file (`--body-file`, `git commit -F`), and a denied command says so.
  *
- * Reads the hook payload on stdin. Prints a deny decision as JSON, or nothing to allow.
+ * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
+ * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
+ * a deny decision as JSON, nothing to allow, or exit 2 with one line on stderr when it couldn't check.
  */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
   [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
@@ -165,46 +167,49 @@ export function denialReason(tool: string, reasons: string[]): string {
 }
 
 /**
- * Fails closed. Claude Code treats a hook that crashes (exit 1, a stack trace) as a non-blocking error
- * and runs the tool anyway, so an exception here (unreadable input, a path that can't be resolved) would
- * be a bypass. Inside a run, any error becomes a blocking error instead: exit 2 with a one-line reason
- * on stderr, which Claude Code shows to the agent and acts on by refusing the tool call.
+ * The decision for one hook payload, given the run's environment (`FAULTFORGE_FACTORY_RUN`,
+ * `FAULTFORGE_RUN_ROOT`, `FAULTFORGE_TICKET_NUMBER`). Outside a run everything is allowed, whatever the
+ * payload says: there is nothing to protect. Inside a run it fails closed: an exception (unreadable input, a
+ * path that can't be resolved) is a blocking error, never an allow, because Claude Code treats a hook that
+ * crashes as a non-blocking error and runs the tool anyway.
  */
-function main() {
-  if (!process.env.FAULTFORGE_FACTORY_RUN) return;
+export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Decision {
+  if (!env.FAULTFORGE_FACTORY_RUN) return ALLOW;
   let tool = "";
   let reasons: string[] = [];
   try {
-    const input = JSON.parse(readFileSync(0, "utf8"));
+    const input = JSON.parse(stdin);
     tool = String(input.tool_name ?? "");
     const args = input.tool_input ?? {};
     const cwd: string = input.cwd ?? process.cwd();
     if (tool === "Bash" || tool === "PowerShell")
-      reasons = commandViolations(String(args.command ?? ""), process.env.FAULTFORGE_TICKET_NUMBER);
+      reasons = commandViolations(String(args.command ?? ""), env.FAULTFORGE_TICKET_NUMBER);
     else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
       const reason = editViolation(
         resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
-        process.env.FAULTFORGE_RUN_ROOT,
+        env.FAULTFORGE_RUN_ROOT,
       );
       if (reason) reasons = [reason];
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    console.error(
-      `factory-policy hook failed: ${message}. Not allowed in an unattended factory run: a hook that can't check lets nothing through. If the ticket needs this, stop and report it as stuck.`,
-    );
-    process.exit(2);
+    return failed(error);
   }
-  if (!reasons.length) return;
-  console.log(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: denialReason(tool, reasons),
-      },
-    }),
-  );
+  if (!reasons.length) return ALLOW;
+  return { kind: "deny", reason: denialReason(tool, reasons) };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();
+/** The hook's own failure, inside a run, as a blocking error: the tool call is refused, never let through. */
+function failed(error: unknown): Decision {
+  return {
+    kind: "error",
+    message: `factory-policy hook failed: ${firstLine(error)}. Not allowed in an unattended factory run: a hook that can't check lets nothing through. If the ticket needs this, stop and report it as stuck.`,
+  };
+}
+
+function main() {
+  // Outside a run there is nothing to protect, whatever stdin holds or whether it can be read at all.
+  if (!process.env.FAULTFORGE_FACTORY_RUN) return;
+  respond(hookAnswer(readStdin, decide, failed));
+}
+
+if (isEntry(import.meta.url)) main();
