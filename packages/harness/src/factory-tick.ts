@@ -122,6 +122,24 @@ export interface AgentRun {
   subtype: string | null;
   costUsd: number | null;
   turns: number | null;
+  /** The last pull request URL seen in a `gh pr create` step's own result, if the agent opened one. Used
+   * when the time limit cuts the run off before it can report a `FACTORY_RESULT` of its own. */
+  lastPr?: string | null;
+}
+
+/**
+ * The pull request URL from a `gh pr create` step's tool result, or null. The content of a `tool_result`
+ * message is either a plain string or a list of `{type: "text", text}` blocks.
+ */
+export function prUrlFromToolResult(content: unknown): string | null {
+  const text = Array.isArray(content)
+    ? content
+        .map((part) =>
+          part && typeof part === "object" && "text" in part ? String((part as { text: unknown }).text) : "",
+        )
+        .join("\n")
+    : String(content ?? "");
+  return text.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/)?.[0] ?? null;
 }
 
 export interface Verification {
@@ -146,7 +164,8 @@ export function settle(
   github: string,
   minutes: number,
 ): Finish {
-  if (agent.timedOut) return { label: LABELS.help, reason: `hit the time limit of ${minutes} minutes`, pr: null };
+  if (agent.timedOut)
+    return { label: LABELS.help, reason: `hit the time limit of ${minutes} minutes`, pr: agent.lastPr ?? null };
   if (!result) {
     const how = agent.subtype && agent.subtype !== "success" ? ` (${agent.subtype})` : "";
     return {
@@ -890,6 +909,47 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   };
 }
 
+/** The time limit for an ordinary `gh` or `git` call. A push or a fetch/clone gets `LONG_CALL_TIMEOUT_MS`
+ * instead: a slow network can make either legitimately take longer than everything else the tick runs. */
+export const CALL_TIMEOUT_MS = 60_000;
+export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
+
+/** True when a `child_process` error is Node reporting that the call exceeded its `timeout` option. */
+export function isTimeoutError(error: unknown): boolean {
+  return Boolean(error) && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+}
+
+/**
+ * A failed `gh` or `git` call, with the call named so a stop the run reports (the audit, the verify
+ * step, a relabel) says which one hung or failed, never just "the runner failed".
+ */
+export class ExternalCallError extends Error {
+  readonly timedOut: boolean;
+  readonly stderr: string;
+  constructor(label: string, cause: unknown) {
+    const timedOut = isTimeoutError(cause);
+    const stderr =
+      cause && typeof cause === "object" && "stderr" in cause
+        ? String((cause as { stderr?: unknown }).stderr ?? "")
+        : "";
+    const detail = stderr.trim().split("\n").at(-1) || (cause instanceof Error ? cause.message : String(cause));
+    super(timedOut ? `${label} timed out` : `${label} failed: ${detail}`);
+    this.name = "ExternalCallError";
+    this.timedOut = timedOut;
+    this.stderr = stderr;
+  }
+}
+
+/**
+ * True only when a failed label removal is GitHub saying the label wasn't on the issue to begin with
+ * (its own HTTP 404 message, not a timeout or any other failure). Anything else - no permission, the
+ * issue or repo gone, a hung call - must be reported, never swallowed as "already gone".
+ */
+export function isLabelAlreadyGone(error: unknown): boolean {
+  if (!(error instanceof ExternalCallError) || error.timedOut) return false;
+  return /HTTP 404/.test(error.stderr) && /label does not exist/i.test(error.stderr);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Real side effects
 
@@ -897,12 +957,36 @@ function runsDir(): string {
   return resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(LAB_ROOT, "..", "faultforge-runs"));
 }
 
+/** Runs an external command with a time limit, throwing a `ExternalCallError` named after it on failure. */
+export function runExternal(
+  label: string,
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+  extra: { maxBuffer?: number; stdio?: ["ignore", "pipe", "pipe"] } = {},
+): string {
+  try {
+    return execFileSync(bin, args, { encoding: "utf8", timeout: timeoutMs, ...extra }) as unknown as string;
+  } catch (error) {
+    throw new ExternalCallError(label, error);
+  }
+}
+
 function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return runExternal(`gh ${args[0] ?? ""}`.trim(), "gh", args, CALL_TIMEOUT_MS, { maxBuffer: 64 * 1024 * 1024 });
 }
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], CALL_TIMEOUT_MS, {
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/** For a push, or a fetch/clone: the same as `git`, but with the longer time limit. */
+function gitLong(cwd: string, ...args: string[]): string {
+  return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], LONG_CALL_TIMEOUT_MS, {
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function npm(cwd: string, ...args: string[]): { status: number | null; output: string } {
@@ -921,6 +1005,54 @@ function pidAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
+ * an unheld lock can never both get it. Taking over a *stale* one (its pid is dead) is not naturally
+ * atomic - removing the old file and writing the new one are two steps - so it is gated by a second,
+ * genuinely atomic mutex (a directory `mkdir`): only one tick may ever be in that two-step section at a
+ * time. A tick that loses the race for the mutex reports busy, exactly as it would for a live holder.
+ */
+export function acquireLock(
+  dir: string,
+  isAlive: (pid: number) => boolean = pidAlive,
+): { acquired: boolean; release(): void; note?: string } {
+  const file = join(dir, "factory.lock");
+  const recovery = join(dir, "factory.lock.recovery");
+  const take = () =>
+    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+  const release = () => rmSync(file, { force: true });
+  try {
+    take();
+    return { acquired: true, release };
+  } catch {
+    // Fallen through: something is already at `file`, live or stale.
+  }
+  try {
+    mkdirSync(recovery);
+  } catch {
+    return { acquired: false, release: () => {}, note: "another run is already checking a stale lock" };
+  }
+  try {
+    let held: { pid?: number; at?: string } = {};
+    try {
+      held = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      // An unreadable lock is treated as stale below.
+    }
+    if (held.pid && isAlive(held.pid))
+      return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
+    rmSync(file, { force: true });
+    take();
+    return {
+      acquired: true,
+      release,
+      note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
+    };
+  } finally {
+    rmSync(recovery, { recursive: true, force: true });
   }
 }
 
@@ -1003,32 +1135,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    lock() {
-      const file = join(runs, "factory.lock");
-      const take = () =>
-        writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
-      const release = () => rmSync(file, { force: true });
-      try {
-        take();
-        return { acquired: true, release };
-      } catch {
-        let held: { pid?: number; at?: string } = {};
-        try {
-          held = JSON.parse(readFileSync(file, "utf8"));
-        } catch {
-          // An unreadable lock is treated as stale below.
-        }
-        if (held.pid && pidAlive(held.pid))
-          return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
-        rmSync(file, { force: true });
-        take();
-        return {
-          acquired: true,
-          release,
-          note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
-        };
-      }
-    },
+    lock: () => acquireLock(runs),
     labelled: (github, label) =>
       (
         JSON.parse(
@@ -1077,8 +1184,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       for (const label of remove) {
         try {
           gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`);
-        } catch {
-          // Already gone.
+        } catch (error) {
+          if (!isLabelAlreadyGone(error)) throw error;
         }
       }
       if (add.length) gh("issue", "edit", String(number), "--repo", github, ...add.flatMap((l) => ["--add-label", l]));
@@ -1096,14 +1203,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         for (const [key, repo] of Object.entries(factory.repos)) {
           const source = resolve(LAB_ROOT, repo.path);
           const target = repo.path === "." ? lab : worktreeFor(lab, repo.path);
-          git(source, "fetch", "--quiet", "origin", "main");
+          gitLong(source, "fetch", "--quiet", "origin", "main");
           mainAtStart[key] = git(source, "rev-parse", "origin/main");
           mkdirSync(dirname(target), { recursive: true });
-          git(source, "worktree", "add", "--detach", target, "origin/main");
+          gitLong(source, "worktree", "add", "--detach", target, "origin/main");
         }
-        git(privateRepo, "fetch", "--quiet", "origin", "main");
+        gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
         mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
-        git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         for (const repo of Object.values(factory.repos)) {
           const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
           if (!existsSync(join(dir, "package.json"))) continue;
@@ -1216,6 +1323,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         }, options.minutes * 60_000);
         let buffer = "";
         let final: Record<string, unknown> | null = null;
+        let lastPr: string | null = null;
         const commands = new Map<string, string>();
         const onLine = (line: string) => {
           if (!line.trim()) return;
@@ -1238,7 +1346,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
               // No output here: the event log can be public (an Actions log or artifact). The full
               // output stays in the agent transcript, which only goes to the private repo.
-              log("agent-step-result", { step: commands.get(part.tool_use_id ?? ""), error: Boolean(part.is_error) });
+              const step = commands.get(part.tool_use_id ?? "");
+              log("agent-step-result", { step, error: Boolean(part.is_error) });
+              if (step === "pr-opened" && !part.is_error) {
+                const url = prUrlFromToolResult(part.content);
+                if (url) lastPr = url;
+              }
             }
           }
         };
@@ -1267,6 +1380,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             subtype: `could not start the agent: ${error.message}`,
             costUsd: null,
             turns: null,
+            lastPr: null,
           });
         });
         child.on("close", (code) => {
@@ -1282,6 +1396,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             subtype: typeof result?.subtype === "string" ? result.subtype : null,
             costUsd: typeof result?.total_cost_usd === "number" ? result.total_cost_usd : null,
             turns: typeof result?.num_turns === "number" ? result.num_turns : null,
+            lastPr,
           });
         });
       });
@@ -1351,8 +1466,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (!priv) {
         priv = join(runs, runId, "private");
         mkdirSync(dirname(priv), { recursive: true });
-        git(privateRepo, "fetch", "--quiet", "origin", "main");
-        git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
+        gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         temporary = true;
       }
       const dir = join(priv, evidenceInPrivate, "factory-runs");
@@ -1364,9 +1479,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       git(priv, "add", "-A");
       if (git(priv, "status", "--porcelain"))
         git(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
-      git(priv, "fetch", "--quiet", "origin", "main");
+      gitLong(priv, "fetch", "--quiet", "origin", "main");
       git(priv, "rebase", "--quiet", "origin/main");
-      git(priv, "push", "--quiet", "origin", "HEAD:main");
+      gitLong(priv, "push", "--quiet", "origin", "HEAD:main");
       if (temporary) {
         git(privateRepo, "worktree", "remove", "--force", priv);
         git(privateRepo, "branch", "-D", `run-${runId}`);
@@ -1389,7 +1504,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const mainAtStart: Record<string, string> = {};
       for (const [key, repo] of Object.entries(factory.repos)) {
         const dir = resolve(LAB_ROOT, repo.path);
-        git(dir, "fetch", "--quiet", "origin", "main");
+        gitLong(dir, "fetch", "--quiet", "origin", "main");
         const head = git(dir, "rev-parse", "HEAD");
         const main = git(dir, "rev-parse", "origin/main");
         if (head !== main)
@@ -1398,7 +1513,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           throw new Error(`the ${key} checkout has no node_modules: the workflow must run npm ci first`);
         mainAtStart[key] = main;
       }
-      git(privateRepo, "fetch", "--quiet", "origin", "main");
+      gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
       mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
       requireHooks(LAB_ROOT);
       return {
