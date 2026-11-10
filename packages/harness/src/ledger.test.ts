@@ -85,6 +85,52 @@ describe("readLedger / readAuditLog: applying amendments", () => {
     const [entry] = readLedger(path);
     expect(entry?.note).toBeUndefined();
   });
+
+  it("targets one audit event by eventId, never the other event sharing its caseId (Qodo on PR 135)", () => {
+    const first = { eventId: "evt-1", caseId: "FF-0001", type: "sabotage.injected" };
+    const second = { eventId: "evt-2", caseId: "FF-0001", type: "review.recorded" };
+    const amendment = {
+      kind: "amendment",
+      amends: "evt-2",
+      at: "t1",
+      change: { note: "fixed" },
+      reason: "r",
+      evidence: "e",
+    };
+    const path = fileOf(first, second, amendment);
+    const [a, b] = readAuditLog(path);
+    expect(a?.note).toBeUndefined();
+    expect(b?.note).toBe("fixed");
+  });
+
+  it("leaves an amendment unapplied when its target id is held by more than one entry", () => {
+    const amendment = {
+      kind: "amendment",
+      amends: "FF-0001",
+      at: "t1",
+      change: { note: "x" },
+      reason: "r",
+      evidence: "e",
+    };
+    const path = fileOf(CASE_A, CASE_A, amendment);
+    const [first, second] = readLedger(path);
+    expect(first?.note).toBeUndefined();
+    expect(second?.note).toBeUndefined();
+  });
+
+  it("applies a change naming its own field 'amendments' without crashing, and still returns the real list", () => {
+    const amendment = {
+      kind: "amendment",
+      amends: "FF-0001",
+      at: "t1",
+      change: { amendments: null },
+      reason: "r",
+      evidence: "e",
+    };
+    const path = fileOf(CASE_A, amendment);
+    const [entry] = readLedger(path);
+    expect(entry?.amendments).toEqual([amendment]);
+  });
 });
 
 describe("ledgerProblems", () => {
@@ -130,6 +176,36 @@ describe("ledgerProblems", () => {
   it("refuses an amendment with no evidence", () => {
     const path = fileOf(CASE_A, { kind: "amendment", amends: "FF-0001", at: "t1", change: { note: "x" }, reason: "r" });
     expect(ledgerProblems(path)).toEqual(["amendment amending FF-0001: has no evidence"]);
+  });
+
+  it("refuses a whitespace-only reason or evidence the same as a missing one (Qodo on PR 135)", () => {
+    const path = fileOf(CASE_A, {
+      kind: "amendment",
+      amends: "FF-0001",
+      at: "t1",
+      change: { note: "x" },
+      reason: "   ",
+      evidence: "\t",
+    });
+    expect(ledgerProblems(path)).toEqual([
+      "amendment amending FF-0001: has no reason",
+      "amendment amending FF-0001: has no evidence",
+    ]);
+  });
+
+  it("refuses an id held by more than one entry, and the amendment naming it, instead of picking one (Qodo on PR 135)", () => {
+    const path = fileOf(CASE_A, CASE_A, {
+      kind: "amendment",
+      amends: "FF-0001",
+      at: "t1",
+      change: { note: "x" },
+      reason: "r",
+      evidence: "e",
+    });
+    expect(ledgerProblems(path)).toEqual([
+      "FF-0001 is held by more than one entry",
+      "amendment amending FF-0001: that id is held by more than one entry, so the target is ambiguous",
+    ]);
   });
 
   it("refuses an amendment that amends another amendment", () => {

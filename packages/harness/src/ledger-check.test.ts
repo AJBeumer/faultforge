@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,6 +58,55 @@ describe("appendOnlyProblems: a file's git history", () => {
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n', "two cases");
     commit(dir, "ground-truth.jsonl", "", "drop everything");
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toHaveLength(1);
+  });
+
+  it("catches an uncommitted edit, not just committed history (Qodo on PR 135)", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001","validated":true}\n', "first case");
+    writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-0001","validated":false}\n');
+    const problems = appendOnlyProblems(dir, "ground-truth.jsonl");
+    expect(problems).toEqual(["ground-truth.jsonl: uncommitted changes removed or changed a line"]);
+  });
+
+  it("is empty when nothing but history exists, with no uncommitted changes", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+  });
+
+  it("catches a merge commit whose conflict resolution drops a line, which plain git log -p hides (Qodo on PR 135)", () => {
+    const dir = repo();
+    commit(dir, "f.jsonl", "L1\n", "base");
+    sh(dir, "switch", "--quiet", "-c", "feature");
+    commit(dir, "f.jsonl", "L1\nL2\n", "feature adds L2");
+    sh(dir, "switch", "--quiet", "main");
+    commit(dir, "f.jsonl", "L1\nL3\n", "main adds L3");
+    try {
+      sh(dir, "merge", "--no-ff", "--no-edit", "-q", "feature");
+    } catch {
+      // Expected: both sides touched line 2, so the merge conflicts and needs a manual resolution.
+    }
+    // Resolve by keeping only feature's line, dropping main's L3 without any earlier commit having done so.
+    writeFileSync(join(dir, "f.jsonl"), "L1\nL2\n");
+    sh(dir, "add", "f.jsonl");
+    sh(dir, "commit", "--quiet", "--no-edit");
+    const mergeSha = sh(dir, "rev-parse", "HEAD").slice(0, 12);
+    const problems = appendOnlyProblems(dir, "f.jsonl");
+    expect(problems.some((p) => p.includes(mergeSha))).toBe(true);
+  });
+});
+
+describe("appendOnlyProblems: the repository itself", () => {
+  it("refuses a directory that isn't the root of its own git repository", () => {
+    const dir = repo();
+    const nested = join(dir, "subdir");
+    mkdirSync(nested);
+    expect(() => appendOnlyProblems(nested, "ground-truth.jsonl")).toThrow(/not the root of its own git repository/);
+  });
+
+  it("refuses a directory with no git repository at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "not-a-repo-"));
+    expect(() => appendOnlyProblems(dir, "ground-truth.jsonl")).toThrow(/not inside a git repository/);
   });
 });
 
