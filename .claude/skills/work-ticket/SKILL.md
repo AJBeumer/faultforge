@@ -25,7 +25,7 @@ gh issue view <N> --repo <github>
 - If it isn't ready, **stop**. Tell the owner exactly what the command reported, and don't start until the ticket is fixed. Don't fill the gap yourself and carry on.
 - If `board` is true, move it to **In progress** on the project board. Repos with `board: false` stay off it, so a `reviewed` repo never links back here.
 
-In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set), the runner has already checked readiness, snapshotted the ticket and claimed it. Read the ticket from the snapshot file named by `FAULTFORGE_TICKET_FILE`, and from nothing else: `gh issue view`, `gh api` on issues and `gh search` are blocked for this ticket. Skip `ticket:ready` (it reads the live ticket), and skip the board move (a write the runner's audit can't see; `gh project` writes are blocked in a run). The runner labels the ticket and reports on it.
+In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set), the runner has already checked readiness, snapshotted the ticket and claimed it. Read the ticket from the snapshot file, whose path the runner's instructions give (it is also `$FAULTFORGE_TICKET_FILE`; echo that one variable if you must, but never list the environment, which the policy blocks), and from nothing else: `gh issue view`, `gh api` on issues and `gh search` are blocked for this ticket. Skip `ticket:ready` (it reads the live ticket), and skip the board move (a write the runner's audit can't see; `gh project` writes are blocked in a run). The runner labels the ticket and reports on it.
 
 ## 2. Branch and build
 
