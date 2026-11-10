@@ -177,6 +177,45 @@ describe("buildCaseRecord", () => {
     expect(record.findings[0]).toMatchObject({ severity: "high", commentLines: [1, 5], summary: "edited" });
   });
 
+  it("uses the most recent case.adjudicated event when the verdict was corrected", () => {
+    const firstVerdict = event("case.adjudicated", {
+      disposition: "review_incomplete",
+      by: "AJBeumer",
+      at: "2026-11-05T00:09:00.000Z",
+    });
+    const record = buildCaseRecord(
+      inputs({ events: [event("sabotage.injected"), REVIEW_EVENT, firstVerdict, ADJUDICATED_EVENT] }),
+    ) as { human: { disposition: string } };
+    expect(record.human.disposition).toBe("confirmed_detected");
+  });
+
+  it("refuses a review recorded for a different commit than the injection", () => {
+    const mismatched = event("review.recorded", {
+      pr: REVIEW_EVENT.pr,
+      review: { ...(REVIEW_EVENT.review as object), reviewedCommit: "c".repeat(40) },
+    });
+    expect(() =>
+      buildCaseRecord(inputs({ events: [event("sabotage.injected"), mismatched, ADJUDICATED_EVENT] })),
+    ).toThrow(/not the injected commit/);
+  });
+
+  it("refuses an adjudication recorded for a different commit than the review", () => {
+    const mismatched = event("case.adjudicated", { ...ADJUDICATED_EVENT, commit: "c".repeat(40) });
+    expect(() => buildCaseRecord(inputs({ events: [event("sabotage.injected"), REVIEW_EVENT, mismatched] }))).toThrow(
+      /not the reviewed commit/,
+    );
+  });
+
+  it("refuses a review.recorded event with no reviewer or path, instead of defaulting", () => {
+    const bare = event("review.recorded", {
+      pr: REVIEW_EVENT.pr,
+      review: { configVersion: "v3", reviewedCommit: "b".repeat(40), reviewedAt: "2026-11-05T00:05:00.000Z", url: "u" },
+    });
+    expect(() => buildCaseRecord(inputs({ events: [event("sabotage.injected"), bare, ADJUDICATED_EVENT] }))).toThrow(
+      /reviewer/,
+    );
+  });
+
   it("leaves out injection, detection, collateral for a control case", () => {
     const controlEntry: LedgerEntry = { ...ENTRY, kind: "control" };
     const record = buildCaseRecord(
@@ -197,13 +236,11 @@ describe("overlayProblems", () => {
   it("accepts the documented fields", () => {
     expect(
       overlayProblems({
-        detection: { notes: ["a"], matchDetailOverrides: { kind: "x" } },
+        detection: { notes: ["a"] },
         collateral: [],
         otherReviewers: [],
         challenge: { verdict: "not_run", note: "n" },
         review: { linkedRepositories: "none" },
-        findings: [{ id: "f1", severity: "high", commentLines: [1, 2], summary: "s" }],
-        legacyFindingsPath: "private/raw-artifacts/x.json",
       }),
     ).toEqual([]);
   });
@@ -224,9 +261,41 @@ describe("overlayProblems", () => {
     ]);
   });
 
+  it("rejects the legacy-only extras for a case with a saved review", () => {
+    expect(overlayProblems({ findings: [{ id: "f1", severity: "high" }] }, false)).toEqual([
+      "overlay sets findings, which only a case with no saved review may use",
+    ]);
+    expect(overlayProblems({ legacyFindingsPath: "x.json" }, false)).toEqual([
+      "overlay sets legacyFindingsPath, which only a case with no saved review may use",
+    ]);
+    expect(overlayProblems({ detection: { matchDetailOverrides: { kind: "x" } } }, false)).toEqual([
+      "overlay sets detection.matchDetailOverrides, which is not allowed",
+    ]);
+  });
+
+  it("accepts the legacy-only extras for a case with no saved review", () => {
+    expect(
+      overlayProblems(
+        {
+          detection: { matchDetailOverrides: { kind: "x" } },
+          findings: [{ id: "f1", severity: "high", commentLines: [1, 2], summary: "s" }],
+          legacyFindingsPath: "private/raw-artifacts/x.json",
+        },
+        true,
+      ),
+    ).toEqual([]);
+  });
+
   it("rejects an unknown findings override field, naming it", () => {
-    expect(overlayProblems({ findings: [{ id: "f1", file: "x" }] })).toEqual([
+    expect(overlayProblems({ findings: [{ id: "f1", file: "x" }] }, true)).toEqual([
       "overlay sets findings[].file, which is not allowed",
+    ]);
+  });
+
+  it("reports a malformed findings shape as a problem, not a crash", () => {
+    expect(overlayProblems({ findings: {} }, true)).toEqual(["overlay sets findings, which must be an array"]);
+    expect(overlayProblems({ findings: [null] }, true)).toEqual([
+      "overlay sets a findings[] entry that isn't an object",
     ]);
   });
 });

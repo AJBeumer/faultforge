@@ -8,33 +8,47 @@
  * Reads, for `<caseId>`:
  *  - the ground-truth entry (`readLedger`, amendments applied): `injection` and `target`.
  *  - the case's audit events (`readAuditLog`, amendments applied), filtered to this case. Three stages
- *    are required, and a case missing one is refused, naming it: `sabotage.injected` or
- *    `control.injected` (the case was planted); `review.recorded` (`pr` and the parts of `review` no
- *    saved review carries: `reviewer`, `path`, `configVersion`, `reviewedCommit`, `reviewedAt`, `url`);
- *    `case.adjudicated` (`human.disposition`, `.adjudicatedBy` from `by`, `.adjudicatedAt` from `at`).
- *  - the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`, matched by
- *    `reviewedCommit`, via `findSavedReview` from `verdict.ts`) for `findings`. A review that predates
- *    `review:wait` (so far, only FF-0001) has none; the overlay then names a raw findings file instead
- *    (`legacyFindingsPath`), read in Qodo's API shape and converted with `findingsFor` (`review-wait.ts`).
+ *    are required, and a case missing one is refused, naming it. When more than one event of a stage
+ *    exists (a re-review, a corrected verdict), the most recent one (by `at`) is the one that counts:
+ *    `sabotage.injected` or `control.injected` (the case was planted); `review.recorded` (`pr`, and all
+ *    of `review` — `reviewer`, `path`, `configVersion`, `reviewedCommit`, `reviewedAt`, `url` — are
+ *    required on the event itself, never defaulted); `case.adjudicated` (`human.disposition`,
+ *    `.adjudicatedBy` from `by`, `.adjudicatedAt` from `at`). `reviewedCommit` must equal the ground
+ *    truth's injected commit, and `case.adjudicated`'s `commit`, when the event carries one, must equal
+ *    it too; a case whose events disagree on which commit was reviewed is refused.
  *  - `private/cases/<caseId>.overlay.json`: prose no event or saved review holds —
- *    `detection.notes`, `collateral`, `otherReviewers`, `challenge`, `review.linkedRepositories` — and,
- *    only for a review that predates `review:wait` and the current wording of `match-rule.ts`'s
- *    criteria, two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
- *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`, which a legacy raw
- *    findings file doesn't carry). The command refuses any other field, naming it, and prints which
- *    fields it took from the overlay.
+ *    `detection.notes`, `collateral`, `otherReviewers`, `challenge`, `review.linkedRepositories`. The
+ *    overlay itself opts a case into the legacy path by setting `legacyFindingsPath` (a raw findings
+ *    file, read in Qodo's API shape and converted with `findingsFor` from `review-wait.ts`) — a case
+ *    without it must have a saved review file. This is a declaration, not a guess from what happens to
+ *    exist on disk: a `review.json` backfilled for an unrelated ticket's testing doesn't make a legacy
+ *    case look ordinary, or an ordinary case look legacy. Only a legacy case (so far, only FF-0001,
+ *    whose review predates both `review:wait` and the current wording of `match-rule.ts`'s criteria)
+ *    may also set two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
+ *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`/`summary`, which a
+ *    legacy raw findings file doesn't carry). The command refuses any other field, or shape, naming it,
+ *    and prints which fields it took from the overlay.
+ *  - for an ordinary case, the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`,
+ *    matched by `reviewedCommit`, via `findSavedReview` from `verdict.ts`) for `findings`, cross-checked
+ *    against `review.recorded`'s `pr` so a saved file for the right commit but the wrong PR is refused,
+ *    not silently used.
  *
  * `detection` comes from `applyMatchRule`: the matched finding's criteria when caught, the first
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
  * per finding) and (for a legacy review only) re-worded by `matchDetailOverrides`.
  *
+ * `--write` also appends a `case.published` audit event (the written record's `sha256` and `path`).
+ * Writing the same case twice with unchanged content is a no-op the second time (the file is
+ * rewritten, but no duplicate event is appended) rather than a new event every run.
+ *
  * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
  * listed); 2 an input (ledger, events, template, saved review or overlay) is missing, unreadable, or
- * the case is missing a required stage (named in the message).
+ * inconsistent (a missing stage, disagreeing commits, or a saved review for the wrong PR), named in
+ * the message.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,9 +61,6 @@ import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const SCHEMA_REF = "../schemas/case-record.v1.json";
-/** Qodo is the only reviewer a case record counts, and every saved review was read via its PR comments. */
-const REVIEWER = "qodo-code-review[bot]";
-const REVIEW_PATH = "pr-comments";
 /** This repo, where adjudicated templates are published, for `injection.template`. */
 const TEMPLATE_REPO = "AJBeumer/faultforge";
 
@@ -84,14 +95,15 @@ export function repoSlug(url: string): string {
   return url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "");
 }
 
-function requireEvent(events: LedgerEntry[], types: string[], stage: string): LedgerEntry {
-  const found = events.find((e) => types.includes(e.type as string));
-  if (!found) throw new Error(`${stage} is missing: no ${types.join(" or ")} event for this case`);
-  return found;
+/** The most recent event of `types` (by `at`), so a later verdict or a re-review is the one that counts. */
+function latestEvent(events: LedgerEntry[], types: string[], stage: string): LedgerEntry {
+  const matches = events.filter((e) => types.includes(e.type as string));
+  if (!matches.length) throw new Error(`${stage} is missing: no ${types.join(" or ")} event for this case`);
+  return matches.reduce((latest, e) => ((e.at as string) > (latest.at as string) ? e : latest));
 }
 
-function requireField<T>(event: LedgerEntry, field: string, stage: string): T {
-  const value = (event as Record<string, unknown>)[field];
+function requireField<T>(obj: Record<string, unknown>, field: string, stage: string): T {
+  const value = obj[field];
   if (value === undefined || value === null) throw new Error(`${stage} is missing its ${field} field`);
   return value as T;
 }
@@ -115,23 +127,37 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   const caseId = entry.caseId as string;
   const kind = entry.kind as string;
 
-  requireEvent(events, ["sabotage.injected", "control.injected"], "the injection stage");
-  const reviewEvent = requireEvent(events, ["review.recorded"], "the review stage");
-  const adjudicatedEvent = requireEvent(events, ["case.adjudicated"], "the adjudication stage");
+  latestEvent(events, ["sabotage.injected", "control.injected"], "the injection stage");
+  const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage") as unknown as Record<
+    string,
+    unknown
+  >;
+  const adjudicatedEvent = latestEvent(events, ["case.adjudicated"], "the adjudication stage") as unknown as Record<
+    string,
+    unknown
+  >;
 
   const pr = requireField<{ repo: string; number: number; url: string }>(reviewEvent, "pr", "the review stage");
-  const review = requireField<{
-    reviewer?: string;
-    path?: string;
-    configVersion: string;
-    reviewedCommit: string;
-    reviewedAt: string;
-    url: string;
-  }>(reviewEvent, "review", "the review stage");
+  const review = requireField<Record<string, unknown>>(reviewEvent, "review", "the review stage");
+  const reviewer = requireField<string>(review, "reviewer", "the review stage");
+  const path = requireField<string>(review, "path", "the review stage");
+  const configVersion = requireField<string>(review, "configVersion", "the review stage");
+  const reviewedCommit = requireField<string>(review, "reviewedCommit", "the review stage");
+  const reviewedAt = requireField<string>(review, "reviewedAt", "the review stage");
+  const reviewUrl = requireField<string>(review, "url", "the review stage");
 
   const disposition = requireField<string>(adjudicatedEvent, "disposition", "the adjudication stage");
   const adjudicatedBy = requireField<string>(adjudicatedEvent, "by", "the adjudication stage");
   const adjudicatedAt = requireField<string>(adjudicatedEvent, "at", "the adjudication stage");
+
+  const injectionCommit = entry.injectionCommit as string | undefined;
+  if (injectionCommit && reviewedCommit !== injectionCommit) {
+    throw new Error(`the review was recorded for commit ${reviewedCommit}, not the injected commit ${injectionCommit}`);
+  }
+  const adjudicatedCommit = adjudicatedEvent.commit as string | undefined;
+  if (adjudicatedCommit && adjudicatedCommit !== reviewedCommit) {
+    throw new Error(`the adjudication is for commit ${adjudicatedCommit}, not the reviewed commit ${reviewedCommit}`);
+  }
 
   const overridesById = new Map((overlay.findings ?? []).map((f) => [f.id, f]));
   const publicFindings = findings.map((f) => {
@@ -171,12 +197,12 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
 
   record.pr = { repo: pr.repo, number: pr.number, url: pr.url };
   record.review = {
-    reviewer: review.reviewer ?? REVIEWER,
-    path: review.path ?? REVIEW_PATH,
-    configVersion: review.configVersion,
-    reviewedCommit: review.reviewedCommit,
-    reviewedAt: review.reviewedAt,
-    url: review.url,
+    reviewer,
+    path,
+    configVersion,
+    reviewedCommit,
+    reviewedAt,
+    url: reviewUrl,
     ...(overlay.review?.linkedRepositories ? { linkedRepositories: overlay.review.linkedRepositories } : {}),
   };
   record.findings = publicFindings;
@@ -222,38 +248,55 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   return record;
 }
 
-const OVERLAY_TOP_LEVEL = [
-  "detection",
-  "collateral",
-  "otherReviewers",
-  "challenge",
-  "review",
-  "findings",
-  "legacyFindingsPath",
-];
+const OVERLAY_TOP_LEVEL = ["detection", "collateral", "otherReviewers", "challenge", "review"];
+/** Only a case whose review predates `review:wait` (no saved review file) may use these. */
+const LEGACY_ONLY_TOP_LEVEL = ["findings", "legacyFindingsPath"];
 
-/** Problems with an overlay's shape: any field outside the documented, narrow allow-list. */
-export function overlayProblems(raw: Record<string, unknown>): string[] {
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Problems with an overlay's shape: any field outside the documented, narrow allow-list, or (unless
+ * `isLegacy`) any of the extras reserved for a case with no saved review file. Never throws on a
+ * malformed shape (an overlay isn't trusted input) — an unexpected type is reported as a problem.
+ */
+export function overlayProblems(raw: Record<string, unknown>, isLegacy = false): string[] {
   const problems: string[] = [];
+  const allowed = isLegacy ? [...OVERLAY_TOP_LEVEL, ...LEGACY_ONLY_TOP_LEVEL] : OVERLAY_TOP_LEVEL;
   for (const key of Object.keys(raw)) {
-    if (!OVERLAY_TOP_LEVEL.includes(key)) problems.push(`overlay sets ${key}, which is not allowed`);
-  }
-  if (raw.detection && typeof raw.detection === "object") {
-    for (const key of Object.keys(raw.detection as object)) {
-      if (!["notes", "matchDetailOverrides"].includes(key))
-        problems.push(`overlay sets detection.${key}, which is not allowed`);
+    if (!allowed.includes(key)) {
+      problems.push(
+        LEGACY_ONLY_TOP_LEVEL.includes(key)
+          ? `overlay sets ${key}, which only a case with no saved review may use`
+          : `overlay sets ${key}, which is not allowed`,
+      );
     }
   }
-  if (raw.review && typeof raw.review === "object") {
-    for (const key of Object.keys(raw.review as object)) {
+  if (isPlainObject(raw.detection)) {
+    const allowedDetection = isLegacy ? ["notes", "matchDetailOverrides"] : ["notes"];
+    for (const key of Object.keys(raw.detection)) {
+      if (!allowedDetection.includes(key)) problems.push(`overlay sets detection.${key}, which is not allowed`);
+    }
+  }
+  if (isPlainObject(raw.review)) {
+    for (const key of Object.keys(raw.review)) {
       if (key !== "linkedRepositories") problems.push(`overlay sets review.${key}, which is not allowed`);
     }
   }
-  if (raw.findings) {
-    for (const f of raw.findings as Record<string, unknown>[]) {
-      for (const key of Object.keys(f)) {
-        if (!["id", "severity", "commentLines", "summary"].includes(key)) {
-          problems.push(`overlay sets findings[].${key}, which is not allowed`);
+  if (raw.findings !== undefined && isLegacy) {
+    if (!Array.isArray(raw.findings)) {
+      problems.push("overlay sets findings, which must be an array");
+    } else {
+      for (const f of raw.findings) {
+        if (!isPlainObject(f)) {
+          problems.push("overlay sets a findings[] entry that isn't an object");
+          continue;
+        }
+        for (const key of Object.keys(f)) {
+          if (!["id", "severity", "commentLines", "summary"].includes(key)) {
+            problems.push(`overlay sets findings[].${key}, which is not allowed`);
+          }
         }
       }
     }
@@ -264,15 +307,15 @@ export function overlayProblems(raw: Record<string, unknown>): string[] {
 /** Dotted paths of the fields this overlay actually sets, for the command to print. */
 export function overlayFieldsTaken(raw: Record<string, unknown>): string[] {
   const taken: string[] = [];
-  const detection = raw.detection as Record<string, unknown> | undefined;
+  const detection = isPlainObject(raw.detection) ? raw.detection : undefined;
   if (detection?.notes) taken.push("detection.notes");
   if (detection?.matchDetailOverrides) taken.push("detection.matchDetailOverrides");
   if (raw.collateral) taken.push("collateral");
   if (raw.otherReviewers) taken.push("otherReviewers");
   if (raw.challenge) taken.push("challenge");
-  const review = raw.review as Record<string, unknown> | undefined;
+  const review = isPlainObject(raw.review) ? raw.review : undefined;
   if (review?.linkedRepositories) taken.push("review.linkedRepositories");
-  if (raw.findings) taken.push("findings (severity/commentLines overrides)");
+  if (raw.findings) taken.push("findings (severity/commentLines/summary overrides)");
   if (raw.legacyFindingsPath) taken.push("legacyFindingsPath");
   return taken;
 }
@@ -382,7 +425,11 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error(`case:build: can't read ${overlayPath}: ${message(e)}`);
     return 2;
   }
-  const overlayIssues = overlayProblems(overlay as Record<string, unknown>);
+  // The overlay itself opts into the legacy path by naming a findings file: file presence under
+  // reviewsDir alone isn't trusted, so a review.json backfilled for an unrelated ticket's testing
+  // can't make a legacy case look like one with a real saved review, or vice versa.
+  const isLegacy = overlay.legacyFindingsPath !== undefined;
+  const overlayIssues = overlayProblems(overlay as Record<string, unknown>, isLegacy);
   if (overlayIssues.length) {
     log(`[case:build] overlay problems:\n${overlayIssues.map((p) => `- ${p}`).join("\n")}`);
     return 1;
@@ -391,32 +438,53 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     log(`[case:build] from overlay: ${field}`);
 
   const injectionCommit = entry.injectionCommit as string;
-  const saved = findSavedReview(reviewsDir, injectionCommit);
   let findings: Finding[];
-  if (saved) {
-    findings = (saved.review.findings ?? []).map((f) => ({
-      id: f.id,
-      file: f.file,
-      lines: f.lines,
-      severity: null,
-      category: f.category ?? null,
-      title: f.title ?? null,
-      description: f.description ?? null,
-    }));
-  } else if (overlay.legacyFindingsPath) {
+  if (isLegacy) {
     let raw: QodoReview;
     try {
-      raw = JSON.parse(readFileSync(join(ROOT, overlay.legacyFindingsPath), "utf8"));
+      raw = JSON.parse(readFileSync(join(ROOT, overlay.legacyFindingsPath as string), "utf8"));
     } catch (e) {
       error(`case:build: can't read ${overlay.legacyFindingsPath}: ${message(e)}`);
       return 2;
     }
     findings = findingsFor(raw, injectionCommit);
   } else {
-    error(
-      `case:build: no saved review for commit ${injectionCommit} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
-    );
-    return 2;
+    let reviewPr: number | undefined;
+    try {
+      const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage") as unknown as Record<
+        string,
+        unknown
+      >;
+      reviewPr = requireField<{ number: number }>(reviewEvent, "pr", "the review stage").number;
+    } catch (e) {
+      error(`case:build: ${message(e)}`);
+      return 2;
+    }
+    const saved = findSavedReview(reviewsDir, injectionCommit);
+    if (!saved) {
+      error(
+        `case:build: no saved review for commit ${injectionCommit} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
+      );
+      return 2;
+    }
+    if (saved.review.pr !== undefined && saved.review.pr !== reviewPr) {
+      error(
+        `case:build: the saved review at ${saved.path} is for PR ${saved.review.pr}, but this case's review.recorded event is for PR ${reviewPr}`,
+      );
+      return 2;
+    }
+    // verdict.ts's SavedFinding doesn't declare severity, but the file review:wait writes has it
+    // (review-wait.ts's Finding); dropping it here would silently publish an empty severity.
+    const savedFindings = (saved.review.findings ?? []) as unknown as Finding[];
+    findings = savedFindings.map((f) => ({
+      id: f.id,
+      file: f.file,
+      lines: f.lines,
+      severity: f.severity ?? null,
+      category: f.category ?? null,
+      title: f.title ?? null,
+      description: f.description ?? null,
+    }));
   }
 
   const templateId = entry.templateId as string | undefined;
@@ -460,14 +528,20 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
   const outPath = join(examplesDir, `${caseId}.json`);
   writeFileSync(outPath, text);
+  const hash = sha256(text);
+  const alreadyPublished = events.some((e) => e.type === "case.published" && e.sha256 === hash);
+  if (alreadyPublished) {
+    log(`[case:build] wrote ${outPath} (already recorded as published with this content)`);
+    return 0;
+  }
   appendFileSync(
     auditEventsPath,
     `${JSON.stringify({
-      eventId: `${caseId}-published-${sha256(text).slice(0, 8)}`,
+      eventId: randomUUID(),
       type: "case.published",
       at: new Date().toISOString(),
       caseId,
-      sha256: sha256(text),
+      sha256: hash,
       path: `examples/${caseId}.json`,
     })}\n`,
   );
