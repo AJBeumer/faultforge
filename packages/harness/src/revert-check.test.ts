@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  dependencySectionsChanged,
+  filesProblem,
   parseNameStatus,
   parseVitestReport,
   revertCheck,
@@ -307,5 +309,81 @@ describe("review findings on PR 100", () => {
     const env = strippedEnv({ PATH: "/bin", HOME: "/home/owner", USERPROFILE: "C:Usersowner" }, "/scratch");
     expect(env.HOME).toBe("/scratch");
     expect(env.USERPROFILE).toBe("/scratch");
+  });
+});
+
+describe("a package.json change that isn't a dependency change (#130)", () => {
+  const manifest = (extra: object) =>
+    JSON.stringify({ name: "x", version: "1.0.0", scripts: { check: "tsc" }, ...extra });
+  const texts = (base: string | null, head: string | null) => () => ({ base, head });
+  const files = {
+    tests: ["src/a.test.ts"],
+    code: [
+      { status: "M", path: "package.json" },
+      { status: "M", path: "src/a.ts" },
+    ],
+  };
+  const passing: TestRun = { ran: true, failed: [], passed: 1 };
+  const failing: TestRun = { ran: true, failed: ["a"], passed: 0 };
+
+  it("lists no section when only scripts, the description or the key order change", () => {
+    const base = manifest({ devDependencies: { vitest: "1", tsx: "2" } });
+    const head = JSON.stringify({
+      ...JSON.parse(base),
+      description: "new",
+      scripts: { check: "tsc", verdict: "tsx x.ts" },
+      devDependencies: { tsx: "2", vitest: "1" },
+    });
+    expect(dependencySectionsChanged(base, head)).toEqual([]);
+  });
+
+  it("names the section that gained, lost or re-pinned a package", () => {
+    const base = manifest({ dependencies: { a: "1" }, devDependencies: { b: "1" } });
+    const gained = manifest({ dependencies: { a: "1", c: "1" }, devDependencies: { b: "1" } });
+    const lost = manifest({ dependencies: { a: "1" } });
+    const pinned = manifest({ dependencies: { a: "2" }, devDependencies: { b: "1" }, peerDependencies: { d: "1" } });
+    expect(dependencySectionsChanged(base, gained)).toEqual(["dependencies"]);
+    expect(dependencySectionsChanged(base, lost)).toEqual(["devDependencies"]);
+    expect(dependencySectionsChanged(base, pinned)).toEqual(["dependencies", "peerDependencies"]);
+  });
+
+  it("treats a new or deleted package.json by what it declares, and unparsable JSON as every section changed", () => {
+    expect(dependencySectionsChanged(null, manifest({}))).toEqual([]);
+    expect(dependencySectionsChanged(null, manifest({ dependencies: { a: "1" } }))).toEqual(["dependencies"]);
+    expect(dependencySectionsChanged(manifest({ dependencies: { a: "1" } }), null)).toEqual(["dependencies"]);
+    expect(dependencySectionsChanged(manifest({}), "{ not json")).toHaveLength(4);
+    expect(dependencySectionsChanged(manifest({}), "[]")).toHaveLength(4);
+  });
+
+  it("gives a PR that only adds a script a verdict", () => {
+    const contents = texts(manifest({}), manifest({ scripts: { check: "tsc", verdict: "tsx x.ts" } }));
+    expect(filesProblem(files, contents)).toBeNull();
+    expect(verdict(files, passing, failing, contents)).toMatchObject({ exit: 0, failedWithoutChange: ["a"] });
+    expect(verdict(files, passing, passing, contents).exit).toBe(1);
+  });
+
+  it("still can't judge a PR that adds a dependency, with the same message as before", () => {
+    const contents = texts(manifest({}), manifest({ devDependencies: { left: "1" } }));
+    const outcome = verdict(files, passing, failing, contents);
+    expect(outcome.exit).toBe(2);
+    expect(outcome.message).toBe(
+      "the PR changes its dependencies (package.json (devDependencies)), and the copy has only one set of installed packages, so it can't run both sides",
+    );
+  });
+
+  it("still can't judge a changed lock file, and a package.json it can't read", () => {
+    const lock = {
+      tests: files.tests,
+      code: [
+        { status: "M", path: "package-lock.json" },
+        { status: "M", path: "src/a.ts" },
+      ],
+    };
+    expect(filesProblem(lock, texts(manifest({}), manifest({})))).toMatch(
+      /^the PR changes its dependencies \(package-lock\.json\)/,
+    );
+    expect(filesProblem(files)).toMatch(
+      /package\.json \(dependencies, devDependencies, optionalDependencies, peerDependencies\)/,
+    );
   });
 });
