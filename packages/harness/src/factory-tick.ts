@@ -159,6 +159,71 @@ export interface Finish {
   pr: string | null;
 }
 
+/** True when a git-reported path (always forward-slash) is `prefix` itself or inside it. */
+function underEvidencePrefix(path: string, prefix: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  return p === prefix || p.startsWith(`${prefix}/`);
+}
+
+/**
+ * Of `paths` (as `git diff --name-only` reports them), the ones that fall outside both allowed evidence
+ * roots: the configured evidence root (e.g. `raw-artifacts`) and `factory-log`. Only these ever stop a
+ * push to the private repo's `main` (#102): the answer key and audit log must stay append-only, and the
+ * factory must never be the one to rewrite them.
+ */
+export function blockedEvidencePaths(paths: string[], evidenceRoot: string): string[] {
+  return paths
+    .map((p) => p.trim())
+    .filter((p) => p && !underEvidencePrefix(p, evidenceRoot) && !underEvidencePrefix(p, "factory-log"));
+}
+
+export interface EvidencePush {
+  /** True once the private branch's commits reached `main`. */
+  pushed: boolean;
+  /** Changed paths outside the allowed evidence roots; empty when the push went through. */
+  blocked: string[];
+  /** Where a blocked run's commits were kept instead (a branch name), if that push itself succeeded. */
+  savedAt?: string;
+}
+
+/**
+ * Commits whatever is staged in `priv` (if anything), then decides where the branch may go: every path
+ * it changed since `origin/main` must be under one of the allowed evidence roots, or nothing reaches
+ * `main` (#102). A blocked run is still pushed to a branch of its own when that push succeeds, so the
+ * owner has somewhere to read it; `main` never moves either way.
+ */
+export function commitAndPublish(
+  priv: string,
+  evidenceRoot: string,
+  runId: string,
+  run: (cwd: string, ...args: string[]) => string,
+  runLong: (cwd: string, ...args: string[]) => string,
+): EvidencePush {
+  run(priv, "add", "-A");
+  if (run(priv, "status", "--porcelain"))
+    run(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
+  runLong(priv, "fetch", "--quiet", "origin", "main");
+  run(priv, "rebase", "--quiet", "origin/main");
+  const changed = run(priv, "diff", "--name-only", "origin/main", "HEAD")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const blocked = blockedEvidencePaths(changed, evidenceRoot);
+  if (blocked.length) {
+    const branch = `blocked-${runId}`;
+    let savedAt: string | undefined;
+    try {
+      runLong(priv, "push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
+      savedAt = branch;
+    } catch {
+      savedAt = undefined; // the run folder (kept uncleaned by the caller) is the fallback copy.
+    }
+    return { pushed: false, blocked, savedAt };
+  }
+  runLong(priv, "push", "--quiet", "origin", "HEAD:main");
+  return { pushed: true, blocked: [] };
+}
+
 /**
  * What the run delivered, from the agent's own report and the runner's independent checks. Anything the
  * runner can't confirm is a stop for the owner, never a success.
@@ -653,8 +718,8 @@ export interface TickDeps {
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
-  /** Saves the run log (and the agent's transcript) to the private repo and pushes it. */
-  saveEvidence(runId: string, ws: Workspace | null): string;
+  /** Saves the run log (and the agent's transcript) to the private repo, and publishes what's allowed. */
+  saveEvidence(runId: string, ws: Workspace | null): EvidencePush & { file: string };
   cleanup(ws: Workspace): void;
   /** Appends one event to the live run log. */
   record(runId: string, event: object): void;
@@ -832,7 +897,21 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     // Logged before the copy is made, so the saved log ends with it too.
     log(finish.label === LABELS.done ? "cleanup" : "kept", { root: ws.root });
     log("saved", { evidence: evidenceFile(factory, runId) });
-    deps.saveEvidence(runId, ws);
+    const saved = deps.saveEvidence(runId, ws);
+    if (saved.blocked.length) {
+      log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+      if (finish.label !== LABELS.help) {
+        relabel([LABELS.working, LABELS.ready, finish.label], [LABELS.help]);
+        finalLabel = LABELS.help;
+      }
+      const where = saved.savedAt
+        ? `the private repository's \`${saved.savedAt}\` branch`
+        : `the run folder (\`${ws.root}\`), kept for inspection`;
+      say(
+        `The run also changed ${saved.blocked.join(", ")} in the private repository, outside \`raw-artifacts/\` and \`factory-log/\`. Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`,
+      );
+      return "needs-help";
+    }
     if (finish.label === LABELS.done) deps.cleanup(ws);
     return finish.label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
@@ -873,7 +952,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     }
     if (runId) {
       try {
-        deps.saveEvidence(runId, ws);
+        const saved = deps.saveEvidence(runId, ws);
+        if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
       } catch {
         // The live log under the runs folder still has everything.
       }
@@ -1613,18 +1693,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         const file = join(runs, `${runId}${suffix}`);
         if (existsSync(file)) copyFileSync(file, join(dir, `${runId}${suffix}`));
       }
-      git(priv, "add", "-A");
-      if (git(priv, "status", "--porcelain"))
-        git(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
-      gitLong(priv, "fetch", "--quiet", "origin", "main");
-      git(priv, "rebase", "--quiet", "origin/main");
-      gitLong(priv, "push", "--quiet", "origin", "HEAD:main");
-      if (temporary) {
+      const result = commitAndPublish(priv, evidenceInPrivate, runId, git, gitLong);
+      // A blocked run keeps its worktree, branch and run folder: they're the owner's only other copy.
+      if (result.pushed && temporary) {
         git(privateRepo, "worktree", "remove", "--force", priv);
         git(privateRepo, "branch", "-D", `run-${runId}`);
         rmSync(join(runs, runId), { recursive: true, force: true });
       }
-      return join(factory.evidence, "factory-runs", `${runId}.jsonl`);
+      return { file: evidenceFile(factory, runId), ...result };
     },
     cleanup(ws) {
       const leftovers = teardown(ws.root, ws.lab, ws.private, basename(ws.root));
