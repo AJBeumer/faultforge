@@ -20,6 +20,22 @@
  * another amendment, or changes `caseId`, `eventId`, `kind` or `at` — the fields that identify a line
  * and place it in history. It also flags any id held by more than one entry, whether or not an
  * amendment names it.
+ *
+ * The audit log's events, one per stage, read by `case-build.ts` (#11):
+ *  - `sabotage.injected` / `control.injected`: the case was planted. Carries no record fields of its
+ *    own; its presence just confirms the stage happened.
+ *  - `review.recorded`: `pr` (`repo`, `number`, `url`) and the parts of the public record's `review`
+ *    a saved `review:wait` file doesn't carry — `reviewer`, `path`, `configVersion`, `reviewedCommit`,
+ *    `reviewedAt`, `url`.
+ *  - `case.adjudicated`: the owner's verdict (`#19`'s `verdict.ts`). `disposition` becomes
+ *    `human.disposition`; `by` becomes `human.adjudicatedBy`; `at` becomes `human.adjudicatedAt`.
+ *  - `case.evidence-added`: extra evidence was saved after adjudication (a free-text `note`). Not
+ *    required to build a record.
+ *  - `case.published`: `case-build.ts --write` appended one, carrying the written record's `sha256`
+ *    and `path`.
+ *
+ * `case-build.ts` requires `sabotage.injected`/`control.injected`, `review.recorded` and
+ * `case.adjudicated` for the case it's building; a case missing one is refused, naming the stage.
  */
 import { readFileSync } from "node:fs";
 
