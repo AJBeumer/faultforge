@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "vitest/config";
@@ -9,9 +9,10 @@ import { defineConfig } from "vitest/config";
  * one, means those fixed names can't collide with a concurrent run on the same machine (#110): this
  * repo's own, run twice at once, or alongside the reviewed repo's. `os.tmpdir()` reads `TMPDIR` /
  * `TEMP` / `TMP` at call time, so setting them for the worker processes is enough; nothing that reads
- * them needs to change.
+ * them needs to change. Removed on exit, so a run doesn't leave its scratch fixtures behind.
  */
 const scratchTmp = mkdtempSync(join(tmpdir(), "faultforge-vitest-"));
+process.on("exit", () => rmSync(scratchTmp, { recursive: true, force: true }));
 
 /**
  * Two projects. `unit` is every `<name>.test.ts` next to the code it tests, and runs on `npm test` and in
