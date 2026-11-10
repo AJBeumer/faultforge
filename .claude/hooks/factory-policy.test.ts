@@ -381,7 +381,29 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
 
   it("allows review:wait in the foreground, and the app started in the background for a live check", () => {
     expect(backgroundViolation(WAIT, false)).toBeUndefined();
+    expect(backgroundViolation(`${WAIT} 2>&1`, false)).toBeUndefined();
+    expect(backgroundViolation(`${WAIT} && echo done`, false)).toBeUndefined();
     expect(backgroundViolation("PORT=3000 npx tsx src/server.ts", true)).toBeUndefined();
+    expect(backgroundViolation("PORT=3000 npx tsx src/server.ts &", false)).toBeUndefined();
+  });
+
+  it.each([
+    `${WAIT} &`,
+    `${WAIT} & echo started`,
+    `nohup ${WAIT} > wait.log`,
+    `setsid ${WAIT}`,
+    `Start-Job { ${WAIT} }`,
+    "Start-Process npm -ArgumentList 'run review:wait -- faultforge 128'",
+    "start /b npm run review:wait -- faultforge 128",
+  ])("denies the shell's own backgrounding of the wait: %s (Qodo on PR 132)", (command) => {
+    expect(backgroundViolation(command, false)).toMatch(/in the foreground/);
+  });
+
+  it("sees the wait by its file as well as by its npm script (Qodo on PR 132)", () => {
+    expect(backgroundViolation("npx tsx packages/harness/src/review-wait.ts faultforge 128", true)).toMatch(
+      /in the foreground/,
+    );
+    expect(backgroundViolation("node review-wait.ts &", false)).toMatch(/in the foreground/);
   });
 
   it("reads the payload's run_in_background flag in the decision", () => {
