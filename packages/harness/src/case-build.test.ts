@@ -439,7 +439,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     return { out, err, code };
   }
 
-  it("prefers a genuine saved review over an overlay's legacyFindingsPath", async () => {
+  it("prefers a genuine saved review over an overlay's legacyFindingsPath, even with null pushSeenAt/reviewStartedAt", async () => {
     const fx = fixture();
     const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
     mkdirSync(reviewDir, { recursive: true });
@@ -450,8 +450,9 @@ describe("run: legacy path only applies with no genuine saved review", () => {
         pr: 5,
         headSha: INJECTION_COMMIT,
         state: "complete",
-        pushSeenAt: "2026-11-01T00:01:00.000Z",
-        reviewStartedAt: "2026-11-01T00:02:00.000Z",
+        // review:wait can genuinely write null for both (no check suite found, no started_at reported).
+        pushSeenAt: null,
+        reviewStartedAt: null,
         reviewSeenCompleteAt: "2026-11-01T00:05:00.000Z",
         findings: [
           {

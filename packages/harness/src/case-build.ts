@@ -352,9 +352,16 @@ function sha256(data: string): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/** Only `review:wait`'s own wait loop writes these three timing fields, every time, to every saved review. */
+/**
+ * `pushSeenAt` and `reviewStartedAt` can genuinely be `null` even in a real `review:wait` save (no
+ * check suite found, no `started_at` reported), so they can't tell a real save from a hand-backfilled
+ * one apart. `reviewSeenCompleteAt` can't: `review:wait` sets it to a real timestamp the moment it
+ * sees the review finished, for every state it ever saves (`complete` or `skipped` — a `timeout` is
+ * never saved as a case's review). A backfilled file, written before that convention existed, has
+ * none of these fields at all.
+ */
 function isReviewWaitSave(review: Record<string, unknown>): boolean {
-  return ["pushSeenAt", "reviewStartedAt", "reviewSeenCompleteAt"].every((f) => typeof review[f] === "string");
+  return typeof review.reviewSeenCompleteAt === "string";
 }
 
 const LINE_WIDTH = 120;
