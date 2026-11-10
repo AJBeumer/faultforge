@@ -1134,6 +1134,18 @@ describe("agentInstructions (#73)", () => {
     expect(text).toContain("Don't list it (env, printenv and set are blocked)");
     expect(text).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
   });
+
+  it("says to wait for Qodo in the foreground and never to end the turn early, which lost run 20261110-150249 (#129)", () => {
+    const text = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md");
+    expect(text).toContain(
+      "Run review:wait in the foreground, with the Bash tool's longest timeout (600000 ms) and --timeout 9",
+    );
+    expect(text).toContain("run it again while it exits 1");
+    expect(text).toContain(
+      "Never start it in the background and never schedule a wakeup: ending your turn ends the run",
+    );
+    expect(text).toContain("Report FACTORY_RESULT before you stop");
+  });
 });
 
 describe("agentArgs (#103)", () => {
@@ -1151,6 +1163,10 @@ describe("agentArgs (#103)", () => {
   it("reaches no MCP server of the machine: an explicit config, used strictly", () => {
     expect(value("--mcp-config")).toBe("/runs/r/agent-mcp.json");
     expect(args).toContain("--strict-mcp-config");
+  });
+
+  it("takes the wakeup tool away: a scheduled wakeup never fires in a headless run (#129)", () => {
+    expect(value("--disallowedTools")).toBe("ScheduleWakeup");
   });
 
   it("keeps the run's other limits: the deny settings, the budget, the prompt and the extra folders", () => {

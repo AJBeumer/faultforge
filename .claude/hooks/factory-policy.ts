@@ -9,6 +9,7 @@
  *  - scheduled tasks and persistent environment or registry changes
  *  - dismissing anything
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
+ *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
@@ -76,9 +77,15 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
  * where someone could have added text after the check.
  */
 export function commandViolations(raw: string, ticket?: string): string[] {
-  // One logical line per command: a backslash (bash) or backtick (PowerShell) line continuation can't
-  // split a command into pieces that no rule sees whole.
-  const command = raw.replace(/[\\`]\r?\n/g, " ");
+  const reasons: string[] = [];
+  for (const command of readings(raw)) {
+    for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
+  }
+  return reasons;
+}
+
+/** The reasons found in one reading of the command. */
+function violationsIn(command: string, ticket?: string): string[] {
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
@@ -108,6 +115,42 @@ export function commandViolations(raw: string, ticket?: string): string[] {
     }
   }
   return reasons;
+}
+
+/**
+ * The ways a shell reads a backslash or backtick before a newline. Bash removes a backslash-newline pair
+ * outright, so a name split across lines (`review:\` newline `wait`) runs as one word. PowerShell reads a
+ * backtick-newline as a separator. And in Bash a backtick before a newline opens a command substitution, so
+ * the words around it stay apart (Qodo on PR 132: `true` backtick newline `git push --force …` backtick runs
+ * the push). No rule can know which shell will run the text, so every rule reads the command both ways,
+ * glued and spaced, and a violation in either reading counts: the rules fail closed.
+ */
+function readings(raw: string): string[] {
+  const continuation = /[\\`]\r?\n/g;
+  return [...new Set([raw.replace(continuation, ""), raw.replace(continuation, " ")])];
+}
+
+/**
+ * A shell's own ways of putting a command in the background: a single `&` (not `&&`, not a `>&` or `|&`
+ * redirect), `nohup`, `setsid`, `disown`, PowerShell's `Start-Job` and `Start-Process`, cmd's `start /b`.
+ */
+const SHELL_BACKGROUND = /(?<![&>|])&(?!&)|\b(nohup|setsid|disown|Start-Job|Start-Process)\b|\bstart\s+\/b\b/i;
+
+/** True when the command runs the review wait, by its npm script or by its file. */
+const RUNS_REVIEW_WAIT = /\breview[:-]wait\b/i;
+
+/**
+ * Why a command may not run in the background, or undefined. The review wait must run in the foreground: a
+ * headless run ends with the agent's turn, so a background task is killed before it saves the review, and
+ * nobody wakes the agent (run 20261110-150249, #129). `background` is the Bash tool's own flag; the shell's
+ * ways of backgrounding count the same (Qodo on PR 132). Starting the app in the background for a live check
+ * stays allowed.
+ */
+export function backgroundViolation(raw: string, background: boolean): string | undefined {
+  const read = readings(raw);
+  if (!read.some((command) => RUNS_REVIEW_WAIT.test(command))) return undefined;
+  if (!background && !read.some((command) => SHELL_BACKGROUND.test(command))) return undefined;
+  return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
 }
 
 /**
@@ -182,9 +225,12 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     tool = String(input.tool_name ?? "");
     const args = input.tool_input ?? {};
     const cwd: string = input.cwd ?? process.cwd();
-    if (tool === "Bash" || tool === "PowerShell")
-      reasons = commandViolations(String(args.command ?? ""), env.FAULTFORGE_TICKET_NUMBER);
-    else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+    if (tool === "Bash" || tool === "PowerShell") {
+      const command = String(args.command ?? "");
+      reasons = commandViolations(command, env.FAULTFORGE_TICKET_NUMBER);
+      const background = backgroundViolation(command, args.run_in_background === true);
+      if (background) reasons.push(background);
+    } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
       const reason = editViolation(
         resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
         env.FAULTFORGE_RUN_ROOT,
