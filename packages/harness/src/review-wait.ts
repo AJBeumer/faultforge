@@ -397,11 +397,20 @@ async function main() {
     lastContent = saveCommentFeeds(raw, lastContent, (file, text) => writeFileSync(join(dir, file), text), short);
     // `pulls/{n}/reviews` (a formal GitHub review, approve/request-changes) isn't where Qodo's
     // comments live, but it's saved on every poll too: a bounded endpoint list is only trustworthy
-    // while every endpoint that could hold the data is actually read, not assumed empty.
-    writeFileSync(
-      join(dir, `${short}.reviews.latest.raw.json`),
-      gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/reviews`),
-    );
+    // while every endpoint that could hold the data is actually read, not assumed empty. It's purely
+    // supplementary, so a failure here is logged and skipped, never allowed to fail the whole poll:
+    // `waitForReview` requires `onPoll` to succeed before it will report a review complete, and this
+    // endpoint isn't worth losing that over.
+    try {
+      writeFileSync(
+        join(dir, `${short}.reviews.latest.raw.json`),
+        gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/reviews`),
+      );
+    } catch (error) {
+      console.error(
+        `pulls/{n}/reviews lookup failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   };
 
   const api = new QodoApi();
