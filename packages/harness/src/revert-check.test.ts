@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  DEPENDENCY_SECTIONS,
   dependencySectionsChanged,
   filesProblem,
   parseNameStatus,
@@ -351,8 +352,27 @@ describe("a package.json change that isn't a dependency change (#130)", () => {
     expect(dependencySectionsChanged(null, manifest({}))).toEqual([]);
     expect(dependencySectionsChanged(null, manifest({ dependencies: { a: "1" } }))).toEqual(["dependencies"]);
     expect(dependencySectionsChanged(manifest({ dependencies: { a: "1" } }), null)).toEqual(["dependencies"]);
-    expect(dependencySectionsChanged(manifest({}), "{ not json")).toHaveLength(4);
-    expect(dependencySectionsChanged(manifest({}), "[]")).toHaveLength(4);
+    expect(dependencySectionsChanged(manifest({}), "{ not json")).toEqual([...DEPENDENCY_SECTIONS]);
+    expect(dependencySectionsChanged(manifest({}), "[]")).toEqual([...DEPENDENCY_SECTIONS]);
+  });
+
+  it("counts every field that decides what gets installed, not only the four dependency maps (PR 138 review)", () => {
+    const base = manifest({ dependencies: { a: "1" } });
+    expect(dependencySectionsChanged(base, manifest({ dependencies: { a: "1" }, overrides: { b: "2" } }))).toEqual([
+      "overrides",
+    ]);
+    expect(dependencySectionsChanged(base, manifest({ dependencies: { a: "1" }, workspaces: ["packages/*"] }))).toEqual(
+      ["workspaces"],
+    );
+    expect(
+      dependencySectionsChanged(
+        base,
+        manifest({ dependencies: { a: "1" }, peerDependenciesMeta: { a: { optional: true } } }),
+      ),
+    ).toEqual(["peerDependenciesMeta"]);
+    expect(dependencySectionsChanged(base, manifest({ dependencies: { a: "1" }, resolutions: { b: "2" } }))).toEqual([
+      "resolutions",
+    ]);
   });
 
   it("gives a PR that only adds a script a verdict", () => {
@@ -382,8 +402,6 @@ describe("a package.json change that isn't a dependency change (#130)", () => {
     expect(filesProblem(lock, texts(manifest({}), manifest({})))).toMatch(
       /^the PR changes its dependencies \(package-lock\.json\)/,
     );
-    expect(filesProblem(files)).toMatch(
-      /package\.json \(dependencies, devDependencies, optionalDependencies, peerDependencies\)/,
-    );
+    expect(filesProblem(files)).toContain(`package.json (${DEPENDENCY_SECTIONS.join(", ")})`);
   });
 });

@@ -12,9 +12,10 @@
  * tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code file,
  * the PR changes its dependencies, the PR's tests fail even with the change, or the scratch copy
  * can't be built. A dependency change is a lock file that differs, or a `package.json` whose
- * `dependencies`, `devDependencies`, `optionalDependencies` or `peerDependencies` differ between
- * base and head; a `package.json` that only gains a script or changes its description is an ordinary
- * code file, put back to its base version like any other.
+ * install-deciding fields differ between base and head (`DEPENDENCY_SECTIONS`: the dependency maps,
+ * `overrides`, `resolutions`, `peerDependenciesMeta`, bundled packages and `workspaces`); a
+ * `package.json` that only gains a script or changes its description is an ordinary code file, put
+ * back to its base version like any other.
  *
  * Read-only for the repository: the scratch copy is made through a temporary git index into a temp
  * folder, so the working tree, the real index and every branch stay as they were (a fetch updates
@@ -75,12 +76,22 @@ export function parseNameStatus(output: string): Change[] {
 /** Lock files: any change decides which packages are installed. The copy shares one install, so it can't test both sides. */
 const LOCK_FILES = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/;
 const MANIFEST = /(^|\/)package\.json$/;
-/** The package.json sections that decide which packages are installed; the rest (scripts, description) is code. */
+/**
+ * The package.json fields that decide what `npm install` puts in node_modules: the dependency maps, the
+ * fields that alter how they resolve (`overrides`, yarn's `resolutions`, `peerDependenciesMeta`,
+ * bundled packages) and `workspaces`. The rest (scripts, description, bin) is code.
+ */
 export const DEPENDENCY_SECTIONS = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
   "peerDependencies",
+  "peerDependenciesMeta",
+  "bundleDependencies",
+  "bundledDependencies",
+  "overrides",
+  "resolutions",
+  "workspaces",
 ] as const;
 
 /** A file's text at the base and at the head of the PR; null where the file doesn't exist. */
