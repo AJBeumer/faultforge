@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type BuildInputs,
@@ -8,6 +11,7 @@ import {
   parseCliArgs,
   printRecord,
   repoSlug,
+  run,
 } from "./case-build.ts";
 import { validateCaseRecord } from "./case-record.ts";
 import type { LedgerEntry } from "./ledger.ts";
@@ -261,6 +265,12 @@ describe("overlayProblems", () => {
     ]);
   });
 
+  it("rejects detection or review that isn't an object, instead of ignoring it", () => {
+    expect(overlayProblems({ detection: [] })).toEqual(["overlay sets detection, which must be an object"]);
+    expect(overlayProblems({ detection: null })).toEqual(["overlay sets detection, which must be an object"]);
+    expect(overlayProblems({ review: "none" })).toEqual(["overlay sets review, which must be an object"]);
+  });
+
   it("rejects the legacy-only extras for a case with a saved review", () => {
     expect(overlayProblems({ findings: [{ id: "f1", severity: "high" }] }, false)).toEqual([
       "overlay sets findings, which only a case with no saved review may use",
@@ -344,5 +354,165 @@ describe("parseCliArgs", () => {
 
   it("rejects no arguments", () => {
     expect(parseCliArgs([])).toBeNull();
+  });
+});
+
+describe("run: legacy path only applies with no genuine saved review", () => {
+  const CASE_ID = "FF-9001";
+  const INJECTION_COMMIT = "d".repeat(40);
+  // overlay.legacyFindingsPath is read relative to the repo root (it names a path like
+  // "private/raw-artifacts/<case>/..."), so the fixture's own file is named relative to it too.
+  const REPO_ROOT = join(import.meta.dirname, "../../..");
+
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "case-build-"));
+    const groundTruthPath = join(root, "ground-truth.jsonl");
+    const auditEventsPath = join(root, "audit-events.jsonl");
+    const overlayPath = join(root, `${CASE_ID}.overlay.json`);
+    const examplesDir = join(root, "examples");
+    mkdirSync(examplesDir, { recursive: true });
+    mkdirSync(join(root, "templates", "t1"), { recursive: true });
+    writeFileSync(
+      join(root, "templates", "t1", "template.json"),
+      JSON.stringify({ match: { kindTerms: ["off by one"] } }),
+    );
+
+    const entry = {
+      caseId: CASE_ID,
+      kind: "sabotage",
+      templateId: "t1",
+      invariantId: "INV-1",
+      defectClass: "off-by-one",
+      targetRepo: "https://github.com/Owner/target.git",
+      targetCommit: "a".repeat(40),
+      injectionCommit: INJECTION_COMMIT,
+      injectedFile: "src/x.ts",
+      injectedLines: [1, 2],
+    };
+    writeFileSync(groundTruthPath, `${JSON.stringify(entry)}\n`);
+
+    const events = [
+      { eventId: "e1", type: "sabotage.injected", caseId: CASE_ID, at: "2026-11-01T00:00:00.000Z" },
+      {
+        eventId: "e2",
+        type: "review.recorded",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:05:00.000Z",
+        pr: { repo: "Owner/target", number: 5, url: "https://github.com/Owner/target/pull/5" },
+        review: {
+          reviewer: "qodo-code-review[bot]",
+          path: "pr-comments",
+          configVersion: "v1",
+          reviewedCommit: INJECTION_COMMIT,
+          reviewedAt: "2026-11-01T00:05:00.000Z",
+          url: "https://github.com/Owner/target/pull/5#issuecomment-1",
+        },
+      },
+      {
+        eventId: "e3",
+        type: "case.adjudicated",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:10:00.000Z",
+        disposition: "confirmed_detected",
+        by: "Owner",
+      },
+    ];
+    writeFileSync(auditEventsPath, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+
+    return { root, groundTruthPath, auditEventsPath, overlayPath, examplesDir };
+  }
+
+  async function runOn(fx: ReturnType<typeof fixture>, overlay: Record<string, unknown>) {
+    writeFileSync(fx.overlayPath, JSON.stringify(overlay));
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await run(CASE_ID, {
+      env: { FAULTFORGE_PRIVATE_DIR: fx.root },
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+      groundTruthPath: fx.groundTruthPath,
+      auditEventsPath: fx.auditEventsPath,
+      reviewsDir: join(fx.root, "raw-artifacts", "reviews"),
+      overlayPath: fx.overlayPath,
+      examplesDir: fx.examplesDir,
+    });
+    return { out, err, code };
+  }
+
+  it("prefers a genuine saved review over an overlay's legacyFindingsPath", async () => {
+    const fx = fixture();
+    const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "complete",
+        pushSeenAt: "2026-11-01T00:01:00.000Z",
+        reviewStartedAt: "2026-11-01T00:02:00.000Z",
+        reviewSeenCompleteAt: "2026-11-01T00:05:00.000Z",
+        findings: [
+          {
+            id: "f1",
+            file: "src/x.ts",
+            lines: [1, 2],
+            severity: "action_required",
+            category: "Bug",
+            title: "An off-by-one",
+            description: "loops off by one",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(fx.root, "legacy-findings.json"),
+      JSON.stringify({
+        findings: [{ id: "wrong", git_sha: INJECTION_COMMIT, file_path: "src/x.ts", start_line: 1, end_line: 2 }],
+      }),
+    );
+    const { code, out } = await runOn(fx, {
+      challenge: { verdict: "not_run", note: "n" },
+      legacyFindingsPath: relative(REPO_ROOT, join(fx.root, "legacy-findings.json")),
+    });
+    // The overlay sets legacyFindingsPath even though a genuine saved review exists: refused, since
+    // that extra is reserved for a case with no saved review.
+    expect(code).toBe(1);
+    expect(out.join("\n")).toMatch(/only a case with no saved review may use/);
+  });
+
+  it("falls back to the overlay's legacy path when the saved review isn't a genuine review:wait save", async () => {
+    const fx = fixture();
+    const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
+    mkdirSync(reviewDir, { recursive: true });
+    // Missing pushSeenAt/reviewStartedAt/reviewSeenCompleteAt: hand-backfilled, not review:wait's own.
+    writeFileSync(
+      join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({ repo: "Owner/target", pr: 5, headSha: INJECTION_COMMIT, state: "complete", findings: [] }),
+    );
+    writeFileSync(
+      join(fx.root, "legacy-findings.json"),
+      JSON.stringify({
+        findings: [
+          {
+            id: "legacy-1",
+            git_sha: INJECTION_COMMIT,
+            file_path: "src/x.ts",
+            start_line: 1,
+            end_line: 2,
+            category: "Bug",
+            title: "An off-by-one",
+            description: "loops off by one",
+          },
+        ],
+      }),
+    );
+    const { code, out } = await runOn(fx, {
+      challenge: { verdict: "not_run", note: "n" },
+      legacyFindingsPath: relative(REPO_ROOT, join(fx.root, "legacy-findings.json")),
+    });
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("qodo:legacy-1");
   });
 });

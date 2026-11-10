@@ -273,13 +273,17 @@ export function overlayProblems(raw: Record<string, unknown>, isLegacy = false):
       );
     }
   }
-  if (isPlainObject(raw.detection)) {
+  if (raw.detection !== undefined && !isPlainObject(raw.detection)) {
+    problems.push("overlay sets detection, which must be an object");
+  } else if (isPlainObject(raw.detection)) {
     const allowedDetection = isLegacy ? ["notes", "matchDetailOverrides"] : ["notes"];
     for (const key of Object.keys(raw.detection)) {
       if (!allowedDetection.includes(key)) problems.push(`overlay sets detection.${key}, which is not allowed`);
     }
   }
-  if (isPlainObject(raw.review)) {
+  if (raw.review !== undefined && !isPlainObject(raw.review)) {
+    problems.push("overlay sets review, which must be an object");
+  } else if (isPlainObject(raw.review)) {
     for (const key of Object.keys(raw.review)) {
       if (key !== "linkedRepositories") problems.push(`overlay sets review.${key}, which is not allowed`);
     }
@@ -346,6 +350,11 @@ export interface RunOptions {
 
 function sha256(data: string): string {
   return createHash("sha256").update(data).digest("hex");
+}
+
+/** Only `review:wait`'s own wait loop writes these three timing fields, every time, to every saved review. */
+function isReviewWaitSave(review: Record<string, unknown>): boolean {
+  return ["pushSeenAt", "reviewStartedAt", "reviewSeenCompleteAt"].every((f) => typeof review[f] === "string");
 }
 
 const LINE_WIDTH = 120;
@@ -425,10 +434,17 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error(`case:build: can't read ${overlayPath}: ${message(e)}`);
     return 2;
   }
-  // The overlay itself opts into the legacy path by naming a findings file: file presence under
-  // reviewsDir alone isn't trusted, so a review.json backfilled for an unrelated ticket's testing
-  // can't make a legacy case look like one with a real saved review, or vice versa.
-  const isLegacy = overlay.legacyFindingsPath !== undefined;
+
+  const injectionCommit = entry.injectionCommit as string;
+  // A saved review counts only if it carries the timing fields only review:wait's wait loop writes
+  // (pushSeenAt, reviewStartedAt, reviewSeenCompleteAt): a review.json backfilled by hand (as FF-0001's
+  // was, for an unrelated ticket's testing) can't masquerade as one, and the saved review always wins
+  // over the overlay's legacy path when it genuinely exists.
+  const foundReview = findSavedReview(reviewsDir, injectionCommit);
+  const saved =
+    foundReview && isReviewWaitSave(foundReview.review as unknown as Record<string, unknown>) ? foundReview : undefined;
+  const isLegacy = !saved;
+
   const overlayIssues = overlayProblems(overlay as Record<string, unknown>, isLegacy);
   if (overlayIssues.length) {
     log(`[case:build] overlay problems:\n${overlayIssues.map((p) => `- ${p}`).join("\n")}`);
@@ -437,12 +453,17 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   for (const field of overlayFieldsTaken(overlay as Record<string, unknown>))
     log(`[case:build] from overlay: ${field}`);
 
-  const injectionCommit = entry.injectionCommit as string;
   let findings: Finding[];
-  if (isLegacy) {
+  if (!saved) {
+    if (!overlay.legacyFindingsPath) {
+      error(
+        `case:build: no saved review for commit ${injectionCommit} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
+      );
+      return 2;
+    }
     let raw: QodoReview;
     try {
-      raw = JSON.parse(readFileSync(join(ROOT, overlay.legacyFindingsPath as string), "utf8"));
+      raw = JSON.parse(readFileSync(join(ROOT, overlay.legacyFindingsPath), "utf8"));
     } catch (e) {
       error(`case:build: can't read ${overlay.legacyFindingsPath}: ${message(e)}`);
       return 2;
@@ -458,13 +479,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       reviewPr = requireField<{ number: number }>(reviewEvent, "pr", "the review stage").number;
     } catch (e) {
       error(`case:build: ${message(e)}`);
-      return 2;
-    }
-    const saved = findSavedReview(reviewsDir, injectionCommit);
-    if (!saved) {
-      error(
-        `case:build: no saved review for commit ${injectionCommit} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
-      );
       return 2;
     }
     if (saved.review.pr !== undefined && saved.review.pr !== reviewPr) {
