@@ -18,7 +18,8 @@
     "rules:evidence": "tsx packages/harness/src/rules-evidence.ts",
     "rules:propose": "tsx packages/harness/src/rules-propose.ts",
     "revert:check": "tsx packages/harness/src/revert-check.ts",
-    "ledger:check": "tsx packages/harness/src/ledger-check.ts"
+    "ledger:check": "tsx packages/harness/src/ledger-check.ts",
+    "verdict": "tsx packages/harness/src/verdict.ts"
   },
   "repository": {
     "type": "git",
