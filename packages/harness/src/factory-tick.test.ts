@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -828,6 +828,19 @@ describe("hook self-test (#104)", () => {
     mkdirSync(reviewedFolder);
     expect(hookSelfTest(LAB, reviewedFolder, limit, realHookRunner(LAB, limit))).toEqual([]);
   }, 60_000);
+});
+
+describe("vitest.config: temp directory isolation (#110)", () => {
+  it("runs with its own TMPDIR/TMP/TEMP, not the machine-wide one", () => {
+    // vitest.config.ts sets these for every worker (see its `test.env`). Checked at the environment
+    // the test actually runs in, not by re-reading the config, so this fails if the setting is ever
+    // dropped or stops reaching the worker, not just if the source line is removed.
+    expect(process.env.TMPDIR).toMatch(/faultforge-vitest-/);
+    expect(process.env.TMPDIR).toBe(process.env.TMP);
+    expect(process.env.TMPDIR).toBe(process.env.TEMP);
+    expect(existsSync(String(process.env.TMPDIR))).toBe(true);
+    expect(tmpdir()).toBe(process.env.TMPDIR);
+  });
 });
 
 describe("buildSnapshot: GitHub's pages", () => {
