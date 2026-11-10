@@ -76,7 +76,7 @@ export interface Overlay {
   review?: { linkedRepositories?: string };
   /** Per-id overrides a legacy findings file can't carry: `severity`, `commentLines`, and a human-edited `summary`. */
   findings?: { id: string; severity?: string; commentLines?: [number, number]; summary?: string }[];
-  /** Where to read findings when no saved review exists, relative to the repo root. */
+  /** Where to read findings when no saved review exists, relative to the repo root (an absolute path works too). */
   legacyFindingsPath?: string;
 }
 
@@ -470,7 +470,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     }
     let raw: QodoReview;
     try {
-      raw = JSON.parse(readFileSync(join(ROOT, overlay.legacyFindingsPath), "utf8"));
+      raw = JSON.parse(readFileSync(resolve(ROOT, overlay.legacyFindingsPath), "utf8"));
     } catch (e) {
       error(`case:build: can't read ${overlay.legacyFindingsPath}: ${message(e)}`);
       return 2;
