@@ -27,7 +27,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["packages/**/*.test.ts", ".claude/**/*.test.ts"],
+          include: ["*.test.ts", "packages/**/*.test.ts", ".claude/**/*.test.ts"],
           exclude: ["**/node_modules/**", "packages/*/test/**"],
         },
       },
