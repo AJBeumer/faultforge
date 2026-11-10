@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { normalisePath, overlaps } from "./match-rule.ts";
+import { isRange, normalisePath, overlaps } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
 const schema = JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"));
@@ -45,8 +45,20 @@ export function validateCaseRecord(record: unknown): string[] {
 
 /** Cross-field rules JSON Schema can't express: a catch must follow from the findings and the match rule. */
 function consistencyProblems({ findings, detection, human, injection, review }: CaseRecord): string[] {
-  if (!detection) return [];
   const problems: string[] = [];
+  // One finding per id, or the checks below could judge a different finding from the one the rule matched.
+  const seen = new Set<string>();
+  for (const f of findings) {
+    if (seen.has(f.id)) problems.push(`finding id ${f.id} appears more than once`);
+    seen.add(f.id);
+    if (f.lines !== null && !isRange(f.lines)) {
+      problems.push(`finding ${f.id} has lines ${(f.lines as number[]).join("-")}, whose end comes before its start`);
+    }
+  }
+  if (injection && !isRange(injection.lines)) {
+    problems.push(`injection.lines ${(injection.lines as number[]).join("-")} ends before it starts`);
+  }
+  if (!detection) return problems;
   const findingsById = new Map(findings.map((f) => [f.id, f]));
   for (const id of detection.matchedFindingIds) {
     if (!findingsById.has(id)) problems.push(`detection names finding ${id}, which is not in findings`);

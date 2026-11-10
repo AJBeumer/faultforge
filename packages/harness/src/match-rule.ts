@@ -30,7 +30,7 @@ export interface FindingMatch {
   file: Criterion;
   lines: Criterion;
   kind: Criterion;
-  /** The width of the finding's own line range, in lines; null when Qodo placed it nowhere. */
+  /** The width of the finding's own line range, in lines; null when Qodo placed it nowhere or the range is reversed. */
   lineWidth: number | null;
   matched: boolean;
 }
@@ -56,9 +56,22 @@ function fileCriterion(injectionFile: string, findingFile: string | null): Crite
   return { pass: false, detail: `the finding names ${findingFile}, not the changed file ${injectionFile}` };
 }
 
-/** Two ranges overlap when they share at least one line: [10,12] and [12,20] do, [10,12] and [13,20] don't. */
+/** True for a line range as the schema means it: two whole numbers from 1, the end not before the start. */
+export function isRange(lines: unknown): lines is [number, number] {
+  return (
+    Array.isArray(lines) &&
+    lines.length === 2 &&
+    lines.every((n) => Number.isInteger(n) && n >= 1) &&
+    (lines[0] as number) <= (lines[1] as number)
+  );
+}
+
+/**
+ * Two ranges overlap when they share at least one line: [10,12] and [12,20] do, [10,12] and [13,20] don't.
+ * A reversed range such as [20,10] describes no lines, so it overlaps nothing.
+ */
 export function overlaps(a: [number, number], b: [number, number]): boolean {
-  return a[0] <= b[1] && b[0] <= a[1];
+  return isRange(a) && isRange(b) && a[0] <= b[1] && b[0] <= a[1];
 }
 
 function linesCriterion(injectionLines: [number, number], findingLines: [number, number] | null): Criterion {
@@ -67,6 +80,12 @@ function linesCriterion(injectionLines: [number, number], findingLines: [number,
   }
   const [fStart, fEnd] = findingLines;
   const [iStart, iEnd] = injectionLines;
+  if (!isRange(findingLines)) {
+    return { pass: false, detail: `finding lines ${fStart}-${fEnd} are not a range: the end comes before the start` };
+  }
+  if (!isRange(injectionLines)) {
+    return { pass: false, detail: `the injected lines ${iStart}-${iEnd} are not a range: fix the record` };
+  }
   if (overlaps(findingLines, injectionLines)) {
     return { pass: true, detail: `finding lines ${fStart}-${fEnd} overlap the changed lines ${iStart}-${iEnd}` };
   }
@@ -91,7 +110,7 @@ function kindCriterion(finding: MatchFinding, kindTerms: string[]): Criterion {
 }
 
 function lineWidth(lines: [number, number] | null): number | null {
-  return lines === null ? null : lines[1] - lines[0] + 1;
+  return isRange(lines) ? lines[1] - lines[0] + 1 : null;
 }
 
 /** Pure: the answer depends only on the injection, the findings and the kind terms passed in. */

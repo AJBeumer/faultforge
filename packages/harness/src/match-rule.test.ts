@@ -7,6 +7,7 @@ import {
   type Injection,
   type MatchFinding,
   type MatchRuleResult,
+  overlaps,
 } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
@@ -156,5 +157,22 @@ describe("applyMatchRule against the published FF-0001 record", () => {
     expect(only(result).file.pass).toBe(record.detection.match.file.pass);
     expect(only(result).lines.pass).toBe(record.detection.match.lines.pass);
     expect(only(result).kind.pass).toBe(record.detection.match.kind.pass);
+  });
+});
+
+describe("applyMatchRule: ranges that aren't ranges (Qodo on PR 128)", () => {
+  it("fails the lines criterion for a reversed finding range and reports no width", () => {
+    const reversed = finding({ lines: [20, 10], title: "Replay", summary: "", category: "" });
+    const result = applyMatchRule({ file: injection.file, lines: [5, 25] }, [reversed], kindTerms);
+    expect(only(result).lines.pass).toBe(false);
+    expect(only(result).lines.detail).toMatch(/end comes before the start/);
+    expect(only(result).lineWidth).toBeNull();
+    expect(result.caught).toBe(false);
+  });
+
+  it("overlaps() is false for a reversed range on either side", () => {
+    expect(overlaps([20, 10], [5, 25])).toBe(false);
+    expect(overlaps([5, 25], [20, 10])).toBe(false);
+    expect(overlaps([5, 25], [10, 20])).toBe(true);
   });
 });

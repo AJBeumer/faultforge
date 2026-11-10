@@ -161,3 +161,24 @@ describe("findLeaks", () => {
     expect(findLeaks("Qodo flagged src/bookings/create.ts line 33")).toEqual([]);
   });
 });
+
+describe("validateCaseRecord: what the schema can't say (Qodo on PR 128)", () => {
+  it("rejects a finding id that appears more than once", () => {
+    const record = ff0001();
+    record.findings.push({ ...record.findings[0], file: null, lines: null });
+    expect(validateCaseRecord(record)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/appears more than once/)]),
+    );
+  });
+
+  it("rejects a line range whose end comes before its start, in a finding and in the injection", () => {
+    const record = ff0001();
+    record.findings[0].lines = [40, 30];
+    expect(validateCaseRecord(record)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/end comes before its start/)]),
+    );
+    const other = ff0001();
+    other.injection.lines = [40, 30];
+    expect(validateCaseRecord(other)).toEqual(expect.arrayContaining([expect.stringMatching(/injection\.lines/)]));
+  });
+});

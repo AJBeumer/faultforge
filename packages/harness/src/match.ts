@@ -3,26 +3,22 @@
  *
  *   npm run match -- examples/FF-0001.json
  *
- * Reads the template's `match.kindTerms` from `templates/seed/<templateId>/template.json`, then
- * `private/templates/<templateId>/template.json`. Prints, for each finding, the three criteria with
- * their details, the finding's own line range and width, and the overall catch.
+ * The template's `match.kindTerms` come from the same place `npm run inject` reads the template: private
+ * storage first (`FAULTFORGE_PRIVATE_DIR`, or `private/`), then `templates/seed`. Prints, for each finding,
+ * the three criteria with their details, the finding's own line range and width, and the overall catch.
  *
- * Exits 0 when the record's own `detection` agrees with the computed result, 1 when it disagrees
- * (the output says where), 2 when the record can't be read or its template can't be found.
+ * Exit codes: 0 when the record's own `detection` agrees with the computed result, or the record has none
+ * yet; 1 when they disagree, and the output says where; 2 when the record isn't a readable case record, or
+ * its template can't be found, read or declares no usable terms.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
+import { applyMatchRule, isRange, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
+import { kindTermsOf, templateDir } from "./templates.ts";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-
-interface Template {
-  match?: { kindTerms?: string[] };
-}
-
-interface CaseRecord {
-  caseId: string;
+export interface CaseRecord {
+  caseId?: string;
   injection?: { templateId: string; file: string; lines: [number, number] };
   findings: MatchFinding[];
   detection?: {
@@ -32,18 +28,23 @@ interface CaseRecord {
   };
 }
 
-/** Where a template's match terms live: the seed copy first, then the private, unreleased one. */
-function findTemplateDir(templateId: string): string | undefined {
-  return [join(ROOT, "templates/seed", templateId), join(ROOT, "private/templates", templateId)].find((dir) =>
-    existsSync(join(dir, "template.json")),
-  );
+export interface RunOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Where the report's lines go; stdout by default. */
+  log?: (line: string) => void;
+  /** Where a refusal goes; stderr by default. */
+  error?: (line: string) => void;
 }
 
 function formatCriterion(name: string, criterion: { pass: boolean; detail: string }): string {
   return `  ${name}: ${criterion.pass ? "PASS" : "FAIL"} - ${criterion.detail}`;
 }
 
-/** Everywhere the computed result and the record's own detection disagree. */
+/**
+ * Everywhere the computed result and the record's own detection disagree. The record holds one set of
+ * criteria: they describe the matched finding when there is one, or the only finding. A miss with several
+ * findings leaves them unattributed, so only `caught` and the matched ids are compared then.
+ */
 export function disagreements(record: CaseRecord, result: MatchRuleResult): string[] {
   const detection = record.detection;
   if (!detection) return [];
@@ -56,13 +57,12 @@ export function disagreements(record: CaseRecord, result: MatchRuleResult): stri
   if (JSON.stringify(recorded) !== JSON.stringify(computed)) {
     problems.push(`matchedFindingIds: record says [${recorded.join(", ")}], computed says [${computed.join(", ")}]`);
   }
-  const reference = result.matchedFindingIds[0] ?? result.findings[0]?.id;
-  const referenceResult = result.findings.find((f) => f.id === reference);
-  if (referenceResult) {
+  const described = result.findings.length === 1 ? result.findings[0] : result.findings.find((f) => f.matched);
+  if (described) {
     for (const criterion of ["file", "lines", "kind"] as const) {
-      if (detection.match[criterion].pass !== referenceResult[criterion].pass) {
+      if (detection.match[criterion].pass !== described[criterion].pass) {
         problems.push(
-          `match.${criterion}.pass: record says ${detection.match[criterion].pass}, computed says ${referenceResult[criterion].pass}`,
+          `match.${criterion}.pass: record says ${detection.match[criterion].pass}, computed says ${described[criterion].pass} for ${described.id}`,
         );
       }
     }
@@ -70,63 +70,88 @@ export function disagreements(record: CaseRecord, result: MatchRuleResult): stri
   return problems;
 }
 
-export function run(recordPath: string): number {
+/** Why the parsed file can't be matched, or undefined. The schema is checked elsewhere; this is the minimum. */
+function shapeProblem(record: unknown): string | undefined {
+  if (!record || typeof record !== "object") return "is not a JSON object";
+  const r = record as Partial<CaseRecord>;
+  if (!Array.isArray(r.findings)) return "has no findings list";
+  if (!r.findings.every((f) => f && typeof f.id === "string")) return "has a finding without an id";
+  if (!r.injection) return "has no injection to match against";
+  const { templateId, file, lines } = r.injection;
+  if (typeof templateId !== "string" || typeof file !== "string" || !isRange(lines)) {
+    return "needs templateId, file and a line range in its injection";
+  }
+  return undefined;
+}
+
+export function run(recordPath: string, options: RunOptions = {}): number {
+  const env = options.env ?? process.env;
+  const log = options.log ?? ((line: string) => console.log(line));
+  const error = options.error ?? ((line: string) => console.error(line));
+  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
   let record: CaseRecord;
   try {
     record = JSON.parse(readFileSync(resolve(recordPath), "utf8"));
-  } catch (error) {
-    console.error(`match: can't read ${recordPath}: ${error instanceof Error ? error.message : String(error)}`);
+  } catch (e) {
+    error(`match: can't read ${recordPath}: ${message(e)}`);
     return 2;
   }
-  if (!record.injection) {
-    console.error(`match: ${record.caseId ?? recordPath} has no injection to match against`);
+  const shape = shapeProblem(record);
+  if (shape || !record.injection) {
+    error(`match: ${recordPath} ${shape}`);
     return 2;
   }
-  const templateDir = findTemplateDir(record.injection.templateId);
-  if (!templateDir) {
-    console.error(`match: template ${record.injection.templateId} not found in templates/seed or private/templates`);
+  const { injection } = record;
+  const dir = templateDir(injection.templateId, env);
+  if (!dir) {
+    error(`match: template ${injection.templateId} not found in private/templates or templates/seed`);
     return 2;
   }
-  const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
-  const kindTerms = template.match?.kindTerms ?? [];
-  if (!kindTerms.length) {
-    console.error(`match: ${templateDir}/template.json is missing match.kindTerms`);
+  let kindTerms: string[];
+  try {
+    kindTerms = kindTermsOf(JSON.parse(readFileSync(join(dir, "template.json"), "utf8")), `${dir}/template.json`);
+  } catch (e) {
+    error(`match: can't use ${dir}/template.json: ${message(e)}`);
     return 2;
   }
 
-  const result = applyMatchRule(record.injection, record.findings, kindTerms);
-
+  const result = applyMatchRule(injection, record.findings, kindTerms);
   for (const finding of result.findings) {
     const source = record.findings.find((f) => f.id === finding.id);
-    console.log(`${finding.id} ${source?.title ? `"${source.title}"` : ""}`.trim());
-    console.log(formatCriterion("file", finding.file));
-    console.log(formatCriterion("lines", finding.lines));
-    console.log(formatCriterion("kind", finding.kind));
+    log(`${finding.id} ${source?.title ? `"${source.title}"` : ""}`.trim());
+    log(formatCriterion("file", finding.file));
+    log(formatCriterion("lines", finding.lines));
+    log(formatCriterion("kind", finding.kind));
     const width =
       finding.lineWidth === null ? "no lines" : `${finding.lineWidth} line${finding.lineWidth === 1 ? "" : "s"}`;
     const range = source?.lines ? `lines ${source.lines[0]}-${source.lines[1]}` : "lines (none)";
-    console.log(`  ${range}, ${width}`);
+    log(`  ${range}, ${width}`);
     if (source?.commentLines) {
-      console.log(`  comment lines ${source.commentLines[0]}-${source.commentLines[1]} (information only)`);
+      log(`  comment lines ${source.commentLines[0]}-${source.commentLines[1]} (information only)`);
     }
   }
-  console.log(`caught: ${result.caught}`);
-  console.log(`matched: ${result.matchedFindingIds.join(", ") || "none"}`);
+  log(`caught: ${result.caught}`);
+  log(`matched: ${result.matchedFindingIds.join(", ") || "none"}`);
 
-  const problems = disagreements(record, result);
   if (!record.detection) {
-    console.log("(record has no detection to compare against)");
+    log("(record has no detection to compare against)");
     return 0;
   }
+  if (!result.caught && result.findings.length > 1) {
+    log(
+      "(a miss with several findings: the record's criteria name no one finding, so only caught and the matched ids are compared)",
+    );
+  }
+  const problems = disagreements(record, result);
   if (problems.length) {
-    for (const problem of problems) console.log(`disagrees: ${problem}`);
+    for (const problem of problems) log(`disagrees: ${problem}`);
     return 1;
   }
-  console.log("agrees with the record's own detection");
+  log("agrees with the record's own detection");
   return 0;
 }
 
-// Exit codes: 0 agrees with the record's detection, 1 disagrees, 2 can't read the record or its template.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const recordPath = process.argv[2];
   if (!recordPath) {
