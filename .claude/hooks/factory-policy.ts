@@ -9,6 +9,7 @@
  *  - scheduled tasks and persistent environment or registry changes
  *  - dismissing anything
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
+ *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
@@ -111,6 +112,17 @@ export function commandViolations(raw: string, ticket?: string): string[] {
 }
 
 /**
+ * Why a command may not run in the background, or undefined. `review:wait` must run in the foreground: a
+ * headless run ends with the agent's turn, so a background task is killed before it saves the review, and
+ * nobody wakes the agent (run 20261110-150249, #129). Starting the app in the background for a live check
+ * stays allowed.
+ */
+export function backgroundViolation(command: string, background: boolean): string | undefined {
+  if (!background || !/\breview:wait\b/.test(command)) return undefined;
+  return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
+}
+
+/**
  * Where a path really lands on disk: the nearest existing folder is resolved through symlinks and
  * junctions, and the rest is appended. A link inside the run can't smuggle an edit outside it.
  */
@@ -182,9 +194,12 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     tool = String(input.tool_name ?? "");
     const args = input.tool_input ?? {};
     const cwd: string = input.cwd ?? process.cwd();
-    if (tool === "Bash" || tool === "PowerShell")
-      reasons = commandViolations(String(args.command ?? ""), env.FAULTFORGE_TICKET_NUMBER);
-    else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+    if (tool === "Bash" || tool === "PowerShell") {
+      const command = String(args.command ?? "");
+      reasons = commandViolations(command, env.FAULTFORGE_TICKET_NUMBER);
+      const background = backgroundViolation(command, args.run_in_background === true);
+      if (background) reasons.push(background);
+    } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
       const reason = editViolation(
         resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
         env.FAULTFORGE_RUN_ROOT,

@@ -3,7 +3,7 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync } from
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { commandViolations, decide, denialReason, editViolation } from "./factory-policy.ts";
+import { backgroundViolation, commandViolations, decide, denialReason, editViolation } from "./factory-policy.ts";
 
 const HOOK = join(import.meta.dirname, "factory-policy.ts");
 // Native absolute paths, so the tests mean the same on Windows and on CI's Linux.
@@ -367,5 +367,28 @@ describe("factory policy: the first unattended run's denied environment listing 
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatch(/no dumping the environment/);
     expect(reasons[0]).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
+  });
+});
+
+describe("factory policy: review:wait runs in the foreground (#129)", () => {
+  const WAIT = "npm run review:wait -- faultforge 128 --commit abc1234";
+
+  it("denies review:wait started in the background, and says how to run it instead", () => {
+    const reason = backgroundViolation(WAIT, true);
+    expect(reason).toMatch(/in the foreground/);
+    expect(reason).toContain("--timeout 9");
+  });
+
+  it("allows review:wait in the foreground, and the app started in the background for a live check", () => {
+    expect(backgroundViolation(WAIT, false)).toBeUndefined();
+    expect(backgroundViolation("PORT=3000 npx tsx src/server.ts", true)).toBeUndefined();
+  });
+
+  it("reads the payload's run_in_background flag in the decision", () => {
+    const env = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
+    const call = (background: boolean) =>
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: WAIT, run_in_background: background } });
+    expect(decide(call(true), env)).toMatchObject({ kind: "deny", reason: expect.stringMatching(/in the foreground/) });
+    expect(decide(call(false), env)).toEqual({ kind: "allow" });
   });
 });
