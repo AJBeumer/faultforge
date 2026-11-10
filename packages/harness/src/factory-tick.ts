@@ -33,6 +33,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -122,6 +123,29 @@ export interface AgentRun {
   subtype: string | null;
   costUsd: number | null;
   turns: number | null;
+  /** The last pull request URL seen in a `gh pr create` step's own result, if the agent opened one. Used
+   * when the time limit cuts the run off before it can report a `FACTORY_RESULT` of its own. */
+  lastPr?: string | null;
+}
+
+/**
+ * The pull request URL of exactly `github` from a `gh pr create` step's tool result, or null. The
+ * content of a `tool_result` message is either a plain string or a list of `{type: "text", text}` blocks.
+ * Other text in the same result (a path, a ticket excerpt the step happened to print) can contain a
+ * pull request URL of some other repository; only one of this ticket's own repo counts.
+ */
+export function prUrlFromToolResult(content: unknown, github: string): string | null {
+  const text = Array.isArray(content)
+    ? content
+        .map((part) =>
+          part && typeof part === "object" && "text" in part ? String((part as { text: unknown }).text) : "",
+        )
+        .join("\n")
+    : String(content ?? "");
+  for (const match of text.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/g)) {
+    if (match[1]?.toLowerCase() === github.toLowerCase()) return match[0];
+  }
+  return null;
 }
 
 export interface Verification {
@@ -146,7 +170,8 @@ export function settle(
   github: string,
   minutes: number,
 ): Finish {
-  if (agent.timedOut) return { label: LABELS.help, reason: `hit the time limit of ${minutes} minutes`, pr: null };
+  if (agent.timedOut)
+    return { label: LABELS.help, reason: `hit the time limit of ${minutes} minutes`, pr: agent.lastPr ?? null };
   if (!result) {
     const how = agent.subtype && agent.subtype !== "success" ? ` (${agent.subtype})` : "";
     return {
@@ -608,7 +633,7 @@ export interface TickDeps {
   snapshot(github: string, number: number): TicketSnapshot;
   /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
   writeTicket(ws: Workspace, text: string): string;
-  relabel(github: string, number: number, remove: string[], add: string[]): void;
+  relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
   comment(github: string, number: number, body: string): void;
   workspace(runId: string): Workspace;
   runAgent(
@@ -680,6 +705,19 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     runId = runIdFor(deps.now(), pick.repoKey, pick.number);
     const reviewed = repoConfig(factory, pick.repoKey).guard === "reviewed";
     const say = (body: string) => deps.comment(pick.github, pick.number, safeText(body, reviewed));
+    // relabel still adds the new label even when removing the old one failed (real side effects, below).
+    // A failed removal is just logged - an old label left lingering is cosmetic - but a failed add means
+    // the ticket's intended new state was never recorded, so this throws for the caller to treat as any
+    // other failure here: never silently proceeding as if the ticket now shows what it doesn't.
+    const relabel = (remove: string[], add: string[]) => {
+      const { removeFailed, addFailed } = deps.relabel(pick.github, pick.number, remove, add);
+      if (removeFailed) {
+        log("error", {
+          message: `couldn't remove a label from the ticket: ${removeFailed instanceof Error ? removeFailed.message : removeFailed}`,
+        });
+      }
+      if (addFailed) throw addFailed instanceof Error ? addFailed : new Error(String(addFailed));
+    };
     log("picked", {
       repo: pick.repoKey,
       ticket: pick.number,
@@ -691,7 +729,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const owner = pick.github.split("/")[0] ?? "";
     if (pick.labelledBy.toLowerCase() !== owner.toLowerCase()) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      relabel([LABELS.ready], []);
       say(
         `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
       );
@@ -702,7 +740,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const authors = provenanceProblems(deps.snapshot(pick.github, pick.number).provenance, owner);
     if (authors.length) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      relabel([LABELS.ready], []);
       say(
         `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
       );
@@ -713,7 +751,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const readiness = deps.ready(pick.repoKey, pick.number);
     if (readiness.problems.length) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], [LABELS.help]);
+      relabel([LABELS.ready], [LABELS.help]);
       say(
         `Not started: this ticket isn't ready yet.\n\n${readiness.problems.map((p) => `- ${p}`).join("\n")}\n\nFix the ticket and add \`${LABELS.ready}\` again.`,
       );
@@ -722,8 +760,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return "not-ready";
     }
 
-    deps.relabel(pick.github, pick.number, [LABELS.ready], [LABELS.working]);
     claimed = pick;
+    relabel([LABELS.ready], [LABELS.working]);
     say(
       `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
@@ -774,7 +812,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const finish: Finish = audit.length
       ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
       : settled;
-    deps.relabel(pick.github, pick.number, [LABELS.working], [finish.label]);
+    // ready-for-agent is stripped again here too: if its removal at the claim failed silently (logged,
+    // not fatal, above), a ticket that already finished must never still look pickable by a later tick.
+    relabel([LABELS.working, LABELS.ready], [finish.label]);
     finalLabel = finish.label;
     const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
     say(
@@ -793,9 +833,28 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     log("error", { message, afterLabel: finalLabel });
     // Once the ticket has its final label, a later failure (saving, cleanup) must not add a second one.
+    // The relabel and the comment are tried independently: one failing must never also swallow the other,
+    // or the ticket is left agent-working with nothing alive to say why.
     if (claimed && !finalLabel) {
+      // ready-for-agent too: the claim may have left it in place (logged there, not fatal), and this is
+      // the last chance to strip it before a later tick could otherwise pick the same ticket up again.
+      const { removeFailed, addFailed } = deps.relabel(
+        claimed.github,
+        claimed.number,
+        [LABELS.working, LABELS.ready],
+        [LABELS.help],
+      );
+      if (removeFailed) {
+        log("error", {
+          message: `couldn't remove a label from the ticket: ${removeFailed instanceof Error ? removeFailed.message : removeFailed}`,
+        });
+      }
+      if (addFailed) {
+        log("error", {
+          message: `couldn't update the ticket's label: ${addFailed instanceof Error ? addFailed.message : addFailed}`,
+        });
+      }
       try {
-        deps.relabel(claimed.github, claimed.number, [LABELS.working], [LABELS.help]);
         const reviewed = repoConfig(factory, claimed.repoKey).guard === "reviewed";
         deps.comment(
           claimed.github,
@@ -890,6 +949,85 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   };
 }
 
+/** The time limit for an ordinary `gh` or `git` call. A push or a fetch/clone gets `LONG_CALL_TIMEOUT_MS`
+ * instead: a slow network can make either legitimately take longer than everything else the tick runs. */
+export const CALL_TIMEOUT_MS = 60_000;
+export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
+
+/** True when a `child_process` error is Node reporting that the call exceeded its `timeout` option. */
+export function isTimeoutError(error: unknown): boolean {
+  return Boolean(error) && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+}
+
+/**
+ * A failed `gh` or `git` call, with the call named so a stop the run reports (the audit, the verify
+ * step, a relabel) says which one hung or failed, never just "the runner failed".
+ */
+export class ExternalCallError extends Error {
+  readonly timedOut: boolean;
+  readonly stderr: string;
+  constructor(label: string, cause: unknown) {
+    const timedOut = isTimeoutError(cause);
+    const stderr =
+      cause && typeof cause === "object" && "stderr" in cause
+        ? String((cause as { stderr?: unknown }).stderr ?? "")
+        : "";
+    const detail = stderr.trim().split("\n").at(-1) || (cause instanceof Error ? cause.message : String(cause));
+    super(timedOut ? `${label} timed out` : `${label} failed: ${detail}`);
+    this.name = "ExternalCallError";
+    this.timedOut = timedOut;
+    this.stderr = stderr;
+  }
+}
+
+/**
+ * True only when a failed label removal is GitHub saying the label wasn't on the issue to begin with
+ * (its own HTTP 404 message, not a timeout or any other failure). Anything else - no permission, the
+ * issue or repo gone, a hung call - must be reported, never swallowed as "already gone".
+ */
+export function isLabelAlreadyGone(error: unknown): boolean {
+  if (!(error instanceof ExternalCallError) || error.timedOut) return false;
+  return /HTTP 404/.test(error.stderr) && /label does not exist/i.test(error.stderr);
+}
+
+/** What went wrong removing or adding a ticket's labels, or null for either that didn't. A failed removal
+ * just leaves an old label lingering - cosmetic, safe to log and move on from. A failed add means the
+ * ticket's new state was never recorded at all, which the caller must never treat as if it had been. */
+export interface RelabelProblems {
+  removeFailed: unknown;
+  addFailed: unknown;
+}
+
+/**
+ * Removes each label with `removeOne`, then adds `add` with `addAll` - always, even when a removal
+ * failed. Never throws: both failures (a removal other than `isLabelAlreadyGone`, or the add itself) are
+ * returned, so the caller can treat them differently rather than one masking the other.
+ */
+export function relabelWith(
+  remove: string[],
+  add: string[],
+  removeOne: (label: string) => void,
+  addAll: (labels: string[]) => void,
+): RelabelProblems {
+  let removeFailed: unknown = null;
+  for (const label of remove) {
+    try {
+      removeOne(label);
+    } catch (error) {
+      if (!isLabelAlreadyGone(error)) removeFailed ??= error;
+    }
+  }
+  let addFailed: unknown = null;
+  if (add.length) {
+    try {
+      addAll(add);
+    } catch (error) {
+      addFailed = error;
+    }
+  }
+  return { removeFailed, addFailed };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Real side effects
 
@@ -897,12 +1035,36 @@ function runsDir(): string {
   return resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(LAB_ROOT, "..", "faultforge-runs"));
 }
 
+/** Runs an external command with a time limit, throwing a `ExternalCallError` named after it on failure. */
+export function runExternal(
+  label: string,
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+  extra: { maxBuffer?: number; stdio?: ["ignore", "pipe", "pipe"] } = {},
+): string {
+  try {
+    return execFileSync(bin, args, { encoding: "utf8", timeout: timeoutMs, ...extra }) as unknown as string;
+  } catch (error) {
+    throw new ExternalCallError(label, error);
+  }
+}
+
 function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return runExternal(`gh ${args[0] ?? ""}`.trim(), "gh", args, CALL_TIMEOUT_MS, { maxBuffer: 64 * 1024 * 1024 });
 }
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], CALL_TIMEOUT_MS, {
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+/** For a push, or a fetch/clone: the same as `git`, but with the longer time limit. */
+function gitLong(cwd: string, ...args: string[]): string {
+  return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], LONG_CALL_TIMEOUT_MS, {
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function npm(cwd: string, ...args: string[]): { status: number | null; output: string } {
@@ -922,6 +1084,87 @@ function pidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
+ * an unheld lock can never both get it.
+ *
+ * Taking over a *stale* one (its pid is dead) is not naturally atomic - removing the old file and writing
+ * the new one are two steps - so it goes through `renameSync` instead of `rmSync`: moving a file away is
+ * exclusive on its *source* path the same way `wx` is exclusive on a path that doesn't exist yet. Two
+ * ticks can both try to move the same stale lock out of the way, but only one `renameSync` call can ever
+ * succeed against that source path - the other's throws ENOENT, because by then there is nothing left
+ * there to rename, and it reports losing the race, same as for a live holder.
+ *
+ * Reading the stale lock's own content and deciding it is stale are still two steps, so between them
+ * another tick can have already moved it out of the way and taken a fresh lock of its own: this tick's
+ * rename would then isolate that fresh lock by accident, not the stale one it read. The rename's result is
+ * checked against exactly the bytes read before deciding to act, and restored if they no longer match,
+ * rather than ever proceeding on a lock that turned out to belong to someone else. Only once that check
+ * passes does the winner take the now-empty path for itself; if a third tick's own plain, unrelated `wx`
+ * write lands in the instant between that and its own `take()`, that `take()` fails too, and it reports
+ * losing that race as well.
+ */
+export function acquireLock(
+  dir: string,
+  isAlive: (pid: number) => boolean = pidAlive,
+): { acquired: boolean; release(): void; note?: string } {
+  const file = join(dir, "factory.lock");
+  const take = () =>
+    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+  const release = () => rmSync(file, { force: true });
+  try {
+    take();
+    return { acquired: true, release };
+  } catch {
+    // Fallen through: something is already at `file`, live or stale.
+  }
+  let heldText = "";
+  let held: { pid?: number; at?: string } = {};
+  try {
+    heldText = readFileSync(file, "utf8");
+    held = JSON.parse(heldText);
+  } catch {
+    // An unreadable lock is treated as stale below; heldText stays "" and won't match anything real.
+  }
+  if (held.pid && isAlive(held.pid))
+    return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
+  const graveyard = join(dir, `factory.lock.stale.${process.pid}.${Math.random().toString(36).slice(2)}`);
+  try {
+    renameSync(file, graveyard);
+  } catch {
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  // The rename atomically isolated whatever was actually at `file`: check it is still the exact stale
+  // lock just read, not another tick's fresh one that replaced it in the instant between that read and
+  // this rename. A mismatch means this tick just took someone else's live lock by accident; put it back
+  // and report losing the race, rather than ever proceeding on a lock that belongs to someone else.
+  let isolatedText: string | null = null;
+  try {
+    isolatedText = readFileSync(graveyard, "utf8");
+  } catch {
+    // Nothing else ever names this exact graveyard path; vanishing here would be stranger still.
+  }
+  if (isolatedText !== heldText) {
+    try {
+      renameSync(graveyard, file);
+    } catch {
+      // Already gone or replaced again since: nothing more to undo.
+    }
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  rmSync(graveyard, { force: true });
+  try {
+    take();
+  } catch {
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  return {
+    acquired: true,
+    release,
+    note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
+  };
 }
 
 function killTree(pid: number) {
@@ -1003,32 +1246,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    lock() {
-      const file = join(runs, "factory.lock");
-      const take = () =>
-        writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
-      const release = () => rmSync(file, { force: true });
-      try {
-        take();
-        return { acquired: true, release };
-      } catch {
-        let held: { pid?: number; at?: string } = {};
-        try {
-          held = JSON.parse(readFileSync(file, "utf8"));
-        } catch {
-          // An unreadable lock is treated as stale below.
-        }
-        if (held.pid && pidAlive(held.pid))
-          return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
-        rmSync(file, { force: true });
-        take();
-        return {
-          acquired: true,
-          release,
-          note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
-        };
-      }
-    },
+    lock: () => acquireLock(runs),
     labelled: (github, label) =>
       (
         JSON.parse(
@@ -1073,16 +1291,13 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       writeFileSync(file, `${text}\n`);
       return file;
     },
-    relabel(github, number, remove, add) {
-      for (const label of remove) {
-        try {
-          gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`);
-        } catch {
-          // Already gone.
-        }
-      }
-      if (add.length) gh("issue", "edit", String(number), "--repo", github, ...add.flatMap((l) => ["--add-label", l]));
-    },
+    relabel: (github, number, remove, add) =>
+      relabelWith(
+        remove,
+        add,
+        (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
+        (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
+      ),
     comment: (github, number, body) => {
       gh("issue", "comment", String(number), "--repo", github, "--body", body);
     },
@@ -1096,14 +1311,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         for (const [key, repo] of Object.entries(factory.repos)) {
           const source = resolve(LAB_ROOT, repo.path);
           const target = repo.path === "." ? lab : worktreeFor(lab, repo.path);
-          git(source, "fetch", "--quiet", "origin", "main");
+          gitLong(source, "fetch", "--quiet", "origin", "main");
           mainAtStart[key] = git(source, "rev-parse", "origin/main");
           mkdirSync(dirname(target), { recursive: true });
-          git(source, "worktree", "add", "--detach", target, "origin/main");
+          gitLong(source, "worktree", "add", "--detach", target, "origin/main");
         }
-        git(privateRepo, "fetch", "--quiet", "origin", "main");
+        gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
         mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
-        git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         for (const repo of Object.values(factory.repos)) {
           const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
           if (!existsSync(join(dir, "package.json"))) continue;
@@ -1178,6 +1393,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       return [...problems, ...windowProblems({ comments, ticketEvents, reviews }, owner, from, to)];
     },
     runAgent(ws, runId, repoKey, number, ticketFile, log) {
+      const { github } = repoConfig(factory, repoKey);
       const settingsFile = join(ws.root, "agent-settings.json");
       writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: DENY } }, null, 2));
       // An empty MCP config, used with --strict-mcp-config: the agent reaches no MCP server of this machine.
@@ -1216,6 +1432,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         }, options.minutes * 60_000);
         let buffer = "";
         let final: Record<string, unknown> | null = null;
+        let lastPr: string | null = null;
         const commands = new Map<string, string>();
         const onLine = (line: string) => {
           if (!line.trim()) return;
@@ -1238,7 +1455,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
               // No output here: the event log can be public (an Actions log or artifact). The full
               // output stays in the agent transcript, which only goes to the private repo.
-              log("agent-step-result", { step: commands.get(part.tool_use_id ?? ""), error: Boolean(part.is_error) });
+              const step = commands.get(part.tool_use_id ?? "");
+              log("agent-step-result", { step, error: Boolean(part.is_error) });
+              if (step === "pr-opened" && !part.is_error) {
+                const url = prUrlFromToolResult(part.content, github);
+                if (url) lastPr = url;
+              }
             }
           }
         };
@@ -1267,6 +1489,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             subtype: `could not start the agent: ${error.message}`,
             costUsd: null,
             turns: null,
+            lastPr: null,
           });
         });
         child.on("close", (code) => {
@@ -1282,6 +1505,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             subtype: typeof result?.subtype === "string" ? result.subtype : null,
             costUsd: typeof result?.total_cost_usd === "number" ? result.total_cost_usd : null,
             turns: typeof result?.num_turns === "number" ? result.num_turns : null,
+            lastPr,
           });
         });
       });
@@ -1351,8 +1575,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (!priv) {
         priv = join(runs, runId, "private");
         mkdirSync(dirname(priv), { recursive: true });
-        git(privateRepo, "fetch", "--quiet", "origin", "main");
-        git(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
+        gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         temporary = true;
       }
       const dir = join(priv, evidenceInPrivate, "factory-runs");
@@ -1364,9 +1588,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       git(priv, "add", "-A");
       if (git(priv, "status", "--porcelain"))
         git(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
-      git(priv, "fetch", "--quiet", "origin", "main");
+      gitLong(priv, "fetch", "--quiet", "origin", "main");
       git(priv, "rebase", "--quiet", "origin/main");
-      git(priv, "push", "--quiet", "origin", "HEAD:main");
+      gitLong(priv, "push", "--quiet", "origin", "HEAD:main");
       if (temporary) {
         git(privateRepo, "worktree", "remove", "--force", priv);
         git(privateRepo, "branch", "-D", `run-${runId}`);
@@ -1389,7 +1613,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const mainAtStart: Record<string, string> = {};
       for (const [key, repo] of Object.entries(factory.repos)) {
         const dir = resolve(LAB_ROOT, repo.path);
-        git(dir, "fetch", "--quiet", "origin", "main");
+        gitLong(dir, "fetch", "--quiet", "origin", "main");
         const head = git(dir, "rev-parse", "HEAD");
         const main = git(dir, "rev-parse", "origin/main");
         if (head !== main)
@@ -1398,7 +1622,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           throw new Error(`the ${key} checkout has no node_modules: the workflow must run npm ci first`);
         mainAtStart[key] = main;
       }
-      git(privateRepo, "fetch", "--quiet", "origin", "main");
+      gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
       mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
       requireHooks(LAB_ROOT);
       return {

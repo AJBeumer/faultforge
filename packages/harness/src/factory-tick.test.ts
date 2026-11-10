@@ -1,31 +1,40 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import {
   type AgentRun,
+  acquireLock,
   agentArgs,
   agentInstructions,
   agentStep,
   buildSnapshot,
+  CALL_TIMEOUT_MS,
   checkProblems,
   commitToVerify,
+  ExternalCallError,
   type HookAnswer,
   type HookRunner,
   hookProblems,
   hookSelfTest,
   hookTimeoutSeconds,
   type IssueEvent,
+  isLabelAlreadyGone,
+  isTimeoutError,
   LABELS,
+  LONG_CALL_TIMEOUT_MS,
   lastLabelled,
   oldest,
   openActionRequired,
   parseAgentResult,
   prNumber,
   provenanceProblems,
+  prUrlFromToolResult,
   prViewProblems,
   realHookRunner,
   redact,
+  relabelWith,
   runIdFor,
   runsHook,
   safeText,
@@ -129,8 +138,10 @@ function fake(
       provenance: { author: "owner", editors: ["owner"], commenters: [] },
     }),
     writeTicket: (w) => `${w.root}/ticket.md`,
-    relabel: (github, number, remove, add) =>
-      calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`),
+    relabel: (github, number, remove, add) => {
+      calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`);
+      return { removeFailed: null, addFailed: null };
+    },
     comment: (github, number, body) => comments.push({ github, number, body }),
     workspace: () => {
       calls.push("workspace");
@@ -353,7 +364,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
       "workspace",
       "agent",
-      `relabel owner/target#18 -${LABELS.working} +${LABELS.done}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       "save with workspace",
       "cleanup",
     ]);
@@ -390,7 +401,7 @@ describe("tick: stop paths", () => {
       { runAgent: async () => ({ ...AGENT_OK, timedOut: true, resultText: null }) },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
-    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working} +${LABELS.help}`);
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
     expect(f.calls).not.toContain("cleanup");
     expect(f.comments[1]?.body).toMatch(/time limit of 120 minutes/);
   });
@@ -414,6 +425,107 @@ describe("tick: stop paths", () => {
     expect((window[1] ?? "") < finished).toBe(true);
   });
 
+  it("never cleans up the worktrees when saving the evidence fails, keeping them for the owner (#107)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: () => {
+          throw new Error("push rejected");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain("cleanup");
+  });
+
+  it("never starts the agent when the claim's own label add fails: the ticket must not run twice (Qodo on PR 123)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        relabel: (github, number, remove, add) => {
+          f.calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`);
+          // The claim call: removes ready-for-agent, adds agent-working.
+          if (add.includes(LABELS.working)) return { removeFailed: null, addFailed: new Error("add failed") };
+          return { removeFailed: null, addFailed: null };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    // The agent must never have been started on a ticket whose claim didn't actually land.
+    expect(f.calls).not.toContain("agent");
+    // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again.
+    expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
+      `relabel owner/target#18 -${LABELS.ready} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+    ]);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+  });
+
+  it("does not report the run as finished when the finish step's own label add fails (Qodo on PR 123)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        relabel: (github, number, remove, add) => {
+          f.calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`);
+          if (add.includes(LABELS.done)) return { removeFailed: null, addFailed: new Error("add failed") };
+          return { removeFailed: null, addFailed: null };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    // The fallback relabel is still tried, even though the finish-step one failed.
+    expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
+      `relabel owner/target#18 -${LABELS.ready} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+    ]);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+  });
+
+  it("needs help when a gh/git call during the audit times out, names the call, and still relabels (#107)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new ExternalCallError("git ls-remote", { code: "ETIMEDOUT" });
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(git ls-remote timed out\)/);
+  });
+
+  it("needs help when a gh/git call during verify times out, names the call, and still relabels (#107)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        verifyPr: () => {
+          throw new ExternalCallError("npm review:wait", { code: "ETIMEDOUT" });
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(npm review:wait timed out\)/);
+  });
+
+  it("reports the opened pull request on the ticket when the time limit is hit after the agent opened one (#107)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        runAgent: async () => ({
+          ...AGENT_OK,
+          timedOut: true,
+          resultText: null,
+          lastPr: "https://github.com/owner/target/pull/42",
+        }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.comments.at(-1)?.body).toMatch(/pull\/42/);
+  });
+
   it("never gives a ticket a second final label when saving fails after the label", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -426,7 +538,7 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
       `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
-      `relabel owner/target#18 -${LABELS.working} +${LABELS.done}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
     ]);
     expect(f.comments).toHaveLength(2);
     expect(f.events.at(-1)).toMatchObject({ event: "error", message: "push rejected", afterLabel: LABELS.done });
@@ -458,7 +570,7 @@ describe("tick: stop paths", () => {
       },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
-    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working} +${LABELS.help}`);
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
     expect(f.comments[1]?.body).toMatch(/runner failed \(npm ci failed\)/);
     expect(f.released()).toBe(true);
   });
@@ -520,6 +632,24 @@ describe("settle", () => {
       label: LABELS.help,
       reason: expect.stringMatching(/error_max_budget_usd/),
     });
+  });
+
+  it("reports the pull request the agent opened before the time limit cut it off (#107)", () => {
+    expect(
+      settle(
+        { ...AGENT_OK, timedOut: true, resultText: null, lastPr: "https://github.com/owner/target/pull/9" },
+        null,
+        verified,
+        "owner/target",
+        120,
+      ),
+    ).toMatchObject({ label: LABELS.help, pr: "https://github.com/owner/target/pull/9" });
+  });
+
+  it("still reports no pull request when the agent never got that far before timing out (#107)", () => {
+    expect(
+      settle({ ...AGENT_OK, timedOut: true, resultText: null }, null, verified, "owner/target", 120).pr,
+    ).toBeNull();
   });
 
   it("passes an owner gate through as done, with its reason", () => {
@@ -1039,5 +1169,209 @@ describe("verifying the commit the agent pushed (Qodo on PR 98)", () => {
       PUSHED,
     );
     expect(problems).toHaveLength(2);
+  });
+});
+
+describe("time limits on gh and git calls (#107)", () => {
+  it("recognises Node's ETIMEDOUT and nothing else", () => {
+    expect(isTimeoutError({ code: "ETIMEDOUT" })).toBe(true);
+    expect(isTimeoutError({ code: "ENOENT" })).toBe(false);
+    expect(isTimeoutError(new Error("boom"))).toBe(false);
+    expect(isTimeoutError(null)).toBe(false);
+  });
+
+  it("names the call and marks it as a timeout", () => {
+    const err = new ExternalCallError("git push", { code: "ETIMEDOUT" });
+    expect(err.timedOut).toBe(true);
+    expect(err.message).toBe("git push timed out");
+  });
+
+  it("keeps gh's own detail for a call that failed without timing out", () => {
+    const err = new ExternalCallError("gh api", {
+      stderr: "gh: HTTP 403: Forbidden (https://api.github.com/x)\n",
+    });
+    expect(err.timedOut).toBe(false);
+    expect(err.message).toBe("gh api failed: gh: HTTP 403: Forbidden (https://api.github.com/x)");
+  });
+
+  it("gives the long limit to pushes and clones, longer than the default every other call gets", () => {
+    expect(LONG_CALL_TIMEOUT_MS).toBeGreaterThan(CALL_TIMEOUT_MS);
+  });
+  // Whether the time limit actually cuts off a real, hanging process is checked in
+  // packages/harness/test/factory-tick-timeouts.test.ts: spawning a process belongs in the integration
+  // suite, never in this file's fast, fake-only checks.
+});
+
+describe("isLabelAlreadyGone (#107)", () => {
+  it("swallows only gh's own 404 for a label that was never on the issue", () => {
+    const gone = new ExternalCallError("gh api", {
+      stderr: "gh: HTTP 404: Label does not exist (https://api.github.com/repos/o/r/issues/1/labels/x)\n",
+    });
+    expect(isLabelAlreadyGone(gone)).toBe(true);
+  });
+
+  it("reports a 401, a 403, a 404 that isn't about the label, and a timeout, instead of swallowing them", () => {
+    const unauthorized = new ExternalCallError("gh api", { stderr: "gh: HTTP 401: Bad credentials (...)\n" });
+    const forbidden = new ExternalCallError("gh api", { stderr: "gh: HTTP 403: Forbidden (...)\n" });
+    const issueGone = new ExternalCallError("gh api", { stderr: "gh: HTTP 404: Not Found (...)\n" });
+    const timedOut = new ExternalCallError("gh api", { code: "ETIMEDOUT" });
+    expect(isLabelAlreadyGone(unauthorized)).toBe(false);
+    expect(isLabelAlreadyGone(forbidden)).toBe(false);
+    expect(isLabelAlreadyGone(issueGone)).toBe(false);
+    expect(isLabelAlreadyGone(timedOut)).toBe(false);
+    expect(isLabelAlreadyGone(new Error("plain"))).toBe(false);
+  });
+});
+
+describe("relabelWith (#107, Qodo on PR 123)", () => {
+  it("always adds, even when every removal failed, and reports nothing when it was just a missing label", () => {
+    const added: string[][] = [];
+    const gone = () => {
+      throw new ExternalCallError("gh api", {
+        stderr: "gh: HTTP 404: Label does not exist (...)\n",
+      });
+    };
+    expect(relabelWith(["old"], ["new"], gone, (labels) => added.push(labels))).toEqual({
+      removeFailed: null,
+      addFailed: null,
+    });
+    expect(added).toEqual([["new"]]);
+  });
+
+  it("adds the new label, then still reports a 401 removal failure separately, never swallowing it", () => {
+    const added: string[][] = [];
+    const unauthorized = () => {
+      throw new ExternalCallError("gh api", { stderr: "gh: HTTP 401: Bad credentials (...)\n" });
+    };
+    const result = relabelWith(["old"], ["new"], unauthorized, (labels) => added.push(labels));
+    expect(added).toEqual([["new"]]);
+    expect(result.removeFailed).toBeInstanceOf(ExternalCallError);
+    expect((result.removeFailed as ExternalCallError).message).toMatch(/401/);
+    expect(result.addFailed).toBeNull();
+  });
+
+  it("reports a failed add on its own, distinct from a failed removal: the caller must never confuse them", () => {
+    const addBroke = new ExternalCallError("gh issue edit", { stderr: "gh: HTTP 500: Internal Server Error (...)\n" });
+    const result = relabelWith(
+      ["old"],
+      ["new"],
+      () => {},
+      () => {
+        throw addBroke;
+      },
+    );
+    expect(result.removeFailed).toBeNull();
+    expect(result.addFailed).toBe(addBroke);
+  });
+
+  it("adds nothing when there is nothing to add, and removes every label asked for", () => {
+    const removed: string[] = [];
+    const result = relabelWith(
+      ["a", "b"],
+      [],
+      (label) => removed.push(label),
+      () => {
+        throw new Error("must not be called");
+      },
+    );
+    expect(removed).toEqual(["a", "b"]);
+    expect(result).toEqual({ removeFailed: null, addFailed: null });
+  });
+});
+
+describe("prUrlFromToolResult (#107)", () => {
+  it("finds a pull request url in a plain string result", () => {
+    expect(prUrlFromToolResult("Created https://github.com/owner/target/pull/42\n", "owner/target")).toBe(
+      "https://github.com/owner/target/pull/42",
+    );
+  });
+
+  it("finds a pull request url inside a list of text blocks", () => {
+    expect(
+      prUrlFromToolResult([{ type: "text", text: "https://github.com/owner/target/pull/7 opened" }], "owner/target"),
+    ).toBe("https://github.com/owner/target/pull/7");
+  });
+
+  it("is null when there is no pull request url", () => {
+    expect(prUrlFromToolResult("nothing here", "owner/target")).toBeNull();
+    expect(prUrlFromToolResult(null, "owner/target")).toBeNull();
+    expect(prUrlFromToolResult(undefined, "owner/target")).toBeNull();
+  });
+
+  it("ignores a pull request url of some other repository, even alongside this one's (Qodo on PR 123)", () => {
+    const text =
+      "See https://github.com/owner/other/pull/3 for background.\nCreated https://github.com/owner/target/pull/42";
+    expect(prUrlFromToolResult(text, "owner/target")).toBe("https://github.com/owner/target/pull/42");
+    expect(prUrlFromToolResult("Created https://github.com/owner/other/pull/3", "owner/target")).toBeNull();
+  });
+});
+
+describe("acquireLock (#107)", () => {
+  const tmp = () => mkdtempSync(join(tmpdir(), "ff-lock-"));
+
+  it("acquires a fresh lock, and release lets it be acquired again", () => {
+    const dir = tmp();
+    const a = acquireLock(dir);
+    expect(a.acquired).toBe(true);
+    expect(a.note).toBeUndefined();
+    a.release();
+    expect(acquireLock(dir).acquired).toBe(true);
+  });
+
+  it("is busy when a live process holds the lock", () => {
+    const dir = tmp();
+    expect(acquireLock(dir).acquired).toBe(true);
+    const b = acquireLock(dir, () => true);
+    expect(b.acquired).toBe(false);
+    expect(b.note).toMatch(/pid \d+ since/);
+  });
+
+  it("takes over a stale lock whose pid is dead", () => {
+    const dir = tmp();
+    expect(acquireLock(dir).acquired).toBe(true);
+    const b = acquireLock(dir, () => false);
+    expect(b.acquired).toBe(true);
+    expect(b.note).toMatch(/took over a stale lock/);
+  });
+
+  it("the second of two ticks that both try to take over the same stale lock reports busy, never both wins (Qodo on PR 123)", () => {
+    const dir = tmp();
+    const file = join(dir, "factory.lock");
+    writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    // Simulate a second tick's own renameSync, of the exact same stale lock, winning the race: by the
+    // time this tick's own renameSync runs, there is nothing left at `file` to rename away.
+    const raced = () => {
+      rmSync(file, { force: true });
+      return false;
+    };
+    const result = acquireLock(dir, raced);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/lost the race/);
+  });
+
+  it("leaves no graveyard file behind after taking over a stale lock", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    expect(acquireLock(dir, () => false).acquired).toBe(true);
+    expect(readdirSync(dir)).toEqual(["factory.lock"]);
+  });
+
+  it("never steals a lock another tick already took over in between this tick's read and its rename (Qodo on PR 123)", () => {
+    const dir = tmp();
+    const file = join(dir, "factory.lock");
+    writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    // Simulate another tick completing its own full stale takeover - moving the same stale lock away and
+    // taking a fresh one of its own - in the gap between this tick reading the lock as stale and acting
+    // on that read.
+    const racedToOwnFreshLock = () => {
+      writeFileSync(file, JSON.stringify({ pid: 777777, at: "2026-11-10T00:00:00Z" }), { flag: "w" });
+      return false;
+    };
+    const result = acquireLock(dir, racedToOwnFreshLock);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/lost the race/);
+    // The other tick's fresh lock must survive untouched, not be replaced by this tick's own.
+    expect(JSON.parse(readFileSync(file, "utf8")).pid).toBe(777777);
+    expect(readdirSync(dir)).toEqual(["factory.lock"]);
   });
 });
