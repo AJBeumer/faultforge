@@ -399,6 +399,12 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
     expect(backgroundViolation(command, false)).toMatch(/in the foreground/);
   });
 
+  it("reads a backtick before a newline as Bash does too: a substitution, not a join (Qodo on PR 132, round 3)", () => {
+    const hidden = "true`\ngit push --force origin HEAD:refs/heads/x`";
+    expect(commandViolations(hidden)).toContain("no force push or remote delete");
+    expect(commandViolations("true`\ngh pr merge 1`")).toContain("only the owner merges, closes or comments on a PR");
+  });
+
   it("joins a line continuation first, as every other rule does (Qodo on PR 132, round 2)", () => {
     expect(backgroundViolation("npm run review:\\\nwait -- faultforge 128", true)).toMatch(/in the foreground/);
     expect(backgroundViolation("npm run review:`\nwait -- faultforge 128 &", false)).toMatch(/in the foreground/);

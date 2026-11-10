@@ -77,7 +77,15 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
  * where someone could have added text after the check.
  */
 export function commandViolations(raw: string, ticket?: string): string[] {
-  const command = oneLine(raw);
+  const reasons: string[] = [];
+  for (const command of readings(raw)) {
+    for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
+  }
+  return reasons;
+}
+
+/** The reasons found in one reading of the command. */
+function violationsIn(command: string, ticket?: string): string[] {
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
@@ -110,13 +118,16 @@ export function commandViolations(raw: string, ticket?: string): string[] {
 }
 
 /**
- * One logical line per command: a backslash (bash) or backtick (PowerShell) line continuation can't split
- * a command into pieces that no rule sees whole. The pair is removed, as the shell removes it, so a name
- * split across lines (`review:\` newline `wait`) reads as the shell runs it. Every rule reads the command
- * through this.
+ * The ways a shell reads a backslash or backtick before a newline. Bash removes a backslash-newline pair
+ * outright, so a name split across lines (`review:\` newline `wait`) runs as one word. PowerShell reads a
+ * backtick-newline as a separator. And in Bash a backtick before a newline opens a command substitution, so
+ * the words around it stay apart (Qodo on PR 132: `true` backtick newline `git push --force …` backtick runs
+ * the push). No rule can know which shell will run the text, so every rule reads the command both ways,
+ * glued and spaced, and a violation in either reading counts: the rules fail closed.
  */
-function oneLine(raw: string): string {
-  return raw.replace(/[\\`]\r?\n/g, "");
+function readings(raw: string): string[] {
+  const continuation = /[\\`]\r?\n/g;
+  return [...new Set([raw.replace(continuation, ""), raw.replace(continuation, " ")])];
 }
 
 /**
@@ -136,9 +147,9 @@ const RUNS_REVIEW_WAIT = /\breview[:-]wait\b/i;
  * stays allowed.
  */
 export function backgroundViolation(raw: string, background: boolean): string | undefined {
-  const command = oneLine(raw);
-  if (!RUNS_REVIEW_WAIT.test(command)) return undefined;
-  if (!background && !SHELL_BACKGROUND.test(command)) return undefined;
+  const read = readings(raw);
+  if (!read.some((command) => RUNS_REVIEW_WAIT.test(command))) return undefined;
+  if (!background && !read.some((command) => SHELL_BACKGROUND.test(command))) return undefined;
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
 }
 
