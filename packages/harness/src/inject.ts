@@ -183,6 +183,9 @@ try {
     failure = `proof test still passes on the variant, so the mutation is not validated: ${stillPassing.join(", ")}`;
   } else if (!validateOnly && typecheck !== "pass") {
     failure = "variant does not typecheck";
+  } else if (!validateOnly && template.kind === "control" && publicTests !== "pass") {
+    // A control has no proof to anchor it as harmless; the public tests are what stand in for one.
+    failure = "control variant fails the public tests, so it is not a clean control";
   }
 
   if (!failure && !validateOnly) {
