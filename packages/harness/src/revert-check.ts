@@ -10,7 +10,12 @@
  *
  * Exits 0 when at least one test failed without the change, 1 when every test still passed (the
  * tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code file,
- * the PR's tests fail even with the change, or the scratch copy can't be built.
+ * the PR changes its dependencies, the PR's tests fail even with the change, or the scratch copy
+ * can't be built. A dependency change is a lock file that differs, or a `package.json` whose
+ * install-deciding fields differ between base and head (`DEPENDENCY_SECTIONS`: the dependency maps,
+ * `overrides`, `resolutions`, `peerDependenciesMeta`, bundled packages and `workspaces`); a
+ * `package.json` that only gains a script or changes its description is an ordinary code file, put
+ * back to its base version like any other.
  *
  * Read-only for the repository: the scratch copy is made through a temporary git index into a temp
  * folder, so the working tree, the real index and every branch stay as they were (a fetch updates
@@ -68,8 +73,63 @@ export function parseNameStatus(output: string): Change[] {
   return changes;
 }
 
-/** Files that decide which packages are installed. The copy shares one install, so it can't test both sides. */
-const DEPENDENCY_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/;
+/** Lock files: any change decides which packages are installed. The copy shares one install, so it can't test both sides. */
+const LOCK_FILES = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock)$/;
+const MANIFEST = /(^|\/)package\.json$/;
+/**
+ * The package.json fields that decide what `npm install` puts in node_modules: the dependency maps, the
+ * fields that alter how they resolve (`overrides`, yarn's `resolutions`, `peerDependenciesMeta`,
+ * bundled packages) and `workspaces`. The rest (scripts, description, bin) is code.
+ */
+export const DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "peerDependenciesMeta",
+  "bundleDependencies",
+  "bundledDependencies",
+  "overrides",
+  "resolutions",
+  "workspaces",
+] as const;
+
+/** A file's text at the base and at the head of the PR; null where the file doesn't exist. */
+export type Contents = (path: string) => { base: string | null; head: string | null };
+
+/** A value with its object keys sorted, so two manifests that only order their entries differently compare equal. */
+function canonical(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * The dependency sections of a package.json that differ between its base and head texts. A missing
+ * file has no sections; a text that isn't a JSON object can't be compared, so every section counts as
+ * changed (the safe answer: a check that can't tell declines rather than guesses).
+ */
+export function dependencySectionsChanged(base: string | null, head: string | null): string[] {
+  const parse = (text: string | null): Record<string, unknown> | undefined => {
+    if (text === null) return {};
+    try {
+      const value: unknown = JSON.parse(text);
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const before = parse(base);
+  const after = parse(head);
+  if (!before || !after) return [...DEPENDENCY_SECTIONS];
+  return DEPENDENCY_SECTIONS.filter(
+    (section) => canonical(before[section] ?? null) !== canonical(after[section] ?? null),
+  );
+}
 
 export interface TestRun {
   /** False when the runner produced no result at all: the copy couldn't run its tests. */
@@ -112,21 +172,38 @@ export interface Outcome {
   failedWithoutChange: string[];
 }
 
-/** Why the PR's files alone rule out a check, before anything runs; null when a check can run. */
-export function filesProblem(files: { tests: string[]; code: Change[] }): string | null {
+/**
+ * Why the PR's files alone rule out a check, before anything runs; null when a check can run. A
+ * changed package.json is a dependency change only when `contents` shows one of its dependency
+ * sections differs; without `contents` to read it, it counts as one (the safe answer).
+ */
+export function filesProblem(files: { tests: string[]; code: Change[] }, contents?: Contents): string | null {
   if (!files.tests.length) return "the PR changes no test file, so there is nothing to prove";
   if (!files.code.length) return "the PR changes no code file, so there is no change to take away";
-  const deps = files.code.filter((c) => DEPENDENCY_FILES.test(c.path)).map((c) => c.path);
+  const deps: string[] = [];
+  for (const change of files.code) {
+    if (LOCK_FILES.test(change.path)) deps.push(change.path);
+    else if (MANIFEST.test(change.path)) {
+      const texts = contents?.(change.path);
+      const sections = texts ? dependencySectionsChanged(texts.base, texts.head) : [...DEPENDENCY_SECTIONS];
+      if (sections.length) deps.push(`${change.path} (${sections.join(", ")})`);
+    }
+  }
   if (deps.length) {
     return `the PR changes its dependencies (${deps.join(", ")}), and the copy has only one set of installed packages, so it can't run both sides`;
   }
   return null;
 }
 
-/** The verdict, from the PR's files and the two runs. */
-export function verdict(files: { tests: string[]; code: Change[] }, withChange?: TestRun, without?: TestRun): Outcome {
+/** The verdict, from the PR's files and the two runs; `contents` reads a changed package.json at base and head. */
+export function verdict(
+  files: { tests: string[]; code: Change[] },
+  withChange?: TestRun,
+  without?: TestRun,
+  contents?: Contents,
+): Outcome {
   const none = (message: string): Outcome => ({ exit: 2, message, failedWithoutChange: [] });
-  const problem = filesProblem(files);
+  const problem = filesProblem(files, contents);
   if (problem) return none(problem);
   if (!withChange?.ran)
     return none(`the PR's tests couldn't run in the scratch copy: ${withChange?.error ?? "no result"}`);
@@ -198,8 +275,20 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
   );
   const split = splitFiles(changes, input.tests);
   const files = { tests: runnableTests(split.tests), code: split.code };
+  const show = (ref: string, path: string): string | null => {
+    try {
+      return git(input.repo, ["show", `${ref}:${path}`]);
+    } catch {
+      return null;
+    }
+  };
+  const contents: Contents = (path) => ({ base: show(input.base, path), head: show(input.head, path) });
+  const judge = (withChange?: TestRun, without?: TestRun) => ({
+    ...verdict(files, withChange, without, contents),
+    changes,
+  });
   // Nothing to run (no tests, no code, or changed dependencies): answer without building a copy.
-  if (filesProblem(files)) return { ...verdict(files), changes };
+  if (filesProblem(files, contents)) return judge();
 
   const scratch = mkdtempSync(join(input.temp ?? tmpdir(), "revert-check-"));
   const link = join(scratch, "copy", "node_modules");
@@ -214,13 +303,10 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
       if (existsSync(modules)) symlinkSync(modules, link, "junction");
     } catch (error) {
       const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
-      return {
-        ...verdict(files, { ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` }),
-        changes,
-      };
+      return judge({ ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` });
     }
     const withChange = input.runTests(copy, files.tests);
-    if (!withChange.ran || withChange.failed.length) return { ...verdict(files, withChange), changes };
+    if (!withChange.ran || withChange.failed.length) return judge(withChange);
     // Added files go; modified and deleted ones come back from the base, checked out the same way as
     // the head (same line-ending conversion), so the only difference is the change itself.
     for (const change of files.code) if (change.status === "A") rmSync(join(copy, change.path), { force: true });
@@ -230,7 +316,7 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
       git(input.repo, ["read-tree", input.base], baseIndex);
       git(input.repo, ["checkout-index", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`, "--", ...restore], baseIndex);
     }
-    return { ...verdict(files, withChange, input.runTests(copy, files.tests)), changes };
+    return judge(withChange, input.runTests(copy, files.tests));
   } finally {
     // Remove the link to node_modules by itself first, so deleting the copy can never reach the real one.
     try {
@@ -315,7 +401,7 @@ async function main() {
   process.exit(result.exit);
 }
 
-// Exit codes: 0 caught, 1 not proven, 2 can't judge (or couldn't run).
+// Exit codes: 0 caught, 1 not proven, 2 can't judge (no tests, no code, a dependency change, tests that fail with the change, or couldn't run).
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main().catch((error: unknown) => {
     console.error(`revert:check could not run: ${error instanceof Error ? error.message : String(error)}`);
