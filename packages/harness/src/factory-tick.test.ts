@@ -1103,9 +1103,15 @@ describe("agentInstructions (#73)", () => {
 
   it("names the snapshot file's environment variable and rules out the live reads the skills mention (#113)", () => {
     const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md");
-    expect(text).toMatch(/FAULTFORGE_TICKET_FILE/);
+    expect(text).toContain("is in /runs/r/ticket.md.");
     expect(text).toMatch(/never with gh issue view, gh api or npm run ticket:ready/);
     expect(text).toMatch(/Don't move the ticket on the project board/);
+  });
+
+  it("gives the path outright and rules out listing the environment, which the first run did on its first call (#113)", () => {
+    const text = agentInstructions("/runs/r", "faultforge", 107, "/runs/r/ticket.md");
+    expect(text).toContain("Don't list it (env, printenv and set are blocked)");
+    expect(text).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
   });
 });
 

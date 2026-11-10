@@ -57,7 +57,10 @@ const SECRET_RULES: [RegExp, string][] = [
     /\b(GH_TOKEN|GITHUB_TOKEN|QODO_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|FACTORY_GH_TOKEN)\b/,
     "the run's keys are off limits",
   ],
-  [/(^|[\s;&|(])(env|printenv|set|export\s+-p|declare\s+-x)(\s*($|[;&|>)]))/m, "no dumping the environment"],
+  [
+    /(^|[\s;&|(])(env|printenv|set|export\s+-p|declare\s+-x)(\s*($|[;&|>)]))/m,
+    'no dumping the environment (one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine)',
+  ],
   [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
   [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
 ];

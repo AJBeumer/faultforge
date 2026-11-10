@@ -294,6 +294,7 @@ describe("factory policy: the skills' run-mode steps are allowed, the interactiv
     // /work-ticket step 1 in a run: the snapshot file, not the live ticket
     'cat "$FAULTFORGE_TICKET_FILE"',
     "sed -n 1,200p $FAULTFORGE_TICKET_FILE",
+    'echo "$FAULTFORGE_TICKET_FILE"',
     // steps 4 and 6: the capture and proof commands
     "npm run review:wait -- faultforge 12 --commit abc1234",
     "npm run revert:check -- faultforge 12",
@@ -322,5 +323,14 @@ describe("factory policy: the skills' run-mode steps are allowed, the interactiv
     "gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: {}) { clientMutationId } }'",
   ])("blocks %s", (command) => {
     expect(commandViolations(command, ticket)).not.toEqual([]);
+  });
+});
+
+describe("factory policy: the first unattended run's denied environment listing (#113)", () => {
+  it("still denies the listing, and the reason now names the one-variable form that is allowed", () => {
+    const reasons = commandViolations('env | grep -i faultforge; echo "---"; env | grep -i FACTORY');
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/no dumping the environment/);
+    expect(reasons[0]).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
   });
 });
