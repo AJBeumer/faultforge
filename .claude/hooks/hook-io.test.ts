@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isEntry } from "./hook-io.ts";
+import { ALLOW, type Decision, hookAnswer, isEntry } from "./hook-io.ts";
 
 describe("isEntry: a hook knows when it is the file being run", () => {
   const here = fileURLToPath(import.meta.url);
@@ -25,5 +25,32 @@ describe("isEntry: a hook knows when it is the file being run", () => {
     const swapped = (letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase()) + here.slice(1);
     expect(swapped).not.toBe(here);
     expect(isEntry(import.meta.url, swapped)).toBe(true);
+  });
+});
+
+describe("hookAnswer: a payload that can't be read is the hook's own failure (Qodo on PR 131)", () => {
+  const failed = (error: unknown): Decision => ({ kind: "error", message: `hook failed: ${String(error)}` });
+
+  it("passes what was read to the decision", () => {
+    expect(
+      hookAnswer(
+        () => "{}",
+        (stdin) => ({ kind: "deny", reason: stdin }),
+        failed,
+      ),
+    ).toEqual({
+      kind: "deny",
+      reason: "{}",
+    });
+  });
+
+  it("turns a failing read into the blocking error, never a crash", () => {
+    const read = () => {
+      throw new Error("EBADF: bad file descriptor, read");
+    };
+    expect(hookAnswer(read, () => ALLOW, failed)).toMatchObject({
+      kind: "error",
+      message: expect.stringMatching(/EBADF/),
+    });
   });
 });

@@ -3,7 +3,7 @@
  * checkout's pending content from git fixtures are in guard-target.pending.test.ts (#121).
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -199,10 +199,14 @@ describe("guard-target hook", () => {
 });
 
 describe("guard-target hook reads the reviewed repos from factory.json", () => {
-  /** The fixture config plus a third reviewed repo, added as one entry; its checkout exists nowhere. */
+  /**
+   * The fixture config plus a third reviewed repo, added as one entry. Its checkout is a folder under the temp
+   * folder that is never created: the guard skips a checkout it can't find, and never looks beside the lab.
+   */
   function withThirdRepo(): string {
+    const checkout = join(mkdtempSync(join(tmpdir(), "guard-third-")), "other-app");
     return guardConfig(TARGET_FIXTURE, (c) => {
-      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: "../other-app" };
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: checkout };
     });
   }
 
@@ -511,5 +515,18 @@ describe("guard-target hook as a process (node <file>), the way Claude Code runs
     expect(stdout).toBe("");
     expect(stderr).toMatch(/^guard-target hook failed: .+/);
     expect(stderr.split("\n")).toHaveLength(1);
+  });
+
+  it("as a process: a stdin it can't read is a blocking error too, not a crash (Qodo on PR 131)", () => {
+    const folder = openSync(tmpdir(), "r"); // reading a folder fails with EISDIR
+    const result = spawnSync(process.execPath, [HOOK], {
+      stdio: [folder, "pipe", "pipe"],
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_CONFIG: DEFAULT_CONFIG },
+    });
+    closeSync(folder);
+    expect(result.status).toBe(2);
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr.trim()).toMatch(/^guard-target hook failed: EISDIR/);
   });
 });

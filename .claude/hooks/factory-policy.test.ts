@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -273,6 +273,19 @@ describe("factory policy hook as a process (node <file>), the way Claude Code ru
     expect(result.stdout.trim()).toBe("");
     expect(result.stderr.trim()).toMatch(/^factory-policy hook failed: .+/);
     expect(result.stderr.trim().split("\n")).toHaveLength(1);
+  });
+
+  it("as a process: a stdin it can't read inside a run is a blocking error too, not a crash (Qodo on PR 131)", () => {
+    const folder = openSync(tmpdir(), "r"); // reading a folder fails with EISDIR
+    const result = spawnSync(process.execPath, [HOOK], {
+      stdio: [folder, "pipe", "pipe"],
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN },
+    });
+    closeSync(folder);
+    expect(result.status).toBe(2);
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr.trim()).toMatch(/^factory-policy hook failed: EISDIR/);
   });
 });
 

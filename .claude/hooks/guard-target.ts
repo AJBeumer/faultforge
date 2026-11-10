@@ -31,7 +31,7 @@ import {
   type Reviewed,
   reviewedRepos,
 } from "./guard-repos.ts";
-import { ALLOW, type Decision, firstLine, isEntry, readStdin, respond } from "./hook-io.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 
 /** What one decision is made against: the folder the tool runs in, and the repos under guard. */
 interface Context {
@@ -67,11 +67,16 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     return ALLOW;
   } catch (error) {
     if (error instanceof Denied) return { kind: "deny", reason: error.message };
-    return {
-      kind: "error",
-      message: `guard-target hook failed: ${firstLine(error)}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
-    };
+    return failed(error);
   }
+}
+
+/** The hook's own failure as a blocking error: the tool call is refused, never let through. */
+function failed(error: unknown): Decision {
+  return {
+    kind: "error",
+    message: `guard-target hook failed: ${firstLine(error)}. The action is refused: a hook that can't check lets nothing through. Fix the hook or the input; don't work around it.`,
+  };
 }
 
 /**
@@ -343,7 +348,7 @@ function deny(reason: string): never {
 }
 
 function main() {
-  respond(decide(readStdin()));
+  respond(hookAnswer(readStdin, decide, failed));
 }
 
 if (isEntry(import.meta.url)) main();

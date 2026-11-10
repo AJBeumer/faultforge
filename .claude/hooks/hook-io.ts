@@ -51,6 +51,25 @@ export function respond(decision: Decision): void {
 }
 
 /**
+ * A hook's answer for one payload: what `read` returns goes to `decide`, and a read that fails is the hook's
+ * own failure, reported through `failed` as a blocking error rather than a crash. A crash (exit 1) is a
+ * non-blocking error to Claude Code, which then runs the tool unchecked (Qodo on PR 131).
+ */
+export function hookAnswer(
+  read: () => string,
+  decide: (stdin: string) => Decision,
+  failed: (error: unknown) => Decision,
+): Decision {
+  let stdin: string;
+  try {
+    stdin = read();
+  } catch (error) {
+    return failed(error);
+  }
+  return decide(stdin);
+}
+
+/**
  * True when the module at `moduleUrl` is the file node was started with (`node <file>`), not a module a
  * test imported. Both paths are resolved through the file system first, so a drive letter or folder spelled
  * in another case, or a junction on the way, can't make a hook mistake itself for an import and stay

@@ -21,7 +21,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { ALLOW, type Decision, firstLine, isEntry, readStdin, respond } from "./hook-io.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
   [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
@@ -192,17 +192,24 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       if (reason) reasons = [reason];
     }
   } catch (error) {
-    return {
-      kind: "error",
-      message: `factory-policy hook failed: ${firstLine(error)}. Not allowed in an unattended factory run: a hook that can't check lets nothing through. If the ticket needs this, stop and report it as stuck.`,
-    };
+    return failed(error);
   }
   if (!reasons.length) return ALLOW;
   return { kind: "deny", reason: denialReason(tool, reasons) };
 }
 
+/** The hook's own failure, inside a run, as a blocking error: the tool call is refused, never let through. */
+function failed(error: unknown): Decision {
+  return {
+    kind: "error",
+    message: `factory-policy hook failed: ${firstLine(error)}. Not allowed in an unattended factory run: a hook that can't check lets nothing through. If the ticket needs this, stop and report it as stuck.`,
+  };
+}
+
 function main() {
-  respond(decide(readStdin()));
+  // Outside a run there is nothing to protect, whatever stdin holds or whether it can be read at all.
+  if (!process.env.FAULTFORGE_FACTORY_RUN) return;
+  respond(hookAnswer(readStdin, decide, failed));
 }
 
 if (isEntry(import.meta.url)) main();
