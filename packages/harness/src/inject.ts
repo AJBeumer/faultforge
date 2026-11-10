@@ -3,32 +3,64 @@
  *
  *   npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --case FF-0001
  *
- * The mutation is committed on its own branch in the target repository (not pushed).
- * It counts as validated only if the hidden proof test passes on the base commit, fails
- * on the variant, and the variant still typechecks. Ledger entry, audit event and raw
- * artefacts go to private storage, which never enters the target repository.
+ * The mutation is committed on its own branch in the target repository (not pushed). It counts as
+ * validated only if the proof test of the template's `invariantId`, and of every `alsoBreaks` entry,
+ * passes on the base commit and fails on the variant, and the variant still typechecks. Ledger entry,
+ * audit event and raw artefacts go to private storage, which never enters the target repository.
+ *
+ *   npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --validate-only
+ *
+ * `--validate-only` checks the template against the schema and runs the same proofs, without planting
+ * anything: the target checkout ends exactly as it started (same HEAD, same branch, clean tree), and
+ * nothing is written to private storage. No `--case` is needed or used.
+ *
+ * Exit codes: 0 the template is valid and (in `--validate-only`) every proof passed on the base commit
+ * and failed on the variant, or (otherwise) the case was planted and recorded; 1 a refusal or a failed
+ * validation, printed on stderr.
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { arch, platform } from "node:os";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { templateTelltales } from "./neutral.ts";
-import { templateDir as findTemplateDir, kindTermsOf, privateDir } from "./templates.ts";
+import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
+
+interface AlsoBreaks {
+  invariantId: string;
+  proofTest: string;
+}
 
 interface Template {
   id: string;
-  invariantId: string;
-  defectClass: string;
+  kind: "bug" | "control";
   summary: string;
   file: string;
   find: string;
   replace: string;
-  proofTest: string;
-  match?: { kindTerms?: string[] };
   publish: { branch: string; commitMessage: string };
+  ticket: { title: string; what: string; criteria: string[] };
+  invariantId?: string;
+  defectClass?: string;
+  proofTest?: string;
+  match?: { kindTerms?: string[] };
+  alsoBreaks?: AlsoBreaks[];
+}
+
+interface Proof {
+  invariantId: string;
+  proofTest: string;
 }
 
 type Outcome = "pass" | "fail";
@@ -42,34 +74,63 @@ const { values: args } = parseArgs({
     template: { type: "string" },
     target: { type: "string" },
     case: { type: "string" },
+    "validate-only": { type: "boolean" },
   },
 });
-if (!args.template || !args.target || !args.case) {
-  fail("usage: npm run inject -- --template <id> --target <path> --case <FF-NNNN>");
+const validateOnly = args["validate-only"] ?? false;
+if (!args.template || !args.target || (!validateOnly && !args.case)) {
+  fail(
+    "usage: npm run inject -- --template <id> --target <path> --case <FF-NNNN>\n" +
+      "   or: npm run inject -- --template <id> --target <path> --validate-only",
+  );
 }
 
 const caseId = args.case;
 const targetDir = resolve(args.target);
 // Unreleased templates live in private storage; only adjudicated ones are copied to templates/seed.
-const templateDir = findTemplateDir(args.template);
-if (!templateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
+const foundTemplateDir = findTemplateDir(args.template);
+if (!foundTemplateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
+const templateDir: string = foundTemplateDir;
 const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
+
+// Checked before anything else: a template that fails the schema is refused without planting anything.
+const schemaProblems = templateProblems(template);
+if (schemaProblems.length) {
+  fail(`template ${args.template} fails the schema:\n${schemaProblems.map((p) => `  ${p}`).join("\n")}`);
+}
 // Everything the template would put in front of the reviewer must read as an ordinary change: the branch
-// name and commit message, and the code it looks for and writes.
+// name and commit message, the code it looks for and writes, and its target ticket.
 const giveaways = templateTelltales(template);
 if (giveaways.length) fail(`the template gives the case away (${giveaways.join("; ")})`);
+
 // The terms the match rule's third criterion looks for, declared here before any case runs the template.
-try {
-  kindTermsOf(template, `${templateDir}/template.json`);
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+// Only a bug template carries one: a control has no injected problem to describe.
+if (template.kind === "bug") {
+  try {
+    kindTermsOf(template, `${templateDir}/template.json`);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 }
-const proofPath = join(templateDir, template.proofTest);
-const artefactDir = join(PRIVATE_DIR, "raw-artifacts", caseId);
+
+// Every proof the variant must break: the template's own invariant, plus whatever it breaks as collateral.
+const proofs: Proof[] =
+  template.kind === "bug"
+    ? [
+        { invariantId: template.invariantId as string, proofTest: template.proofTest as string },
+        ...(template.alsoBreaks ?? []),
+      ]
+    : [];
+
+const artefactDir = validateOnly
+  ? mkdtempSync(join(tmpdir(), "faultforge-validate-"))
+  : join(PRIVATE_DIR, "raw-artifacts", caseId as string);
+// Registered as soon as the folder exists, so a refusal on any later precondition still cleans it up:
+// nothing from --validate-only may survive, not even a scratch folder outside private storage.
+if (validateOnly) process.on("exit", () => rmSync(artefactDir, { recursive: true, force: true }));
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");
 
-// Preconditions: fresh case id, clean target, branch name free.
-if (readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) {
+if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) {
   fail(`${caseId} is already in the ledger`);
 }
 if (git("status", "--porcelain")) fail(`target has uncommitted changes: ${targetDir}`);
@@ -79,39 +140,62 @@ if (run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${template.publi
   fail(`branch ${template.publish.branch} already exists in the target`);
 }
 
-mkdirSync(artefactDir, { recursive: true });
+if (!validateOnly) mkdirSync(artefactDir, { recursive: true });
 
 log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
-const proofOnBase = runProof("base");
-if (proofOnBase !== "pass") fail("proof test fails on the base commit; it cannot prove anything");
+
+// Indexed by position in `proofs`, never by invariantId: alsoBreaks may name the same invariant twice
+// (collateral the template didn't separate), and keying by invariantId would let a later proof's result
+// silently overwrite an earlier one's.
+const proofsOnBase: Outcome[] = proofs.map((proof) => runProof("base", proof));
+const failingOnBase = proofs.filter((_, i) => proofsOnBase[i] !== "pass");
+if (failingOnBase.length) {
+  fail(
+    `proof test fails on the base commit, so it cannot prove anything: ${failingOnBase.map((p) => p.invariantId).join(", ")}`,
+  );
+}
 
 let injectionCommit: string | undefined;
-let injectedLines: [number, number];
-let typecheck: Outcome;
-let publicTests: Outcome;
-let proofOnVariant: Outcome;
+let injectedLines: [number, number] = [0, 0];
+let typecheck: Outcome = "pass";
+let publicTests: Outcome = "pass";
+let proofsOnVariant: Outcome[] = [];
+let failure: string | undefined;
 
 git("switch", "--quiet", "-c", template.publish.branch);
 try {
   injectedLines = applyMutation();
-  writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
+  if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
 
-  typecheck = runStep("typecheck", process.execPath, [
-    join(targetDir, "node_modules/typescript/bin/tsc"),
-    "-p",
-    "tsconfig.json",
-    "--noEmit",
-  ]);
-  publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
-  proofOnVariant = runProof("variant");
+  if (!validateOnly) {
+    typecheck = runStep("typecheck", process.execPath, [
+      join(targetDir, "node_modules/typescript/bin/tsc"),
+      "-p",
+      "tsconfig.json",
+      "--noEmit",
+    ]);
+    publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
+  }
+  proofsOnVariant = proofs.map((proof) => runProof("variant", proof));
 
-  if (typecheck !== "pass") throw new Error("variant does not typecheck");
-  if (proofOnVariant !== "fail") throw new Error("proof test still passes on the variant; mutation not validated");
+  const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
+  if (stillPassing.length) {
+    failure = `proof test still passes on the variant, so the mutation is not validated: ${stillPassing.join(", ")}`;
+  } else if (!validateOnly && typecheck !== "pass") {
+    failure = "variant does not typecheck";
+  } else if (!validateOnly && template.kind === "control" && publicTests !== "pass") {
+    // A control has no proof to anchor it as harmless; the public tests are what stand in for one.
+    failure = "control variant fails the public tests, so it is not a clean control";
+  }
 
-  git("commit", "--quiet", "--all", "-m", template.publish.commitMessage);
-  injectionCommit = git("rev-parse", "HEAD");
+  if (!failure && !validateOnly) {
+    git("commit", "--quiet", "--all", "-m", template.publish.commitMessage);
+    injectionCommit = git("rev-parse", "HEAD");
+  }
 } finally {
-  if (!injectionCommit) {
+  // --validate-only always leaves the checkout exactly as it found it; a real run keeps the committed
+  // variant only when validation succeeded.
+  if (validateOnly || !injectionCommit) {
     git("reset", "--quiet", "--hard");
     git("switch", "--quiet", baseBranch);
     git("branch", "--quiet", "-D", template.publish.branch);
@@ -119,41 +203,80 @@ try {
     git("switch", "--quiet", baseBranch);
   }
 }
+if (failure) fail(failure);
+
+if (validateOnly) {
+  log(
+    `validated: every proof passes on base and fails on variant (${proofs.map((p) => p.invariantId).join(", ") || "none"})`,
+  );
+  process.exit(0);
+}
 if (!injectionCommit) fail("variant was not committed");
 
-copyFileSync(proofPath, join(artefactDir, template.proofTest));
-const proofHash = sha256(readFileSync(proofPath));
+for (const proof of proofs) {
+  const dest = join(artefactDir, proof.proofTest);
+  mkdirSync(dirname(dest), { recursive: true });
+  copyFileSync(join(templateDir, proof.proofTest), dest);
+}
 const createdAt = new Date().toISOString();
 
-const entry = {
-  caseId,
-  kind: "sabotage",
-  templateId: template.id,
-  invariantId: template.invariantId,
-  defectClass: template.defectClass,
-  targetRepo: git("remote", "get-url", "origin"),
-  targetCommit: baseCommit,
-  injectionCommit,
-  branch: template.publish.branch,
-  injectedFile: template.file,
-  injectedLines,
-  proofTest: `${template.id}/${template.proofTest}@sha256:${proofHash}`,
-  validation: { proofOnBase, proofOnVariant, typecheck, publicTests },
-  validated: true,
-  createdAt,
-};
+const entry =
+  template.kind === "bug"
+    ? {
+        caseId,
+        kind: "sabotage",
+        templateId: template.id,
+        invariantId: template.invariantId,
+        defectClass: template.defectClass,
+        targetRepo: git("remote", "get-url", "origin"),
+        targetCommit: baseCommit,
+        injectionCommit,
+        branch: template.publish.branch,
+        injectedFile: template.file,
+        injectedLines,
+        validation: {
+          proofs: proofs.map((proof, i) => ({
+            invariantId: proof.invariantId,
+            proofTest: `${template.id}/${proof.proofTest}@sha256:${sha256(readFileSync(join(templateDir, proof.proofTest)))}`,
+            proofOnBase: proofsOnBase[i],
+            proofOnVariant: proofsOnVariant[i],
+          })),
+          typecheck,
+          publicTests,
+        },
+        validated: true,
+        createdAt,
+      }
+    : {
+        caseId,
+        kind: "control",
+        templateId: template.id,
+        targetRepo: git("remote", "get-url", "origin"),
+        targetCommit: baseCommit,
+        injectionCommit,
+        branch: template.publish.branch,
+        injectedFile: template.file,
+        injectedLines,
+        validation: { typecheck, publicTests },
+        validated: true,
+        createdAt,
+      };
 appendJsonl(ledgerPath, entry);
 appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
   eventId: randomUUID(),
-  type: "sabotage.injected",
+  type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
   at: createdAt,
   caseId,
   tool: TOOL,
   environment: `${platform()}-${arch()}-node${process.versions.node}`,
-  inputHash: sha256(readFileSync(join(templateDir, "template.json")) + proofHash + baseCommit),
+  inputHash: sha256(
+    readFileSync(join(templateDir, "template.json")) +
+      proofs.map((p) => sha256(readFileSync(join(templateDir, p.proofTest)))).join("") +
+      baseCommit,
+  ),
 });
 
-log(`validated: proof passes on base, fails on variant; public tests ${publicTests}`);
+log(`validated: proof(s) pass on base, fail on variant; public tests ${publicTests}`);
 log(
   `${caseId} -> branch ${template.publish.branch} @ ${injectionCommit.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`,
 );
@@ -173,23 +296,32 @@ function applyMutation(): [number, number] {
   return [start, start + lineCount - 1];
 }
 
-function runProof(stage: "base" | "variant"): Outcome {
-  const outcome = runStep(
-    `proof-${stage}`,
-    process.execPath,
-    [
-      join(ROOT, "node_modules/vitest/vitest.mjs"),
-      "run",
-      "--root",
-      dirname(proofPath),
-      "--config",
-      join(ROOT, "vitest.proof.config.ts"),
-    ],
-    ROOT,
-    { FAULTFORGE_TARGET_DIR: targetDir },
-  );
-  log(`proof on ${stage}: ${outcome}`);
-  return outcome;
+/** Runs one proof test in a scratch folder holding only that file, so proof file names never collide. */
+function runProof(stage: "base" | "variant", proof: Proof): Outcome {
+  const scratch = mkdtempSync(join(tmpdir(), "faultforge-proof-"));
+  try {
+    const dest = join(scratch, proof.proofTest);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(join(templateDir, proof.proofTest), dest);
+    const outcome = runStep(
+      `proof-${stage}-${proof.invariantId}`,
+      process.execPath,
+      [
+        join(ROOT, "node_modules/vitest/vitest.mjs"),
+        "run",
+        "--root",
+        scratch,
+        "--config",
+        join(ROOT, "vitest.proof.config.ts"),
+      ],
+      ROOT,
+      { FAULTFORGE_TARGET_DIR: targetDir },
+    );
+    log(`proof ${proof.invariantId} on ${stage}: ${outcome}`);
+    return outcome;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 /** Runs a command, stores its output as an artefact, and reports pass or fail. */

@@ -1,5 +1,8 @@
 {
+  "$schema": "../../../schemas/template.v2.json",
+  "schemaVersion": 2,
   "id": "idempotency-guard-bypass-v1",
+  "kind": "bug",
   "invariantId": "INV-IDEMP-001",
   "defectClass": "idempotency",
   "summary": "Replay path looks up the original booking by idempotency key instead of booking id, so the lookup always misses and a repeat request creates a second booking.",
@@ -10,8 +13,18 @@
   "match": {
     "kindTerms": ["idempotency", "replay", "duplicate booking"]
   },
+  "alsoBreaks": [{ "invariantId": "INV-AUTH-001", "proofTest": "cross-user.proof.test.ts" }],
   "publish": {
     "branch": "tidy-replay-lookup",
     "commitMessage": "Simplify replay lookup in createBooking"
+  },
+  "ticket": {
+    "title": "Simplify replay lookup in createBooking",
+    "what": "The replay branch of createBooking looks up the original booking through an extra lookup value instead of reading the booking id that's already on the idempotency record. Read the id straight off the record instead.",
+    "criteria": [
+      "A repeat POST /bookings with the same Idempotency-Key and the same body returns the original booking unchanged, and no second booking is stored.",
+      "The same key with a different body is still refused.",
+      "Existing booking creation and idempotency tests continue to pass."
+    ]
   }
 }
