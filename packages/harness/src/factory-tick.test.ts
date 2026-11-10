@@ -1043,6 +1043,12 @@ describe("audit helpers", () => {
     });
     expect(hookProblems(settings)).toContain("factory-policy.ts doesn't run before NotebookEdit");
   });
+
+  it("reads every page of the audit's PR list, never just the first 50 (#114)", () => {
+    const source = readFileSync(join(import.meta.dirname, "factory-tick.ts"), "utf8");
+    const call = source.match(/gh\(\s*"api",[\s\S]*?pulls\?state=all[\s\S]*?\)/)?.[0] ?? "";
+    expect(call).toContain("--paginate");
+  });
 });
 
 describe("helpers", () => {

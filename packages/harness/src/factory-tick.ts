@@ -1381,9 +1381,15 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const reviews = Object.values(factory.repos).flatMap((repo) =>
         (
           JSON.parse(
-            gh("api", `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50`),
-          ) as Pull[]
+            gh(
+              "api",
+              "--paginate",
+              "--slurp",
+              `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50`,
+            ),
+          ) as Pull[][]
         )
+          .flat()
           .filter((pull) => Date.parse(pull.updated_at) >= Math.floor(Date.parse(from) / 1000) * 1000)
           .flatMap((pull) =>
             (
@@ -1749,7 +1755,7 @@ async function main() {
     // owner decides on the proposal ticket; a failure here is reported and never changes the
     // run's outcome or labels.
     try {
-      proposeAfterRun(LAB_ROOT, mode, console.log);
+      proposeAfterRun(LAB_ROOT, console.log);
     } catch (error) {
       console.error(
         `rules:propose failed (run outcome unchanged): ${error instanceof Error ? (error.stack ?? error.message) : error}`,

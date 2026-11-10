@@ -35,6 +35,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { templateTelltales } from "./neutral.ts";
+import { type Outcome, outcomeOf } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
 interface AlsoBreaks {
@@ -62,8 +63,6 @@ interface Proof {
   invariantId: string;
   proofTest: string;
 }
-
-type Outcome = "pass" | "fail";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PRIVATE_DIR = privateDir();
@@ -148,11 +147,13 @@ log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
 // (collateral the template didn't separate), and keying by invariantId would let a later proof's result
 // silently overwrite an earlier one's.
 const proofsOnBase: Outcome[] = proofs.map((proof) => runProof("base", proof));
-const failingOnBase = proofs.filter((_, i) => proofsOnBase[i] !== "pass");
+const notRunOnBase = proofs.filter((_, i) => proofsOnBase[i] === "not_run").map((p) => p.invariantId);
+if (notRunOnBase.length) {
+  fail(`proof test did not finish on the base commit, so it cannot prove anything: ${notRunOnBase.join(", ")}`);
+}
+const failingOnBase = proofs.filter((_, i) => proofsOnBase[i] === "fail").map((p) => p.invariantId);
 if (failingOnBase.length) {
-  fail(
-    `proof test fails on the base commit, so it cannot prove anything: ${failingOnBase.map((p) => p.invariantId).join(", ")}`,
-  );
+  fail(`proof test fails on the base commit, so it cannot prove anything: ${failingOnBase.join(", ")}`);
 }
 
 let injectionCommit: string | undefined;
@@ -178,13 +179,20 @@ try {
   }
   proofsOnVariant = proofs.map((proof) => runProof("variant", proof));
 
+  const notRunOnVariant = proofs.filter((_, i) => proofsOnVariant[i] === "not_run").map((p) => p.invariantId);
   const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
-  if (stillPassing.length) {
+  if (notRunOnVariant.length) {
+    failure = `proof test did not finish on the variant, so the mutation is not validated: ${notRunOnVariant.join(", ")}`;
+  } else if (stillPassing.length) {
     failure = `proof test still passes on the variant, so the mutation is not validated: ${stillPassing.join(", ")}`;
-  } else if (!validateOnly && typecheck !== "pass") {
+  } else if (!validateOnly && typecheck === "not_run") {
+    failure = "typecheck did not finish, so the mutation is not validated";
+  } else if (!validateOnly && typecheck === "fail") {
     failure = "variant does not typecheck";
-  } else if (!validateOnly && template.kind === "control" && publicTests !== "pass") {
+  } else if (!validateOnly && template.kind === "control" && publicTests === "not_run") {
     // A control has no proof to anchor it as harmless; the public tests are what stand in for one.
+    failure = "public tests did not finish, so this is not a clean control";
+  } else if (!validateOnly && template.kind === "control" && publicTests === "fail") {
     failure = "control variant fails the public tests, so it is not a clean control";
   }
 
@@ -324,7 +332,11 @@ function runProof(stage: "base" | "variant", proof: Proof): Outcome {
   }
 }
 
-/** Runs a command, stores its output as an artefact, and reports pass or fail. */
+/**
+ * Runs a command, stores its output as an artefact, and reports the outcome: "not_run", never
+ * "fail", when the command hit its time limit or could not be spawned at all, since no test result
+ * was ever produced for either.
+ */
 function runStep(
   name: string,
   cmd: string,
@@ -333,11 +345,13 @@ function runStep(
   env: Record<string, string> = {},
 ): Outcome {
   const result = run(cmd, cmdArgs, cwd, env);
+  const outcome = outcomeOf(result);
+  const errorLine = result.error ? `\n${outcome}: ${result.error.message}` : "";
   writeFileSync(
     join(artefactDir, `${name}.log`),
-    `$ ${cmdArgs.join(" ")}\nexit ${result.status}\n\n${result.stdout}${result.stderr}`,
+    `$ ${cmdArgs.join(" ")}\nexit ${result.status}\n\n${result.stdout}${result.stderr}${errorLine}`,
   );
-  return result.status === 0 ? "pass" : "fail";
+  return outcome;
 }
 
 function run(cmd: string, cmdArgs: string[], cwd: string, env: Record<string, string> = {}) {
@@ -347,7 +361,7 @@ function run(cmd: string, cmdArgs: string[], cwd: string, env: Record<string, st
     env: { ...process.env, ...env, NO_COLOR: "1" },
     timeout: 120_000,
   });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error };
 }
 
 function git(...gitArgs: string[]): string {

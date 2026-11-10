@@ -168,7 +168,7 @@ export function propose(
  * the run's outcome. Two concurrent `--open` runs could double-propose a pattern; the runner is
  * serialized by the tick lock, so only concurrent manual runs can race.
  */
-export function proposeAfterRun(root: string, _mode: "ci" | "local", print: (line: string) => void): ProposeResult {
+export function proposeAfterRun(root: string, print: (line: string) => void): ProposeResult {
   try {
     execFileSync("git", ["-C", join(root, "private"), "pull", "--ff-only", "--quiet"], { timeout: 60_000 });
   } catch (error) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceRow } from "./rules-evidence.ts";
-import { findPatterns, newPatterns, proposalBody, proposalTitle, THRESHOLD } from "./rules-propose.ts";
+import { findPatterns, newPatterns, proposalBody, proposalTitle, proposeAfterRun, THRESHOLD } from "./rules-propose.ts";
 
 const row = (overrides: Partial<EvidenceRow>): EvidenceRow => ({
   id: "00000000-0000-4000-8000-000000000000",
@@ -18,6 +18,12 @@ const row = (overrides: Partial<EvidenceRow>): EvidenceRow => ({
   recordedAt: "2026-11-06T18:00:00Z",
   openAtLastReview: false,
   ...overrides,
+});
+
+describe("proposeAfterRun", () => {
+  it("takes no unused mode parameter: the factory root and a printer, nothing else", () => {
+    expect(proposeAfterRun.length).toBe(2);
+  });
 });
 
 describe("findPatterns", () => {

@@ -11,7 +11,7 @@
  * exam. Exclusion fails closed: if the case records or the answer key can't be read, the command
  * stops instead of writing a table that might contain exam findings.
  */
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory } from "./factory-config.ts";
@@ -123,6 +123,9 @@ export function readSavedReviews(reviewsDir: string): { key: string; review: Sav
   for (const dir of dirs) {
     const match = /^(.+)-pr(\d+)$/.exec(dir);
     if (!match) continue;
+    // A stray file that happens to match the folder pattern (e.g. a leftover ".zip") is not a reviews
+    // folder: skip it instead of letting readdirSync throw ENOTDIR.
+    if (!statSync(join(reviewsDir, dir)).isDirectory()) continue;
     for (const file of readdirSync(join(reviewsDir, dir))) {
       if (!file.endsWith(".review.json")) continue;
       out.push({ key: match[1] as string, review: JSON.parse(readFileSync(join(reviewsDir, dir, file), "utf8")) });
