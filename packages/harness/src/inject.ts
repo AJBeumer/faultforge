@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { templateTelltales } from "./neutral.ts";
+import { templateDir as findTemplateDir, kindTermsOf, privateDir } from "./templates.ts";
 
 interface Template {
   id: string;
@@ -26,13 +27,14 @@ interface Template {
   find: string;
   replace: string;
   proofTest: string;
+  match?: { kindTerms?: string[] };
   publish: { branch: string; commitMessage: string };
 }
 
 type Outcome = "pass" | "fail";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const PRIVATE_DIR = resolve(process.env.FAULTFORGE_PRIVATE_DIR ?? join(ROOT, "private"));
+const PRIVATE_DIR = privateDir();
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 const { values: args } = parseArgs({
@@ -49,16 +51,19 @@ if (!args.template || !args.target || !args.case) {
 const caseId = args.case;
 const targetDir = resolve(args.target);
 // Unreleased templates live in private storage; only adjudicated ones are copied to templates/seed.
-const templateDir = [
-  join(PRIVATE_DIR, "templates", args.template),
-  join(ROOT, "templates", "seed", args.template),
-].find((dir) => existsSync(join(dir, "template.json")));
+const templateDir = findTemplateDir(args.template);
 if (!templateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
 const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
 // Everything the template would put in front of the reviewer must read as an ordinary change: the branch
 // name and commit message, and the code it looks for and writes.
 const giveaways = templateTelltales(template);
 if (giveaways.length) fail(`the template gives the case away (${giveaways.join("; ")})`);
+// The terms the match rule's third criterion looks for, declared here before any case runs the template.
+try {
+  kindTermsOf(template, `${templateDir}/template.json`);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 const proofPath = join(templateDir, template.proofTest);
 const artefactDir = join(PRIVATE_DIR, "raw-artifacts", caseId);
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");

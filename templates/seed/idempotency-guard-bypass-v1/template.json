@@ -7,6 +7,9 @@
   "find": "    const original = deps.store.getBooking(previous.bookingId);\n",
   "replace": "    const original = deps.store.getBooking(idempotencyKey);\n",
   "proofTest": "proof.test.ts",
+  "match": {
+    "kindTerms": ["idempotency", "replay", "duplicate booking"]
+  },
   "publish": {
     "branch": "tidy-replay-lookup",
     "commitMessage": "Simplify replay lookup in createBooking"

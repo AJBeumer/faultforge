@@ -99,6 +99,51 @@ describe("validateCaseRecord", () => {
     record.detection.match.kind.pass = false;
     expect(validateCaseRecord(record)).not.toEqual([]);
   });
+
+  it("rejects a matched finding whose file differs from the injected file", () => {
+    const record = ff0001();
+    record.findings[0].file = "src/bookings/other.ts";
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("rejects a matched finding whose lines don't overlap the injected lines", () => {
+    const record = ff0001();
+    record.findings[0].lines = [100, 100];
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("rejects a reviewedCommit that differs from the injected commit", () => {
+    const record = ff0001();
+    record.review.reviewedCommit = "a".repeat(40);
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("accepts a record where a null-placement finding isn't matched", () => {
+    const record = ff0001();
+    record.findings.push({
+      id: "qodo:unplaced",
+      file: null,
+      lines: null,
+      category: "Other",
+      severity: "low",
+      summary: "Unrelated finding Qodo didn't place anywhere.",
+    });
+    expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("rejects a record that lists a null-placement finding as matched", () => {
+    const record = ff0001();
+    record.findings.push({
+      id: "qodo:unplaced",
+      file: null,
+      lines: null,
+      category: "Other",
+      severity: "low",
+      summary: "Unrelated finding Qodo didn't place anywhere.",
+    });
+    record.detection.matchedFindingIds.push("qodo:unplaced");
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
 });
 
 describe("findLeaks", () => {
@@ -114,5 +159,26 @@ describe("findLeaks", () => {
 
   it("allows ordinary text", () => {
     expect(findLeaks("Qodo flagged src/bookings/create.ts line 33")).toEqual([]);
+  });
+});
+
+describe("validateCaseRecord: what the schema can't say (Qodo on PR 128)", () => {
+  it("rejects a finding id that appears more than once", () => {
+    const record = ff0001();
+    record.findings.push({ ...record.findings[0], file: null, lines: null });
+    expect(validateCaseRecord(record)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/appears more than once/)]),
+    );
+  });
+
+  it("rejects a line range whose end comes before its start, in a finding and in the injection", () => {
+    const record = ff0001();
+    record.findings[0].lines = [40, 30];
+    expect(validateCaseRecord(record)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/end comes before its start/)]),
+    );
+    const other = ff0001();
+    other.injection.lines = [40, 30];
+    expect(validateCaseRecord(other)).toEqual(expect.arrayContaining([expect.stringMatching(/injection\.lines/)]));
   });
 });
