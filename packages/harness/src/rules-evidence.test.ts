@@ -76,7 +76,7 @@ describe("buildTable", () => {
     const complete = review({ findings: [finding("f-raised")], openFindings: [finding("f-raised")] });
     const timedOut = review({
       headSha: "bbb2222",
-      state: "timeout",
+      state: "review incomplete",
       recordedAt: "2026-11-09T12:00:00Z",
       openFindings: [],
     });
@@ -97,7 +97,7 @@ describe("buildTable", () => {
     const completeFirst = review({ findings: [], openFindings: [] });
     const timedOutLater = review({
       headSha: "bbb2222",
-      state: "timeout",
+      state: "review incomplete",
       recordedAt: "2026-11-09T12:00:00Z",
       findings: [finding("f-late")],
       openFindings: [],

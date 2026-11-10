@@ -270,11 +270,17 @@ export function saveCommentFeeds(
   short: string,
 ): string {
   write(`${short}.comments.latest.raw.json`, JSON.stringify(raw));
-  type Comment = { user: { login: string }; updated_at: string };
+  // `user` is null on a comment whose author account was deleted: substituted with "unknown" rather
+  // than read as Qodo's or crashing every poll (a GitHub app's comments outlive the human accounts
+  // mentioned near them, not its own, but the shape allows for it and real feeds have shown nulls).
+  // A comment that does have an author keeps its full user object, not just the login: only the
+  // missing case is touched.
+  type Comment = { user: { login: string } | null; updated_at: string };
   const pages = (text: string) => (JSON.parse(text) as Comment[][]).flat();
-  const comments = { pr: pages(raw.pr), inline: pages(raw.inline) };
+  const normalize = (list: Comment[]) => list.map((c) => (c.user ? c : { ...c, user: { login: "unknown" } }));
+  const comments = { pr: normalize(pages(raw.pr)), inline: normalize(pages(raw.inline)) };
   const version = [...comments.pr, ...comments.inline]
-    .filter((c) => c.user.login.startsWith("qodo"))
+    .filter((c) => (c.user?.login ?? "unknown").startsWith("qodo"))
     .map((c) => c.updated_at)
     .sort()
     .pop();
@@ -283,6 +289,28 @@ export function saveCommentFeeds(
   if (!version || content === lastContent) return lastContent;
   write(`${short}.comments.${version.replace(/:/g, "")}.raw.json`, content);
   return content;
+}
+
+/** One line per check run, or "no checks" when there are none. */
+export function summarizeCi(checks: { name: string; status: string; conclusion: string | null }[]): string {
+  return checks.map((c) => `${c.name}: ${c.conclusion ?? c.status}`).join(", ") || "no checks";
+}
+
+/**
+ * CI is optional evidence, not Qodo's answer: a failed lookup must never keep the review record
+ * from being written, so this never throws. `onError` is called (not thrown) so a caller can still
+ * log why, before recording "unavailable".
+ */
+export function ciOrUnavailable(
+  fetchChecks: () => { name: string; status: string; conclusion: string | null }[],
+  onError?: (error: unknown) => void,
+): string {
+  try {
+    return summarizeCi(fetchChecks());
+  } catch (error) {
+    onError?.(error);
+    return "unavailable";
+  }
 }
 
 /** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
@@ -367,6 +395,22 @@ async function main() {
       inline: gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/comments`),
     };
     lastContent = saveCommentFeeds(raw, lastContent, (file, text) => writeFileSync(join(dir, file), text), short);
+    // `pulls/{n}/reviews` (a formal GitHub review, approve/request-changes) isn't where Qodo's
+    // comments live, but it's saved on every poll too: a bounded endpoint list is only trustworthy
+    // while every endpoint that could hold the data is actually read, not assumed empty. It's purely
+    // supplementary, so a failure here is logged and skipped, never allowed to fail the whole poll:
+    // `waitForReview` requires `onPoll` to succeed before it will report a review complete, and this
+    // endpoint isn't worth losing that over.
+    try {
+      writeFileSync(
+        join(dir, `${short}.reviews.latest.raw.json`),
+        gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/reviews`),
+      );
+    } catch (error) {
+      console.error(
+        `pulls/{n}/reviews lookup failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   };
 
   const api = new QodoApi();
@@ -380,6 +424,14 @@ async function main() {
             extended: true,
           })) as QodoReview;
         } finally {
+          // A session recovery's own answer overwrites lastRaw; the failure that caused it is saved
+          // separately so it isn't lost.
+          if (api.lastRecoveredRaw.length) {
+            writeFileSync(
+              join(dir, `${short}.qodo-api.latest.recovered.raw.json`),
+              JSON.stringify(api.lastRecoveredRaw),
+            );
+          }
           // Raw first: kept even when the answer can't be parsed.
           if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);
         }
@@ -397,14 +449,22 @@ async function main() {
   );
 
   if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));
-  const checks = ghAll<{ name: string; status: string; conclusion: string | null }>(
-    `repos/${github}/commits/${headSha}/check-runs`,
-    (p) => (p as { check_runs: { name: string; status: string; conclusion: string | null }[] }).check_runs,
-  );
-  const ci = checks.map((c) => `${c.name}: ${c.conclusion ?? c.status}`).join(", ") || "no checks";
   const findings = result.review ? findingsFor(result.review, headSha) : [];
   const open = result.review ? openFindings(result.review) : [];
   const effort = result.review ? reviewEffort(result.review, headSha) : null;
+  // CI is optional evidence about the same commit, not part of Qodo's answer: computed safely so a
+  // failed lookup can never cost the review record below, which is written only once, complete.
+  const ci = ciOrUnavailable(
+    () =>
+      ghAll<{ name: string; status: string; conclusion: string | null }>(
+        `repos/${github}/commits/${headSha}/check-runs`,
+        (p) => (p as { check_runs: { name: string; status: string; conclusion: string | null }[] }).check_runs,
+      ),
+    (error) =>
+      console.error(
+        `CI check-runs lookup failed, recording ci as unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+  );
   const record = {
     repo: github,
     pr,
@@ -449,7 +509,7 @@ async function main() {
   console.log(
     `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}). Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
   );
-  console.log(`CI: ${ci}`);
+  console.log(`CI: ${record.ci}`);
   console.log(`${findings.length} finding(s) on ${short}; ${open.length} open on this PR in total:`);
   for (const f of open) {
     const where = f.file ? `${f.file}${f.lines ? `:${f.lines[0]}-${f.lines[1]}` : ""}` : "(no location)";
