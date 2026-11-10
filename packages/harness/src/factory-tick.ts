@@ -33,8 +33,8 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -633,7 +633,7 @@ export interface TickDeps {
   snapshot(github: string, number: number): TicketSnapshot;
   /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
   writeTicket(ws: Workspace, text: string): string;
-  relabel(github: string, number: number, remove: string[], add: string[]): void;
+  relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
   comment(github: string, number: number, body: string): void;
   workspace(runId: string): Workspace;
   runAgent(
@@ -705,16 +705,18 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     runId = runIdFor(deps.now(), pick.repoKey, pick.number);
     const reviewed = repoConfig(factory, pick.repoKey).guard === "reviewed";
     const say = (body: string) => deps.comment(pick.github, pick.number, safeText(body, reviewed));
-    // relabel still adds the new label even when removing the old one failed (real side effects, below);
-    // that failure must never also stop the ticket from getting its comment or its final label here.
+    // relabel still adds the new label even when removing the old one failed (real side effects, below).
+    // A failed removal is just logged - an old label left lingering is cosmetic - but a failed add means
+    // the ticket's intended new state was never recorded, so this throws for the caller to treat as any
+    // other failure here: never silently proceeding as if the ticket now shows what it doesn't.
     const relabel = (remove: string[], add: string[]) => {
-      try {
-        deps.relabel(pick.github, pick.number, remove, add);
-      } catch (error) {
+      const { removeFailed, addFailed } = deps.relabel(pick.github, pick.number, remove, add);
+      if (removeFailed) {
         log("error", {
-          message: `couldn't update the ticket's label: ${error instanceof Error ? error.message : error}`,
+          message: `couldn't remove a label from the ticket: ${removeFailed instanceof Error ? removeFailed.message : removeFailed}`,
         });
       }
+      if (addFailed) throw addFailed instanceof Error ? addFailed : new Error(String(addFailed));
     };
     log("picked", {
       repo: pick.repoKey,
@@ -810,7 +812,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const finish: Finish = audit.length
       ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
       : settled;
-    relabel([LABELS.working], [finish.label]);
+    // ready-for-agent is stripped again here too: if its removal at the claim failed silently (logged,
+    // not fatal, above), a ticket that already finished must never still look pickable by a later tick.
+    relabel([LABELS.working, LABELS.ready], [finish.label]);
     finalLabel = finish.label;
     const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
     say(
@@ -832,11 +836,22 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     // The relabel and the comment are tried independently: one failing must never also swallow the other,
     // or the ticket is left agent-working with nothing alive to say why.
     if (claimed && !finalLabel) {
-      try {
-        deps.relabel(claimed.github, claimed.number, [LABELS.working], [LABELS.help]);
-      } catch (inner) {
+      // ready-for-agent too: the claim may have left it in place (logged there, not fatal), and this is
+      // the last chance to strip it before a later tick could otherwise pick the same ticket up again.
+      const { removeFailed, addFailed } = deps.relabel(
+        claimed.github,
+        claimed.number,
+        [LABELS.working, LABELS.ready],
+        [LABELS.help],
+      );
+      if (removeFailed) {
         log("error", {
-          message: `couldn't update the ticket's label: ${inner instanceof Error ? inner.message : inner}`,
+          message: `couldn't remove a label from the ticket: ${removeFailed instanceof Error ? removeFailed.message : removeFailed}`,
+        });
+      }
+      if (addFailed) {
+        log("error", {
+          message: `couldn't update the ticket's label: ${addFailed instanceof Error ? addFailed.message : addFailed}`,
         });
       }
       try {
@@ -975,27 +990,42 @@ export function isLabelAlreadyGone(error: unknown): boolean {
   return /HTTP 404/.test(error.stderr) && /label does not exist/i.test(error.stderr);
 }
 
+/** What went wrong removing or adding a ticket's labels, or null for either that didn't. A failed removal
+ * just leaves an old label lingering - cosmetic, safe to log and move on from. A failed add means the
+ * ticket's new state was never recorded at all, which the caller must never treat as if it had been. */
+export interface RelabelProblems {
+  removeFailed: unknown;
+  addFailed: unknown;
+}
+
 /**
  * Removes each label with `removeOne`, then adds `add` with `addAll` - always, even when a removal
- * failed - and only then throws the first removal failure that wasn't `isLabelAlreadyGone`. The caller
- * must always get its new label, whether or not the old one could be taken off.
+ * failed. Never throws: both failures (a removal other than `isLabelAlreadyGone`, or the add itself) are
+ * returned, so the caller can treat them differently rather than one masking the other.
  */
 export function relabelWith(
   remove: string[],
   add: string[],
   removeOne: (label: string) => void,
   addAll: (labels: string[]) => void,
-): void {
-  let problem: unknown = null;
+): RelabelProblems {
+  let removeFailed: unknown = null;
   for (const label of remove) {
     try {
       removeOne(label);
     } catch (error) {
-      if (!isLabelAlreadyGone(error)) problem ??= error;
+      if (!isLabelAlreadyGone(error)) removeFailed ??= error;
     }
   }
-  if (add.length) addAll(add);
-  if (problem) throw problem;
+  let addFailed: unknown = null;
+  if (add.length) {
+    try {
+      addAll(add);
+    } catch (error) {
+      addFailed = error;
+    }
+  }
+  return { removeFailed, addFailed };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1056,65 +1086,24 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** How long the stale-lock recovery section may run before its own mutex is itself treated as stale: it
- * is a handful of synchronous file calls, never close to this, so only a crash mid-section leaves it
- * held this long. */
-export const RECOVERY_STALE_MS = 60_000;
-
-/**
- * Claims the stale-lock recovery mutex (a directory): `mkdir` is atomic, so the common case - nobody else
- * is recovering - needs nothing more. If it's held, and old enough that its owner almost certainly
- * crashed before reaching its own cleanup, this reclaims it: destroy-and-recreate is not atomic by
- * itself, so every claimant writes its own pid into the directory and reads it back - if a second
- * claimant's destroy-and-recreate interleaves first, this claimant's read-back won't match what it wrote,
- * and it correctly reports losing, never a false double claim.
- */
-function claimRecoveryMutex(dir: string): boolean {
-  const claim = (): boolean => {
-    const marker = join(dir, "claim");
-    try {
-      writeFileSync(marker, String(process.pid));
-      return readFileSync(marker, "utf8") === String(process.pid);
-    } catch {
-      return false;
-    }
-  };
-  try {
-    mkdirSync(dir);
-    return claim();
-  } catch {
-    // Fallen through: the directory already exists, in use or abandoned.
-  }
-  let ageMs = Number.POSITIVE_INFINITY;
-  try {
-    ageMs = Date.now() - statSync(dir).mtimeMs;
-  } catch {
-    return false; // Vanished while checking: another tick is finishing with it right now.
-  }
-  if (ageMs < RECOVERY_STALE_MS) return false;
-  try {
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir);
-  } catch {
-    return false; // Lost the race to reclaim it too.
-  }
-  return claim();
-}
-
 /**
  * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
- * an unheld lock can never both get it. Taking over a *stale* one (its pid is dead) is not naturally
- * atomic - removing the old file and writing the new one are two steps - so it is gated by
- * `claimRecoveryMutex`: only one tick may ever be in that two-step section at a time. A tick that loses
- * that race, or that then loses the race to take the now-freed lock itself (a third tick's own fresh,
- * unrelated `wx` write can land first), reports busy, exactly as it would for a live holder.
+ * an unheld lock can never both get it.
+ *
+ * Taking over a *stale* one (its pid is dead) is not naturally atomic - removing the old file and writing
+ * the new one are two steps - so it goes through `renameSync` instead of `rmSync`: moving a file away is
+ * exclusive on its *source* path the same way `wx` is exclusive on a path that doesn't exist yet. Two
+ * ticks can both try to move the same stale lock out of the way, but only one `renameSync` call can ever
+ * succeed against that source path - the other's throws ENOENT, because by then there is nothing left
+ * there to rename, and it reports losing the race, same as for a live holder. The winner then takes the
+ * now-empty path for itself; if a third tick's own plain, unrelated `wx` write lands in the instant
+ * between that and its own `take()`, that `take()` fails too, and it reports losing that race as well.
  */
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
 ): { acquired: boolean; release(): void; note?: string } {
   const file = join(dir, "factory.lock");
-  const recovery = join(dir, "factory.lock.recovery");
   const take = () =>
     writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
   const release = () => rmSync(file, { force: true });
@@ -1124,34 +1113,31 @@ export function acquireLock(
   } catch {
     // Fallen through: something is already at `file`, live or stale.
   }
-  if (!claimRecoveryMutex(recovery)) {
-    return { acquired: false, release: () => {}, note: "another run is already checking a stale lock" };
-  }
+  let held: { pid?: number; at?: string } = {};
   try {
-    let held: { pid?: number; at?: string } = {};
-    try {
-      held = JSON.parse(readFileSync(file, "utf8"));
-    } catch {
-      // An unreadable lock is treated as stale below.
-    }
-    if (held.pid && isAlive(held.pid))
-      return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
-    // A fresh tick's plain `wx` write needs no mutex, so it can land in the gap between clearing the
-    // stale lock and taking it: either step failing here means losing that race, never a crash.
-    try {
-      rmSync(file, { force: true });
-      take();
-    } catch {
-      return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
-    }
-    return {
-      acquired: true,
-      release,
-      note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
-    };
-  } finally {
-    rmSync(recovery, { recursive: true, force: true });
+    held = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    // An unreadable lock is treated as stale below.
   }
+  if (held.pid && isAlive(held.pid))
+    return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
+  const graveyard = join(dir, `factory.lock.stale.${process.pid}.${Math.random().toString(36).slice(2)}`);
+  try {
+    renameSync(file, graveyard);
+  } catch {
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  rmSync(graveyard, { force: true });
+  try {
+    take();
+  } catch {
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  return {
+    acquired: true,
+    release,
+    note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
+  };
 }
 
 function killTree(pid: number) {
@@ -1278,14 +1264,13 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       writeFileSync(file, `${text}\n`);
       return file;
     },
-    relabel(github, number, remove, add) {
+    relabel: (github, number, remove, add) =>
       relabelWith(
         remove,
         add,
         (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
         (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
-      );
-    },
+      ),
     comment: (github, number, body) => {
       gh("issue", "comment", String(number), "--repo", github, "--body", body);
     },
