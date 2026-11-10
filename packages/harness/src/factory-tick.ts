@@ -1095,9 +1095,16 @@ function pidAlive(pid: number): boolean {
  * exclusive on its *source* path the same way `wx` is exclusive on a path that doesn't exist yet. Two
  * ticks can both try to move the same stale lock out of the way, but only one `renameSync` call can ever
  * succeed against that source path - the other's throws ENOENT, because by then there is nothing left
- * there to rename, and it reports losing the race, same as for a live holder. The winner then takes the
- * now-empty path for itself; if a third tick's own plain, unrelated `wx` write lands in the instant
- * between that and its own `take()`, that `take()` fails too, and it reports losing that race as well.
+ * there to rename, and it reports losing the race, same as for a live holder.
+ *
+ * Reading the stale lock's own content and deciding it is stale are still two steps, so between them
+ * another tick can have already moved it out of the way and taken a fresh lock of its own: this tick's
+ * rename would then isolate that fresh lock by accident, not the stale one it read. The rename's result is
+ * checked against exactly the bytes read before deciding to act, and restored if they no longer match,
+ * rather than ever proceeding on a lock that turned out to belong to someone else. Only once that check
+ * passes does the winner take the now-empty path for itself; if a third tick's own plain, unrelated `wx`
+ * write lands in the instant between that and its own `take()`, that `take()` fails too, and it reports
+ * losing that race as well.
  */
 export function acquireLock(
   dir: string,
@@ -1113,11 +1120,13 @@ export function acquireLock(
   } catch {
     // Fallen through: something is already at `file`, live or stale.
   }
+  let heldText = "";
   let held: { pid?: number; at?: string } = {};
   try {
-    held = JSON.parse(readFileSync(file, "utf8"));
+    heldText = readFileSync(file, "utf8");
+    held = JSON.parse(heldText);
   } catch {
-    // An unreadable lock is treated as stale below.
+    // An unreadable lock is treated as stale below; heldText stays "" and won't match anything real.
   }
   if (held.pid && isAlive(held.pid))
     return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
@@ -1125,6 +1134,24 @@ export function acquireLock(
   try {
     renameSync(file, graveyard);
   } catch {
+    return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+  }
+  // The rename atomically isolated whatever was actually at `file`: check it is still the exact stale
+  // lock just read, not another tick's fresh one that replaced it in the instant between that read and
+  // this rename. A mismatch means this tick just took someone else's live lock by accident; put it back
+  // and report losing the race, rather than ever proceeding on a lock that belongs to someone else.
+  let isolatedText: string | null = null;
+  try {
+    isolatedText = readFileSync(graveyard, "utf8");
+  } catch {
+    // Nothing else ever names this exact graveyard path; vanishing here would be stranger still.
+  }
+  if (isolatedText !== heldText) {
+    try {
+      renameSync(graveyard, file);
+    } catch {
+      // Already gone or replaced again since: nothing more to undo.
+    }
     return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
   }
   rmSync(graveyard, { force: true });

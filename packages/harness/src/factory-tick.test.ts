@@ -1355,4 +1355,23 @@ describe("acquireLock (#107)", () => {
     expect(acquireLock(dir, () => false).acquired).toBe(true);
     expect(readdirSync(dir)).toEqual(["factory.lock"]);
   });
+
+  it("never steals a lock another tick already took over in between this tick's read and its rename (Qodo on PR 123)", () => {
+    const dir = tmp();
+    const file = join(dir, "factory.lock");
+    writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    // Simulate another tick completing its own full stale takeover - moving the same stale lock away and
+    // taking a fresh one of its own - in the gap between this tick reading the lock as stale and acting
+    // on that read.
+    const racedToOwnFreshLock = () => {
+      writeFileSync(file, JSON.stringify({ pid: 777777, at: "2026-11-10T00:00:00Z" }), { flag: "w" });
+      return false;
+    };
+    const result = acquireLock(dir, racedToOwnFreshLock);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/lost the race/);
+    // The other tick's fresh lock must survive untouched, not be replaced by this tick's own.
+    expect(JSON.parse(readFileSync(file, "utf8")).pid).toBe(777777);
+    expect(readdirSync(dir)).toEqual(["factory.lock"]);
+  });
 });
