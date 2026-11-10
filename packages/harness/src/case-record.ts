@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
+import { normalisePath, overlaps } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
 const schema = JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"));
@@ -14,10 +15,24 @@ interface Detection {
   match: Record<"file" | "lines" | "kind", { pass: boolean }>;
 }
 
+interface Finding {
+  id: string;
+  file: string | null;
+  lines: [number, number] | null;
+}
+
+interface Injection {
+  file: string;
+  lines: [number, number];
+  commit: string;
+}
+
 interface CaseRecord {
-  findings: { id: string }[];
+  findings: Finding[];
   detection?: Detection;
   human: { disposition: string };
+  injection?: Injection;
+  review?: { reviewedCommit: string };
 }
 
 /** Problems with a public case record, or an empty list if it is valid. */
@@ -29,12 +44,12 @@ export function validateCaseRecord(record: unknown): string[] {
 }
 
 /** Cross-field rules JSON Schema can't express: a catch must follow from the findings and the match rule. */
-function consistencyProblems({ findings, detection, human }: CaseRecord): string[] {
+function consistencyProblems({ findings, detection, human, injection, review }: CaseRecord): string[] {
   if (!detection) return [];
   const problems: string[] = [];
-  const ids = new Set(findings.map((f) => f.id));
+  const findingsById = new Map(findings.map((f) => [f.id, f]));
   for (const id of detection.matchedFindingIds) {
-    if (!ids.has(id)) problems.push(`detection names finding ${id}, which is not in findings`);
+    if (!findingsById.has(id)) problems.push(`detection names finding ${id}, which is not in findings`);
   }
   const allPass = Object.values(detection.match).every((c) => c.pass);
   if (detection.caught !== allPass) {
@@ -46,6 +61,29 @@ function consistencyProblems({ findings, detection, human }: CaseRecord): string
   const detected = human.disposition === "confirmed_detected";
   if (detected !== detection.caught && human.disposition !== "review_incomplete") {
     problems.push(`the owner's disposition ${human.disposition} disagrees with caught = ${detection.caught}`);
+  }
+  if (injection) {
+    for (const id of detection.matchedFindingIds) {
+      const finding = findingsById.get(id);
+      if (!finding) continue;
+      if (finding.file === null || finding.lines === null) {
+        problems.push(`detection names finding ${id} as matched, but Qodo placed it nowhere`);
+        continue;
+      }
+      if (normalisePath(finding.file) !== normalisePath(injection.file)) {
+        problems.push(
+          `detection names finding ${id} as matched, but its file ${finding.file} differs from the injected file ${injection.file}`,
+        );
+      }
+      if (!overlaps(finding.lines, injection.lines)) {
+        problems.push(
+          `detection names finding ${id} as matched, but its lines ${finding.lines.join("-")} do not overlap the injected lines ${injection.lines.join("-")}`,
+        );
+      }
+    }
+    if (review && review.reviewedCommit !== injection.commit) {
+      problems.push(`review.reviewedCommit ${review.reviewedCommit} differs from injection.commit ${injection.commit}`);
+    }
   }
   return problems;
 }

@@ -99,6 +99,51 @@ describe("validateCaseRecord", () => {
     record.detection.match.kind.pass = false;
     expect(validateCaseRecord(record)).not.toEqual([]);
   });
+
+  it("rejects a matched finding whose file differs from the injected file", () => {
+    const record = ff0001();
+    record.findings[0].file = "src/bookings/other.ts";
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("rejects a matched finding whose lines don't overlap the injected lines", () => {
+    const record = ff0001();
+    record.findings[0].lines = [100, 100];
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("rejects a reviewedCommit that differs from the injected commit", () => {
+    const record = ff0001();
+    record.review.reviewedCommit = "a".repeat(40);
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
+
+  it("accepts a record where a null-placement finding isn't matched", () => {
+    const record = ff0001();
+    record.findings.push({
+      id: "qodo:unplaced",
+      file: null,
+      lines: null,
+      category: "Other",
+      severity: "low",
+      summary: "Unrelated finding Qodo didn't place anywhere.",
+    });
+    expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("rejects a record that lists a null-placement finding as matched", () => {
+    const record = ff0001();
+    record.findings.push({
+      id: "qodo:unplaced",
+      file: null,
+      lines: null,
+      category: "Other",
+      severity: "low",
+      summary: "Unrelated finding Qodo didn't place anywhere.",
+    });
+    record.detection.matchedFindingIds.push("qodo:unplaced");
+    expect(validateCaseRecord(record)).not.toEqual([]);
+  });
 });
 
 describe("findLeaks", () => {

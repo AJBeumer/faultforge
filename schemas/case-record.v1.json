@@ -88,8 +88,8 @@
         "properties": {
           "id": { "type": "string" },
           "title": { "type": "string" },
-          "file": { "type": "string" },
-          "lines": { "$ref": "#/$defs/lineRange" },
+          "file": { "type": ["string", "null"] },
+          "lines": { "anyOf": [{ "$ref": "#/$defs/lineRange" }, { "type": "null" }] },
           "commentLines": { "$ref": "#/$defs/lineRange" },
           "category": { "type": "string" },
           "severity": { "type": "string" },

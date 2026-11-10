@@ -26,6 +26,7 @@ interface Template {
   find: string;
   replace: string;
   proofTest: string;
+  match?: { kindTerms?: string[] };
   publish: { branch: string; commitMessage: string };
 }
 
@@ -59,6 +60,7 @@ const template: Template = JSON.parse(readFileSync(join(templateDir, "template.j
 // name and commit message, and the code it looks for and writes.
 const giveaways = templateTelltales(template);
 if (giveaways.length) fail(`the template gives the case away (${giveaways.join("; ")})`);
+if (!template.match?.kindTerms?.length) fail("template.json is missing match.kindTerms");
 const proofPath = join(templateDir, template.proofTest);
 const artefactDir = join(PRIVATE_DIR, "raw-artifacts", caseId);
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");
