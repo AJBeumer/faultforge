@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { commandViolations, denialReason, editViolation } from "./factory-policy.ts";
+import { commandViolations, decide, denialReason, editViolation } from "./factory-policy.ts";
 
 const HOOK = join(import.meta.dirname, "factory-policy.ts");
 // Native absolute paths, so the tests mean the same on Windows and on CI's Linux.
@@ -193,64 +193,86 @@ describe("factory policy: file edits", () => {
   });
 });
 
-describe("factory policy hook", () => {
-  const run = (env: Record<string, string>, payload: object) =>
-    spawnSync(process.execPath, [HOOK], {
-      input: JSON.stringify(payload),
-      encoding: "utf8",
-      env: { ...process.env, FAULTFORGE_FACTORY_RUN: "", FAULTFORGE_RUN_ROOT: "", ...env },
-    });
+describe("factory policy hook: the decision", () => {
+  const RUN_ENV = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
+  const OUTSIDE = { FAULTFORGE_FACTORY_RUN: "", FAULTFORGE_RUN_ROOT: "" };
+  const payload = (tool: string, toolInput: object, cwd?: string) =>
+    JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput });
 
-  it("does nothing outside a factory run", () => {
-    const result = run({}, { tool_name: "Bash", tool_input: { command: "gh pr merge 1" } });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("");
+  it("allows everything outside a factory run", () => {
+    expect(decide(payload("Bash", { command: "gh pr merge 1" }), OUTSIDE)).toEqual({ kind: "allow" });
   });
 
   it("denies a merge inside a run, with the reason", () => {
-    const result = run(
-      { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN },
-      { tool_name: "Bash", tool_input: { command: "gh pr merge 1" } },
-    );
+    expect(decide(payload("Bash", { command: "gh pr merge 1" }), RUN_ENV)).toMatchObject({
+      kind: "deny",
+      reason: expect.stringMatching(/only the owner merges/),
+    });
+  });
+
+  it("denies an edit outside the run folder inside a run", () => {
+    const edit = payload("Edit", { file_path: resolve("/Projects/FaultForge/README.md") }, RUN);
+    expect(decide(edit, RUN_ENV).kind).toBe("deny");
+  });
+
+  it("reads the run's ticket number from the environment", () => {
+    const view = payload("Bash", { command: "gh issue view 18" });
+    expect(decide(view, { ...RUN_ENV, FAULTFORGE_TICKET_NUMBER: "18" })).toMatchObject({
+      kind: "deny",
+      reason: expect.stringMatching(/snapshot file/),
+    });
+    expect(decide(view, RUN_ENV)).toEqual({ kind: "allow" });
+  });
+
+  describe("fails closed (#104)", () => {
+    it("answers a blocking error, with a one-line reason, when its input is not JSON inside a run", () => {
+      const decision = decide("not json", RUN_ENV);
+      expect(decision.kind).toBe("error");
+      if (decision.kind !== "error") return;
+      expect(decision.message).toMatch(/^factory-policy hook failed: .+/);
+      expect(decision.message.split("\n")).toHaveLength(1);
+    });
+
+    it("answers a blocking error when its input is empty inside a run", () => {
+      expect(decide("", RUN_ENV).kind).toBe("error");
+    });
+
+    it("still allows outside a run, even on bad input: there is nothing to protect", () => {
+      expect(decide("not json", OUTSIDE)).toEqual({ kind: "allow" });
+    });
+  });
+});
+
+describe("factory policy hook as a process (node <file>), the way Claude Code runs it", () => {
+  const run = (env: Record<string, string>, stdin: string) =>
+    spawnSync(process.execPath, [HOOK], {
+      input: stdin,
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_FACTORY_RUN: "", FAULTFORGE_RUN_ROOT: "", ...env },
+    });
+  const inRun = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
+
+  it("as a process: a deny is a PreToolUse decision on stdout with exit 0", () => {
+    const result = run(inRun, JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh pr merge 1" } }));
+    expect(result.status).toBe(0);
     const decision = JSON.parse(result.stdout).hookSpecificOutput;
+    expect(decision.hookEventName).toBe("PreToolUse");
     expect(decision.permissionDecision).toBe("deny");
     expect(decision.permissionDecisionReason).toMatch(/only the owner merges/);
   });
 
-  it("denies an edit outside the run folder inside a run", () => {
-    const result = run(
-      { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN },
-      { tool_name: "Edit", cwd: RUN, tool_input: { file_path: resolve("/Projects/FaultForge/README.md") } },
-    );
-    expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  it("as a process: outside a run it prints nothing and exits 0, even on bad input", () => {
+    const result = run({}, "not json");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("");
   });
 
-  describe("fails closed (#104)", () => {
-    const rawRun = (env: Record<string, string>, stdin: string) =>
-      spawnSync(process.execPath, [HOOK], {
-        input: stdin,
-        encoding: "utf8",
-        env: { ...process.env, FAULTFORGE_FACTORY_RUN: "", FAULTFORGE_RUN_ROOT: "", ...env },
-      });
-    const inRun = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
-
-    it("blocks inside a run with exit 2 and a one-line reason when its input is not JSON", () => {
-      const result = rawRun(inRun, "not json");
-      expect(result.status).toBe(2);
-      expect(result.stdout.trim()).toBe("");
-      expect(result.stderr.trim()).toMatch(/^factory-policy hook failed: .+/);
-      expect(result.stderr.trim().split("\n")).toHaveLength(1);
-    });
-
-    it("blocks inside a run when its input is empty", () => {
-      expect(rawRun(inRun, "").status).toBe(2);
-    });
-
-    it("still does nothing outside a run, even on bad input: there is nothing to protect", () => {
-      const result = rawRun({}, "not json");
-      expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("");
-    });
+  it("as a process: a blocking error inside a run is exit 2 with one line on stderr and nothing on stdout", () => {
+    const result = run(inRun, "not json");
+    expect(result.status).toBe(2);
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr.trim()).toMatch(/^factory-policy hook failed: .+/);
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
   });
 });
 

@@ -1,11 +1,42 @@
 /**
- * Test fixtures for the hooks: temporary git repositories that stand in for a reviewed checkout, so no
- * test ever reads or changes the owner's real checkouts.
+ * Test fixtures for the hooks: temporary git repositories that stand in for a reviewed checkout, a
+ * factory.json that points the guard at them, and the guard's decision asked in-process. No test ever
+ * reads or changes the owner's real checkouts.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decide } from "./guard-target.ts";
+
+/** This repository's factory.json, parsed once; the guard tests change copies of it. */
+export const FACTORY = JSON.parse(readFileSync(join(import.meta.dirname, "../../factory.json"), "utf8"));
+
+/**
+ * factory.json with the target's checkout pointed at `checkout` (a fixture repo, or a folder that doesn't
+ * exist), changed further by `extra`, and written to its own temp file. The guard reads the file named by
+ * FAULTFORGE_CONFIG, so no decision in the tests reads the owner's real checkouts.
+ */
+export function guardConfig(checkout: string, extra?: (config: typeof FACTORY) => void): string {
+  const config = structuredClone(FACTORY);
+  config.repos.target.path = checkout;
+  extra?.(config);
+  const file = join(mkdtempSync(join(tmpdir(), "guard-config-")), "factory.json");
+  writeFileSync(file, JSON.stringify(config));
+  return file;
+}
+
+/**
+ * The guard's decision for one tool call, asked in-process with `config` as its factory.json: the deny
+ * reason, or undefined when allowed. A blocking error throws and fails the test; the process tests in
+ * guard-target.test.ts cover how an error is reported.
+ */
+export function guardDecision(tool: string, toolInput: object, cwd: string, config: string): string | undefined {
+  const payload = JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput });
+  const decision = decide(payload, { ...process.env, FAULTFORGE_CONFIG: config });
+  if (decision.kind === "error") throw new Error(decision.message);
+  return decision.kind === "deny" ? decision.reason : undefined;
+}
 
 export interface TempRepo {
   /** The working tree. */
