@@ -258,15 +258,6 @@ export function parseArgs(argv: string[]): Args | null {
 }
 
 /**
- * True for a GitHub comment URL that names a formal review (`#pullrequestreview-<id>`), false for
- * an ordinary issue comment (`#issuecomment-<id>`). Qodo's summary comments are the latter, which is
- * why `pulls/{n}/reviews` (the endpoint that holds the former) isn't polled here.
- */
-export function isFormalReview(htmlUrl: string): boolean {
-  return /#pullrequestreview-\d+/.test(htmlUrl);
-}
-
-/**
  * Saves one poll of the two comment feeds (each the raw `gh api --paginate --slurp` text: an array of
  * pages). The raw text is written first, every poll, so an answer that can't be parsed is still kept;
  * then a new version file is written when the content changed and Qodo has commented. Returns the
@@ -279,16 +270,17 @@ export function saveCommentFeeds(
   short: string,
 ): string {
   write(`${short}.comments.latest.raw.json`, JSON.stringify(raw));
-  // `user` is null on a comment whose author account was deleted: kept as "unknown" rather than
-  // read as Qodo's or crashing every poll (a GitHub app's comments outlive the human accounts
+  // `user` is null on a comment whose author account was deleted: substituted with "unknown" rather
+  // than read as Qodo's or crashing every poll (a GitHub app's comments outlive the human accounts
   // mentioned near them, not its own, but the shape allows for it and real feeds have shown nulls).
+  // A comment that does have an author keeps its full user object, not just the login: only the
+  // missing case is touched.
   type Comment = { user: { login: string } | null; updated_at: string };
   const pages = (text: string) => (JSON.parse(text) as Comment[][]).flat();
-  const login = (c: Comment) => c.user?.login ?? "unknown";
-  const normalize = (list: Comment[]) => list.map((c) => ({ ...c, user: { login: login(c) } }));
+  const normalize = (list: Comment[]) => list.map((c) => (c.user ? c : { ...c, user: { login: "unknown" } }));
   const comments = { pr: normalize(pages(raw.pr)), inline: normalize(pages(raw.inline)) };
   const version = [...comments.pr, ...comments.inline]
-    .filter((c) => c.user.login.startsWith("qodo"))
+    .filter((c) => (c.user?.login ?? "unknown").startsWith("qodo"))
     .map((c) => c.updated_at)
     .sort()
     .pop();
@@ -302,6 +294,23 @@ export function saveCommentFeeds(
 /** One line per check run, or "no checks" when there are none. */
 export function summarizeCi(checks: { name: string; status: string; conclusion: string | null }[]): string {
   return checks.map((c) => `${c.name}: ${c.conclusion ?? c.status}`).join(", ") || "no checks";
+}
+
+/**
+ * CI is optional evidence, not Qodo's answer: a failed lookup must never keep the review record
+ * from being written, so this never throws. `onError` is called (not thrown) so a caller can still
+ * log why, before recording "unavailable".
+ */
+export function ciOrUnavailable(
+  fetchChecks: () => { name: string; status: string; conclusion: string | null }[],
+  onError?: (error: unknown) => void,
+): string {
+  try {
+    return summarizeCi(fetchChecks());
+  } catch (error) {
+    onError?.(error);
+    return "unavailable";
+  }
 }
 
 /** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
@@ -379,10 +388,6 @@ async function main() {
   console.log(`Waiting for Qodo's review of ${repoKey} PR ${pr} at ${short} (up to ${timeoutMinutes} min)…`);
 
   // Save every version of Qodo's comments while waiting: the first version can be edited later.
-  // `pulls/{n}/reviews` (a formal GitHub review: approve/request-changes, its own "#pullrequestreview-"
-  // URL) isn't polled: Qodo posts its summary as an ordinary issue comment instead, confirmed on
-  // FF-0001 where both of its comments carried an "#issuecomment-" URL, never a review one (see
-  // `isFormalReview`). That endpoint has nothing of Qodo's to lose.
   let lastContent = "";
   const onPoll = async () => {
     const raw = {
@@ -390,6 +395,13 @@ async function main() {
       inline: gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/comments`),
     };
     lastContent = saveCommentFeeds(raw, lastContent, (file, text) => writeFileSync(join(dir, file), text), short);
+    // `pulls/{n}/reviews` (a formal GitHub review, approve/request-changes) isn't where Qodo's
+    // comments live, but it's saved on every poll too: a bounded endpoint list is only trustworthy
+    // while every endpoint that could hold the data is actually read, not assumed empty.
+    writeFileSync(
+      join(dir, `${short}.reviews.latest.raw.json`),
+      gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/reviews`),
+    );
   };
 
   const api = new QodoApi();
@@ -403,6 +415,14 @@ async function main() {
             extended: true,
           })) as QodoReview;
         } finally {
+          // A session recovery's own answer overwrites lastRaw; the failure that caused it is saved
+          // separately so it isn't lost.
+          if (api.lastRecoveredRaw.length) {
+            writeFileSync(
+              join(dir, `${short}.qodo-api.latest.recovered.raw.json`),
+              JSON.stringify(api.lastRecoveredRaw),
+            );
+          }
           // Raw first: kept even when the answer can't be parsed.
           if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);
         }
@@ -423,6 +443,19 @@ async function main() {
   const findings = result.review ? findingsFor(result.review, headSha) : [];
   const open = result.review ? openFindings(result.review) : [];
   const effort = result.review ? reviewEffort(result.review, headSha) : null;
+  // CI is optional evidence about the same commit, not part of Qodo's answer: computed safely so a
+  // failed lookup can never cost the review record below, which is written only once, complete.
+  const ci = ciOrUnavailable(
+    () =>
+      ghAll<{ name: string; status: string; conclusion: string | null }>(
+        `repos/${github}/commits/${headSha}/check-runs`,
+        (p) => (p as { check_runs: { name: string; status: string; conclusion: string | null }[] }).check_runs,
+      ),
+    (error) =>
+      console.error(
+        `CI check-runs lookup failed, recording ci as unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+  );
   const record = {
     repo: github,
     pr,
@@ -441,28 +474,12 @@ async function main() {
     reviewStartedAt:
       result.review?.review_session?.commit_sha === headSha ? result.review.review_session.started_at : null,
     recordedAt: new Date().toISOString(),
-    ci: null as string | null,
+    ci,
     abTest: { name: result.review?.ab_test_name ?? null, arm: result.review?.ab_arm ?? null },
     findings,
     openFindings: open,
   };
-  const reviewJsonPath = join(dir, `${short}.review.json`);
-  // The record of what Qodo answered is written as soon as it's known, so a CI lookup failure
-  // below can never cost it: CI is optional evidence about the same commit, not part of the answer.
-  writeFileSync(reviewJsonPath, `${JSON.stringify(record, null, 2)}\n`);
-  try {
-    const checks = ghAll<{ name: string; status: string; conclusion: string | null }>(
-      `repos/${github}/commits/${headSha}/check-runs`,
-      (p) => (p as { check_runs: { name: string; status: string; conclusion: string | null }[] }).check_runs,
-    );
-    record.ci = summarizeCi(checks);
-  } catch (error) {
-    console.error(
-      `CI check-runs lookup failed, recording ci as unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    record.ci = "unavailable";
-  }
-  writeFileSync(reviewJsonPath, `${JSON.stringify(record, null, 2)}\n`);
+  writeFileSync(join(dir, `${short}.review.json`), `${JSON.stringify(record, null, 2)}\n`);
 
   if (result.state === "timeout") {
     console.log(`Review incomplete: no completed Qodo run for ${short} after ${timeoutMinutes} min. Saved in ${dir}`);

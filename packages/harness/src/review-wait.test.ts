@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseRpcBody, parseToolText, QodoApi } from "./qodo-api.ts";
+import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
 import {
+  ciOrUnavailable,
   findingsFor,
-  isFormalReview,
   openFindings,
   parseArgs,
   type QodoReview,
@@ -160,6 +160,22 @@ describe("parseToolText and parseRpcBody (review findings on PR 59)", () => {
 
   it("joins an event's data lines", () => {
     expect(parseRpcBody('event: message\ndata: {"result":\ndata: {"ok":true}}\n\n')).toEqual({ result: { ok: true } });
+  });
+});
+
+describe("isSessionLost", () => {
+  it("matches a transport-level 404 or a JSON-RPC error naming a session", () => {
+    expect(isSessionLost(new TransportError("tools/call: HTTP 404 not found"))).toBe(true);
+    expect(isSessionLost(new TransportError('tools/call: {"message":"Session not found"}'))).toBe(true);
+  });
+
+  it("doesn't match a transport error unrelated to a session", () => {
+    expect(isSessionLost(new TransportError("tools/call: HTTP 500 server error"))).toBe(false);
+  });
+
+  it("never matches a non-transport error, however its text reads", () => {
+    // Qodo's own tool-level answer (isError), not a sign the connection was lost.
+    expect(isSessionLost(new Error("Qodo tool error: no review session for that commit"))).toBe(false);
   });
 });
 
@@ -454,23 +470,41 @@ describe("review findings on PR 98", () => {
       expect(writes).toContain("abc1234.comments.2026-11-09T155200Z.raw.json");
     });
 
-    it("saves a comment with a deleted author as 'unknown' instead of crashing", () => {
+    it("saves a comment with a deleted author as 'unknown' instead of crashing, leaving real authors untouched", () => {
       const writes: [string, string][] = [];
+      const withId = { user: { login: "someone", id: 42 }, updated_at: "2026-11-09T15:40:00Z" };
       const raw = {
-        pr: JSON.stringify([[{ user: null, updated_at: "2026-11-09T15:40:00Z" }, qodo("2026-11-09T15:50:01Z")]]),
+        pr: JSON.stringify([
+          [{ user: null, updated_at: "2026-11-09T15:40:00Z" }, qodo("2026-11-09T15:50:01Z"), withId],
+        ]),
         inline: page(),
       };
       expect(() => saveCommentFeeds(raw, "", (f, t) => writes.push([f, t]), "deadbee")).not.toThrow();
       const versioned = writes.find(([f]) => f === "deadbee.comments.2026-11-09T155001Z.raw.json");
       expect(versioned?.[1]).toContain('"login":"unknown"');
+      // A comment that does have an author keeps its full user object, not just the login.
+      expect(versioned?.[1]).toContain('"user":{"login":"someone","id":42}');
     });
   });
 });
 
-describe("isFormalReview", () => {
-  it("tells a formal GitHub review URL from an ordinary issue comment", () => {
-    expect(isFormalReview("https://github.com/x/y/pull/1#pullrequestreview-123")).toBe(true);
-    expect(isFormalReview("https://github.com/x/y/pull/1#issuecomment-456")).toBe(false);
+describe("ciOrUnavailable", () => {
+  it("summarizes the checks when the lookup succeeds", () => {
+    expect(ciOrUnavailable(() => [{ name: "build", status: "completed", conclusion: "success" }])).toBe(
+      "build: success",
+    );
+  });
+
+  it("falls back to 'unavailable' without throwing when the lookup fails, and still reports why", () => {
+    const errors: unknown[] = [];
+    const ci = ciOrUnavailable(
+      () => {
+        throw new Error("gh: 502");
+      },
+      (error) => errors.push(error),
+    );
+    expect(ci).toBe("unavailable");
+    expect(errors).toHaveLength(1);
   });
 });
 
@@ -570,6 +604,9 @@ describe("QodoApi: recovers from a session Qodo later forgot", () => {
     await expect(api.call("get-pr-review-findings")).resolves.toEqual({ ok: true });
     expect(starts).toBe(2);
     expect(toolCalls).toBe(2);
+    // The retry's own answer overwrites lastRaw; the 404 that caused it is kept too, not lost.
+    expect(api.lastRecoveredRaw).toEqual([JSON.stringify({ httpStatus: 404, body: "no such session" })]);
+    expect(api.lastRaw).not.toBe(api.lastRecoveredRaw[0]);
   });
 
   it("starts a new session and retries once after a JSON-RPC error naming the session", async () => {
@@ -630,6 +667,39 @@ describe("QodoApi: recovers from a session Qodo later forgot", () => {
     });
     const api = new QodoApi();
     await expect(api.call("get-pr-review-findings")).rejects.toThrow("bad request");
+    expect(starts).toBe(1);
+    expect(toolCalls).toBe(1);
+  });
+
+  it("doesn't retry Qodo's own tool-level answer, even one whose text happens to mention a session", async () => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    let starts = 0;
+    let toolCalls = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method, id } = JSON.parse(init.body);
+      if (method === "initialize") {
+        starts++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), {
+          status: 200,
+          headers: { "mcp-session-id": "session-1" },
+        });
+      }
+      if (method === "notifications/initialized") return new Response("", { status: 200 });
+      if (method === "tools/call") {
+        toolCalls++;
+        // A successful call whose tool-level answer is itself an error (isError), not a transport
+        // failure: its text mentioning "session" must not be read as the connection being lost.
+        const body = {
+          jsonrpc: "2.0",
+          id,
+          result: { isError: true, content: [{ type: "text", text: "no review session for that commit" }] },
+        };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).rejects.toThrow(/no review session/);
     expect(starts).toBe(1);
     expect(toolCalls).toBe(1);
   });
