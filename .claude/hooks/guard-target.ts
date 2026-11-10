@@ -10,7 +10,8 @@
  *    Shell text can't show what a redirect, a copy or a script wrote, so the content is read from git at
  *    the moment it would travel. That is the guarantee; the text checks are the early warning.
  * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
- * (cd, pushd, Set-Location, git -C, git --work-tree), or runs from inside it.
+ * (cd, pushd, Set-Location, git -C, git --work-tree), or runs from inside it. Which repos those are, and
+ * how a checkout is recognised, is in guard-repos.ts.
  * And everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo.
  *
  * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
@@ -18,21 +19,19 @@
  * a deny decision as JSON, nothing to allow, or exit 2 with one line on stderr when it couldn't check.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
+import {
+  entersCheckout,
+  esc,
+  inCheckout,
+  linkPattern,
+  navigatesInto,
+  type Reviewed,
+  reviewedRepos,
+} from "./guard-repos.ts";
 import { ALLOW, type Decision, firstLine, isEntry, readStdin, respond } from "./hook-io.ts";
-
-interface Reviewed {
-  /** owner/name on GitHub */
-  github: string;
-  /** The repo name on GitHub. */
-  name: string;
-  /** The local checkout's folder name, from its configured path. */
-  folder: string;
-  /** The local checkout, resolved from this repo's root, where pending content is read from git. */
-  checkout: string;
-}
 
 /** What one decision is made against: the folder the tool runs in, and the repos under guard. */
 interface Context {
@@ -42,18 +41,6 @@ interface Context {
 
 /** A tool's input as parsed from the payload: whatever Claude Code sent. */
 type ToolInput = ReturnType<typeof JSON.parse>;
-
-const LAB_ROOT = join(import.meta.dirname, "../..");
-
-/** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
-const TARGET: Reviewed = {
-  github: "AJBeumer/faultforge-target",
-  name: "faultforge-target",
-  folder: "faultforge-target",
-  checkout: resolve(LAB_ROOT, "../faultforge-target"),
-};
-
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Thrown by `deny()` and turned into a deny decision by `decide()`. */
 class Denied extends Error {}
@@ -88,49 +75,6 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
 }
 
 /**
- * The target, plus every repo marked reviewed in `factory.json` (or the file `configPath` names, from
- * `FAULTFORGE_CONFIG`). A missing, broken or wrong config can only fail to add a repo; it can never switch
- * off the target's guard.
- */
-function reviewedRepos(configPath: string | undefined): Reviewed[] {
-  const repos = [{ ...TARGET }];
-  try {
-    const path = configPath ?? join(import.meta.dirname, "../../factory.json");
-    const entries: { github?: unknown; path?: unknown; guard?: unknown }[] = Object.values(
-      JSON.parse(readFileSync(path, "utf8")).repos ?? {},
-    );
-    for (const entry of entries) {
-      if (entry.guard !== "reviewed" || typeof entry.github !== "string" || typeof entry.path !== "string") continue;
-      const known = repos.find((r) => r.github.toLowerCase() === (entry.github as string).toLowerCase());
-      if (known) {
-        // The config may keep the target's checkout somewhere else; its protection stays either way.
-        known.checkout = resolve(LAB_ROOT, entry.path);
-        continue;
-      }
-      const name = entry.github.split("/")[1] ?? entry.github;
-      repos.push({
-        github: entry.github,
-        name,
-        folder: basename(entry.path) || name,
-        checkout: resolve(LAB_ROOT, entry.path),
-      });
-    }
-  } catch {
-    // keep the target alone
-  }
-  return repos;
-}
-
-/** A link GitHub turns into a "mentioned in" event on one of these repos' issues or PRs. */
-function linkPattern(repos: Reviewed[]): RegExp | undefined {
-  if (!repos.length) return undefined;
-  return new RegExp(
-    repos.map((r) => `github\\.com/${esc(r.github)}/(issues|pull)/\\d+|${esc(r.name)}#\\d+`).join("|"),
-    "i",
-  );
-}
-
-/**
  * Every GitHub repo (owner/name) a command names as a destination: `--repo`, an API route, or a URL
  * given to `gh` or to `git push/pull/fetch/clone/remote`, anywhere in the command, chained parts and
  * quoted text included. The guard applies the strictest rule over all of them.
@@ -143,33 +87,6 @@ function explicitDestinations(command: string): string[] {
     /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
   ];
   return patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
-}
-
-/**
- * The ways a command moves into a checkout: `cd`, `pushd`, PowerShell's `Set-Location` (or `sl`), each
- * with an optional `-Path`/`-LiteralPath`, `git -C<path>` with or without a space, and `git --work-tree=` /
- * `--git-dir`. The path may be relative, absolute or quoted, and the folder may be followed by a path
- * separator, a quote, whitespace or a shell operator (`;`, `&&`, `|`).
- */
-function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
-  const folders = [repo.folder, repo.name].map(esc).join("|");
-  const lead = atSegmentStart ? "(?:^|[;&|\\n]\\s*)" : "\\b";
-  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+-C\\s*|${lead}git\\s+--(?:work-tree|git-dir)[=\\s]\\s*)`;
-  return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
-}
-
-/** True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. */
-function entersCheckout(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, false).test(command);
-}
-
-/**
- * True only when the move into the checkout is a command of its own (at the start of the command or after a
- * shell operator), not words inside a message. The own-ticket link exemption needs this stricter form, so a
- * quoted `Set-Location <target>` in a commit message can't earn it.
- */
-function navigatesInto(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, true).test(command);
 }
 
 /**
@@ -217,11 +134,6 @@ function checkPendingContent(ctx: Context, command: string, touched: Reviewed[])
  */
 function isChained(command: string): boolean {
   return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(blankQuoted(command).trim());
-}
-
-/** True when a local path is inside the repo's checkout folder (whole folder names only). */
-function inCheckout(path: string, repo: Reviewed): boolean {
-  return [repo.folder, repo.name].some((folder) => new RegExp(`(^|[/\\\\])${esc(folder)}([/\\\\]|$)`, "i").test(path));
 }
 
 function checkCommand(ctx: Context, command: string) {
