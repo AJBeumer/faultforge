@@ -61,8 +61,10 @@ export function readinessProblems(body: string, sections: Sections, openBlockers
   return problems;
 }
 
+const GH_TIMEOUT_MS = 60_000;
+
 function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8" });
+  return execFileSync("gh", args, { encoding: "utf8", timeout: GH_TIMEOUT_MS });
 }
 
 /** Reads a ticket from GitHub and returns its title and readiness problems (empty when ready). */
@@ -86,6 +88,30 @@ export function checkTicket(
   return { title: issue.title, problems: readinessProblems(body, sections, blockers) };
 }
 
+/**
+ * What to print and exit with for a ticket check that either came back (ready or not) or could not
+ * be read at all. A failure to read the ticket is never reported with the same code as "not ready":
+ * 2 means the check didn't run, 1 means it ran and found the ticket not ready, 0 means it's ready.
+ */
+export function ticketReadyReport(
+  repoKey: string,
+  number: number,
+  result: { title: string; problems: string[] } | { error: unknown },
+): { code: 0 | 1 | 2; stream: "log" | "error"; message: string } {
+  if ("error" in result) {
+    const detail = result.error instanceof Error ? result.error.message : String(result.error);
+    return { code: 2, stream: "error", message: `${repoKey} #${number}: could not read the ticket: ${detail}` };
+  }
+  if (result.problems.length) {
+    return {
+      code: 1,
+      stream: "log",
+      message: `${repoKey} #${number} is not ready:\n${result.problems.map((p) => `- ${p}`).join("\n")}`,
+    };
+  }
+  return { code: 0, stream: "log", message: `${repoKey} #${number} is ready: ${result.title}` };
+}
+
 function main() {
   const factory = loadFactory();
   const [repoKey, number] = process.argv.slice(2);
@@ -93,12 +119,15 @@ function main() {
     console.error(`usage: npm run ticket:ready -- <${Object.keys(factory.repos).join("|")}> <issue number>`);
     process.exit(2);
   }
-  const { title, problems } = checkTicket(factory, repoKey, Number(number));
-  if (problems.length) {
-    console.log(`${repoKey} #${number} is not ready:\n${problems.map((p) => `- ${p}`).join("\n")}`);
-    process.exit(1);
+  let result: { title: string; problems: string[] } | { error: unknown };
+  try {
+    result = checkTicket(factory, repoKey, Number(number));
+  } catch (error) {
+    result = { error };
   }
-  console.log(`${repoKey} #${number} is ready: ${title}`);
+  const report = ticketReadyReport(repoKey, Number(number), result);
+  console[report.stream](report.message);
+  process.exit(report.code);
 }
 
 // Run only when called as a script, not when the tests import it.

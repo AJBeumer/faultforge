@@ -1224,6 +1224,24 @@ const DENY = [
  */
 export type RunMode = "local" | "ci";
 
+/**
+ * Pulls from a `sort=updated&direction=desc` listing, newest first, no older than `cutoffMs` (epoch
+ * ms). `fetchPage` returns one page (1-based) or `[]` past the end. Stops as soon as a page holds a
+ * pull older than the cutoff, since every pull after it, on this page or any later one, is older
+ * still: the audit reads every pull in its own run window without reading a repo's whole history.
+ */
+export function pullsSince<P extends { updated_at: string }>(cutoffMs: number, fetchPage: (page: number) => P[]): P[] {
+  const out: P[] = [];
+  for (let page = 1; ; page++) {
+    const batch = fetchPage(page);
+    if (!batch.length) return out;
+    for (const pull of batch) {
+      if (Date.parse(pull.updated_at) < cutoffMs) return out;
+      out.push(pull);
+    }
+  }
+}
+
 export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
@@ -1376,15 +1394,19 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ) as IssueEvent[][]
       ).flat();
       // Submitted reviews (approve, request changes) leave no comment: read them from every PR touched since.
+      // The pulls endpoint has no `since`, so page through it by hand and stop once a page is older than
+      // the window, instead of reading (or silently capping at) the repo's whole pull-request history.
       type Pull = { number: number; updated_at: string };
       type Review = { user?: { login: string }; submitted_at?: string; html_url: string };
+      const cutoffMs = Math.floor(Date.parse(from) / 1000) * 1000;
       const reviews = Object.values(factory.repos).flatMap((repo) =>
-        (
-          JSON.parse(
-            gh("api", `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50`),
-          ) as Pull[]
+        pullsSince<Pull>(
+          cutoffMs,
+          (page) =>
+            JSON.parse(
+              gh("api", `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50&page=${page}`),
+            ) as Pull[],
         )
-          .filter((pull) => Date.parse(pull.updated_at) >= Math.floor(Date.parse(from) / 1000) * 1000)
           .flatMap((pull) =>
             (
               JSON.parse(
@@ -1749,7 +1771,7 @@ async function main() {
     // owner decides on the proposal ticket; a failure here is reported and never changes the
     // run's outcome or labels.
     try {
-      proposeAfterRun(LAB_ROOT, mode, console.log);
+      proposeAfterRun(LAB_ROOT, console.log);
     } catch (error) {
       console.error(
         `rules:propose failed (run outcome unchanged): ${error instanceof Error ? (error.stack ?? error.message) : error}`,

@@ -179,6 +179,19 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["inj9999", "inj8888", "rev7777"]));
   });
 
+  it("skips a stray file that matches the folder pattern instead of crashing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
+    dirs.push(dir);
+    mkdirSync(join(dir, "reviews", "faultforge-pr75"), { recursive: true });
+    writeFileSync(join(dir, "reviews", "faultforge-pr75", "aaa.review.json"), JSON.stringify(review({})));
+    // Not a folder, but matches the "<repoKey>-pr<N>" pattern.
+    writeFileSync(join(dir, "reviews", "target-pr9"), "leftover file, not a reviews folder");
+
+    const reviews = readSavedReviews(join(dir, "reviews"));
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({ key: "faultforge", review: { pr: 75 } });
+  });
+
   it("fails closed: an unreadable folder or answer key is an error, never an empty result", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);

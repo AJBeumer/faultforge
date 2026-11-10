@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadFactory, repoConfig } from "./factory-config.ts";
-import { openNumbers, readinessProblems, writtenDependencies } from "./ticket-ready.ts";
+import { openNumbers, readinessProblems, ticketReadyReport, writtenDependencies } from "./ticket-ready.ts";
 
 const factory = loadFactory();
 const SECTIONS = {
@@ -83,5 +83,36 @@ describe("review findings on PR 53", () => {
     const page1 = Array.from({ length: 30 }, (_, i) => ({ number: i + 1, state: "closed" }));
     const page2 = [{ number: 99, state: "open" }];
     expect(openNumbers([page1, page2])).toEqual([99]);
+  });
+});
+
+describe("ticketReadyReport", () => {
+  it("exits 0 and logs when the ticket is ready", () => {
+    expect(ticketReadyReport("faultforge", 47, { title: "A thing", problems: [] })).toEqual({
+      code: 0,
+      stream: "log",
+      message: "faultforge #47 is ready: A thing",
+    });
+  });
+
+  it("exits 1 and logs the problems when the ticket is not ready, never the code gh failures use", () => {
+    const report = ticketReadyReport("faultforge", 47, { title: "A thing", problems: ["missing section"] });
+    expect(report.code).toBe(1);
+    expect(report.message).toContain("missing section");
+  });
+
+  it("exits 2 when gh could not be read, never the code a not-ready ticket uses", () => {
+    const report = ticketReadyReport("faultforge", 47, { error: new Error("gh timed out") });
+    expect(report).toEqual({
+      code: 2,
+      stream: "error",
+      message: "faultforge #47: could not read the ticket: gh timed out",
+    });
+  });
+
+  it("names a thrown non-Error the same way", () => {
+    const report = ticketReadyReport("target", 4, { error: "boom" });
+    expect(report.code).toBe(2);
+    expect(report.message).toContain("boom");
   });
 });
