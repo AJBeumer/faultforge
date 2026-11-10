@@ -50,12 +50,28 @@ export function parseToolText(result: { isError?: boolean; content?: { type: str
   return JSON.parse(text);
 }
 
+/**
+ * True when a failed call means Qodo forgot a session it had previously accepted: a 404 (the
+ * session id no longer exists), or a JSON-RPC error naming "session" (seen as a "session not
+ * found" error after the session had been running a while). Either way the fix is the same: start
+ * a new session and try the call again, not report the poll itself as failed.
+ */
+export function isSessionLost(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /HTTP 404\b/.test(message) || /\bsession\b/i.test(message);
+}
+
 export class QodoApi {
   private session?: string;
   private id = 0;
   private ready?: Promise<void>;
   private readonly key = apiKey();
-  /** The raw text of the last tool result, kept so a caller can save it even if parsing fails. */
+  /**
+   * The response body text of the last request, kept exactly as received so a caller can save it
+   * even when it fails to parse. Wrapped with the HTTP status when the body wasn't usable as-is
+   * (an error status, or text that didn't parse): the status is then part of what's saved, not
+   * only logged.
+   */
   lastRaw = "";
 
   /** Calls one allow-listed tool and returns its text result parsed as JSON. */
@@ -63,19 +79,35 @@ export class QodoApi {
     if (!READ_ONLY_TOOLS.has(tool)) throw new Error(`Refusing ${tool}: not on the read-only allow-list.`);
     // Cleared first, so a failed call never leaves the previous answer looking like its own.
     this.lastRaw = "";
-    // A failed start is forgotten, so the next call connects again instead of repeating the old failure.
+    await this.ensureStarted();
+    try {
+      return await this.toolCall(tool, args);
+    } catch (error) {
+      const hadSession = this.session !== undefined;
+      if (!hadSession || !isSessionLost(error)) throw error;
+      this.session = undefined;
+      this.ready = undefined;
+      await this.ensureStarted();
+      return await this.toolCall(tool, args);
+    }
+  }
+
+  private async toolCall(tool: string, args: Record<string, unknown>): Promise<unknown> {
+    const result = (await this.rpc("tools/call", { name: tool, arguments: args })) as {
+      isError?: boolean;
+      content?: { type: string; text?: string }[];
+    };
+    return parseToolText(result);
+  }
+
+  /** A failed start is forgotten, so the next call connects again instead of repeating the old failure. */
+  private ensureStarted(): Promise<void> {
     this.ready ??= this.start().catch((error: unknown) => {
       this.ready = undefined;
       this.session = undefined;
       throw error;
     });
-    await this.ready;
-    const result = (await this.rpc("tools/call", { name: tool, arguments: args })) as {
-      isError?: boolean;
-      content?: { type: string; text?: string }[];
-    };
-    this.lastRaw = JSON.stringify(result);
-    return parseToolText(result);
+    return this.ready;
   }
 
   private async start() {
@@ -101,10 +133,21 @@ export class QodoApi {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     this.session ??= res.headers.get("mcp-session-id") ?? undefined;
+    // Kept before anything is checked or parsed, so any failure below still leaves it saved.
     const text = await res.text();
-    if (!res.ok) throw new Error(`${method}: HTTP ${res.status} ${text.slice(0, 300).replaceAll(this.key, "***")}`);
+    this.lastRaw = text;
+    if (!res.ok) {
+      this.lastRaw = JSON.stringify({ httpStatus: res.status, body: text });
+      throw new Error(`${method}: HTTP ${res.status} ${text.slice(0, 300).replaceAll(this.key, "***")}`);
+    }
     if (notify || !text.trim()) return undefined;
-    const json = parseRpcBody(text);
+    let json: { result?: unknown; error?: unknown };
+    try {
+      json = parseRpcBody(text);
+    } catch (error) {
+      this.lastRaw = JSON.stringify({ httpStatus: res.status, body: text });
+      throw new Error(`${method}: could not parse the response (HTTP ${res.status}): ${(error as Error).message}`);
+    }
     if (json.error) throw new Error(`${method}: ${JSON.stringify(json.error).replaceAll(this.key, "***")}`);
     return json.result;
   }

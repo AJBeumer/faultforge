@@ -4,12 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseRpcBody, parseToolText, QodoApi } from "./qodo-api.ts";
 import {
   findingsFor,
+  isFormalReview,
   openFindings,
   parseArgs,
   type QodoReview,
   reviewEffort,
   reviewState,
   saveCommentFeeds,
+  summarizeCi,
   waitForHead,
   waitForReview,
 } from "./review-wait.ts";
@@ -451,5 +453,184 @@ describe("review findings on PR 98", () => {
       saveCommentFeeds(raw, "", (f) => writes.push(f), "abc1234");
       expect(writes).toContain("abc1234.comments.2026-11-09T155200Z.raw.json");
     });
+
+    it("saves a comment with a deleted author as 'unknown' instead of crashing", () => {
+      const writes: [string, string][] = [];
+      const raw = {
+        pr: JSON.stringify([[{ user: null, updated_at: "2026-11-09T15:40:00Z" }, qodo("2026-11-09T15:50:01Z")]]),
+        inline: page(),
+      };
+      expect(() => saveCommentFeeds(raw, "", (f, t) => writes.push([f, t]), "deadbee")).not.toThrow();
+      const versioned = writes.find(([f]) => f === "deadbee.comments.2026-11-09T155001Z.raw.json");
+      expect(versioned?.[1]).toContain('"login":"unknown"');
+    });
+  });
+});
+
+describe("isFormalReview", () => {
+  it("tells a formal GitHub review URL from an ordinary issue comment", () => {
+    expect(isFormalReview("https://github.com/x/y/pull/1#pullrequestreview-123")).toBe(true);
+    expect(isFormalReview("https://github.com/x/y/pull/1#issuecomment-456")).toBe(false);
+  });
+});
+
+describe("summarizeCi", () => {
+  it("joins check runs as one line", () => {
+    expect(
+      summarizeCi([
+        { name: "build", status: "completed", conclusion: "success" },
+        { name: "lint", status: "completed", conclusion: "failure" },
+      ]),
+    ).toBe("build: success, lint: failure");
+  });
+
+  it("falls back to status when there's no conclusion yet", () => {
+    expect(summarizeCi([{ name: "build", status: "in_progress", conclusion: null }])).toBe("build: in_progress");
+  });
+
+  it("says 'no checks' when there are none", () => {
+    expect(summarizeCi([])).toBe("no checks");
+  });
+});
+
+describe("QodoApi: raw body kept before parsing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const stubRpc = (handlers: Record<string, () => Response>) => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method } = JSON.parse(init.body);
+      const handler = handlers[method];
+      if (!handler) throw new Error(`unexpected method ${method}`);
+      return handler();
+    });
+  };
+
+  const ok = (id: number, result: unknown) =>
+    new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), { status: 200 });
+  const started = { initialize: () => ok(1, {}), "notifications/initialized": () => new Response("", { status: 200 }) };
+
+  it("keeps the successful response text itself as the raw answer", async () => {
+    const body = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: '{"ok":true}' }] } };
+    stubRpc({ ...started, "tools/call": () => new Response(JSON.stringify(body), { status: 200 }) });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).resolves.toEqual({ ok: true });
+    expect(api.lastRaw).toBe(JSON.stringify(body));
+  });
+
+  it("saves an unparseable 200 body with its HTTP status, instead of losing it", async () => {
+    stubRpc({ ...started, "tools/call": () => new Response("not json", { status: 200 }) });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).rejects.toThrow(/could not parse/);
+    expect(JSON.parse(api.lastRaw)).toMatchObject({ httpStatus: 200, body: "not json" });
+  });
+
+  it("saves an HTTP error body next to the raw file, with its status", async () => {
+    stubRpc({ ...started, "tools/call": () => new Response("server exploded", { status: 500 }) });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).rejects.toThrow(/HTTP 500/);
+    expect(JSON.parse(api.lastRaw)).toEqual({ httpStatus: 500, body: "server exploded" });
+  });
+});
+
+describe("QodoApi: recovers from a session Qodo later forgot", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("starts a new session and retries once after a 404 (session not found)", async () => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    let starts = 0;
+    let toolCalls = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method, id } = JSON.parse(init.body);
+      if (method === "initialize") {
+        starts++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), {
+          status: 200,
+          headers: { "mcp-session-id": `session-${starts}` },
+        });
+      }
+      if (method === "notifications/initialized") return new Response("", { status: 200 });
+      if (method === "tools/call") {
+        toolCalls++;
+        if (toolCalls === 1) return new Response("no such session", { status: 404 });
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).resolves.toEqual({ ok: true });
+    expect(starts).toBe(2);
+    expect(toolCalls).toBe(2);
+  });
+
+  it("starts a new session and retries once after a JSON-RPC error naming the session", async () => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    let starts = 0;
+    let toolCalls = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method, id } = JSON.parse(init.body);
+      if (method === "initialize") {
+        starts++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), {
+          status: 200,
+          headers: { "mcp-session-id": `session-${starts}` },
+        });
+      }
+      if (method === "notifications/initialized") return new Response("", { status: 200 });
+      if (method === "tools/call") {
+        toolCalls++;
+        if (toolCalls === 1) {
+          return new Response(
+            JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "Session not found" } }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: '{"ok":true}' }] } }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).resolves.toEqual({ ok: true });
+    expect(starts).toBe(2);
+  });
+
+  it("doesn't retry a plain tool error once a session is established", async () => {
+    vi.stubEnv("QODO_API_KEY", "test-key");
+    let starts = 0;
+    let toolCalls = 0;
+    vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
+      const { method, id } = JSON.parse(init.body);
+      if (method === "initialize") {
+        starts++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), {
+          status: 200,
+          headers: { "mcp-session-id": "session-1" },
+        });
+      }
+      if (method === "notifications/initialized") return new Response("", { status: 200 });
+      if (method === "tools/call") {
+        toolCalls++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32001, message: "bad request" } }), {
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const api = new QodoApi();
+    await expect(api.call("get-pr-review-findings")).rejects.toThrow("bad request");
+    expect(starts).toBe(1);
+    expect(toolCalls).toBe(1);
   });
 });
