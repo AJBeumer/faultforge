@@ -451,7 +451,8 @@ describe("tick: stop paths", () => {
     expect(body).toMatch(/blocked-20261109-093001-target-18/);
   });
 
-  it("still reports the blocked evidence on the ticket even when the corrective relabel fails (#102)", async () => {
+  it("still reports the blocked evidence on the ticket even when the corrective relabel keeps failing, retried once (#102)", async () => {
+    let addAttempts = 0;
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -463,7 +464,10 @@ describe("tick: stop paths", () => {
         }),
         relabel: (github, number, remove, add) => {
           f.calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`);
-          if (add.includes(LABELS.help)) return { removeFailed: null, addFailed: new Error("add failed") };
+          if (add.includes(LABELS.help)) {
+            addAttempts++;
+            return { removeFailed: null, addFailed: new Error("add failed") };
+          }
           return { removeFailed: null, addFailed: null };
         },
       },
@@ -471,6 +475,35 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.comments.at(-1)?.body).toMatch(
       /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
+    );
+    expect(addAttempts).toBe(2);
+  });
+
+  it("still relabels the blocked run even when posting the comment about it fails, retried once (#102)", async () => {
+    let commentAttempts = 0;
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => ({
+          file: "",
+          pushed: false,
+          blocked: ["config/qodo-rules.yaml"],
+          savedAt: `blocked-${runId}`,
+        }),
+        comment: (github, number, body) => {
+          if (!body.includes("outside `raw-artifacts/`")) {
+            f.comments.push({ github, number, body });
+            return;
+          }
+          commentAttempts++;
+          throw new Error("comment API down");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(commentAttempts).toBe(2);
+    expect(f.calls).toContain(
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready},${LABELS.done} +${LABELS.help}`,
     );
   });
 
@@ -840,6 +873,16 @@ describe("commitAndPublish: what a run may push to the private repo (#102)", () 
     expect(result.savedAt).toBe("blocked-run2");
     expect(sh(origin, "rev-parse", "main")).toBe(mainBefore);
     expect(sh(origin, "show", "blocked-run2:ground-truth.jsonl")).toContain("FF-0099");
+  });
+
+  it("does not mistake a similarly-prefixed root path for one under the evidence root, through the same trimming `git` helper production uses (Qodo on PR 141, round 2)", () => {
+    const origin = bareOrigin();
+    const priv = clone(origin);
+    mkdirSync(join(priv, "raw-artifacts-decoy"), { recursive: true });
+    writeFileSync(join(priv, "raw-artifacts-decoy", "file.txt"), "nope\n");
+    const result = commitAndPublish(priv, "raw-artifacts", "run5", sh, sh);
+    expect(result.pushed).toBe(false);
+    expect(result.blocked).toEqual(["raw-artifacts-decoy/file.txt"]);
   });
 
   it("still blocks a protected file moved under the evidence root: the rename's old path still counts as changed (Qodo on PR 141)", () => {

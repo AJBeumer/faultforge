@@ -185,22 +185,21 @@ export function blockedEvidencePaths(paths: string[], evidenceRoot: string): str
 /**
  * Every path that differs between `priv`'s worktree (as it stands right now, committed or not) and
  * `origin/main`: committed changes made earlier in the run, plus whatever is modified or untracked in
- * the working tree. `--no-renames` forces a rename apart into its old and new paths, so a protected file
- * moved under the evidence root still shows its old, now-missing path (Qodo on PR 141) — `--name-only`
- * alone would report only the allowed destination and hide that the source was removed from `main`.
+ * the working tree. Every one of the three commands below prints a bare path per line, nothing else —
+ * deliberately never `git status --porcelain`, whose leading status characters can be mistaken for part
+ * of the path once the shared `git`/`gitLong` helpers (used here, same as everywhere else) have trimmed
+ * the overall output: a path that starts with its own letter can then read as if a status prefix were
+ * still attached to it, or the reverse (Qodo on PR 141, round 2). `--no-renames` forces a rename apart
+ * into its old and new paths, so a protected file moved under the evidence root still shows its old,
+ * now-missing path — `--name-only` alone would report only the allowed destination and hide that the
+ * source was removed from `main`.
  */
 function changedAgainst(priv: string, run: (cwd: string, ...args: string[]) => string, origin: string): string[] {
-  const committed = run(priv, "diff", "--no-renames", "--name-only", origin, "HEAD")
-    .split("\n")
-    .filter((p) => p !== "");
-  const working = run(priv, "status", "--porcelain", "--untracked-files=all")
-    .split("\n")
-    .filter((p) => p !== "")
-    .flatMap((line) => {
-      const path = line.slice(3);
-      return path.includes(" -> ") ? path.split(" -> ") : [path];
-    });
-  return [...new Set([...committed, ...working])];
+  const lines = (s: string) => s.split("\n").filter((p) => p !== "");
+  const committed = lines(run(priv, "diff", "--no-renames", "--name-only", origin, "HEAD"));
+  const uncommitted = lines(run(priv, "diff", "--no-renames", "--name-only", "HEAD"));
+  const untracked = lines(run(priv, "ls-files", "--others", "--exclude-standard"));
+  return [...new Set([...committed, ...uncommitted, ...untracked])];
 }
 
 export interface EvidencePush {
@@ -938,18 +937,29 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       // Sanitised on its own, so a protected word among the blocked paths only blanks this clause, never
       // the branch or folder the owner needs to find the evidence by (Qodo on PR 141).
       const paths = safeText(saved.blocked.join(", "), reviewed);
-      // Said before the relabel: if that then fails, the owner still has what matters most (Qodo on PR 141).
-      say(
-        `The run also changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`,
-      );
+      const blockedMessage = `The run also changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
+      // Said before the relabel, and each retried once on its own: one failing must never also cost the
+      // other, and the run log (which the run-log copy itself always reaches, win or lose) is never the
+      // owner's only way to learn a done-looking ticket was actually blocked (Qodo on PR 141, round 2).
+      const once = (what: string, fn: () => void): boolean => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            fn();
+            return true;
+          } catch (error) {
+            log("error", { message: `couldn't ${what}: ${error instanceof Error ? error.message : error}` });
+          }
+        }
+        return false;
+      };
+      once("comment the blocked evidence on the ticket", () => say(blockedMessage));
       if (finish.label !== LABELS.help) {
-        try {
-          relabel([LABELS.working, LABELS.ready, finish.label], [LABELS.help]);
+        if (
+          once(`relabel the blocked run to ${LABELS.help}`, () =>
+            relabel([LABELS.working, LABELS.ready, finish.label], [LABELS.help]),
+          )
+        ) {
           finalLabel = LABELS.help;
-        } catch (relabelError) {
-          log("error", {
-            message: `couldn't relabel the blocked run to ${LABELS.help}: ${relabelError instanceof Error ? relabelError.message : relabelError}`,
-          });
         }
       }
       // The run folder is only kept when even the blocked-branch push failed: that's the one case
