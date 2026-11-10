@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,8 +32,10 @@ import {
   provenanceProblems,
   prUrlFromToolResult,
   prViewProblems,
+  RECOVERY_STALE_MS,
   realHookRunner,
   redact,
+  relabelWith,
   runExternal,
   runIdFor,
   runsHook,
@@ -1169,10 +1171,12 @@ describe("isLabelAlreadyGone (#107)", () => {
     expect(isLabelAlreadyGone(gone)).toBe(true);
   });
 
-  it("reports a 403, a 404 that isn't about the label, and a timeout, instead of swallowing them", () => {
+  it("reports a 401, a 403, a 404 that isn't about the label, and a timeout, instead of swallowing them", () => {
+    const unauthorized = new ExternalCallError("gh api", { stderr: "gh: HTTP 401: Bad credentials (...)\n" });
     const forbidden = new ExternalCallError("gh api", { stderr: "gh: HTTP 403: Forbidden (...)\n" });
     const issueGone = new ExternalCallError("gh api", { stderr: "gh: HTTP 404: Not Found (...)\n" });
     const timedOut = new ExternalCallError("gh api", { code: "ETIMEDOUT" });
+    expect(isLabelAlreadyGone(unauthorized)).toBe(false);
     expect(isLabelAlreadyGone(forbidden)).toBe(false);
     expect(isLabelAlreadyGone(issueGone)).toBe(false);
     expect(isLabelAlreadyGone(timedOut)).toBe(false);
@@ -1180,23 +1184,72 @@ describe("isLabelAlreadyGone (#107)", () => {
   });
 });
 
+describe("relabelWith (#107, Qodo on PR 123)", () => {
+  it("always adds, even when every removal failed, and reports nothing when it was just a missing label", () => {
+    const added: string[][] = [];
+    const gone = () => {
+      throw new ExternalCallError("gh api", {
+        stderr: "gh: HTTP 404: Label does not exist (...)\n",
+      });
+    };
+    expect(() => relabelWith(["old"], ["new"], gone, (labels) => added.push(labels))).not.toThrow();
+    expect(added).toEqual([["new"]]);
+  });
+
+  it("adds the new label, then still reports a 401 removal failure instead of swallowing it", () => {
+    const added: string[][] = [];
+    const unauthorized = () => {
+      throw new ExternalCallError("gh api", { stderr: "gh: HTTP 401: Bad credentials (...)\n" });
+    };
+    let thrown: unknown;
+    try {
+      relabelWith(["old"], ["new"], unauthorized, (labels) => added.push(labels));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(added).toEqual([["new"]]);
+    expect(thrown).toBeInstanceOf(ExternalCallError);
+    expect((thrown as ExternalCallError).message).toMatch(/401/);
+  });
+
+  it("adds nothing when there is nothing to add, and removes every label asked for", () => {
+    const removed: string[] = [];
+    relabelWith(
+      ["a", "b"],
+      [],
+      (label) => removed.push(label),
+      () => {
+        throw new Error("must not be called");
+      },
+    );
+    expect(removed).toEqual(["a", "b"]);
+  });
+});
+
 describe("prUrlFromToolResult (#107)", () => {
   it("finds a pull request url in a plain string result", () => {
-    expect(prUrlFromToolResult("Created https://github.com/owner/target/pull/42\n")).toBe(
+    expect(prUrlFromToolResult("Created https://github.com/owner/target/pull/42\n", "owner/target")).toBe(
       "https://github.com/owner/target/pull/42",
     );
   });
 
   it("finds a pull request url inside a list of text blocks", () => {
-    expect(prUrlFromToolResult([{ type: "text", text: "https://github.com/owner/target/pull/7 opened" }])).toBe(
-      "https://github.com/owner/target/pull/7",
-    );
+    expect(
+      prUrlFromToolResult([{ type: "text", text: "https://github.com/owner/target/pull/7 opened" }], "owner/target"),
+    ).toBe("https://github.com/owner/target/pull/7");
   });
 
   it("is null when there is no pull request url", () => {
-    expect(prUrlFromToolResult("nothing here")).toBeNull();
-    expect(prUrlFromToolResult(null)).toBeNull();
-    expect(prUrlFromToolResult(undefined)).toBeNull();
+    expect(prUrlFromToolResult("nothing here", "owner/target")).toBeNull();
+    expect(prUrlFromToolResult(null, "owner/target")).toBeNull();
+    expect(prUrlFromToolResult(undefined, "owner/target")).toBeNull();
+  });
+
+  it("ignores a pull request url of some other repository, even alongside this one's (Qodo on PR 123)", () => {
+    const text =
+      "See https://github.com/owner/other/pull/3 for background.\nCreated https://github.com/owner/target/pull/42";
+    expect(prUrlFromToolResult(text, "owner/target")).toBe("https://github.com/owner/target/pull/42");
+    expect(prUrlFromToolResult("Created https://github.com/owner/other/pull/3", "owner/target")).toBeNull();
   });
 });
 
@@ -1236,5 +1289,46 @@ describe("acquireLock (#107)", () => {
     const b = acquireLock(dir, () => false);
     expect(b.acquired).toBe(false);
     expect(b.note).toMatch(/already checking a stale lock/);
+  });
+
+  it("reports busy instead of crashing when a fresh tick wins the race for the just-cleared lock (Qodo on PR 123)", () => {
+    const dir = tmp();
+    const file = join(dir, "factory.lock");
+    writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    // Simulate another tick's own plain, mutex-free `wx` write landing in the gap this tick's stale
+    // takeover needs between clearing the old lock and writing its own: replace the path with something
+    // this tick's `rmSync` + `take()` can't cleanly recover from.
+    const raced = () => {
+      rmSync(file, { force: true });
+      mkdirSync(file);
+      return false;
+    };
+    const result = acquireLock(dir, raced);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/lost the race/);
+    // The recovery mutex is still released even though the takeover itself failed.
+    expect(existsSync(join(dir, "factory.lock.recovery"))).toBe(false);
+  });
+
+  it("a crashed recovery doesn't block every later tick forever: a stale recovery mutex is reclaimed", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    const recovery = join(dir, "factory.lock.recovery");
+    mkdirSync(recovery);
+    // Back-date it well past the staleness threshold, as if its owner crashed right after creating it.
+    const past = new Date(Date.now() - RECOVERY_STALE_MS - 5_000);
+    utimesSync(recovery, past, past);
+    const result = acquireLock(dir, () => false);
+    expect(result.acquired).toBe(true);
+    expect(result.note).toMatch(/took over a stale lock/);
+  });
+
+  it("does not reclaim a recovery mutex that is merely in use, however briefly, as stale", () => {
+    const dir = tmp();
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
+    mkdirSync(join(dir, "factory.lock.recovery"));
+    const result = acquireLock(dir, () => false);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/already checking a stale lock/);
   });
 });

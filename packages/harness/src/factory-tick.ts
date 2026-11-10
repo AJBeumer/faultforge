@@ -34,6 +34,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -128,10 +129,12 @@ export interface AgentRun {
 }
 
 /**
- * The pull request URL from a `gh pr create` step's tool result, or null. The content of a `tool_result`
- * message is either a plain string or a list of `{type: "text", text}` blocks.
+ * The pull request URL of exactly `github` from a `gh pr create` step's tool result, or null. The
+ * content of a `tool_result` message is either a plain string or a list of `{type: "text", text}` blocks.
+ * Other text in the same result (a path, a ticket excerpt the step happened to print) can contain a
+ * pull request URL of some other repository; only one of this ticket's own repo counts.
  */
-export function prUrlFromToolResult(content: unknown): string | null {
+export function prUrlFromToolResult(content: unknown, github: string): string | null {
   const text = Array.isArray(content)
     ? content
         .map((part) =>
@@ -139,7 +142,10 @@ export function prUrlFromToolResult(content: unknown): string | null {
         )
         .join("\n")
     : String(content ?? "");
-  return text.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/)?.[0] ?? null;
+  for (const match of text.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/\d+/g)) {
+    if (match[1]?.toLowerCase() === github.toLowerCase()) return match[0];
+  }
+  return null;
 }
 
 export interface Verification {
@@ -699,6 +705,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     runId = runIdFor(deps.now(), pick.repoKey, pick.number);
     const reviewed = repoConfig(factory, pick.repoKey).guard === "reviewed";
     const say = (body: string) => deps.comment(pick.github, pick.number, safeText(body, reviewed));
+    // relabel still adds the new label even when removing the old one failed (real side effects, below);
+    // that failure must never also stop the ticket from getting its comment or its final label here.
+    const relabel = (remove: string[], add: string[]) => {
+      try {
+        deps.relabel(pick.github, pick.number, remove, add);
+      } catch (error) {
+        log("error", {
+          message: `couldn't update the ticket's label: ${error instanceof Error ? error.message : error}`,
+        });
+      }
+    };
     log("picked", {
       repo: pick.repoKey,
       ticket: pick.number,
@@ -710,7 +727,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const owner = pick.github.split("/")[0] ?? "";
     if (pick.labelledBy.toLowerCase() !== owner.toLowerCase()) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      relabel([LABELS.ready], []);
       say(
         `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
       );
@@ -721,7 +738,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const authors = provenanceProblems(deps.snapshot(pick.github, pick.number).provenance, owner);
     if (authors.length) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], []);
+      relabel([LABELS.ready], []);
       say(
         `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
       );
@@ -732,7 +749,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const readiness = deps.ready(pick.repoKey, pick.number);
     if (readiness.problems.length) {
-      deps.relabel(pick.github, pick.number, [LABELS.ready], [LABELS.help]);
+      relabel([LABELS.ready], [LABELS.help]);
       say(
         `Not started: this ticket isn't ready yet.\n\n${readiness.problems.map((p) => `- ${p}`).join("\n")}\n\nFix the ticket and add \`${LABELS.ready}\` again.`,
       );
@@ -741,8 +758,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return "not-ready";
     }
 
-    deps.relabel(pick.github, pick.number, [LABELS.ready], [LABELS.working]);
     claimed = pick;
+    relabel([LABELS.ready], [LABELS.working]);
     say(
       `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
@@ -793,7 +810,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const finish: Finish = audit.length
       ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
       : settled;
-    deps.relabel(pick.github, pick.number, [LABELS.working], [finish.label]);
+    relabel([LABELS.working], [finish.label]);
     finalLabel = finish.label;
     const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
     say(
@@ -812,9 +829,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     log("error", { message, afterLabel: finalLabel });
     // Once the ticket has its final label, a later failure (saving, cleanup) must not add a second one.
+    // The relabel and the comment are tried independently: one failing must never also swallow the other,
+    // or the ticket is left agent-working with nothing alive to say why.
     if (claimed && !finalLabel) {
       try {
         deps.relabel(claimed.github, claimed.number, [LABELS.working], [LABELS.help]);
+      } catch (inner) {
+        log("error", {
+          message: `couldn't update the ticket's label: ${inner instanceof Error ? inner.message : inner}`,
+        });
+      }
+      try {
         const reviewed = repoConfig(factory, claimed.repoKey).guard === "reviewed";
         deps.comment(
           claimed.github,
@@ -950,6 +975,29 @@ export function isLabelAlreadyGone(error: unknown): boolean {
   return /HTTP 404/.test(error.stderr) && /label does not exist/i.test(error.stderr);
 }
 
+/**
+ * Removes each label with `removeOne`, then adds `add` with `addAll` - always, even when a removal
+ * failed - and only then throws the first removal failure that wasn't `isLabelAlreadyGone`. The caller
+ * must always get its new label, whether or not the old one could be taken off.
+ */
+export function relabelWith(
+  remove: string[],
+  add: string[],
+  removeOne: (label: string) => void,
+  addAll: (labels: string[]) => void,
+): void {
+  let problem: unknown = null;
+  for (const label of remove) {
+    try {
+      removeOne(label);
+    } catch (error) {
+      if (!isLabelAlreadyGone(error)) problem ??= error;
+    }
+  }
+  if (add.length) addAll(add);
+  if (problem) throw problem;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Real side effects
 
@@ -1008,12 +1056,58 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/** How long the stale-lock recovery section may run before its own mutex is itself treated as stale: it
+ * is a handful of synchronous file calls, never close to this, so only a crash mid-section leaves it
+ * held this long. */
+export const RECOVERY_STALE_MS = 60_000;
+
+/**
+ * Claims the stale-lock recovery mutex (a directory): `mkdir` is atomic, so the common case - nobody else
+ * is recovering - needs nothing more. If it's held, and old enough that its owner almost certainly
+ * crashed before reaching its own cleanup, this reclaims it: destroy-and-recreate is not atomic by
+ * itself, so every claimant writes its own pid into the directory and reads it back - if a second
+ * claimant's destroy-and-recreate interleaves first, this claimant's read-back won't match what it wrote,
+ * and it correctly reports losing, never a false double claim.
+ */
+function claimRecoveryMutex(dir: string): boolean {
+  const claim = (): boolean => {
+    const marker = join(dir, "claim");
+    try {
+      writeFileSync(marker, String(process.pid));
+      return readFileSync(marker, "utf8") === String(process.pid);
+    } catch {
+      return false;
+    }
+  };
+  try {
+    mkdirSync(dir);
+    return claim();
+  } catch {
+    // Fallen through: the directory already exists, in use or abandoned.
+  }
+  let ageMs = Number.POSITIVE_INFINITY;
+  try {
+    ageMs = Date.now() - statSync(dir).mtimeMs;
+  } catch {
+    return false; // Vanished while checking: another tick is finishing with it right now.
+  }
+  if (ageMs < RECOVERY_STALE_MS) return false;
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir);
+  } catch {
+    return false; // Lost the race to reclaim it too.
+  }
+  return claim();
+}
+
 /**
  * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
  * an unheld lock can never both get it. Taking over a *stale* one (its pid is dead) is not naturally
- * atomic - removing the old file and writing the new one are two steps - so it is gated by a second,
- * genuinely atomic mutex (a directory `mkdir`): only one tick may ever be in that two-step section at a
- * time. A tick that loses the race for the mutex reports busy, exactly as it would for a live holder.
+ * atomic - removing the old file and writing the new one are two steps - so it is gated by
+ * `claimRecoveryMutex`: only one tick may ever be in that two-step section at a time. A tick that loses
+ * that race, or that then loses the race to take the now-freed lock itself (a third tick's own fresh,
+ * unrelated `wx` write can land first), reports busy, exactly as it would for a live holder.
  */
 export function acquireLock(
   dir: string,
@@ -1030,9 +1124,7 @@ export function acquireLock(
   } catch {
     // Fallen through: something is already at `file`, live or stale.
   }
-  try {
-    mkdirSync(recovery);
-  } catch {
+  if (!claimRecoveryMutex(recovery)) {
     return { acquired: false, release: () => {}, note: "another run is already checking a stale lock" };
   }
   try {
@@ -1044,8 +1136,14 @@ export function acquireLock(
     }
     if (held.pid && isAlive(held.pid))
       return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
-    rmSync(file, { force: true });
-    take();
+    // A fresh tick's plain `wx` write needs no mutex, so it can land in the gap between clearing the
+    // stale lock and taking it: either step failing here means losing that race, never a crash.
+    try {
+      rmSync(file, { force: true });
+      take();
+    } catch {
+      return { acquired: false, release: () => {}, note: "lost the race to take over a stale lock" };
+    }
     return {
       acquired: true,
       release,
@@ -1181,14 +1279,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       return file;
     },
     relabel(github, number, remove, add) {
-      for (const label of remove) {
-        try {
-          gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`);
-        } catch (error) {
-          if (!isLabelAlreadyGone(error)) throw error;
-        }
-      }
-      if (add.length) gh("issue", "edit", String(number), "--repo", github, ...add.flatMap((l) => ["--add-label", l]));
+      relabelWith(
+        remove,
+        add,
+        (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
+        (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
+      );
     },
     comment: (github, number, body) => {
       gh("issue", "comment", String(number), "--repo", github, "--body", body);
@@ -1285,6 +1381,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       return [...problems, ...windowProblems({ comments, ticketEvents, reviews }, owner, from, to)];
     },
     runAgent(ws, runId, repoKey, number, ticketFile, log) {
+      const { github } = repoConfig(factory, repoKey);
       const settingsFile = join(ws.root, "agent-settings.json");
       writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: DENY } }, null, 2));
       // An empty MCP config, used with --strict-mcp-config: the agent reaches no MCP server of this machine.
@@ -1349,7 +1446,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
               const step = commands.get(part.tool_use_id ?? "");
               log("agent-step-result", { step, error: Boolean(part.is_error) });
               if (step === "pr-opened" && !part.is_error) {
-                const url = prUrlFromToolResult(part.content);
+                const url = prUrlFromToolResult(part.content, github);
                 if (url) lastPr = url;
               }
             }
