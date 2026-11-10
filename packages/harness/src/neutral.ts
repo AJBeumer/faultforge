@@ -25,19 +25,28 @@ export function telltales(text: string): string[] {
 /**
  * The reasons a bug template would give its case away, as `field: reason`, over every field that reaches
  * the reviewed repository: the branch name and commit message, the text it looks for and the text it
- * writes (`find`, `replace`). The proof test stays in private storage, so its name is not checked. An
- * empty list means the template reads as an ordinary change.
+ * writes (`find`, `replace`), and, when the template declares one, its ticket's title, `what` and
+ * criteria — the target ticket the case PR will claim to make. The proof test stays in private storage,
+ * so its name is not checked. An empty list means the template reads as an ordinary change.
  */
 export function templateTelltales(template: {
   find: string;
   replace: string;
   publish: { branch: string; commitMessage: string };
+  ticket?: { title: string; what: string; criteria: string[] };
 }): string[] {
   const fields: [string, string][] = [
     ["branch", template.publish.branch],
     ["commitMessage", template.publish.commitMessage],
     ["find", template.find],
     ["replace", template.replace],
+    ...(template.ticket
+      ? ([
+          ["ticket.title", template.ticket.title],
+          ["ticket.what", template.ticket.what],
+          ...template.ticket.criteria.map((c, i): [string, string] => [`ticket.criteria[${i}]`, c]),
+        ] as [string, string][])
+      : []),
   ];
   return fields.flatMap(([field, text]) => telltales(text).map((reason) => `${field}: ${reason}`));
 }

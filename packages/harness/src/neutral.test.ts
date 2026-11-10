@@ -54,4 +54,25 @@ describe("templateTelltales (#105)", () => {
       templateTelltales({ ...template, publish: { branch: "FF-0002-fix", commitMessage: "Fix planted bug" } }),
     ).toEqual(["branch: contains a case id", "commitMessage: says planted"]);
   });
+
+  it("checks the ticket's title, what and criteria, the target ticket the case PR will claim to make", () => {
+    const withTicket = {
+      ...template,
+      ticket: {
+        title: "Simplify replay lookup",
+        what: "Read the booking id straight off the record.",
+        criteria: ["Replays still return the original booking."],
+      },
+    };
+    expect(templateTelltales(withTicket)).toEqual([]);
+    expect(templateTelltales({ ...withTicket, ticket: { ...withTicket.ticket, title: "Fix planted bug" } })).toEqual([
+      "ticket.title: says planted",
+    ]);
+    expect(templateTelltales({ ...withTicket, ticket: { ...withTicket.ticket, what: "See the answer key" } })).toEqual([
+      "ticket.what: mentions the answer key",
+    ]);
+    expect(
+      templateTelltales({ ...withTicket, ticket: { ...withTicket.ticket, criteria: ["Closes FF-0002"] } }),
+    ).toEqual(["ticket.criteria[0]: contains a case id"]);
+  });
 });

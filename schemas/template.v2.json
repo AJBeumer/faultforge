@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AJBeumer/faultforge/blob/main/schemas/template.v2.json",
+  "title": "FaultForge template, version 2",
+  "description": "Everything one case needs: its kind, every invariant the change breaks with a proof test for each, the match terms and the target ticket the case PR will claim to make.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "summary", "file", "find", "replace", "publish", "ticket"],
+  "allOf": [
+    {
+      "if": { "required": ["kind"], "properties": { "kind": { "const": "bug" } } },
+      "then": { "required": ["invariantId", "defectClass", "proofTest", "match", "alsoBreaks"] }
+    },
+    {
+      "if": { "required": ["kind"], "properties": { "kind": { "const": "control" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["invariantId"] },
+            { "required": ["defectClass"] },
+            { "required": ["proofTest"] },
+            { "required": ["match"] },
+            { "required": ["alsoBreaks"] }
+          ]
+        }
+      }
+    }
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 2 },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "kind": { "enum": ["bug", "control"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "file": { "type": "string", "minLength": 1 },
+    "find": { "type": "string", "minLength": 1 },
+    "replace": { "type": "string" },
+    "invariantId": { "type": "string", "minLength": 1 },
+    "defectClass": { "type": "string", "minLength": 1 },
+    "proofTest": { "type": "string", "minLength": 1 },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kindTerms"],
+      "properties": {
+        "kindTerms": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "alsoBreaks": {
+      "description": "Other invariants the same change breaks, each with its own proof test. May be empty.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invariantId", "proofTest"],
+        "properties": {
+          "invariantId": { "type": "string", "minLength": 1 },
+          "proofTest": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "commitMessage"],
+      "properties": {
+        "branch": { "type": "string", "minLength": 1 },
+        "commitMessage": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ticket": {
+      "description": "The target ticket the case PR will claim to make: ordinary development work, never the bug.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "what", "criteria"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "what": { "type": "string", "minLength": 1 },
+        "criteria": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

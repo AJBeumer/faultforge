@@ -3,10 +3,13 @@
  * which plants a case from a template, and match.ts, which applies the rule to a case record, so both
  * read the same template for the same id.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Ajv2020 } from "ajv/dist/2020.js";
 
 const ROOT = join(import.meta.dirname, "../../..");
+const templateSchema = JSON.parse(readFileSync(join(ROOT, "schemas/template.v2.json"), "utf8"));
+const templateSchemaCheck = new Ajv2020({ allErrors: true }).compile(templateSchema);
 
 /** Private storage: `FAULTFORGE_PRIVATE_DIR`, or `private/` in this repository. */
 export function privateDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -42,4 +45,21 @@ export function kindTermsOf(template: unknown, where: string): string[] {
     throw new Error(`${where} must declare match.kindTerms as a non-empty list of non-blank strings`);
   }
   return terms;
+}
+
+/**
+ * Problems with a template against the version-2 schema, in plain words, or an empty list when it's
+ * valid. The first word of each problem names the field: the root for a missing property, the property
+ * itself for a bad value or an unknown one. Checked before anything else: `inject` refuses a template
+ * that fails here without planting anything, and `--validate-only` never gets past it either.
+ */
+export function templateProblems(template: unknown): string[] {
+  if (templateSchemaCheck(template)) return [];
+  return (templateSchemaCheck.errors ?? []).map((e) => {
+    if (e.keyword === "additionalProperties") {
+      const unknown = (e.params as { additionalProperty: string }).additionalProperty;
+      return `${e.instancePath || "/"}: unknown property "${unknown}"`;
+    }
+    return `${e.instancePath || "/"} ${e.message}`;
+  });
 }
