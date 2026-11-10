@@ -35,7 +35,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { templateTelltales } from "./neutral.ts";
-import { type Outcome, outcomeOf } from "./run-outcome.ts";
+import { type Outcome, outcomeOf, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
 interface AlsoBreaks {
@@ -189,10 +189,12 @@ try {
     failure = "typecheck did not finish, so the mutation is not validated";
   } else if (!validateOnly && typecheck === "fail") {
     failure = "variant does not typecheck";
-  } else if (!validateOnly && template.kind === "control" && publicTests === "not_run") {
-    // A control has no proof to anchor it as harmless; the public tests are what stand in for one.
-    failure = "public tests did not finish, so this is not a clean control";
+  } else if (!validateOnly && publicTests === "not_run") {
+    // Missing for either kind: a bug case with no evidence on its public tests is as unvalidated as
+    // one with a failing proof, and a control has no proof at all to fall back on.
+    failure = "public tests did not finish, so the mutation is not validated";
   } else if (!validateOnly && template.kind === "control" && publicTests === "fail") {
+    // A control has no proof to anchor it as harmless; the public tests are what stand in for one.
     failure = "control variant fails the public tests, so it is not a clean control";
   }
 
@@ -346,11 +348,7 @@ function runStep(
 ): Outcome {
   const result = run(cmd, cmdArgs, cwd, env);
   const outcome = outcomeOf(result);
-  const errorLine = result.error ? `\n${outcome}: ${result.error.message}` : "";
-  writeFileSync(
-    join(artefactDir, `${name}.log`),
-    `$ ${cmdArgs.join(" ")}\nexit ${result.status}\n\n${result.stdout}${result.stderr}${errorLine}`,
-  );
+  writeFileSync(join(artefactDir, `${name}.log`), stepLogText(cmdArgs, result, outcome));
   return outcome;
 }
 
@@ -361,7 +359,13 @@ function run(cmd: string, cmdArgs: string[], cwd: string, env: Record<string, st
     env: { ...process.env, ...env, NO_COLOR: "1" },
     timeout: 120_000,
   });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error };
+  return {
+    status: result.status,
+    signal: result.signal,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error,
+  };
 }
 
 function git(...gitArgs: string[]): string {
