@@ -138,7 +138,9 @@ describe("stale premises (#147)", () => {
   it("reports a ticket whose Notes name a file the checkout doesn't have", () => {
     const body = `${ready}\n\n### Notes\n- Extend \`packages/harness/src/no-such-file.ts\`; reuse \`loadFactory()\`.`;
     const result = checkTicket(factory, "faultforge", 1, fakeGh(body), () => LAB_ROOT);
-    expect(result.problems).toEqual(["stale premise: packages/harness/src/no-such-file.ts (path) not found"]);
+    expect(result.problems).toEqual([
+      "stale premise: packages/harness/src/no-such-file.ts (path) not found on origin/main of the ticket's repo or 1 sibling repo",
+    ]);
   });
 
   it("accepts a ticket whose premises all exist, and never checks its Done when", () => {

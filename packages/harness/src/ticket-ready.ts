@@ -91,12 +91,16 @@ export function checkTicket(
     (n) => !linked.includes(n) && run("api", `repos/${repo}/issues/${n}`, "--jq", ".state").trim() === "open",
   );
   const blockers = [...linked, ...written].sort((a, b) => a - b);
-  // The first required section and the checklist describe what the ticket delivers, not what it assumes.
+  // The first required section, the checklist and Out of scope describe what the ticket will or won't deliver, not what it assumes.
   // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.
   const siblings = Object.entries(factory.repos)
     .filter(([key]) => key !== repoKey)
     .map(([, repo]) => checkoutOf(repo.path));
-  const stale = premiseProblems(premisesOf(body, [sections.sections[0] ?? "", sections.checklist]), checkout, siblings);
+  const stale = premiseProblems(
+    premisesOf(body, [sections.sections[0] ?? "", sections.checklist, "Out of scope"]),
+    checkout,
+    siblings,
+  );
   return { title: issue.title, problems: readinessProblems(body, sections, blockers, stale) };
 }
 

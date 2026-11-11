@@ -1,27 +1,36 @@
 /**
- * A ticket's premises: the repository paths, file names, npm scripts and exported functions it names
- * in backticks as things that already exist. Each one is checked against a checkout before the factory
- * builds the ticket, so a work order written against a file that was deleted, a helper that no longer
- * exists or a script that never existed is reported as "stale premise" instead of being built on (#147).
+ * A ticket's premises: the repository paths, file names, npm scripts and functions it names in
+ * backticks as things that already exist. Each one is checked against `origin/main` of the repo's
+ * checkout, the revision an unattended run builds from, before the factory builds the ticket. A work
+ * order written against a file that was deleted, a helper that no longer exists or a script that never
+ * existed is reported as "stale premise" instead of being built on (#147).
  *
  * What counts as a premise: a backtick token outside fenced code blocks and `<details>` blocks (kept
- * original wording), outside the ticket's deliverable sections (the first required section and the
- * checklist, which describe what will exist afterwards), and not introduced by "new", "create", "add"
- * or "gain" in the same sentence. A path with a `/` must exist at that path; a bare file name such as
- * `inject.ts` must exist somewhere in the checkout. A premise that the ticket's own repo lacks but a
- * sibling repo of the factory has (a lab ticket naming the target's `INVARIANTS.md`) is not stale.
- * Paths under `private/` are skipped: that repository isn't part of a CI checkout. Used by
- * `ticket-ready.ts`; no network.
+ * original wording), outside the ticket's deliverable sections (the first required section, the
+ * checklist and "Out of scope", which describe what will or will not exist afterwards), and not
+ * introduced by "new", "create", "add" or "gain" in the same clause. A path with a `/` must be in
+ * main's tree at that path; a bare file name such as `inject.ts` must be in the tree somewhere, or in
+ * the private storage folder beside the checkout, which is never committed. A function must be
+ * declared, exported or imported somewhere in main's source files. A premise that the ticket's own
+ * repo lacks but a sibling repo of the factory has (a lab ticket naming the target's `INVARIANTS.md`)
+ * is not stale. Everything is read through `git`, never from the working tree, so the owner's branch
+ * and uncommitted files can't change the verdict. Used by `ticket-ready.ts`; no network.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { type Dirent, existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 
 export type PremiseKind = "path" | "file" | "script" | "function";
 export type Premise = { token: string; kind: PremiseKind };
 
-/** The body without fenced code blocks and `<details>` blocks, so examples and kept wording can't count. */
+/** The revision every premise is checked against: what a fresh run checks out. */
+export const MAIN_REF = "origin/main";
+
+/** The body without fenced code blocks (indented or not) and `<details>` blocks, so examples and kept wording can't count. */
 export function proseOf(body: string): string {
-  return body.replace(/^(```|~~~)[\s\S]*?^\1\s*$/gm, "").replace(/<details>[\s\S]*?<\/details>/gi, "");
+  return body
+    .replace(/^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[ \t]*$/gm, "")
+    .replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, "");
 }
 
 /** A ticket's `###` sections by lower-case name, from its prose. */
@@ -37,22 +46,46 @@ const PATH = /^\.?[\w.@-]+(?:\/[\w.@-]+)+\.[a-z][a-z0-9]*$/i;
 /** A bare file name with a source, data or doc extension, such as `inject.ts` or `CLAUDE.md`. */
 const FILE = /^[\w.@-]+\.(?:ts|mts|js|mjs|cjs|json|jsonl|md|yml|yaml|txt|sh|ps1)$/i;
 const FUNCTION = /^[A-Za-z_$][\w$]*\(\)$/;
-const SCRIPT = /^[a-z][\w-]*:[a-z][\w-]*$/;
+const SCRIPT = /^([a-z][\w-]*):[a-z][\w-]*$/;
+/** `a:b` tokens that are module specifiers or search qualifiers, never npm scripts. */
+const NOT_SCRIPTS = new Set([
+  "node",
+  "npm",
+  "bun",
+  "http",
+  "https",
+  "git",
+  "mailto",
+  "is",
+  "label",
+  "state",
+  "repo",
+  "sort",
+  "author",
+  "assignee",
+  "milestone",
+  "type",
+  "org",
+  "user",
+  "no",
+  "in",
+]);
 const NPM_RUN = /^npm run (?:-s )?([\w:-]+)/;
-/** Words that announce something the ticket will create, read from the sentence before the token. */
-const INTRODUCES = /\b(?:new|creates?|created|adds?|added|gains?|introduces?|introduced|writes?)\b[^`.]*$/i;
+/** Words that announce something the ticket will create, read from the same clause before the token. */
+const INTRODUCES = /\b(?:new|creates?|created|adds?|added|gains?|introduces?|introduced|writes?)\b[^`.\n;:]*$/i;
 
 /** One premise from one backtick token, or null when the token isn't a checkable claim. */
 export function classify(token: string): Premise | null {
   const text = token.trim();
-  if (!text || /[<>*\s]/.test(text.replace(/^npm run (?:-s )?/, "")) || text.includes("://")) return null;
   const run = NPM_RUN.exec(text);
   if (run?.[1]) return { token: run[1], kind: "script" };
-  const path = text.replace(/:\d+(?:-\d+)?$/, "");
+  if (!text || /[<>*\s]/.test(text) || text.includes("://")) return null;
+  const path = text.replace(/^\.\//, "").replace(/:\d+(?:-\d+)?$/, "");
   if (PATH.test(path)) return path.startsWith("private/") ? null : { token: path, kind: "path" };
   if (FILE.test(path)) return { token: path, kind: "file" };
   if (FUNCTION.test(text)) return { token: text.slice(0, -2), kind: "function" };
-  if (SCRIPT.test(text)) return { token: text, kind: "script" };
+  const script = SCRIPT.exec(text);
+  if (script?.[1] && !NOT_SCRIPTS.has(script[1])) return { token: text, kind: "script" };
   return null;
 }
 
@@ -80,47 +113,95 @@ export function premisesOf(body: string, deliverables: string[]): Premise[] {
   return premises;
 }
 
-const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "private", "coverage"]);
-
-/** Every file under a checkout, skipping dependencies, build output and private storage. */
-function allFiles(dir: string, found: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (SKIPPED_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) allFiles(full, found);
-    else found.push(full);
-  }
-  return found;
+function git(checkout: string, args: string[]): string {
+  return execFileSync("git", ["-C", checkout, ...args], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
-/** Names exported as `export function`, `export async function`, `export const` or `export let` in any source file. */
-export function exportedNames(checkout: string): Set<string> {
+/** Every path in the tree at `ref`, or a clear error when the checkout has no such revision. */
+function treePaths(checkout: string, ref: string): string[] {
+  try {
+    return git(checkout, ["ls-tree", "-r", "--name-only", ref]).split("\n").filter(Boolean);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    throw new Error(`cannot read ${ref} in ${checkout}: ${detail}`);
+  }
+}
+
+const SOURCE_GLOBS = ["*.ts", "*.mts", "*.js", "*.mjs", "*.cjs"];
+const DECLARATION = /(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g;
+
+/** Names in one `export { a, b as c }` or `import { a as b, c }` list: both sides of every alias. */
+function bracedNames(list: string): string[] {
+  return list
+    .split(",")
+    .flatMap((part) => part.split(/\s+as\s+/))
+    .map((name) => name.replace(/^type\s+/, "").trim())
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+}
+
+/**
+ * Every function-like name a source file at `ref` declares, exports or imports. A ticket that names
+ * `main()` (declared, not exported) or `existsSync()` (imported from Node) states a true premise.
+ */
+function sourceNames(checkout: string, ref: string): Set<string> {
   const names = new Set<string>();
-  for (const file of allFiles(checkout).filter((f) => /\.(?:ts|mts|js|mjs)$/.test(f))) {
-    for (const match of readFileSync(file, "utf8").matchAll(
-      /^export\s+(?:async\s+)?(?:function|const|let)\s+([\w$]+)/gm,
-    )) {
-      if (match[1]) names.add(match[1]);
-    }
+  let lines: string;
+  try {
+    const pattern = String.raw`^\s*((export\s+)?(default\s+)?(async\s+)?(function|const|let|var|class)\s|export\s*\{|import\s)`;
+    lines = git(checkout, ["grep", "-h", "-I", "-E", pattern, ref, "--", ...SOURCE_GLOBS]);
+  } catch {
+    return names; // git grep exits 1 when nothing matches
+  }
+  for (const line of lines.split("\n")) {
+    for (const match of line.matchAll(DECLARATION)) if (match[1]) names.add(match[1]);
+    const braces = /(?:export|import)\s*(?:type\s*)?\{([^}]*)\}/.exec(line);
+    if (braces?.[1]) for (const name of bracedNames(braces[1])) names.add(name);
+    const defaults = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:,|from)/.exec(line);
+    if (defaults?.[1]) names.add(defaults[1]);
+    const star = /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(line);
+    if (star?.[1]) names.add(star[1]);
   }
   return names;
 }
 
-/** The checkout's npm scripts, or an empty set when it has no package.json. */
-export function scriptNames(checkout: string): Set<string> {
-  const file = join(checkout, "package.json");
-  if (!existsSync(file)) return new Set();
-  const scripts = (JSON.parse(readFileSync(file, "utf8")) as { scripts?: Record<string, string> }).scripts ?? {};
-  return new Set(Object.keys(scripts));
+/** The scripts of `package.json` at `ref`, or none when the checkout has no package.json there. */
+function scriptNames(checkout: string, ref: string): Set<string> {
+  try {
+    const pkg = JSON.parse(git(checkout, ["show", `${ref}:package.json`])) as { scripts?: Record<string, string> };
+    return new Set(Object.keys(pkg.scripts ?? {}));
+  } catch {
+    return new Set();
+  }
 }
 
-/** Every file name (without its folder) in the checkout. */
-export function fileNames(checkout: string): Set<string> {
-  return new Set(allFiles(checkout).map((f) => basename(f)));
+/** File names under the private storage folder beside a checkout, which git never holds. Symlinks are not followed. */
+function privateFileNames(checkout: string, depth = 4): Set<string> {
+  const names = new Set<string>();
+  const walk = (dir: string, left: number) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || entry.name === ".git" || entry.name === "node_modules") continue;
+      if (entry.isDirectory()) {
+        if (left > 0) walk(join(dir, entry.name), left - 1);
+      } else names.add(entry.name);
+    }
+  };
+  const privateDir = join(checkout, "private");
+  if (existsSync(privateDir)) walk(privateDir, depth);
+  return names;
 }
 
-/** What one checkout holds, each list read at most once and only when a premise needs it. */
-function holdings(checkout: string) {
+/** What one checkout holds at `ref`, each list read at most once and only when a premise needs it. */
+function holdings(checkout: string, ref: string): (premise: Premise) => boolean {
   const cache = new Map<string, Set<string>>();
   const lookup = (key: string, load: () => Set<string>): Set<string> => {
     const cached = cache.get(key);
@@ -129,30 +210,44 @@ function holdings(checkout: string) {
     cache.set(key, loaded);
     return loaded;
   };
+  const paths = () => lookup("paths", () => new Set(treePaths(checkout, ref)));
   return (premise: Premise): boolean => {
     switch (premise.kind) {
       case "path":
-        return existsSync(join(checkout, premise.token));
+        return paths().has(premise.token);
       case "file":
-        return lookup("files", () => fileNames(checkout)).has(premise.token);
+        return (
+          lookup("names", () => new Set([...paths()].map((p) => basename(p)))).has(premise.token) ||
+          lookup("private", () => privateFileNames(checkout)).has(premise.token)
+        );
       case "script":
-        return lookup("scripts", () => scriptNames(checkout)).has(premise.token);
+        return lookup("scripts", () => scriptNames(checkout, ref)).has(premise.token);
       default:
-        return lookup("exports", () => exportedNames(checkout)).has(premise.token);
+        return lookup("functions", () => sourceNames(checkout, ref)).has(premise.token);
     }
   };
 }
 
 /**
- * One problem line per premise no checkout satisfies, in the ticket's order. `siblings` are the other
- * repos' checkouts (those that exist): a premise found there is a cross-repo mention, not a stale one.
+ * One problem line per premise no checkout satisfies at `ref`, in the ticket's order, naming where it
+ * was looked for. `siblings` are the other repos' checkouts (those that exist): a premise found there
+ * is a cross-repo mention, not a stale one.
  */
-export function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {
-  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);
+export function premiseProblems(
+  premises: Premise[],
+  checkout: string,
+  siblings: string[] = [],
+  ref = MAIN_REF,
+): string[] {
+  const present = siblings.filter((dir) => existsSync(dir));
+  const holders = [checkout, ...present].map((dir) => holdings(dir, ref));
+  const where = `not found on ${ref} of the ticket's repo${
+    present.length ? ` or ${present.length} sibling repo${present.length > 1 ? "s" : ""}` : ""
+  }`;
   const problems: string[] = [];
   for (const premise of premises) {
     if (holders.some((has) => has(premise))) continue;
-    problems.push(`stale premise: ${premise.token} (${premise.kind}) not found`);
+    problems.push(`stale premise: ${premise.token} (${premise.kind}) ${where}`);
   }
   return problems;
 }

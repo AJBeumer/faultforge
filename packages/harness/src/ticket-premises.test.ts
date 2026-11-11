@@ -1,30 +1,49 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { classify, exportedNames, premiseProblems, premisesOf, proseOf, scriptNames } from "./ticket-premises.ts";
+import { classify, premiseProblems, premisesOf, proseOf } from "./ticket-premises.ts";
 
 const DELIVERABLES = ["Result", "Done when"];
 
-/** A checkout with one script, one source file with two exports, one doc and a private folder. */
+function git(dir: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", dir, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+}
+
+/** A git checkout whose `origin/main` holds the committed files. */
+function repo(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), "premises-"));
+  git(dir, "init", "-q", "-b", "main");
+  git(dir, "config", "user.email", "t@example.org");
+  git(dir, "config", "user.name", "t");
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), content);
+  }
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "main");
+  git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
+  return dir;
+}
+
+/** The ticket's repo: one script family, a module with exports, an imported builtin, a doc, private storage. */
 let checkout: string;
 beforeAll(() => {
-  checkout = mkdtempSync(join(tmpdir(), "premises-"));
-  mkdirSync(join(checkout, "src"), { recursive: true });
-  mkdirSync(join(checkout, "docs"), { recursive: true });
-  mkdirSync(join(checkout, "node_modules", "dep"), { recursive: true });
+  checkout = repo({
+    "package.json": JSON.stringify({ scripts: { check: "vitest", "ticket:ready": "tsx x" } }),
+    "src/helpers.ts":
+      'import { existsSync } from "node:fs";\nexport function privateDir() {}\nexport const loadFactory = () => 1;\nfunction hidden() {}\nexport default function entry() {}\nexport { hidden as shown };\n',
+    "src/main.js": "export class Runner {}\n",
+    "docs/guide.md": "# guide\n",
+  });
+  // The working tree differs from origin/main: a file main lacks, and private storage, which is never committed.
+  writeFileSync(join(checkout, "src", "only-in-tree.ts"), "export function onlyInTree() {}\n");
   mkdirSync(join(checkout, "private"), { recursive: true });
-  writeFileSync(
-    join(checkout, "package.json"),
-    JSON.stringify({ scripts: { check: "vitest", "ticket:ready": "tsx x" } }),
-  );
-  writeFileSync(
-    join(checkout, "src", "helpers.ts"),
-    "export function privateDir() {}\nexport const loadFactory = () => 1;\nfunction hidden() {}\n",
-  );
-  writeFileSync(join(checkout, "node_modules", "dep", "index.js"), "export function fromDependency() {}\n");
-  writeFileSync(join(checkout, "docs", "guide.md"), "# guide\n");
-  writeFileSync(join(checkout, "private", "secret.json"), "{}");
+  writeFileSync(join(checkout, "private", "BACKLOG.md"), "- todo\n");
 });
 
 const ticket = (notes: string, done = "- [ ] New `src/report.ts` prints it") => `### Result
@@ -38,6 +57,11 @@ ${done}
 
 ### Notes
 ${notes}`;
+
+const problems = (notes: string, siblings: string[] = []) =>
+  premiseProblems(premisesOf(ticket(notes), DELIVERABLES), checkout, siblings);
+
+const HERE = "not found on origin/main of the ticket's repo";
 
 describe("premisesOf", () => {
   it("finds a path, a script and a function named as existing things", () => {
@@ -55,7 +79,7 @@ describe("premisesOf", () => {
     expect(premisesOf(body, DELIVERABLES)).toEqual([{ token: "check", kind: "script" }]);
   });
 
-  it("skips a token the sentence introduces as new", () => {
+  it("skips a token the same sentence introduces as new", () => {
     const body = ticket("Add a new `src/report.ts` beside `src/helpers.ts`; it gains `report()`.");
     expect(premisesOf(body, DELIVERABLES)).toEqual([
       { token: "check", kind: "script" },
@@ -63,18 +87,31 @@ describe("premisesOf", () => {
     ]);
   });
 
-  it("ignores tokens inside code blocks and details blocks", () => {
+  it("stops the 'new' look-back at the end of the line or clause (blind review 2, Qodo 10)", () => {
+    const body = ticket("- Adds a dry-run flag\n- Reads `src/gone.ts` for the list; also `src/helpers.ts`");
+    expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check", "src/gone.ts", "src/helpers.ts"]);
+  });
+
+  it("ignores tokens inside code blocks, indented code blocks and details blocks with attributes (Qodo 9, blind 10)", () => {
     const body = ticket(
-      "Assumes `src/helpers.ts`.\n\n```\nsee `src/gone.ts`\n```\n\n<details>\n<summary>Original</summary>\nused `old:script`\n</details>",
+      "Assumes `src/helpers.ts`.\n\n```\nsee `src/gone.ts`\n```\n\n- item\n  ```md\n  `src/also-gone.ts`\n  ```\n\n<details open>\n<summary>Original</summary>\nused `old:script`\n</details>",
     );
     expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check", "src/helpers.ts"]);
   });
 
-  it("skips private paths, URLs, placeholders and directories", () => {
+  it("skips private paths, with or without a leading ./, URLs, placeholders and directories (Qodo 3)", () => {
     const body = ticket(
-      "Snapshot in `private/config/qodo-v6/rules.json`; see `https://example.org/a.md`, `raw-artifacts/<ts>/x.json`, `packages/harness/src/`.",
+      "Snapshot in `private/config/qodo-v6/rules.json` or `./private/x.json`; see `https://example.org/a.md`, `raw-artifacts/<ts>/x.json`, `packages/harness/src/`.",
     );
     expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check"]);
+  });
+
+  it("skips the Out of scope section, which names what will not exist (blind 12)", () => {
+    const body = `${ticket("Reads `src/helpers.ts`.")}\n\n### Out of scope\n- A \`premise:fix\` script and \`docs/premises.md\``;
+    expect(premisesOf(body, [...DELIVERABLES, "Out of scope"]).map((p) => p.token)).toEqual([
+      "check",
+      "src/helpers.ts",
+    ]);
   });
 
   it("strips a line reference from a path", () => {
@@ -85,9 +122,24 @@ describe("premisesOf", () => {
     expect(classify("src/a.ts:10-12")).toEqual({ token: "src/a.ts", kind: "path" });
   });
 
-  it("reads the script name out of npm run", () => {
+  it("reads the script name out of npm run, with or without arguments (Qodo 4, blind 4)", () => {
     expect(classify("npm run qodo:check")).toEqual({ token: "qodo:check", kind: "script" });
     expect(classify("npm run -s check")).toEqual({ token: "check", kind: "script" });
+    expect(classify("npm run test:integration -- --runInBand")).toEqual({ token: "test:integration", kind: "script" });
+    expect(classify("npm run ticket:ready -- faultforge 47")).toEqual({ token: "ticket:ready", kind: "script" });
+  });
+
+  it("does not read a module specifier or a search qualifier as an npm script (blind 3)", () => {
+    for (const token of [
+      "node:fs",
+      "node:child_process",
+      "is:open",
+      "label:ready-for-agent",
+      "state:open",
+      "repo:a-b",
+    ]) {
+      expect(classify(token)).toBeNull();
+    }
   });
 
   it("names each premise once", () => {
@@ -96,88 +148,91 @@ describe("premisesOf", () => {
   });
 
   it("leaves prose, commands with spaces and plain words alone", () => {
-    for (const token of ["git -C private", "main", "FAULTFORGE_PRIVATE_DIR", "Done when", "x = 1"]) {
+    for (const token of ["git -C private", "main", "FAULTFORGE_PRIVATE_DIR", "Done when", "x = 1", "2.2.0", "e.g."]) {
       expect(classify(token)).toBeNull();
     }
   });
+
+  it("classifies a bare file name", () => {
+    expect(classify("inject.ts")).toEqual({ token: "inject.ts", kind: "file" });
+    expect(classify("CLAUDE.md")).toEqual({ token: "CLAUDE.md", kind: "file" });
+  });
 });
 
-describe("premiseProblems", () => {
-  it("reports nothing when every premise holds", () => {
-    const body = ticket("Reuse `privateDir()` and `loadFactory()` from `src/helpers.ts`; `docs/guide.md` explains it.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([]);
+describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind 1)", () => {
+  it("reports nothing when every premise is on main", () => {
+    expect(
+      problems(
+        "Reuse `privateDir()` and `loadFactory()` from `src/helpers.ts`; `docs/guide.md` and `helpers.ts` explain it.",
+      ),
+    ).toEqual([]);
   });
 
-  it("reports a missing file", () => {
-    const body = ticket("Extend the existing `src/vitest.config.test.ts`.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: src/vitest.config.test.ts (path) not found",
+  it("reports a file that exists only in the working tree, because the run builds from main", () => {
+    expect(problems("Extend `src/only-in-tree.ts` and reuse `onlyInTree()`.")).toEqual([
+      `stale premise: src/only-in-tree.ts (path) ${HERE}`,
+      `stale premise: onlyInTree (function) ${HERE}`,
+    ]);
+  });
+
+  it("reports a missing file by path and by bare name", () => {
+    expect(problems("Extend the existing `src/vitest.config.test.ts` and `vitest.config.test.ts`.")).toEqual([
+      `stale premise: src/vitest.config.test.ts (path) ${HERE}`,
+      `stale premise: vitest.config.test.ts (file) ${HERE}`,
     ]);
   });
 
   it("reports a missing script", () => {
-    const body = ticket("`qodo:check` runs first; `npm run mutation:check` after.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: qodo:check (script) not found",
-      "stale premise: mutation:check (script) not found",
+    expect(problems("`qodo:check` runs first; `npm run mutation:check -- --all` after.")).toEqual([
+      `stale premise: qodo:check (script) ${HERE}`,
+      `stale premise: mutation:check (script) ${HERE}`,
     ]);
   });
 
-  it("reports a missing function, and does not count exports under node_modules or non-exported ones", () => {
-    const body = ticket("Copy `resolvePrivate()`; `fromDependency()` and `hidden()` are elsewhere.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: resolvePrivate (function) not found",
-      "stale premise: fromDependency (function) not found",
-      "stale premise: hidden (function) not found",
+  it("reports a function that exists nowhere, but accepts declared, imported, default, aliased and class names (blind 5, 8)", () => {
+    expect(problems("`resolvePrivate()` and `report()` are elsewhere.")).toEqual([
+      `stale premise: resolvePrivate (function) ${HERE}`,
+      `stale premise: report (function) ${HERE}`,
     ]);
+    expect(problems("`hidden()`, `existsSync()`, `entry()`, `shown()` and `Runner()` all exist in some form.")).toEqual(
+      [],
+    );
+  });
+
+  it("does not let a path escape the checkout (Qodo 7)", () => {
+    expect(problems("See `../outside.ts`.")).toEqual([`stale premise: ../outside.ts (path) ${HERE}`]);
+  });
+
+  it("accepts a bare name of a private file when private storage is beside the checkout (blind 7)", () => {
+    expect(problems("Append to `BACKLOG.md`.")).toEqual([]);
   });
 
   it("reports every stale premise at once, in the ticket's order", () => {
-    const body = ticket("`src/gone.ts` holds `gone()`; run `npm run gone:script`.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: src/gone.ts (path) not found",
-      "stale premise: gone (function) not found",
-      "stale premise: gone:script (script) not found",
+    expect(problems("`src/gone.ts` holds `gone()`; run `npm run gone:script`.")).toEqual([
+      `stale premise: src/gone.ts (path) ${HERE}`,
+      `stale premise: gone (function) ${HERE}`,
+      `stale premise: gone:script (script) ${HERE}`,
     ]);
   });
 
-  it("treats a checkout without package.json as having no scripts", () => {
+  it("accepts a premise a sibling repo has, and names the places searched when nothing has it (Qodo 2, 11)", () => {
+    const sibling = repo({ "INVARIANTS.md": "# invariants\n" });
+    expect(problems("Spread across the target's `INVARIANTS.md`; `src/helpers.ts` stays.")).toEqual([
+      `stale premise: INVARIANTS.md (file) ${HERE}`,
+    ]);
+    expect(problems("Spread across the target's `INVARIANTS.md`.", [sibling, "/no/such/dir"])).toEqual([]);
+    expect(problems("See `src/gone.ts`.", [sibling])).toEqual([
+      `stale premise: src/gone.ts (path) ${HERE} or 1 sibling repo`,
+    ]);
+  });
+
+  it("throws, rather than guessing, when the checkout has no origin/main", () => {
     const bare = mkdtempSync(join(tmpdir(), "premises-bare-"));
-    expect(scriptNames(bare)).toEqual(new Set());
-    expect(exportedNames(bare)).toEqual(new Set());
+    git(bare, "init", "-q");
+    expect(() => premiseProblems([{ token: "src/x.ts", kind: "path" }], bare)).toThrow(/origin\/main/);
   });
 
   it("strips code blocks and details from prose", () => {
     expect(proseOf("a\n```\nb\n```\nc <details>d</details> e")).toBe("a\n\nc  e");
-  });
-});
-
-describe("bare file names", () => {
-  it("classifies a bare file name and leaves a version number or an abbreviation alone", () => {
-    expect(classify("inject.ts")).toEqual({ token: "inject.ts", kind: "file" });
-    expect(classify("CLAUDE.md")).toEqual({ token: "CLAUDE.md", kind: "file" });
-    expect(classify("2.2.0")).toBeNull();
-    expect(classify("e.g.")).toBeNull();
-  });
-
-  it("finds a bare file name anywhere in the checkout, and reports one that is nowhere", () => {
-    const body = ticket(
-      "`helpers.ts` is the model; extend the existing `vitest.config.test.ts`; `package.json` has the scripts.",
-    );
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: vitest.config.test.ts (file) not found",
-    ]);
-  });
-});
-
-describe("sibling checkouts", () => {
-  it("accepts a premise the ticket's repo lacks when a sibling repo of the factory has it", () => {
-    const sibling = mkdtempSync(join(tmpdir(), "premises-sibling-"));
-    writeFileSync(join(sibling, "INVARIANTS.md"), "# invariants\n");
-    const body = ticket("Spread across the target's `INVARIANTS.md`; `src/helpers.ts` stays.");
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout)).toEqual([
-      "stale premise: INVARIANTS.md (file) not found",
-    ]);
-    expect(premiseProblems(premisesOf(body, DELIVERABLES), checkout, [sibling, "/no/such/dir"])).toEqual([]);
   });
 });
