@@ -30,13 +30,16 @@ describe("privateDir", () => {
     expect(privateDir({}, factory("private/raw-artifacts"))).toBe(join(ROOT, "private"));
   });
 
-  it("handled the same way by every script: a non-default evidence path moves private/ with it", () => {
-    // Every script resolves privateDir() from the configured evidence path, the same way, so a
-    // factory.json whose evidence isn't under "private/" is never silently read as if it were.
+  it("moves with a non-default evidence path, the one function every script calls", () => {
     expect(privateDir({}, factory("private/custom-artifacts"))).toBe(join(ROOT, "private"));
     expect(privateDir({}, factory("not-private/raw-artifacts"))).toBe(join(ROOT, "not-private"));
   });
 });
+
+// A non-default evidence path handled the same way by a real script, not just by this module's own
+// functions, is proven end to end in rules-propose.test.ts ("reads cases and ground truth from a
+// non-default evidence path..."), which drives rules-propose.ts's propose() against a factory.json
+// whose evidence isn't under "private/" at all.
 
 describe("runsDir", () => {
   it("honours FAULTFORGE_RUNS_DIR", () => {
