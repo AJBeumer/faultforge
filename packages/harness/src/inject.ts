@@ -34,7 +34,7 @@ import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { type BranchExistence, deriveBranchName } from "./branch-name.ts";
+import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
 import { type Outcome, outcomeOf, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
@@ -136,12 +136,12 @@ if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === case
 if (git("status", "--porcelain")) fail(`target has uncommitted changes: ${targetDir}`);
 const baseBranch = git("rev-parse", "--abbrev-ref", "HEAD");
 const baseCommit = git("rev-parse", "HEAD");
-// --validate-only never asks git for branches: its temporary branch is deleted before the run ends,
-// so it only needs to avoid a name collision with what's already checked out, not derive a free one.
+// --validate-only derives nothing and never asks origin: its temporary branch is deleted before the run
+// ends, so it only needs the one local check it always had, to avoid `git switch -c` failing outright.
 const actualBranch = validateOnly
   ? template.publish.branch
-  : deriveBranchName(template.publish.branch, realBranchExistence(targetDir));
-if (validateOnly && existsLocally(targetDir, actualBranch)) {
+  : deriveBranchName(template.publish.branch, gitBranchExistence(targetDir));
+if (validateOnly && gitBranchExistence(targetDir).existsLocally(actualBranch)) {
   fail(`branch ${actualBranch} already exists in the target`);
 }
 if (!validateOnly) {
@@ -383,18 +383,6 @@ function git(...gitArgs: string[]): string {
   const result = run("git", gitArgs, targetDir);
   if (result.status !== 0) throw new Error(`git ${gitArgs.join(" ")} failed: ${result.stderr.trim()}`);
   return result.stdout.trim();
-}
-
-function existsLocally(dir: string, name: string): boolean {
-  return run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], dir).status === 0;
-}
-
-/** Consults `origin` for every candidate, so a branch pushed from another checkout is never reused. */
-function realBranchExistence(dir: string): BranchExistence {
-  return {
-    existsLocally: (name) => existsLocally(dir, name),
-    existsOnOrigin: (name) => run("git", ["ls-remote", "--exit-code", "--heads", "origin", name], dir).status === 0,
-  };
 }
 
 function readJsonl(path: string): Record<string, unknown>[] {
