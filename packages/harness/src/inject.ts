@@ -34,7 +34,8 @@ import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { templateTelltales } from "./neutral.ts";
+import { type BranchExistence, deriveBranchName } from "./branch-name.ts";
+import { telltales, templateTelltales } from "./neutral.ts";
 import { type Outcome, outcomeOf, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
@@ -135,8 +136,17 @@ if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === case
 if (git("status", "--porcelain")) fail(`target has uncommitted changes: ${targetDir}`);
 const baseBranch = git("rev-parse", "--abbrev-ref", "HEAD");
 const baseCommit = git("rev-parse", "HEAD");
-if (run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${template.publish.branch}`], targetDir).status === 0) {
-  fail(`branch ${template.publish.branch} already exists in the target`);
+// --validate-only never asks git for branches: its temporary branch is deleted before the run ends,
+// so it only needs to avoid a name collision with what's already checked out, not derive a free one.
+const actualBranch = validateOnly
+  ? template.publish.branch
+  : deriveBranchName(template.publish.branch, realBranchExistence(targetDir));
+if (validateOnly && existsLocally(targetDir, actualBranch)) {
+  fail(`branch ${actualBranch} already exists in the target`);
+}
+if (!validateOnly) {
+  const derivedGiveaways = telltales(actualBranch);
+  if (derivedGiveaways.length) fail(`the derived branch name gives the case away (${derivedGiveaways.join("; ")})`);
 }
 
 if (!validateOnly) mkdirSync(artefactDir, { recursive: true });
@@ -163,7 +173,7 @@ let publicTests: Outcome = "pass";
 let proofsOnVariant: Outcome[] = [];
 let failure: string | undefined;
 
-git("switch", "--quiet", "-c", template.publish.branch);
+git("switch", "--quiet", "-c", actualBranch);
 try {
   injectedLines = applyMutation();
   if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
@@ -208,7 +218,7 @@ try {
   if (validateOnly || !injectionCommit) {
     git("reset", "--quiet", "--hard");
     git("switch", "--quiet", baseBranch);
-    git("branch", "--quiet", "-D", template.publish.branch);
+    git("branch", "--quiet", "-D", actualBranch);
   } else {
     git("switch", "--quiet", baseBranch);
   }
@@ -241,7 +251,7 @@ const entry =
         targetRepo: git("remote", "get-url", "origin"),
         targetCommit: baseCommit,
         injectionCommit,
-        branch: template.publish.branch,
+        branch: actualBranch,
         injectedFile: template.file,
         injectedLines,
         validation: {
@@ -264,7 +274,7 @@ const entry =
         targetRepo: git("remote", "get-url", "origin"),
         targetCommit: baseCommit,
         injectionCommit,
-        branch: template.publish.branch,
+        branch: actualBranch,
         injectedFile: template.file,
         injectedLines,
         validation: { typecheck, publicTests },
@@ -277,6 +287,7 @@ appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
   type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
   at: createdAt,
   caseId,
+  branch: actualBranch,
   tool: TOOL,
   environment: `${platform()}-${arch()}-node${process.versions.node}`,
   inputHash: sha256(
@@ -288,7 +299,7 @@ appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
 
 log(`validated: proof(s) pass on base, fail on variant; public tests ${publicTests}`);
 log(
-  `${caseId} -> branch ${template.publish.branch} @ ${injectionCommit.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`,
+  `${caseId} -> branch ${actualBranch} @ ${injectionCommit.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`,
 );
 log(`ledger: ${ledgerPath}`);
 
@@ -372,6 +383,18 @@ function git(...gitArgs: string[]): string {
   const result = run("git", gitArgs, targetDir);
   if (result.status !== 0) throw new Error(`git ${gitArgs.join(" ")} failed: ${result.stderr.trim()}`);
   return result.stdout.trim();
+}
+
+function existsLocally(dir: string, name: string): boolean {
+  return run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], dir).status === 0;
+}
+
+/** Consults `origin` for every candidate, so a branch pushed from another checkout is never reused. */
+function realBranchExistence(dir: string): BranchExistence {
+  return {
+    existsLocally: (name) => existsLocally(dir, name),
+    existsOnOrigin: (name) => run("git", ["ls-remote", "--exit-code", "--heads", "origin", name], dir).status === 0,
+  };
 }
 
 function readJsonl(path: string): Record<string, unknown>[] {
