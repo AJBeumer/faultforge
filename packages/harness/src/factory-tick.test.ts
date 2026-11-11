@@ -1464,6 +1464,14 @@ describe("helpers", () => {
     expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
   });
 
+  it("never trusts a bare zero exit on its own: it must agree with a saved record (#101, Qodo on PR 155)", () => {
+    // A forged or stubbed revert:check could exit 0 without ever writing a record, or without really
+    // running the check it claims to.
+    expect(revertCheckProblems(0, null)[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, {})[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, { exit: 1 })[0]).toMatch(/says exit 1.*can't be trusted/);
+  });
+
   it("replaces lab words only in reviewed repos", () => {
     expect(safeText("FaultForge says hi", false)).toBe("FaultForge says hi");
     expect(safeText("FaultForge says hi", true)).toBe("The details are in the run log.");

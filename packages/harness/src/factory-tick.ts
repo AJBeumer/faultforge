@@ -599,19 +599,27 @@ export function openActionRequired(record: {
 }
 
 /**
- * A problem for `revert:check`'s exit code; empty when the change is proven (exit 0). Only the exit
- * code and category reach this, never the saved record's own `message` or `failedWithoutChange`: those
- * can hold agent-written test names and file-load errors, which must never reach a ticket a reviewer
- * can read (Qodo on PR 155) - the full detail stays in the saved `revert-check.json` record for the
- * owner to read directly. When no record exists at all (`revert:check` failed before it could save
- * one), the last line of its own output is used instead, bounded in size for the same reason.
+ * A problem for `revert:check`'s exit code; empty only when the process exited 0 *and* its saved
+ * record agrees the change was caught. A bare zero exit is never enough on its own: a forged or
+ * stubbed script could exit 0 without ever writing one, so an exit with no matching record is treated
+ * as unverified, the same way a missing review record already is (Qodo on PR 155). Only the exit code
+ * and category reach a problem, never the record's own `message` or `failedWithoutChange`: those can
+ * hold agent-written test names and file-load errors, which must never reach a ticket a reviewer can
+ * read - the full detail stays in the saved `revert-check.json` record for the owner to read directly.
+ * When no record exists at all, the last line of the process's own output is used instead, bounded in
+ * size for the same reason.
  */
 export function revertCheckProblems(status: number | null, record: { exit?: 0 | 1 | 2 } | null, output = ""): string[] {
-  if (status === 0) return [];
+  if (status === 0 && record?.exit === 0) return [];
   const category: Record<number, string> = {
     1: "every test still passes without the change, so it doesn't prove it",
     2: "it couldn't judge the change (no test or code file changed, a dependency change, or the tests failed with the change too)",
   };
+  if (status === 0) {
+    return [
+      `revert:check exited 0 but its saved record ${record ? `says exit ${record.exit}` : "is missing"}, so its verdict can't be trusted`,
+    ];
+  }
   if (record && record.exit !== undefined && record.exit in category) {
     return [`revert:check: ${category[record.exit]} (full detail in its saved record)`];
   }
@@ -1153,11 +1161,17 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   };
 }
 
-/** The time limit for an ordinary `gh` or `git` call. A push, a fetch/clone, or an `npm` call (an
- * install, or a script such as `review:wait`/`revert:check`) gets `LONG_CALL_TIMEOUT_MS` instead: a
- * slow network or a slow script can legitimately take longer than everything else the tick runs. */
+/** The time limit for an ordinary `gh` or `git` call. A push, a fetch/clone, or an ordinary `npm` call
+ * (an install, or `review:wait`, which already gives up on its own after its own `--timeout` minutes)
+ * gets `LONG_CALL_TIMEOUT_MS` instead: a slow network or a slow script can legitimately take longer
+ * than everything else the tick runs. */
 export const CALL_TIMEOUT_MS = 60_000;
 export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
+/** `revert:check` can legitimately run two full test suites in sequence - with the change, then
+ * without it - each allowed up to ten minutes by `runVitest`'s own timeout, so its outer bound must
+ * clear that worst case with room for its `gh`/`git` calls too, or a slow but valid run would be
+ * killed and misreported as a failed verification (Qodo on PR 155). */
+export const REVERT_CHECK_TIMEOUT_MS = 25 * 60_000;
 
 /** True when a `child_process` error is Node reporting that the call exceeded its `timeout` option. */
 export function isTimeoutError(error: unknown): boolean {
@@ -1272,15 +1286,19 @@ function gitLong(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-function npm(cwd: string, ...args: string[]): { status: number | null; output: string } {
+function npm(
+  cwd: string,
+  args: string[],
+  timeoutMs: number = LONG_CALL_TIMEOUT_MS,
+): { status: number | null; output: string } {
   // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words and
   // numbers from this file, never ticket text, so joining them into one command line is safe.
   // Bounded like every other external call, so a hang in a script it runs - a stuck fetch, an API
   // call with no timeout of its own - can never stall the whole run and its lock (Qodo on PR 155).
   const result =
     process.platform === "win32"
-      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: LONG_CALL_TIMEOUT_MS })
-      : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: LONG_CALL_TIMEOUT_MS });
+      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: timeoutMs })
+      : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: timeoutMs });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
@@ -1587,7 +1605,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         for (const repo of Object.values(factory.repos)) {
           const dir = repo.path === "." ? lab : worktreeFor(lab, repo.path);
           if (!existsSync(join(dir, "package.json"))) continue;
-          const install = npm(dir, "ci", "--no-audit", "--no-fund");
+          const install = npm(dir, ["ci", "--no-audit", "--no-fund"]);
           if (install.status !== 0) throw new Error(`npm ci failed in ${dir}: ${install.output.slice(-400)}`);
         }
         // The agent gets main's hooks, not the runner's: refuse to start it without both of them.
@@ -1795,8 +1813,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (!pushed) return { problems: ["no commit id for the pull request's head"] };
       // review:wait runs in the run's worktree, so its evidence lands in the run's private branch.
       // --commit: it waits until GitHub shows the pushed commit, then for that commit's review.
-      const review = npm(
-        ws.lab,
+      const review = npm(ws.lab, [
         "run",
         "-s",
         "review:wait",
@@ -1807,7 +1824,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         pushed,
         "--timeout",
         "5",
-      );
+      ]);
       const meaning: Record<number, string> = {
         1: "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
         2: "review:wait couldn't run",
@@ -1855,7 +1872,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         // result: if this run's own revert:check fails before saving a fresh one, the absence has to
         // show, not an old verdict (same reasoning as runVitest's own report removal, Qodo on PR 155).
         rmSync(revertRecordFile, { force: true });
-        const revert = npm(ws.lab, "run", "-s", "revert:check", "--", repoKey, String(pr));
+        const revert = npm(ws.lab, ["run", "-s", "revert:check", "--", repoKey, String(pr)], REVERT_CHECK_TIMEOUT_MS);
         const revertRecord = existsSync(revertRecordFile) ? JSON.parse(readFileSync(revertRecordFile, "utf8")) : null;
         problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
       }
