@@ -3,7 +3,14 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync } from
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { backgroundViolation, commandViolations, decide, denialReason, editViolation } from "./factory-policy.ts";
+import {
+  backgroundViolation,
+  commandViolations,
+  decide,
+  denialReason,
+  editViolation,
+  privateViolation,
+} from "./factory-policy.ts";
 
 const HOOK = join(import.meta.dirname, "factory-policy.ts");
 // Native absolute paths, so the tests mean the same on Windows and on CI's Linux.
@@ -190,6 +197,50 @@ describe("factory policy: file edits", () => {
 
   it("blocks every edit when the run folder is unknown", () => {
     expect(editViolation(join(RUN, "a.ts"), undefined, TEMP)).toMatch(/no FAULTFORGE_RUN_ROOT/);
+  });
+
+  describe("the private repository's protected files (#142)", () => {
+    const PRIVATE = join(RUN, "FaultForge", "private");
+
+    it("denies the answer key, the audit log, templates/ and config/ in the private worktree", () => {
+      expect(editViolation(join(PRIVATE, "ground-truth.jsonl"), RUN, TEMP)).toMatch(
+        /can't change ground-truth\.jsonl in the private repository/,
+      );
+      expect(editViolation(join(PRIVATE, "audit-events.jsonl"), RUN, TEMP)).toMatch(/audit-events\.jsonl/);
+      expect(editViolation(join(PRIVATE, "templates", "t-01", "template.ts"), RUN, TEMP)).toMatch(/templates/);
+      expect(editViolation(join(PRIVATE, "config", "qodo-rules.yaml"), RUN, TEMP)).toMatch(/config/);
+      expect(editViolation(join(PRIVATE, "Config", "qodo-rules.yaml"), RUN, TEMP)).toMatch(/config/);
+    });
+
+    it("allows evidence in the same worktree, and the same names anywhere else", () => {
+      expect(editViolation(join(PRIVATE, "raw-artifacts", "reviews", "x.json"), RUN, TEMP)).toBeUndefined();
+      expect(editViolation(join(PRIVATE, "factory-log", "2026-11-11.md"), RUN, TEMP)).toBeUndefined();
+      expect(editViolation(join(PRIVATE, "BACKLOG.md"), RUN, TEMP)).toBeUndefined();
+      // The lab checkout's own templates folder is ordinary code; a config folder in the target is too.
+      expect(editViolation(join(RUN, "FaultForge", "templates", "seed", "t.ts"), RUN, TEMP)).toBeUndefined();
+      expect(editViolation(join(RUN, "faultforge-target", "config", "app.json"), RUN, TEMP)).toBeUndefined();
+      // Only the folder directly under a checkout counts as the private worktree.
+      expect(editViolation(join(RUN, "FaultForge", "src", "private", "config", "x"), RUN, TEMP)).toBeUndefined();
+    });
+
+    it("judges the path on its own, outside the run root as well", () => {
+      expect(privateViolation(join(RUN, "FaultForge", "private", "audit-events.jsonl"), RUN)).toMatch(/audit/);
+      expect(privateViolation(resolve("/elsewhere/FaultForge/private/audit-events.jsonl"), RUN)).toBeUndefined();
+      expect(privateViolation(join(RUN, "private", "audit-events.jsonl"), RUN)).toBeUndefined();
+    });
+
+    it("is a denial through the hook's decision, with the reason", () => {
+      const env = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
+      const write = JSON.stringify({
+        tool_name: "Write",
+        cwd: RUN,
+        tool_input: { file_path: join(PRIVATE, "ground-truth.jsonl"), content: "{}" },
+      });
+      expect(decide(write, env)).toMatchObject({ kind: "deny" });
+      expect((decide(write, env) as { reason: string }).reason).toMatch(
+        /ground-truth\.jsonl in the private repository/,
+      );
+    });
   });
 });
 

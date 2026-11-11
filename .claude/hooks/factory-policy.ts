@@ -9,6 +9,7 @@
  *  - scheduled tasks and persistent environment or registry changes
  *  - dismissing anything
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
+ *  - edits in the private worktree to the answer key, the audit log, `templates/` or `config/` (#142)
  *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
@@ -178,9 +179,34 @@ function inside(path: string, folder: string): boolean {
 }
 
 /**
+ * What an unattended run may never edit in the private repository's worktree (#142): the answer key and
+ * the audit log are append-only and the owner's to amend, the templates hold unreviewed cases, and
+ * `config/` holds Qodo's configuration snapshots. Evidence (`raw-artifacts/`, `factory-log/`) is fine.
+ */
+const PRIVATE_PROTECTED = ["ground-truth.jsonl", "audit-events.jsonl", "templates", "config"];
+
+/**
+ * Why an edit in the private worktree is not allowed, or undefined. The runner checks the private
+ * worktree out at `<run root>/<lab checkout>/private` (and the owner's own copy sits at the same place
+ * under their checkout), so a path whose second segment below the run root is `private` is in it. The
+ * post-run diff check in `saveEvidence` is the guarantee; this is the first line, so the agent learns
+ * at the edit, not at the end of the run, that the file isn't its to change.
+ */
+export function privateViolation(path: string, runRoot: string): string | undefined {
+  const rel = relative(realTarget(runRoot), path);
+  if (rel === "" || rel.startsWith("..") || /^[a-z]:/i.test(rel) || /^[/\\]/.test(rel)) return undefined;
+  const [, folder, entry] = rel.split(/[/\\]/);
+  if (folder !== "private" || !entry) return undefined;
+  const hit = PRIVATE_PROTECTED.find((name) => name.toLowerCase() === entry.toLowerCase());
+  if (!hit) return undefined;
+  return `the agent can't change ${hit} in the private repository (the answer key, the audit log, templates/ and config/ are the owner's)`;
+}
+
+/**
  * Why a file edit is not allowed, or undefined. Only the run's own folder and the temp folder may change,
- * and never a `.claude` folder (it holds the agent's own guardrails) or `.github/workflows` (the factory's
- * own controls, and the run's token has no Workflows permission, so a push would fail anyway; #103).
+ * and never a `.claude` folder (it holds the agent's own guardrails), `.github/workflows` (the factory's
+ * own controls, and the run's token has no Workflows permission, so a push would fail anyway; #103), or
+ * the private repository's protected files (#142).
  */
 export function editViolation(path: string, runRoot: string | undefined, temp = tmpdir()): string | undefined {
   if (!runRoot) return "the run has no FAULTFORGE_RUN_ROOT, so no file may change";
@@ -190,6 +216,10 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
   }
   if ([resolve(path), real].some((p) => /(^|[/\\])\.github[/\\]workflows([/\\]|$)/i.test(p))) {
     return "the agent can't change the workflows (.github/workflows): the owner does, with a token that may";
+  }
+  for (const p of [resolve(path), real]) {
+    const reason = privateViolation(p, runRoot);
+    if (reason) return reason;
   }
   if (inside(real, realTarget(runRoot)) || inside(real, realTarget(temp))) return undefined;
   return `only files under the run's folder may change, not ${path}`;
