@@ -45,7 +45,7 @@ import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
-import { evidenceDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
+import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
@@ -1373,7 +1373,11 @@ export function pullsSince<P extends { updated_at: string }>(cutoffMs: number, f
 export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
-  const privateRepo = privateDir();
+  // Literal, not `privateDir()`: this is the physical "private" worktree this very checkout always
+  // has (the same fixed name `workspace()` below gives it), the one the push and the main-moved check
+  // below act on. Honouring `FAULTFORGE_PRIVATE_DIR` here would push and audit a different folder than
+  // the one actually checked out, so the evidence would silently escape it (Qodo on PR 154).
+  const privateRepo = join(LAB_ROOT, "private");
   const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)); // e.g. raw-artifacts
 
   /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
@@ -1901,10 +1905,18 @@ function positiveOption(values: Record<string, unknown>, name: "minutes" | "budg
 }
 
 async function main() {
-  const { values } = parseArgs({
-    args: process.argv.slice(2),
-    options: { ci: { type: "boolean" }, minutes: { type: "string" }, budget: { type: "string" } },
-  });
+  let values: { ci?: boolean; minutes?: string; budget?: string };
+  try {
+    ({ values } = parseArgs({
+      args: process.argv.slice(2),
+      options: { ci: { type: "boolean" }, minutes: { type: "string" }, budget: { type: "string" } },
+    }));
+  } catch (error) {
+    console.error(
+      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (${error instanceof Error ? error.message : error})`,
+    );
+    process.exit(2);
+  }
   const options = { minutes: positiveOption(values, "minutes", 120), budget: positiveOption(values, "budget", 25) };
   const mode: RunMode = values.ci ? "ci" : "local";
   if (!process.env.GH_TOKEN && process.env.GH_TOKEN_FILE)

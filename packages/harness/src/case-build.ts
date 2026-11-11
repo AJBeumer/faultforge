@@ -332,11 +332,17 @@ interface CliArgs {
 
 /** The command line, or null when it's wrong. */
 export function parseCliArgs(argv: string[]): CliArgs | null {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    options: { write: { type: "boolean" } },
-    allowPositionals: true,
-  });
+  let values: { write?: boolean };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      options: { write: { type: "boolean" } },
+      allowPositionals: true,
+    }));
+  } catch {
+    return null;
+  }
   const [caseId] = positionals;
   if (!caseId) return null;
   return { caseId, write: values.write ?? false };

@@ -11,12 +11,12 @@
  * its work keeps producing the same finding — and the owner alone decides what becomes a rule.
  */
 import { execFileSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { gh } from "./github.ts";
-import { evidenceDir, privateDir, ROOT } from "./paths.ts";
+import { evidenceDir, ROOT } from "./paths.ts";
 import { buildTable, casePrs, type EvidenceRow, groundTruthCommits, readSavedReviews } from "./rules-evidence.ts";
 
 /** The pattern threshold, in one place: this many findings, over at least this many PRs. */
@@ -114,7 +114,10 @@ export function propose(
   const lab = Object.values(factory.repos).find((r) => r.guard === "lab")?.github;
   if (!lab) throw new Error("no lab repo in factory.json");
   const evidence = evidenceDir(factory, root);
-  const priv = privateDir(process.env, factory, root);
+  // Derived from `root` directly, never from FAULTFORGE_PRIVATE_DIR: `root` names exactly which
+  // checkout to scan (the owner's, or a test fixture), and an env override would read someone else's
+  // private storage instead (the same escape `privateDir()`'s own doc warns against).
+  const priv = dirname(evidence);
   const excluded = {
     prs: casePrs(join(priv, "cases")),
     commits: groundTruthCommits(join(priv, "ground-truth.jsonl")),
@@ -169,7 +172,7 @@ export function propose(
 export function proposeAfterRun(root: string, print: (line: string) => void): ProposeResult {
   const factory = loadFactory();
   try {
-    execFileSync("git", ["-C", privateDir(process.env, factory, root), "pull", "--ff-only", "--quiet"], {
+    execFileSync("git", ["-C", dirname(evidenceDir(factory, root)), "pull", "--ff-only", "--quiet"], {
       timeout: 60_000,
     });
   } catch (error) {

@@ -17,13 +17,19 @@ export function evidenceDir(factory: FactoryConfig = loadFactory(), root: string
 }
 
 /**
- * Private storage: `FAULTFORGE_PRIVATE_DIR` when set, else the parent of the evidence folder
- * (`private/` by default, since `factory.json`'s evidence is `private/raw-artifacts`). `factory` is
- * only read when `FAULTFORGE_PRIVATE_DIR` is unset, so a caller that already has one path never pays
- * for a second `loadFactory()`, and a test that sets the variable never needs a real `factory.json`.
+ * Private storage for the current process's own checkout: `FAULTFORGE_PRIVATE_DIR` when set, else the
+ * parent of the evidence folder (`private/` by default, since `factory.json`'s evidence is
+ * `private/raw-artifacts`). `factory` is only read when `FAULTFORGE_PRIVATE_DIR` is unset, so a caller
+ * that already has one path never pays for a second `loadFactory()`, and a test that sets the variable
+ * never needs a real `factory.json`.
+ *
+ * Deliberately takes no `root`: a caller working against some other, explicit root (a worktree, a test
+ * fixture) must derive its private directory from that root directly (`dirname(evidenceDir(factory,
+ * root))`), never from this process's own `FAULTFORGE_PRIVATE_DIR` — otherwise the override redirects
+ * reads and writes away from the root the caller actually meant (Qodo on PR 154).
  */
-export function privateDir(env: NodeJS.ProcessEnv = process.env, factory?: FactoryConfig, root?: string): string {
-  return resolve(env.FAULTFORGE_PRIVATE_DIR ?? dirname(evidenceDir(factory, root)));
+export function privateDir(env: NodeJS.ProcessEnv = process.env, factory?: FactoryConfig): string {
+  return resolve(env.FAULTFORGE_PRIVATE_DIR ?? dirname(evidenceDir(factory)));
 }
 
 /** Where the factory runner keeps a run's live log and scratch worktrees, outside every checkout. */
