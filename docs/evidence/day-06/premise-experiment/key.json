@@ -1,0 +1,70 @@
+{
+  "experiment": "wisdom-premises-2026-11-11",
+  "question": "When a ticket rests on a stale or false premise about this codebase, does an investigator using only Qodo Codebase Wisdom's read tools catch it?",
+  "repo": "AJBeumer/faultforge",
+  "revision": "d9cbe5f396ba981a0e1bec4979eb71efadd46cad",
+  "registeredAt": "2026-11-11T17:40:00Z",
+  "tickets": [
+    {
+      "id": "W-0",
+      "role": "control",
+      "title": "Only the dependency line of Depends on counts",
+      "plantedPremise": null,
+      "truePremises": [
+        "writtenDependencies() in packages/harness/src/ticket-ready.ts reads the Depends on section and matches #N with a regex",
+        "ticket sections come from factory.json through loadFactory() in packages/harness/src/factory-config.ts",
+        "packages/harness/src/ticket-ready.test.ts has a test named 'reads blockers written in Depends on'"
+      ]
+    },
+    {
+      "id": "W-1",
+      "role": "planted",
+      "kind": "deleted file",
+      "title": "Prove the unit project never runs an integration test",
+      "plantedPremise": "A root-level vitest.config.test.ts exists and already asserts both project names",
+      "reality": "No such file exists at d9cbe5f; vitest.config.ts has no test next to it. The file was deleted in 1f247d1 (10 Nov), when the test it held moved into factory-tick.test.ts.",
+      "truePremises": [
+        "vitest.config.ts defines two projects named unit and integration",
+        "npm test runs 'vitest run --project unit' and npm run test:integration runs the integration project"
+      ]
+    },
+    {
+      "id": "W-2",
+      "role": "planted",
+      "kind": "stale location (helper moved)",
+      "title": "A command that prints the private folder the harness will use",
+      "plantedPremise": "inject.ts resolves the private folder itself at the top with const PRIVATE_DIR = resolve(process.env.FAULTFORGE_PRIVATE_DIR ?? join(ROOT, \"private\")); copy that line",
+      "reality": "Since 7cc72cb (10 Nov) inject.ts imports privateDir() from packages/harness/src/templates.ts (templates.ts:15) and sets PRIVATE_DIR = privateDir() at inject.ts:68. The new script should import privateDir(), not copy a line.",
+      "truePremises": [
+        "inject.ts has a module-level PRIVATE_DIR constant",
+        "the environment variable FAULTFORGE_PRIVATE_DIR overrides the default private folder"
+      ]
+    },
+    {
+      "id": "W-3",
+      "role": "planted",
+      "kind": "nonexistent component (schema that was never there)",
+      "title": "Add a Premises section to the ticket form",
+      "plantedPremise": "Ticket bodies are validated with ajv against packages/harness/src/ticket-schema.json, like factory.json; add the section to that schema",
+      "reality": "No ticket-schema.json exists. ticket-ready.ts parses ### sections with a regex (sectionsOf) and takes the required section names from factory.json (tickets.sections) via factory-config.ts. ajv is used for factory.json, templates and case records, not for tickets.",
+      "truePremises": [
+        "factory.json is validated with ajv in packages/harness/src/factory-config.ts",
+        "the issue form is .github/ISSUE_TEMPLATE/task.yml",
+        "ticket-ready.ts reports a missing section as 'missing section \"<name>\"'"
+      ]
+    }
+  ],
+  "matchRule": {
+    "catch": "The report states that the planted premise does not hold, names the actual state (file absent; helper lives in templates.ts; no ticket schema, sections parsed by regex) and cites at least one path or path:line obtained from a Qodo read tool.",
+    "partial": "The report doubts or rejects the planted premise but names the wrong reality or gives no citation.",
+    "miss": "The report accepts the planted premise, builds on it, or does not mention it.",
+    "falseAlarm": "The report marks one of the listed true premises as not holding.",
+    "fixed": "This rule is fixed before any investigator runs and is not changed after seeing reports."
+  },
+  "investigator": {
+    "what": "A fresh Claude Code general-purpose subagent with no conversation context, one per ticket, run in parallel, given only the ticket text, the challenge's prompt and the Qodo CLI read commands.",
+    "allowed": "qodo read codebase ... and qodo read pull-request ... on AJBeumer/faultforge only, --json",
+    "forbidden": "local file reads, git, gh, any other repository, any write tool, the target repository",
+    "unitUnderTest": "the tool and the agent driving it, as a Qodo review is the model and its pipeline together"
+  }
+}

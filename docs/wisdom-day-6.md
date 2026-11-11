@@ -58,3 +58,13 @@ Proposed implementation: a script that compares the live rule and skill lists wi
 - **#108 corrected** on the ticket: six `gh` call sites, not five (`verdict.ts:202`), and a shared `privateDir()` already exists in `templates.ts:15`, so `paths.ts` should start by moving it, not adding a second resolver.
 - **#7 corrected**: an end-to-end inject test belongs in `npm run test:integration`, never in `check`, under the code layout rule written after the ticket.
 - **#62 half delivered** by #64 (`revert:check`); suggested rescope on the ticket.
+
+## Afternoon: the investigation measured, not only used
+
+The morning found that #4 rested on stale premises. The afternoon asked whether that finding can be produced on demand. Four tickets were written in the project's form, three with one planted false premise each (a root test file deleted on 10 November, a helper that moved to `templates.ts` on 10 November, a ticket schema that never existed) and one control with only true premises. The answer key and the match rule were committed to private storage before any run. Each ticket went to a fresh subagent limited to Qodo's read tools on this repository, blind to the key and to the local checkout, with the challenge's own prompt.
+
+**Result: 3 of 3 planted premises caught, 0 partial, 0 misses, 0 false alarms across 4 tickets.** Every deciding citation was checked against the local checkout at `d9cbe5f`. Each report also found a real problem that was not planted: the control ticket's own proposed rule would not have fixed the case it was written for, a test-only PR makes `revert:check` exit 2, the form's `required` flag is enforced only in the browser, and three scripts still build the private path by hand. Method, key, tickets, reports and tool observations: [evidence/day-06/premise-experiment/](evidence/day-06/premise-experiment/).
+
+What it changes: a pre-build premise check is a factory step, not a Day 6 ritual. The ticket for it names the files, helpers and scripts a ticket assumes, and the runner checks them before the agent starts. Proposed, not built.
+
+**Afterwards.** The factory built the rewritten #4 the same evening ([PR #145](https://github.com/AJBeumer/faultforge/pull/145)): three Qodo rounds, 5 findings then 1 then 0, all six about failure paths and evidence safety, none about the comparison the ticket specified; `revert:check` found 5 tests that fail without the change. The investigation fixed the design (the client, the snapshot, the cadence, the pages, the split-out skill edits) and the review fixed the edges the ticket did not name. Its first live run reported the 15 `CLAUDE.md`-derived rules as differences: they are inactive but still exist, and the v6 snapshot predates them. The check reports; the owner decides.
