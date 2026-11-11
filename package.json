@@ -21,7 +21,8 @@
     "ledger:check": "tsx packages/harness/src/ledger-check.ts",
     "qodo:check": "tsx packages/harness/src/qodo-check.ts",
     "verdict": "tsx packages/harness/src/verdict.ts",
-    "case:build": "tsx packages/harness/src/case-build.ts"
+    "case:build": "tsx packages/harness/src/case-build.ts",
+    "case:ticket": "tsx packages/harness/src/case-ticket.ts"
   },
   "repository": {
     "type": "git",
