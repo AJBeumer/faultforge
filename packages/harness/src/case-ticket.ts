@@ -10,18 +10,25 @@
  * checked with `templateTelltales`, the same giveaway check `inject` runs on a template: nothing is
  * created from text that would give the case away. The issue's sections come from `factory.json`'s own
  * ticket sections for the target repository, built only from fields a template actually declares: the
- * first section holds `ticket.what`, the checklist section holds `ticket.criteria` as checkboxes. A
- * template has no field for any other section ("Must not break", today), so that section gets one
+ * checklist section holds `ticket.criteria` as checkboxes, the first other section holds `ticket.what`.
+ * A template has no field for any other section ("Must not break", today), so that section gets one
  * fixed, honest line that is true of every template, never content inferred from the bug.
+ *
+ * The ticket text is also refused if it links to any GitHub issue or PR (a URL or a short `repo#N`
+ * reference): a template has no reason to need one, and spawning `gh` directly from this script, rather
+ * than through a shell command, means the interactive guard hook never sees the posted text, so this
+ * check stands in for it.
  *
  * `--dry-run` prints the issue text and the `gh` command it would run, without creating anything or
  * writing to private storage. A case already ticketed (a `case.ticket-created` audit event for it)
  * is refused either way, so a second run can't open a duplicate issue.
  *
  * Exit codes: 0 the issue was created (or, with `--dry-run`, printed); 1 refused — the ticket text
- * gives the case away, the template's `ticket` field is missing or incomplete, or this case already
- * has a ticket; 2 could not run — the template wasn't found or unreadable, the audit log couldn't be
- * read, or `gh` failed to create the issue.
+ * gives the case away or links to a GitHub issue or PR, the template's `ticket` field is missing or
+ * incomplete, the case id isn't a plain token, or this case already has a ticket; 2 could not run —
+ * the template wasn't found or unreadable, the audit log couldn't be read, `gh` failed to create the
+ * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
+ * check GitHub before retrying rather than risk a duplicate issue).
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -58,26 +65,56 @@ export function ticketFieldProblems(ticket: Ticket | undefined): string[] {
   const problems: string[] = [];
   if (typeof ticket.title !== "string" || !ticket.title.trim()) problems.push("ticket.title is missing or blank");
   if (typeof ticket.what !== "string" || !ticket.what.trim()) problems.push("ticket.what is missing or blank");
-  if (!Array.isArray(ticket.criteria) || !ticket.criteria.length || ticket.criteria.some((c) => !c?.trim())) {
+  if (
+    !Array.isArray(ticket.criteria) ||
+    !ticket.criteria.length ||
+    ticket.criteria.some((c) => typeof c !== "string" || !c.trim())
+  ) {
     problems.push("ticket.criteria is missing, empty, or has a blank entry");
   }
   return problems;
 }
 
+/** A link GitHub turns into a "mentioned in" event: a full issue/PR URL, or a short `repo#N` reference. */
+const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|\b[\w.-]+#\d+\b/i;
+
+/**
+ * The reasons a ticket's text links to a GitHub issue or PR, as `field: reason`, over every field that
+ * reaches the target: title, `what`, and every criterion. A template describing ordinary development
+ * work never needs one; a link would also show on that issue's or PR's timeline, where Qodo reads it.
+ */
+export function ticketLinkGiveaways(ticket: Ticket): string[] {
+  const fields: [string, string][] = [
+    ["ticket.title", ticket.title],
+    ["ticket.what", ticket.what],
+    ...ticket.criteria.map((c, i): [string, string] => [`ticket.criteria[${i}]`, c]),
+  ];
+  return fields
+    .filter(([, text]) => ISSUE_OR_PR_LINK.test(text))
+    .map(([field]) => `${field}: links to a GitHub issue or PR`);
+}
+
+/** A safe single path segment: no `/`, no `..`, nothing that could escape private storage when joined into a path. */
+export function isSafeId(id: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !id.includes("..");
+}
+
 /**
  * The issue body in the repo's own ticket sections (`factory.json`'s `tickets.sections`), built only
- * from `ticket`: the first section is `ticket.what`, the checklist section is `ticket.criteria` as
- * checkboxes, and any other section gets the fixed "must not break" line, since no template field
- * describes it.
+ * from `ticket`: the checklist section is `ticket.criteria` as checkboxes, the first other section is
+ * `ticket.what`, and any remaining section gets the fixed "must not break" line, since no template
+ * field describes it.
  */
 export function buildBody(sections: FactoryConfig["repos"][string]["tickets"], ticket: Ticket): string {
-  const first = sections.sections[0];
+  // The first section that isn't the checklist, whatever position either one is in: `ticket.what` goes
+  // there, so a config where the checklist happens to come first still leaves it somewhere to land.
+  const descriptive = sections.sections.find((name) => name !== sections.checklist) ?? sections.sections[0];
   return sections.sections
     .map((name) => {
-      if (name === first) return `### ${name}\n${ticket.what}`;
       if (name === sections.checklist) {
         return `### ${name}\n${ticket.criteria.map((c) => `- [ ] ${c}`).join("\n")}`;
       }
+      if (name === descriptive) return `### ${name}\n${ticket.what}`;
       return `### ${name}\n${MUST_NOT_BREAK_LINE}`;
     })
     .join("\n\n");
@@ -114,6 +151,11 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const error = options.error ?? ((line: string) => console.error(line));
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+  if (!isSafeId(caseId)) {
+    error(`case:ticket: refused, case id must be a plain token (letters, digits, dot, dash, underscore): ${caseId}`);
+    return 1;
+  }
+
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
   const evidenceDir = options.evidenceDir ?? join(root, "raw-artifacts", caseId);
@@ -141,7 +183,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
   }
   const ticket = template.ticket as Ticket;
 
-  const giveaways = templateTelltales(template);
+  const giveaways = [...templateTelltales(template), ...ticketLinkGiveaways(ticket)];
   if (giveaways.length) {
     error(`case:ticket: refused, the ticket would give the case away (${giveaways.join("; ")})`);
     return 1;
@@ -180,14 +222,20 @@ export async function run(templateId: string, caseId: string, options: RunOption
     error(`case:ticket: gh issue create failed: ${message(e)}`);
     return 2;
   }
+  // Saved before anything else is parsed or written: if gh already created the issue, this is the
+  // one record a human has to check GitHub before retrying, even if parsing or a later write fails.
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(join(evidenceDir, "gh-issue-create.raw.txt"), `${url}\n`);
+
   const number = issueNumberFromUrl(url);
   if (number === undefined) {
-    error(`case:ticket: gh issue create did not return an issue URL: ${url}`);
+    error(
+      `case:ticket: gh issue create did not return an issue URL (raw output saved to ${evidenceDir}, check GitHub before retrying): ${url}`,
+    );
     return 2;
   }
 
   const issue = { repo: target.github, number, url, title: ticket.title, body };
-  mkdirSync(evidenceDir, { recursive: true });
   writeFileSync(join(evidenceDir, "ticket.json"), `${JSON.stringify(issue, null, 2)}\n`);
   appendFileSync(
     auditEventsPath,
