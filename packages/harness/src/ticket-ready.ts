@@ -1,29 +1,26 @@
 /**
- * Is a ticket ready to work? It needs every required section, a checklist to verify against, and
- * no open blockers. Used by `/work-ticket` before any work starts:
+ * Is a ticket ready to work? It needs every required section, a checklist to verify against, no open
+ * blockers, and no stale premise: every path, npm script and exported function it names as existing
+ * (outside its deliverable sections) must exist in the repo's checkout (`ticket-premises.ts`, #147).
+ * Used by `/work-ticket` and the factory runner before any work starts:
  *
  *   npm run ticket:ready -- faultforge 47
  *   npm run ticket:ready -- target 4
  *
- * The repo key, its GitHub name and its ticket sections come from `factory.json`.
- * Exits 0 when ready, 1 with the list of problems when not.
+ * The repo key, its GitHub name, checkout path and ticket sections come from `factory.json`.
+ * Exits 0 when ready, 1 with the list of problems when not, 2 when the ticket or the checkout could
+ * not be read (a missing checkout is never reported as "not ready").
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
+import { premiseProblems, premisesOf, sectionsOf } from "./ticket-premises.ts";
+
+const LAB_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 type Sections = RepoConfig["tickets"];
-
-/** A ticket's `###` sections by lower-case name. Code blocks are left out, so examples can't count. */
-function sectionsOf(body: string): Map<string, string> {
-  const prose = body.replace(/^(```|~~~)[\s\S]*?^\1\s*$/gm, "");
-  const parts = new Map<string, string>();
-  for (const match of prose.matchAll(/^###\s+(.+?)\s*$([\s\S]*?)(?=^###\s|(?![\s\S]))/gm)) {
-    parts.set((match[1] ?? "").trim().toLowerCase(), (match[2] ?? "").trim());
-  }
-  return parts;
-}
 
 /** Text with nothing in it but list markers, such as the form's untouched "- ". */
 function isEmpty(text: string): boolean {
@@ -44,8 +41,13 @@ export function openNumbers(pages: { number: number; state: string }[][]): numbe
     .map((issue) => issue.number);
 }
 
-/** Problems that make a ticket not ready, or an empty list. */
-export function readinessProblems(body: string, sections: Sections, openBlockers: number[]): string[] {
+/** Problems that make a ticket not ready, or an empty list. `stalePremises` come from `premiseProblems`. */
+export function readinessProblems(
+  body: string,
+  sections: Sections,
+  openBlockers: number[],
+  stalePremises: string[] = [],
+): string[] {
   const parts = sectionsOf(body);
 
   const problems: string[] = [];
@@ -58,6 +60,7 @@ export function readinessProblems(body: string, sections: Sections, openBlockers
     }
   }
   if (openBlockers.length) problems.push(`blocked by open tickets ${openBlockers.map((n) => `#${n}`).join(", ")}`);
+  problems.push(...stalePremises);
   return problems;
 }
 
@@ -73,8 +76,11 @@ export function checkTicket(
   repoKey: string,
   number: number,
   run: (...args: string[]) => string = gh,
+  checkoutOf: (path: string) => string = (path) => resolve(LAB_ROOT, path),
 ): { title: string; problems: string[] } {
-  const { github: repo, tickets: sections } = repoConfig(factory, repoKey);
+  const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);
+  const checkout = checkoutOf(path);
+  if (!existsSync(checkout)) throw new Error(`checkout for ${repoKey} not found at ${checkout}`);
   const issue = JSON.parse(run("api", `repos/${repo}/issues/${number}`));
   const body: string = issue.body ?? "";
   // Native "blocked by" links, every page, plus blockers only written in the Depends on text.
@@ -85,7 +91,13 @@ export function checkTicket(
     (n) => !linked.includes(n) && run("api", `repos/${repo}/issues/${n}`, "--jq", ".state").trim() === "open",
   );
   const blockers = [...linked, ...written].sort((a, b) => a - b);
-  return { title: issue.title, problems: readinessProblems(body, sections, blockers) };
+  // The first required section and the checklist describe what the ticket delivers, not what it assumes.
+  // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.
+  const siblings = Object.entries(factory.repos)
+    .filter(([key]) => key !== repoKey)
+    .map(([, repo]) => checkoutOf(repo.path));
+  const stale = premiseProblems(premisesOf(body, [sections.sections[0] ?? "", sections.checklist]), checkout, siblings);
+  return { title: issue.title, problems: readinessProblems(body, sections, blockers, stale) };
 }
 
 /**
