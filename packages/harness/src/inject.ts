@@ -32,10 +32,10 @@ import {
 } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
+import { ROOT } from "./paths.ts";
 import { type Outcome, outcomeOf, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
@@ -65,7 +65,6 @@ interface Proof {
   proofTest: string;
 }
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PRIVATE_DIR = privateDir();
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 

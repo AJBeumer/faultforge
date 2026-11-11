@@ -4,17 +4,14 @@
  * read the same template for the same id.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
+import { privateDir, ROOT } from "./paths.ts";
 
-const ROOT = join(import.meta.dirname, "../../..");
 const templateSchema = JSON.parse(readFileSync(join(ROOT, "schemas/template.v2.json"), "utf8"));
 const templateSchemaCheck = new Ajv2020({ allErrors: true }).compile(templateSchema);
 
-/** Private storage: `FAULTFORGE_PRIVATE_DIR`, or `private/` in this repository. */
-export function privateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(env.FAULTFORGE_PRIVATE_DIR ?? join(ROOT, "private"));
-}
+export { privateDir };
 
 /** A template id is one folder name: letters, digits, dots, dashes and underscores, nothing that moves up or across. */
 export function isTemplateId(id: unknown): id is string {

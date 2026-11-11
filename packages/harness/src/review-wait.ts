@@ -14,11 +14,12 @@
  * After a push, pass `--commit`: right after a push GitHub can still show the previous head, and
  * without it the previous commit's finished review would be reported as the answer (PR 65, 9 Nov).
  */
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
+import { gh, ghAll } from "./github.ts";
 import { QodoApi } from "./qodo-api.ts";
 
 /** The parts of Qodo's `get-pr-review-findings` (extended) response this uses. */
@@ -241,19 +242,24 @@ export interface Args {
 
 /** The command line, or null when it's wrong. */
 export function parseArgs(argv: string[]): Args | null {
-  const [repoKey, prArg, ...rest] = argv;
-  const option = (name: string): string | null | undefined => {
-    const i = rest.indexOf(name);
-    if (i < 0) return null;
-    return rest[i + 1];
-  };
-  const timeout = option("--timeout");
-  const commit = option("--commit");
+  let values: { commit?: string; timeout?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseNodeArgs({
+      args: argv,
+      options: { commit: { type: "string" }, timeout: { type: "string" } },
+      allowPositionals: true,
+    }));
+  } catch {
+    return null;
+  }
+  const [repoKey, prArg] = positionals;
   const pr = Number(prArg);
-  const timeoutMinutes = timeout === null ? 20 : Number(timeout);
+  const timeoutMinutes = values.timeout === undefined ? 20 : Number(values.timeout);
+  const commit = values.commit ?? null;
   if (!repoKey || !Number.isInteger(pr) || pr <= 0) return null;
-  if (timeout === undefined || !Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) return null;
-  if (commit === undefined || (commit !== null && !/^[0-9a-f]{7,40}$/i.test(commit))) return null;
+  if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) return null;
+  if (commit !== null && !/^[0-9a-f]{7,40}$/i.test(commit)) return null;
   return { repoKey, pr, timeoutMinutes, commit };
 }
 
@@ -311,16 +317,6 @@ export function ciOrUnavailable(
     onError?.(error);
     return "unavailable";
   }
-}
-
-/** Runs `gh` with a time limit, so a stalled call can't keep the review timeout from firing. */
-function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
-}
-
-/** Every item of a paginated list endpoint. */
-function ghAll<T>(path: string, pick: (page: unknown) => T[] = (page) => page as T[]): T[] {
-  return (JSON.parse(gh("api", "--paginate", "--slurp", path)) as unknown[]).flatMap(pick);
 }
 
 async function main() {
