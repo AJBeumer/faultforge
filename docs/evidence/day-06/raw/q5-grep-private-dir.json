@@ -1,0 +1,126 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": "packages/harness/src/case-build.test.ts",
+      "line": 430,
+      "text": "      env: { FAULTFORGE_PRIVATE_DIR: fx.root },"
+    },
+    {
+      "path": "packages/harness/src/match.test.ts",
+      "line": 19,
+      "text": "    env: { FAULTFORGE_PRIVATE_DIR: privateDir },"
+    },
+    {
+      "path": "packages/harness/src/match.test.ts",
+      "line": 104,
+      "text": "  it(\"prefers the private copy to the seed copy, as inject does, read from FAULTFORGE_PRIVATE_DIR\", () => {"
+    },
+    {
+      "path": "packages/harness/src/match.ts",
+      "line": 7,
+      "text": " * storage first (`FAULTFORGE_PRIVATE_DIR`, or `private/`), then `templates/seed`. Prints, for each finding,"
+    },
+    {
+      "path": "packages/harness/src/templates.test.ts",
+      "line": 13,
+      "text": "    const env = { FAULTFORGE_PRIVATE_DIR: join(tmpdir(), \"no-such-private\") };"
+    },
+    {
+      "path": "packages/harness/src/templates.test.ts",
+      "line": 25,
+      "text": "  it(\"prefers the private copy, read from FAULTFORGE_PRIVATE_DIR\", () => {"
+    },
+    {
+      "path": "packages/harness/src/templates.test.ts",
+      "line": 29,
+      "text": "    const env = { FAULTFORGE_PRIVATE_DIR: dir };"
+    },
+    {
+      "path": "packages/harness/src/templates.ts",
+      "line": 14,
+      "text": "/** Private storage: `FAULTFORGE_PRIVATE_DIR`, or `private/` in this repository. */"
+    },
+    {
+      "path": "packages/harness/src/templates.ts",
+      "line": 16,
+      "text": "  return resolve(env.FAULTFORGE_PRIVATE_DIR ?? join(ROOT, \"private\"));"
+    },
+    {
+      "path": "packages/harness/src/verdict.test.ts",
+      "line": 113,
+      "text": "    env: { FAULTFORGE_PRIVATE_DIR: root },"
+    },
+    {
+      "path": "packages/harness/test/case-build.integration.test.ts",
+      "line": 12,
+      "text": "// The guard looks where `run` looks (`privateDir`, which honours FAULTFORGE_PRIVATE_DIR), so the test"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": [
+    "*.dds",
+    "*.exr",
+    "*.pdb",
+    "*.lib",
+    "*.zip",
+    "*.tar",
+    "*.mp4",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.bmp",
+    "*.tiff",
+    "*.tga",
+    "*.ico",
+    "*.webp",
+    "*.psd",
+    "*.mp3",
+    "*.wav",
+    "*.flac",
+    "*.ogg",
+    "*.avi",
+    "*.mov",
+    "*.mkv",
+    "*.webm",
+    "*.gz",
+    "*.bz2",
+    "*.xz",
+    "*.7z",
+    "*.rar",
+    "*.jar",
+    "*.war",
+    "*.fbx",
+    "*.obj",
+    "*.blend",
+    "*.glb",
+    "*.gltf",
+    "*.bin",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib",
+    "*.o",
+    "*.a",
+    "*.class",
+    "*.wasm",
+    "*.pdf",
+    "*.ttf",
+    "*.otf",
+    "*.woff",
+    "*.woff2"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "issue": {
+    "number": 4,
+    "title": "Check Qodo's setup before each case",
+    "body": "### Result\nOne command confirms Qodo matches the saved config.\n\n### Done when\n- [ ] Compares rules and skills with the saved snapshot\n- [ ] Fails if any repo is linked to the target\n- [ ] Read-only API calls only\n- [ ] `/new-case` runs it first\n- [ ] Tests for match, changed rule, extra rule\n\n### Why\nOn Day 2 a push to the target changed Qodo's rules.\n\n### Notes\n- Files: new `packages/harness/src/qodo-check.ts`, script `qodo:check` in `package.json`\n- Read-only client: `private/qodo-mcp-readonly.mjs` (tools `rules-list`, `review-skills-list`, `cross-repo-overview`). Snapshot: `private/config/qodo-v3/`.\n- Compare by rule id, content and state. Ignore timestamps and counters like `updatedAt`.\n- The key file path comes from `QODO_KEY_FILE`; never print the key.",
+    "state": "open",
+    "author": { "login": "AJBeumer", "external_id": "20108865", "is_bot": false, "is_self": false },
+    "assignees": [{ "login": "AJBeumer", "external_id": "20108865", "is_bot": false, "is_self": false }],
+    "labels": ["review"],
+    "comments_count": 0,
+    "created_at": "2026-11-06T16:30:14Z",
+    "updated_at": "2026-11-06T17:06:36Z",
+    "closed_at": null,
+    "html_url": "https://github.com/AJBeumer/faultforge/issues/4"
+  }
+}

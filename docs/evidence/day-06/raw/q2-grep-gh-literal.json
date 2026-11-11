@@ -1,0 +1,49 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 1195,
+      "text": "  return runExternal(`gh ${args[0] ?? \"\"}`.trim(), \"gh\", args, CALL_TIMEOUT_MS, { maxBuffer: 64 * 1024 * 1024 });"
+    },
+    {
+      "path": "packages/harness/src/revert-check.ts",
+      "line": 364,
+      "text": "  return execFileSync(\"gh\", args, { encoding: \"utf8\", timeout: 60_000 });"
+    },
+    {
+      "path": "packages/harness/src/review-wait.ts",
+      "line": 318,
+      "text": "  return execFileSync(\"gh\", args, { encoding: \"utf8\", timeout: 60_000 });"
+    },
+    {
+      "path": "packages/harness/src/rules-propose.ts",
+      "line": 90,
+      "text": "  return execFileSync(\"gh\", args, { encoding: \"utf8\", timeout: 60_000 });"
+    },
+    {
+      "path": "packages/harness/src/ticket-ready.ts",
+      "line": 67,
+      "text": "  return execFileSync(\"gh\", args, { encoding: \"utf8\", timeout: GH_TIMEOUT_MS });"
+    },
+    {
+      "path": "packages/harness/src/verdict.ts",
+      "line": 202,
+      "text": "  return execFileSync(\"gh\", [\"api\", \"user\", \"--jq\", \".login\"], { encoding: \"utf8\", timeout: 15_000 }).trim();"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": null
+}

@@ -1,0 +1,25 @@
+{
+  "commits": [
+    {
+      "sha": "bc93daed6dce340f559b443e5c29bf8bac9c35bb",
+      "message": "Day 2: house rules in the target, Qodo configuration v3\n\nDecision log entry for Day 2, README status, and a check in /new-case that Qodo's rules match the saved snapshot.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-06T09:13:02Z"
+    },
+    {
+      "sha": "37e37d9d0dd49e120853274078bf6713652f45ad",
+      "message": "Add Qodo safety rules for case PRs\n\nFrom Qodo's docs: Qodo finds links between repositories by itself, and\nit learns from dismissed findings and PR chats. CLAUDE.md and the\nnew-case skill now say to check that the target has no linked repos\nbefore each case, and never to dismiss findings or chat on case PRs.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-02T16:03:54Z"
+    },
+    {
+      "sha": "23b491a81593acc9e24db9039d63fe19ae87261b",
+      "message": "Add Claude Code setup: project rules, a safety hook and two skills\n\n- CLAUDE.md: the rules every coding agent must follow, such as what\n  each of the three repos may hold and how to keep the target repo\n  free of hints for the reviewer.\n- A hook that blocks hints (like the project name or a case id) in\n  commits, PRs, comments and file edits for the target repo, and\n  blocks force pushes to it.\n- Project permissions for safe, everyday commands.\n- Two skills: /new-case runs one case from start to finish, and\n  /daily-challenge plans and wraps up each hackathon day.\n- The inject command now looks for templates in private storage first\n  and refuses branch names or commit messages that give a case away.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-02T15:25:54Z"
+    }
+  ]
+}

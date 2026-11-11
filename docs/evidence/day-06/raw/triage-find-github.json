@@ -1,0 +1,21 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "entries": [
+    { "path": ".github/ISSUE_TEMPLATE/config.yml", "is_dir": false, "size": 184 },
+    { "path": ".github/ISSUE_TEMPLATE/task.yml", "is_dir": false, "size": 1140 },
+    { "path": ".github/pull_request_template.md", "is_dir": false, "size": 346 },
+    { "path": ".github/workflows/check.yml", "is_dir": false, "size": 647 },
+    { "path": ".github/workflows/drill-foreign-label.yml", "is_dir": false, "size": 698 },
+    { "path": ".github/workflows/factory.yml", "is_dir": false, "size": 5343 }
+  ],
+  "truncated": false,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "truncation_reason": null,
+  "error": null,
+  "error_code": null,
+  "retryable": false,
+  "recovery_hints": null
+}

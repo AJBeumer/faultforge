@@ -1,0 +1,188 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": ".claude/skills/factory/SKILL.md",
+      "line": 27,
+      "text": "3. **Wait for the real review:** `npm run review:wait -- <repo> <pr> --commit <sha>`, where `<sha>` is `git rev-parse HEAD` in the checkout you just pushed from. Right after a push GitHub can still show the old head, and without `--commit` the old commit's finished review would come back as the answer. It also saves the evidence on every run: each new version of Qodo's comments while it waits (Qodo rewrites them in place after a push), the raw API answer, and a `review.json` record, under `<evidence>/reviews/<repo>-pr<N>/`. Run it after every push, so every round has its own record. It needs `QODO_KEY_FILE` (or `QODO_API_KEY`) and `GH_TOKEN`. Don't pipe its output: a pipe hides the exit code, and a run that failed at once can look complete. Run it in the foreground, with the Bash tool's longest timeout (600000 ms) and `--timeout 9`, and run it again while it exits 1, for as long as the round allows. Never start it in the background and never schedule a wakeup: in an unattended run, ending your turn ends the run, the background task is killed and nobody wakes you (run 20261110-150249, #129)."
+    },
+    {
+      "path": ".claude/skills/new-case/SKILL.md",
+      "line": 17,
+      "text": "- Check Qodo's state with the read-only client (`QODO_KEY_FILE` set, run from `private/`): `node qodo-mcp-readonly.mjs call cross-repo-overview '{}'` must show no edges, and `rules-list` and `review-skills-list` must match the current version's snapshot in `private/config/qodo-vN/` (from v3 on: `rules.json`, `review-skills.json`; ids, text and active state). Any difference means the reviewer changed: stop and tell the owner. Save both outputs as the case's `qodo-state.raw.json`."
+    },
+    {
+      "path": ".claude/skills/work-ticket/SKILL.md",
+      "line": 70,
+      "text": "It waits until the PR's head is that commit (right after a push GitHub can still show the old one), then until Qodo's API says the review of that commit is complete. On the way it saves every version of Qodo's comments, from every page of both comment feeds, plus the raw API answer and a `review.json` record, under `<evidence>/reviews/<key>-pr<pr>/`. It needs `QODO_KEY_FILE` (or `QODO_API_KEY`) and `GH_TOKEN`. Exit codes: 0 complete, 1 not complete in time or the head never became that commit, 2 couldn't run, 3 Qodo skipped the review (zero findings then does not mean clean)."
+    },
+    { "path": "docs/factory-trigger.md", "line": 64, "text": "setx QODO_KEY_FILE \"<path to the Qodo key file>\"" },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 60,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[55-66]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 102,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[39-43]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 117,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[80-81]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 139,
+      "text": "      \"file_path\": \"packages/harness/src/qodo-api.ts\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 367,
+      "text": "      \"code_snippet\": \"+  if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 387,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[39-43]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 402,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[68-81]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 407,
+      "text": "            \"citation\": \"  const api = new QodoApi();\\n  const result = await waitForReview(\\n    headSha,\\n    {\\n      fetchReview: async () => {\\n        const review = (await api.call(\\\"get-pr-review-findings\\\", {\\n          pr_url: `https://github.com/${github}/pull/${pr}`,\\n          extended: true,\\n        })) as QodoReview;\\n        return review;\\n      },\\n      onPoll,\\n      now: Date.now,\\n      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),\\n    },\\n    { timeoutMs: timeoutMinutes * 60_000 },\\n  );\\n\\n  if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 516,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[71-81]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 531,
+      "text": "            \"source\": \"packages/harness/src/qodo-api.ts[39-43]\","
+    },
+    {
+      "path": "packages/harness/fixtures/qodo-lite-rereview.json",
+      "line": 538,
+      "text": "      \"file_path\": \"packages/harness/src/qodo-api.ts\","
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 25,
+      "text": " * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges."
+    },
+    {
+      "path": "packages/harness/src/qodo-api.ts",
+      "line": 6,
+      "text": " * The key comes from `QODO_API_KEY`, or from the file named in `QODO_KEY_FILE`. It is never printed."
+    },
+    {
+      "path": "packages/harness/src/qodo-api.ts",
+      "line": 23,
+      "text": "    process.env.QODO_API_KEY ?? (process.env.QODO_KEY_FILE && readFileSync(process.env.QODO_KEY_FILE, \"utf8\"));"
+    },
+    {
+      "path": "packages/harness/src/qodo-api.ts",
+      "line": 24,
+      "text": "  if (!key?.trim()) throw new Error(\"Set QODO_API_KEY, or QODO_KEY_FILE to the path of the key file.\");"
+    },
+    {
+      "path": "packages/harness/src/review-wait.test.ts",
+      "line": 4,
+      "text": "import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from \"./qodo-api.ts\";"
+    },
+    { "path": "packages/harness/src/review-wait.ts", "line": 22, "text": "import { QodoApi } from \"./qodo-api.ts\";" },
+    {
+      "path": "packages/harness/src/review-wait.ts",
+      "line": 431,
+      "text": "              join(dir, `${short}.qodo-api.latest.recovered.raw.json`),"
+    },
+    {
+      "path": "packages/harness/src/review-wait.ts",
+      "line": 436,
+      "text": "          if (api.lastRaw) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), api.lastRaw);"
+    },
+    {
+      "path": "packages/harness/src/review-wait.ts",
+      "line": 451,
+      "text": "  if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));"
+    },
+    {
+      "path": "packages/harness/src/rules-evidence.test.ts",
+      "line": 165,
+      "text": "    writeFileSync(join(dir, \"reviews\", \"faultforge-pr75\", \"aaa.qodo-api.raw.json\"), \"{}\");"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": [
+    "*.dds",
+    "*.exr",
+    "*.pdb",
+    "*.lib",
+    "*.zip",
+    "*.tar",
+    "*.mp4",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.bmp",
+    "*.tiff",
+    "*.tga",
+    "*.ico",
+    "*.webp",
+    "*.psd",
+    "*.mp3",
+    "*.wav",
+    "*.flac",
+    "*.ogg",
+    "*.avi",
+    "*.mov",
+    "*.mkv",
+    "*.webm",
+    "*.gz",
+    "*.bz2",
+    "*.xz",
+    "*.7z",
+    "*.rar",
+    "*.jar",
+    "*.war",
+    "*.fbx",
+    "*.obj",
+    "*.blend",
+    "*.glb",
+    "*.gltf",
+    "*.bin",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib",
+    "*.o",
+    "*.a",
+    "*.class",
+    "*.wasm",
+    "*.pdf",
+    "*.ttf",
+    "*.otf",
+    "*.woff",
+    "*.woff2"
+  ]
+}

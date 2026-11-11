@@ -1,0 +1,177 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": "packages/harness/src/case-build.test.ts",
+      "line": 292,
+      "text": "          legacyFindingsPath: \"private/raw-artifacts/x.json\","
+    },
+    {
+      "path": "packages/harness/src/case-build.test.ts",
+      "line": 364,
+      "text": "  // \"private/raw-artifacts/<case>/...\"), so the fixture's own file is named relative to it too."
+    },
+    { "path": "packages/harness/src/case-record.test.ts", "line": 154, "text": "    \"raw-artifacts/FF-0001/log\"," },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 160, "text": "    saveEvidence: (runId, w) => {" },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 162,
+      "text": "      return { file: `private/raw-artifacts/factory-runs/${runId}.jsonl`, pushed: true, blocked: [] };"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 396,
+      "text": "        saveEvidence: (runId, w) => {"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 398,
+      "text": "          return { file: \"\", pushed: false, blocked: [\"config/qodo-rules.yaml\"], savedAt: `blocked-${runId}` };"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 415,
+      "text": "    expect(f.comments.at(-1)?.body).toMatch(/blocked-20261109-093001-target-18/);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 418,
+      "text": "  it(\"keeps the worktrees when even the blocked-branch push failed: the run folder is the only copy left (#102)\", async () => {"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 422,
+      "text": "        saveEvidence: (_runId, w) => {"
+    },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 440, "text": "        saveEvidence: (runId) => ({" },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 444,
+      "text": "          savedAt: `blocked-${runId}`,"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 451,
+      "text": "    expect(body).toMatch(/blocked-20261109-093001-target-18/);"
+    },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 459, "text": "        saveEvidence: (runId) => ({" },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 463,
+      "text": "          savedAt: `blocked-${runId}`,"
+    },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 487, "text": "        saveEvidence: (runId) => ({" },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 491,
+      "text": "          savedAt: `blocked-${runId}`,"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 494,
+      "text": "          if (!body.includes(\"outside `raw-artifacts/`\")) {"
+    },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 554, "text": "        saveEvidence: () => {" },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 655, "text": "        saveEvidence: () => {" },
+    { "path": "packages/harness/src/factory-tick.test.ts", "line": 673, "text": "    f.deps.saveEvidence = () => {" },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 681,
+      "text": "      evidence: \"private/raw-artifacts/factory-runs/20261109-093001-target-18.jsonl\","
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 795,
+      "text": "          \"raw-artifacts/factory-runs/x.jsonl\","
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 797,
+      "text": "          \"factory-log/2026-11-10.md\","
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 820,
+      "text": "    expect(blockedEvidencePaths([\" raw-artifacts/x\"], \"raw-artifacts\")).toEqual([\" raw-artifacts/x\"]);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 860,
+      "text": "    expect(sh(origin, \"show\", \"main:raw-artifacts/factory-runs/run1.jsonl\")).toContain(\"idle\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 873,
+      "text": "    expect(result.savedAt).toBe(\"blocked-run2\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 875,
+      "text": "    expect(sh(origin, \"show\", \"blocked-run2:ground-truth.jsonl\")).toContain(\"FF-0099\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 901,
+      "text": "    sh(priv, \"mv\", \"ground-truth.jsonl\", \"raw-artifacts/ground-truth.jsonl\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 908,
+      "text": "  it(\"sees a change the agent already committed mid-run, before saveEvidence ever stages anything\", () => {"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 165,
+      "text": " * and treating ` raw-artifacts/x` as `raw-artifacts/x` would let a root-level path with a stray space"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 239, "text": "    const branch = `blocked-${runId}`;" },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 753,
+      "text": "  saveEvidence(runId: string, ws: Workspace | null): EvidencePush & { file: string };"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 839, "text": "      deps.saveEvidence(runId, null);" },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 850, "text": "      deps.saveEvidence(runId, null);" },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 861, "text": "      deps.saveEvidence(runId, null);" },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 931,
+      "text": "    const saved = deps.saveEvidence(runId, ws);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 940,
+      "text": "      const blockedMessage = `The run also changed files in the private repository outside \\`raw-artifacts/\\` and \\`factory-log/\\` (${paths}). Nothing was pushed to its \\`main\\`; the run log and transcript are saved instead in ${where}.`;"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 965,
+      "text": "      // The run folder is only kept when even the blocked-branch push failed: that's the one case"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 1010,
+      "text": "        const saved = deps.saveEvidence(runId, ws);"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 1735, "text": "    saveEvidence(runId, ws) {" },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 4,
+      "text": "// Event shapes mirror the real run logs under private/raw-artifacts/factory-runs/, which aren't"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": null
+}
