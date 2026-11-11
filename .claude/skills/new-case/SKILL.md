@@ -17,6 +17,8 @@ Read `CLAUDE.md` first. Every step below obeys it.
 - Run `npm run qodo:check` from this repository's root, never from `private/` (the script lives in the root `package.json`), with `QODO_KEY_FILE` set. Exit 0: Qodo matches the highest-numbered snapshot in `private/config/qodo-vN/` (rules on every page, review skills, no relationship on the target); the live answers are saved under `private/raw-artifacts/qodo-state/<timestamp>/`, so name that folder in the case record as its `qodo-state`. Exit 1 with a printed list of differences: the reviewer changed; stop and tell the owner. A non-zero exit without that list (npm reporting a missing script, a crash) is a tooling problem, not drift: treat it like exit 2. Exit 2: the check could not run (key, snapshot, API); fix the setup before any case. Never work around a difference by editing the snapshot: that is the owner's decision, recorded in the decision log.
 - `inject` picks the branch: the template's `publish.branch` when that name is free, otherwise the base name with the smallest free numeric suffix (`tidy-replay-lookup-2`), checked locally and on origin, and it prints the name it used. Use that name in every later step. Never delete or rename old case branches: they are evidence.
 
+- Run `npm run case:ticket -- --template <id> --case <FF-NNNN> --dry-run` and read the issue text it prints. From configuration v7 every case, control or bug, has a target ticket; section 3 creates it. Stop if the dry run refuses (exit 1: the text would give the case away or links to a GitHub issue or PR).
+
 ## 2. Plant and validate
 
 ```bash
@@ -27,12 +29,18 @@ This writes the ledger entry, an audit event and artefacts under `private/raw-ar
 
 ## 3. Publish the PR
 
+In this order, each command on its own:
+
+1. **Create the target ticket.** `npm run case:ticket -- --template <id> --case <FF-NNNN>`, run in this repository and never chained with a target-repo command. It prints the issue number `<N>`, records a `case.ticket-created` audit event and saves the raw `gh` output. Do this before pushing anything: if it refuses (exit 1), nothing has left the machine. Exit 2 means it could not tell whether the issue was created: check GitHub before retrying, never retry blindly.
+2. **Push the branch,** then
+3. **open the PR** with `Closes #<N>` in the body:
+
 ```bash
 git -C ../faultforge-target push -u origin <branch>
-gh pr create --repo AJBeumer/faultforge-target --base main --head <branch> --title "<commit message>" --body "<one plain sentence>"
+gh pr create --repo AJBeumer/faultforge-target --base main --head <branch> --title "<commit message>" --body "<one plain sentence>. Closes #<N>"
 ```
 
-- The title equals the commit message. The body is one ordinary sentence about the change, never about bugs, tests or reviews.
+- The title equals the commit message. The body is one ordinary sentence about the change, never about bugs, tests or reviews, followed by `Closes #<N>`.
 - If `gh pr create` fails with a permission error, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body, and wait for the PR number.
 - Not a draft. No reviewers, labels or assignees.
 - Record the PR: append an audit event `pr.opened` with the PR number and head commit, and check that the head commit equals the ledger's `injectionCommit`.
