@@ -1,0 +1,221 @@
+{
+  "commits": [
+    {
+      "sha": "05f7193a2674b0a93dba8d96df7cbbfc612c33bf",
+      "message": "Address Qodo round 2: avoid the status-prefix trim trap, retry comment/relabel\n\nReads the private worktree's changed paths from three plain path\nlists (two diffs, one ls-files) instead of git status --porcelain,\nso the shared git helper's whole-output trim can no longer eat a\nleading status character and shift a path's prefix. The blocked-run\ncomment and its corrective relabel each get one retry on their own,\nso a transient failure in either no longer silently leaves a blocked\nrun looking agent-done with nothing said about it.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T22:39:33Z"
+    },
+    {
+      "sha": "a35cf6aac0b1dbf7b68bf5a63dd9a935b7958c0a",
+      "message": "Address Qodo round 1: check before committing, no-renames, redaction\n\nLists changed paths from the untracked/committed working tree before\nany add/commit, so the check runs ahead of the commit it gates.\nDisables rename detection so a protected file moved under the evidence\nroot still shows its old path as changed. Drops the path trim that let\na leading space slip a root-level path past the prefix check. Retries\nthe quarantine push. Keeps the recovery branch or folder name in the\nticket comment even when the blocked paths themselves must be\nredacted, posts it before the corrective relabel, and only keeps a\nblocked run's worktrees when even that branch push failed.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T22:32:16Z"
+    },
+    {
+      "sha": "e212e822a5190108c0e407c49c2b1a55425fa64c",
+      "message": "Refuse to publish private evidence outside its allowed paths\n\nThe runner pushed whatever the agent left in the private worktree\nstraight to main. Now it diffs the private branch against origin/main\nfirst: a run that changed anything outside raw-artifacts/ or\nfactory-log/ is kept on its own branch instead, main never moves, and\nthe ticket is marked agent-needs-help with the paths named.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T22:19:04Z"
+    },
+    {
+      "sha": "15550460723244c6c4132044d567c48bbdf06cd5",
+      "message": "Fix four review findings: unfinished public tests, silent kills, and the audit's pull-request scan\n\n- inject: a bug case with no evidence on its public tests (not_run) is\n  now unvalidated too, not just a control; previously only a control\n  checked that outcome.\n- inject: a run's step log always names its outcome, including the\n  signal that killed it when there's no spawn error, instead of only\n  printing a detail when `result.error` happened to be set.\n- factory audit: replace the paginated-then-filtered PR list with\n  pullsSince(), which pages by hand, newest first, and stops as soon\n  as a page is older than the run window. Reads every pull in the\n  window without downloading a repo's whole PR history.\n- The source-text regression test for the old approach is replaced\n  with direct tests of pullsSince's stopping behaviour.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T17:38:21Z"
+    },
+    {
+      "sha": "96b8c407227460558baeb05facd2df3ca981ee29",
+      "message": "Give each tooling exit code and recorded result one meaning\n\nticket:ready now exits 2 when gh fails to read the ticket, distinct from\nexiting 1 when the ticket itself is not ready, and its gh call carries a\ntime limit. inject records a proof or public-test run that hit its time\nlimit or couldn't be spawned as not_run, never fail, and refuses to\nvalidate on it. rules-evidence skips a stray file that matches the\nreview-folder pattern instead of crashing. rules-propose drops its\nunused mode parameter. The factory audit's PR-reviews read now reads\nevery page instead of stopping at the first 50.\n\nCloses #114",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T17:28:50Z"
+    },
+    {
+      "sha": "00c0535e493097bf6762ea6cf66261c2f9a1d6a1",
+      "message": "Factory run: wait for Qodo in the foreground, and no wakeup tool\n\nRun 20261110-150249 for ticket 18 built its change and opened the PR, then\nstarted review:wait as a background task, scheduled a wakeup and ended its\nturn. In a headless run that ends the run: the runner read no result and\nthe task was killed before it saved the review.\n\nThe runner's instructions now say to run review:wait in the foreground with\nthe Bash tool's longest timeout and --timeout 9, to run it again while it\nexits 1, and never to start it in the background or schedule a wakeup,\nbecause ending the turn ends the run. agentArgs passes --disallowedTools\nScheduleWakeup, and the factory skill's wait step says the same.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T15:40:50Z"
+    },
+    {
+      "sha": "94b9fb2ba0875195f49a05218c1a36c24bcbc193",
+      "message": "Factory run instructions: give the ticket file's path and rule out listing the environment",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T12:39:55Z"
+    },
+    {
+      "sha": "5d08d773fd7609aef55cf42f00d25ca91d14820f",
+      "message": "Factory tick: verify a stale lock's content before acting on it\n\nReading a stale lock's pid and then acting on that read are two\nseparate steps, so another tick could have already moved the same\nstale lock away and taken a fresh one of its own in between. Without\na check, this tick's own rename would isolate that fresh lock by\nmistake instead of the stale one it actually read, and both ticks\nwould end up believing they hold it.\n\nThe rename's result is now checked against exactly the bytes read\nbefore deciding the lock was stale, and restored if they no longer\nmatch, rather than ever proceeding on a lock that turned out to\nbelong to someone else.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T12:27:13Z"
+    },
+    {
+      "sha": "d6ee1f1d9d6eb18f300bf9e2887f6c8d77e22dde",
+      "message": "Factory tick: fix Qodo's round-2 findings on the lock and label changes\n\n- acquireLock no longer uses a second mutex directory to gate stale-lock\n  recovery (that directory could itself be reclaimed unsafely by two\n  ticks at once). Taking over a stale lock now moves the old file out\n  of the way with renameSync instead: renaming is exclusive on its own\n  source path, so only one tick's rename of the same stale file can\n  ever succeed, and the loser reports busy, not a double claim.\n- relabel no longer conflates a failed removal (cosmetic, an old label\n  left lingering) with a failed add (the ticket's new state was never\n  recorded at all): it now reports each separately. The tick only logs\n  and continues past a failed removal; a failed add still stops the\n  run, so a claim that didn't really land can't let the agent start,\n  and a finish that didn't really land can't be reported as finished.\n- The finish step and the fallback both now also strip ready-for-agent,\n  not just agent-working, so a ticket whose claim removal failed can't\n  end up looking pickable again once the run is actually done.\n- Moved the one test that spans a real process into the integration\n  suite, where process-spawning tests belong.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T12:21:45Z"
+    },
+    {
+      "sha": "5249c2b120ef36a8c66ac4a9f032dc42e03208a0",
+      "message": "Factory tick: fix Qodo's round-1 findings on the label and lock changes\n\n- relabel no longer aborts the whole label update when removing the old\n  label fails for a real reason: it still adds the new one, and only\n  then reports the removal problem, extracted into a pure relabelWith\n  so the retry-after-add behaviour is covered directly. The tick itself\n  never lets that problem stop a ticket from getting its final label or\n  its comment: the claim, the finish, and the fallback all treat a\n  failed relabel as something to log, not something that aborts.\n- acquireLock no longer crashes when a fresh tick's own plain lock write\n  lands in the narrow gap a stale takeover needs between clearing the\n  old lock and writing its own: that now reports busy too.\n- The recovery mutex that gates a stale takeover is itself reclaimable\n  once clearly too old for its own section to still be running, so a\n  crash in that narrow window can no longer block every later tick.\n- The PR a timed-out run reports on the ticket is now checked against\n  the ticket's own repo, the same way a normal result already is.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T12:10:02Z"
+    },
+    {
+      "sha": "8c0f6c953e6366e41ebe405fa21b6fc31f704487",
+      "message": "Factory tick: time limits on every gh and git call\n\nEvery gh and git call in the tick ran with no time limit, so a single\nhung call could hold the lock until the job was killed, leaving a\nticket stuck as agent-working with nothing to pick it up again.\n\n- gh and git calls now carry a time limit (60s default, 10 minutes for\n  a push or a fetch/clone), and a failed call is reported by name.\n- A timed-out call during the audit or the verify step already ends\n  the run as agent-needs-help through the existing error handling;\n  added tests pin that down now that these calls can actually fail.\n- relabel no longer swallows every failed label removal as \"already\n  gone\": only gh's own 404 for a missing label is, everything else\n  (403, a different 404, a timeout) is reported.\n- Two ticks that both find the same stale lock can no longer both take\n  it over: a second, atomic mutex gates the stale-lock recovery path,\n  so the loser reports busy.\n- A run that hits the time limit after the agent opened a pull request\n  now reports that PR in the ticket comment, read from the agent's own\n  `gh pr create` step instead of its (missing) final result line.",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-10T11:54:30Z"
+    },
+    {
+      "sha": "ffc304459f4813c88e7e5825d13416a794d351be",
+      "message": "Merge pull request #116 from AJBeumer/skills-match-run-policy\n\nThe skills agree with the unattended-run policy",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T18:17:03Z"
+    },
+    {
+      "sha": "d818472688834201d8a872129bf0759443a47b29",
+      "message": "Merge pull request #119 from AJBeumer/factory-credentials\n\nFactory credentials: no token on disk, secrets only where used, strict MCP config",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T18:16:14Z"
+    },
+    {
+      "sha": "6f4194eb0bbbd28fd32e17f8137882831411a365",
+      "message": "Factory credentials: no token on disk, secrets only on the steps that need them, strict MCP config",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T18:01:58Z"
+    },
+    {
+      "sha": "a8ca926dedec3c909f0f5b1a9f559a7d24e02628",
+      "message": "The skills agree with the unattended-run policy",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T17:44:06Z"
+    },
+    {
+      "sha": "699f47e6d1489e3a2b3cf287d23ab5bf0e5ad3f9",
+      "message": "Hooks block with exit 2 on an error, a missing body file is a deny, and the self-test accepts only decisions Claude Code acts on",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T17:13:52Z"
+    },
+    {
+      "sha": "a0b43ab2438ca88a4163c4aa0ec44da559a7de28",
+      "message": "Hooks fail closed, and the runner self-tests them before a run",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T17:03:46Z"
+    },
+    {
+      "sha": "2f97cd467c3488296439e82b38f8478afec5d421",
+      "message": "Merge branch 'main' into body-text-as-files\n\n# Conflicts:\n#\tpackages/harness/src/factory-tick.test.ts",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T16:34:23Z"
+    },
+    {
+      "sha": "60aa2bd682b12322ae72f7c5721d1a18bb1258eb",
+      "message": "Factory runs: tell the agent to pass message text as files, in the instructions and in every denial",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T16:02:09Z"
+    },
+    {
+      "sha": "cd84252552d7a0dfff448d349521239ca131352b",
+      "message": "review:wait: save comment feeds raw first, recheck the head before reporting; runner verifies the agent's pushed commit",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T15:57:19Z"
+    },
+    {
+      "sha": "4950112aa39ed8bf4f29f64915432a516766bbf4",
+      "message": "review:wait: wait for the pushed commit before reading its review",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T15:49:28Z"
+    },
+    {
+      "sha": "92d678817db5e98b9dcbe6b1b61c9fc258eff4bc",
+      "message": "rules:propose: refresh the private checkout both modes, neutral titles in tickets, threshold in every output, full tracebacks",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T12:38:25Z"
+    },
+    {
+      "sha": "2e21393b719819c47774ec731c2924d0d2aca465",
+      "message": "rules:propose: the factory proposes a rule when a pattern repeats",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T12:30:51Z"
+    },
+    {
+      "sha": "3c9ef6b3f7044b4843fec1e21a3880d2fdfc7ba2",
+      "message": "Policy: join continued lines before matching, and block any gh api call about issues, comments or search in a run",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T11:20:01Z"
+    },
+    {
+      "sha": "5eb9683a67f0c6852a1ef3b7436ab72dc2aa46c1",
+      "message": "Ticket snapshot: test the paging, catch undone edits through the edit history, block every live issue read in a run",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T11:10:54Z"
+    },
+    {
+      "sha": "083e974d2197e44c87903620a8e7d8b5f89beacd",
+      "message": "Factory runs work from a checked snapshot of the ticket and re-check it after the run",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T10:53:09Z"
+    },
+    {
+      "sha": "e9b343f98c0d16820ad25a1d1cf2c5c0bfe69277",
+      "message": "Factory in Actions: refuse tickets with text from anyone but the owner, keep keys and output out of the logs, block env reads and outside HTTP, owner-only dispatch, runner context in step env",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T09:20:56Z"
+    },
+    {
+      "sha": "3cc1f39a4d785ca6ffcb68163025635093545aac",
+      "message": "Run the factory in GitHub Actions: label and schedule triggers, CI mode for factory:tick, workflow contract tests",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T09:12:49Z"
+    },
+    {
+      "sha": "56fb13c3893ec5952637598a6a78625e8bc7efe7",
+      "message": "factory:tick: follow links in the edit check, require the exact hook commands, guard notebook edits, audit reviews, the private repo and the whole .claude tree, count whole seconds",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T08:46:51Z"
+    },
+    {
+      "sha": "506f56d8654c69245dadd714f66a3f333190782f",
+      "message": "factory:tick: audit what changed during a run, require a clean exit and no open action-required finding, keep the agent out of .claude, undo a failed setup",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T08:38:27Z"
+    },
+    {
+      "sha": "38eb49d16ef3817bfeddc3541a1c8c30bd96d8dc",
+      "message": "Start the factory from a ready-for-agent label: factory:tick, run policy hook, timeline",
+      "author_name": "AJBeumer",
+      "author_email": null,
+      "date": "2026-11-09T08:27:54Z"
+    }
+  ]
+}

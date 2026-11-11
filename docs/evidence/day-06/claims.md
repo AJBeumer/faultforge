@@ -1,0 +1,22 @@
+# Claims from the remote reads, checked against the local checkout
+
+Local checkout: `main` at `0b84165`. Remote: Qodo's mirror of `AJBeumer/faultforge`, refreshed at the start (`resolved_ref: main`, commit date 2026-11-11T07:19:01Z, fetched 08:29:13Z), which is the same commit. Raw outputs are in `raw/`. A claim is **verified** when the local check gives the same answer, **wrong** when it doesn't, **unverifiable** when no local check exists.
+
+| # | Question | Claim from the remote read | Source (raw file, tool) | Local check | Verdict |
+|---|---|---|---|---|---|
+| C1 | orient | The mirror serves the same commit as the local checkout | `orient-ls-harness-src.json` (`codebase ls --refresh`) | `git rev-parse HEAD` = `0b84165`, merged 07:19Z | verified |
+| C2 | Q2 | Six harness scripts spawn `gh` themselves: `factory-tick.ts:1195`, `revert-check.ts:364`, `review-wait.ts:318`, `rules-propose.ts:90`, `ticket-ready.ts:67`, `verdict.ts:202` | `q2-grep-gh-literal.json` (`codebase grep`) | local grep, same six lines, same line numbers | verified |
+| C3 | Q2 | No script reaches GitHub another way (no `api.github.com`, no Octokit); the only token handling is in `factory-tick.ts` and `rules-propose.ts` | same, plus local grep | local grep for `api.github.com\|octokit\|GH_TOKEN` | verified |
+| C4 | Q3 | `factory.json` or `factory-config` is read by 8 harness modules, 3 hook modules and `factory.yml` (23 files counting tests and docs) | `q3-grep-factory-json.json` | local `grep -l`, same 12 non-test files | verified |
+| C5 | Q5 | `FAULTFORGE_PRIVATE_DIR` appears in 11 places and is resolved in exactly one function, `privateDir()` at `templates.ts:15-16` | `q5-grep-private-dir.json` | local grep, same 11 lines | verified, with a caveat: four more places compute `join(…, "private")` without the variable (`factory-tick.ts:1384,1466,1739`, `rules-propose.ts:173`), which this question could not see; found by the local follow-up grep |
+| C6 | Q6 | No script checks Qodo's configuration: the only mentions are the manual step in `.claude/skills/new-case/SKILL.md:17` and the allow-list in `qodo-api.ts:15-17`; `package.json` has no `qodo:check` script | `q6-grep-qodo-config-check.json`, `triage-read-package-json.json` (`read-file` at `0b84165`) | local grep and local `package.json` | verified |
+| C7 | Q6 | The manual step entered the skill on 6 Nov in commit `bc93dae` ("Day 2: house rules in the target, Qodo configuration v3"); the skill has three commits in total | `q6-commits-new-case-skill.json` (`list-commits --path`) | `git log -- .claude/skills/new-case/SKILL.md`: same three commits | verified |
+| C8 | Q7 | `factory-tick.ts` has 31 commits in its history, the first on 9 Nov 08:27Z, so all within 48 hours | `q7-commits-factory-tick.json` | local sha set identical (31 of 31) | verified |
+| C9 | Q1 | The run's labels are defined at `factory-tick.ts:48-51` (`ready-for-agent`, `agent-done`, `agent-needs-help`) and the outcome type at line 766 | `q1-grep-labels.json` | `sed -n 48,51p`: same, plus `agent-working` on line 49, which the pattern did not ask for | verified |
+| C10 | Q4 | Evidence leaves through `saveEvidence` (`factory-tick.ts:753` interface, `:1735` implementation); a run that changed anything else goes to a `blocked-<runId>` branch (`:239`) with the message at `:940` | `q4-grep-evidence.json` | `sed` on the four lines | verified |
+| C11 | triage | 49 open tickets on the repository | `triage-open-issues.json` (`list-issues`) | `gh issue list --state open`: 49 | verified |
+| C12 | triage | `packages/` holds only `harness`; `packages/harness/test/` has three integration tests; workflows are `check.yml`, `drill-foreign-label.yml`, `factory.yml` | `triage-find-packages.json`, `triage-find-github.json` (`find`) | local `ls` | verified |
+| C13 | step 4 | Ticket #4's text, dates and label as Qodo returns them | `q4-ticket-4-get-issue.json` (`get-issue`) | `gh issue view 4` | verified |
+| C14 | probe | Qodo's pull-request tools are unavailable (`MT-UPSTREAM-DOWN`) | `probes.md` | none possible | unverifiable (recorded as an outage, not as data) |
+
+**Result: 13 of 13 checkable claims verified; 0 wrong; 1 caveat (C5).** All of these are mechanical reads (grep, find, ls, list-commits, read-file), so a high rate is expected; the risk with such reads is staleness, which C1 rules out for today. The one caveat is a limit of the question, not of the tool: a grep for a variable name cannot find code that avoids the variable. The investigation of ticket #4 below rests on C6, C7, C11 and C13.

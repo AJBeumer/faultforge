@@ -1,0 +1,239 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 207,
+      "text": "    expect(f.calls).toEqual([\"relabel owner/target#18 -ready-for-agent +\", \"save without workspace\"]);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 229,
+      "text": "    expect(f.calls).toEqual([\"relabel owner/target#18 -ready-for-agent +\", \"save without workspace\"]);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 277,
+      "text": "      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 286,
+      "text": "      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 320,
+      "text": "      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 360,
+      "text": "    expect(f.calls).toEqual([`relabel owner/target#18 -ready-for-agent +${LABELS.help}`, \"save without workspace\"]);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 368,
+      "text": "      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 392,
+      "text": "  it(\"downgrades an otherwise-done run to needs-help when the evidence save was blocked, and cleans up once it reached its own branch (#102)\", async () => {"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 402,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 404,
+      "text": "      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 428,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 448,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 475,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 503,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 525,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 542,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 559,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 569,
+      "text": "          // The claim call: removes ready-for-agent, adds agent-working."
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 575,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 578,
+      "text": "    // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again."
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 597,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 616,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 630,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 647,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 660,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 662,
+      "text": "      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 694,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 710,
+      "text": "    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe(\"needs-help\");"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 4,
+      "text": " *   npm run factory:tick                     # take the oldest ready-for-agent ticket, if any"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 9,
+      "text": " *  2. Pick the ticket whose `ready-for-agent` label was added longest ago."
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 19,
+      "text": " *  8. Label the ticket `agent-done` or `agent-needs-help`, comment why, push the run log to the private"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 48, "text": "  ready: \"ready-for-agent\"," },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 50, "text": "  done: \"agent-done\"," },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 51, "text": "  help: \"agent-needs-help\"," },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 766,
+      "text": "export type TickOutcome = \"busy\" | \"idle\" | \"refused\" | \"not-ready\" | \"done\" | \"needs-help\";"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 917,
+      "text": "    // ready-for-agent is stripped again here too: if its removal at the claim failed silently (logged,"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 968, "text": "      return \"needs-help\";" },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 971,
+      "text": "    return finish.label === LABELS.done ? \"done\" : \"needs-help\";"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 979,
+      "text": "      // ready-for-agent too: the claim may have left it in place (logged there, not fatal), and this is"
+    },
+    { "path": "packages/harness/src/factory-tick.ts", "line": 1016, "text": "    return \"needs-help\";" },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 1901,
+      "text": "  if (outcome === \"done\" || outcome === \"needs-help\") {"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 1913,
+      "text": "  process.exit(outcome === \"needs-help\" ? 1 : 0);"
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 12,
+      "text": "  { t: \"2026-11-09T09:40:11.510Z\", event: \"finished\", label: \"agent-done\" },"
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 41,
+      "text": "      \"Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost $1.62, 60 turns, 1 review round, outcome agent-done\","
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 61,
+      "text": "      { t: \"2026-11-09T09:40:11.510Z\", event: \"finished\", label: \"agent-needs-help\" },"
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 65,
+      "text": "      \"Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost n/a, n/a turns, 0 review rounds, outcome agent-needs-help\","
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.test.ts",
+      "line": 78,
+      "text": "      { t: \"2026-11-09T09:00:06.000Z\", event: \"finished\", label: \"agent-done\" },"
+    },
+    {
+      "path": "packages/harness/src/factory-workflow.test.ts",
+      "line": 21,
+      "text": "    expect(workflow).toContain(\"github.event.label.name == 'ready-for-agent'\");"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": null
+}

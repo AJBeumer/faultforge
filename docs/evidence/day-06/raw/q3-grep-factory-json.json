@@ -1,0 +1,303 @@
+{
+  "resolved_ref": "main",
+  "commit_date": "2026-11-11T07:19:01+00:00",
+  "last_fetched_at": "2026-11-11T08:29:13.776530+00:00",
+  "matches": [
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 3,
+      "text": " * factory.json that points the guard at them, and the guard's decision asked in-process. No test ever"
+    },
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 12,
+      "text": "/** This repository's factory.json, parsed once; the guard tests change copies of it. */"
+    },
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 13,
+      "text": "export const FACTORY = JSON.parse(readFileSync(join(import.meta.dirname, \"../../factory.json\"), \"utf8\"));"
+    },
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 16,
+      "text": " * factory.json with the target's checkout pointed at `checkout` (a fixture repo, or a folder that doesn't"
+    },
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 24,
+      "text": "  const file = join(mkdtempSync(join(tmpdir(), \"guard-config-\")), \"factory.json\");"
+    },
+    {
+      "path": ".claude/hooks/fixtures.ts",
+      "line": 30,
+      "text": " * The guard's decision for one tool call, asked in-process with `config` as its factory.json: the deny"
+    },
+    {
+      "path": ".claude/hooks/guard-repos.ts",
+      "line": 3,
+      "text": " * always, plus every repo marked reviewed in `factory.json`. Used by guard-target.ts."
+    },
+    {
+      "path": ".claude/hooks/guard-repos.ts",
+      "line": 33,
+      "text": " * The target, plus every repo marked reviewed in `factory.json` (or the file `configPath` names, from"
+    },
+    {
+      "path": ".claude/hooks/guard-repos.ts",
+      "line": 40,
+      "text": "    const path = configPath ?? join(LAB_ROOT, \"factory.json\");"
+    },
+    {
+      "path": ".claude/hooks/guard-target.test.ts",
+      "line": 201,
+      "text": "describe(\"guard-target hook reads the reviewed repos from factory.json\", () => {"
+    },
+    {
+      "path": ".claude/hooks/guard-target.test.ts",
+      "line": 359,
+      "text": "  it(\"falls back to protecting the target if factory.json can't be read\", () => {"
+    },
+    {
+      "path": ".claude/hooks/guard-target.test.ts",
+      "line": 361,
+      "text": "    expect(decide(\"Bash\", { command }, HARNESS, join(tmpdir(), \"no-such-factory.json\"))).toMatch(/names the lab/);"
+    },
+    {
+      "path": ".claude/hooks/guard-target.ts",
+      "line": 4,
+      "text": " * The reviewed repos are the ones with `\"guard\": \"reviewed\"` in `factory.json`. For each, it blocks:"
+    },
+    {
+      "path": ".claude/hooks/guard-target.ts",
+      "line": 113,
+      "text": "            `The guard can't find ${repo.name}'s checkout at ${repo.checkout} (from factory.json), so it can't check what this ${moment} would carry. Fix the path before committing or pushing there.`,"
+    },
+    {
+      "path": ".claude/skills/factory/SKILL.md",
+      "line": 8,
+      "text": "Arguments: tickets in order, as `<repo> <N>` pairs from `factory.json`, e.g. `target 14, target 15, faultforge 49`. Without arguments, take the open items of the active epic in its listed order."
+    },
+    {
+      "path": ".claude/skills/factory/SKILL.md",
+      "line": 26,
+      "text": "2. **Build it** with the `/work-ticket` routine: branch from an up-to-date `main`, a test per criterion plus a failure case, the repo's `check` from `factory.json`, a PR with the ticket link, criteria table and Must-not-break table. Commands for a reviewed repo run from its checkout."
+    },
+    {
+      "path": ".claude/skills/work-ticket/SKILL.md",
+      "line": 8,
+      "text": "Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` or `faultforge 3`. One ticket at a time, in the order the owner gave."
+    },
+    {
+      "path": ".claude/skills/work-ticket/SKILL.md",
+      "line": 10,
+      "text": "**Repo settings come from `factory.json`, never from memory:** `github` (owner/name), `path` (local checkout), `guard` (`lab` or `reviewed`), `check` (must pass before every commit), `start` (how to run it for a live check, or null), `tickets` (required sections), `board` (tracked on the project board), and `evidence` (where saved reviews and transcripts go). Below, `<github>`, `<path>`, `<check>` and so on mean that repo's values. Read them, with the shared `evidence` folder, with `node -e 'const f=require(\"./factory.json\"); console.log(JSON.stringify({...f.repos[\"<key>\"], evidence: f.evidence}, null, 2))'`. Paths are relative to this repo."
+    },
+    {
+      "path": ".github/workflows/factory.yml",
+      "line": 2,
+      "text": "# schedule picks up tickets in the other repos in factory.json. One run takes at most one ticket, with the"
+    },
+    { "path": ".github/workflows/factory.yml", "line": 40, "text": "          sparse-checkout: factory.json" },
+    {
+      "path": ".github/workflows/factory.yml",
+      "line": 47,
+      "text": "          for repo in $(node -e 'for (const r of Object.values(require(\"./factory.json\").repos)) console.log(r.github)'); do"
+    },
+    {
+      "path": "CLAUDE.md",
+      "line": 80,
+      "text": "- A helper two scripts need lives in a named module (`neutral.ts`, `factory-config.ts`), never as a copy in each script."
+    },
+    {
+      "path": "CLAUDE.md",
+      "line": 83,
+      "text": "- Why colocated and not a mirrored `tests/` tree: in TypeScript with Vitest the test moves with its file, imports stay short, and a missing test is visible in the folder listing. A mirrored tree is a Java and Python convention that duplicates every path and breaks on every move. `factory.json`'s `tests` pattern names both places, so `revert:check` recognises them."
+    },
+    {
+      "path": "README.md",
+      "line": 150,
+      "text": "| `schemas/` | JSON Schemas for the case record and `factory.json` |"
+    },
+    {
+      "path": "README.md",
+      "line": 151,
+      "text": "| `factory.json` | The two repositories the factory works in, described once |"
+    },
+    {
+      "path": "docs/decision-log.md",
+      "line": 63,
+      "text": "    | faultforge | [#48](https://github.com/AJBeumer/faultforge/issues/48) one factory.json | [#55](https://github.com/AJBeumer/faultforge/pull/55) | both repos described once; guard, readiness check and skill read it |"
+    },
+    {
+      "path": "docs/factory-trigger.md",
+      "line": 19,
+      "text": "2. **Pick.** The open ticket, in any repo in `factory.json`, whose `ready-for-agent` label was added longest ago. None: log `idle` and exit."
+    },
+    {
+      "path": "packages/harness/src/factory-config.test.ts",
+      "line": 4,
+      "text": "import { configProblems, loadFactory, repoConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/factory-config.test.ts",
+      "line": 7,
+      "text": "const raw = readFileSync(join(root, \"factory.json\"), \"utf8\");"
+    },
+    { "path": "packages/harness/src/factory-config.test.ts", "line": 9, "text": "describe(\"factory.json\", () => {" },
+    {
+      "path": "packages/harness/src/factory-config.ts",
+      "line": 46,
+      "text": "/** The checked-in `factory.json`, or `FAULTFORGE_CONFIG` if set (tests use that). */"
+    },
+    {
+      "path": "packages/harness/src/factory-config.ts",
+      "line": 47,
+      "text": "export function loadFactory(path = process.env.FAULTFORGE_CONFIG ?? join(root, \"factory.json\")): FactoryConfig {"
+    },
+    {
+      "path": "packages/harness/src/factory-config.ts",
+      "line": 54,
+      "text": "/** One repo's settings by its key in `factory.json`. */"
+    },
+    {
+      "path": "packages/harness/src/factory-config.ts",
+      "line": 57,
+      "text": "  if (!repo) throw new Error(`No repo \"${key}\" in factory.json. Known: ${Object.keys(config.repos).join(\", \")}`);"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.test.ts",
+      "line": 6,
+      "text": "import type { FactoryConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 7,
+      "text": " * One tick takes at most one ticket, across every repo in `factory.json`:"
+    },
+    {
+      "path": "packages/harness/src/factory-tick.ts",
+      "line": 42,
+      "text": "import { type FactoryConfig, loadFactory, repoConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/factory-timeline.ts",
+      "line": 12,
+      "text": "import { loadFactory } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/factory-workflow.test.ts",
+      "line": 8,
+      "text": "import { loadFactory } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/revert-check.ts",
+      "line": 40,
+      "text": "import { loadFactory, repoConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/revert-check.ts",
+      "line": 253,
+      "text": "  /** The repo's test-file pattern from factory.json. */"
+    },
+    {
+      "path": "packages/harness/src/review-wait.ts",
+      "line": 21,
+      "text": "import { loadFactory, repoConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/rules-evidence.ts",
+      "line": 17,
+      "text": "import { loadFactory } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/rules-propose.ts",
+      "line": 16,
+      "text": "import { type FactoryConfig, loadFactory } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/rules-propose.ts",
+      "line": 117,
+      "text": "  if (!lab) throw new Error(\"no lab repo in factory.json\");"
+    },
+    {
+      "path": "packages/harness/src/ticket-ready.test.ts",
+      "line": 2,
+      "text": "import { loadFactory, repoConfig } from \"./factory-config.ts\";"
+    },
+    {
+      "path": "packages/harness/src/ticket-ready.ts",
+      "line": 8,
+      "text": " * The repo key, its GitHub name and its ticket sections come from `factory.json`."
+    },
+    {
+      "path": "packages/harness/src/ticket-ready.ts",
+      "line": 14,
+      "text": "import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from \"./factory-config.ts\";"
+    }
+  ],
+  "found": true,
+  "truncated": false,
+  "raw_output": null,
+  "sha": "0b841652da1752e3a319319f6d973747d527d0aa",
+  "ok": true,
+  "regex_mode": "extended",
+  "error": null,
+  "error_code": null,
+  "retryable": null,
+  "recovery_hints": null,
+  "limit": null,
+  "applied_exclusions": [
+    "*.dds",
+    "*.exr",
+    "*.pdb",
+    "*.lib",
+    "*.zip",
+    "*.tar",
+    "*.mp4",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.bmp",
+    "*.tiff",
+    "*.tga",
+    "*.ico",
+    "*.webp",
+    "*.psd",
+    "*.mp3",
+    "*.wav",
+    "*.flac",
+    "*.ogg",
+    "*.avi",
+    "*.mov",
+    "*.mkv",
+    "*.webm",
+    "*.gz",
+    "*.bz2",
+    "*.xz",
+    "*.7z",
+    "*.rar",
+    "*.jar",
+    "*.war",
+    "*.fbx",
+    "*.obj",
+    "*.blend",
+    "*.glb",
+    "*.gltf",
+    "*.bin",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib",
+    "*.o",
+    "*.a",
+    "*.class",
+    "*.wasm",
+    "*.pdf",
+    "*.ttf",
+    "*.otf",
+    "*.woff",
+    "*.woff2"
+  ]
+}
