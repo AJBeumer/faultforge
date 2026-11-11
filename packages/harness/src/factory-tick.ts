@@ -1520,21 +1520,27 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           differences: [],
         };
       }
+      const result = await checkLiveQodoConfig(factory, {
+        snapshotDir: join(priv, "config"),
+        evidenceRoot: join(priv, evidenceInPrivate),
+      });
+      let published: EvidencePush | null = null;
       try {
-        const result = await checkLiveQodoConfig(factory, {
-          snapshotDir: join(priv, "config"),
-          evidenceRoot: join(priv, evidenceInPrivate),
-        });
-        commitAndPublish(priv, evidenceInPrivate, label, git, gitLong);
-        return { exitCode: result.exitCode, message: result.message, differences: result.differences };
-      } finally {
-        try {
-          git(privateRepo, "worktree", "remove", "--force", priv);
-          git(privateRepo, "branch", "-D", label);
-        } finally {
-          rmSync(join(runs, label), { recursive: true, force: true });
-        }
+        published = commitAndPublish(priv, evidenceInPrivate, label, git, gitLong);
+      } catch {
+        // published stays null: the push itself failed (not merely a blocked path - our evidence is
+        // always under an allowed root). Nothing is torn down below, so the worktree is the evidence's
+        // only remaining copy, the same way `saveEvidence` keeps the run folder when its own push fails.
       }
+      // Torn down only once the evidence actually reached the remote (`main`, or its own branch if a
+      // blocked path forced that); otherwise the worktree is left for the owner to recover by hand
+      // (Qodo on PR 145, round 2).
+      if (published?.pushed || published?.savedAt) {
+        git(privateRepo, "worktree", "remove", "--force", priv);
+        git(privateRepo, "branch", "-D", label);
+        rmSync(join(runs, label), { recursive: true, force: true });
+      }
+      return { exitCode: result.exitCode, message: result.message, differences: result.differences };
     },
     workspace(runId) {
       const root = join(runs, runId);
