@@ -147,6 +147,10 @@ function fake(
       return { removeFailed: null, addFailed: null };
     },
     comment: (github, number, body) => comments.push({ github, number, body }),
+    qodoCheck: async () => {
+      calls.push("qodo-check");
+      return { exitCode: 0, message: "matches qodo-v1", lines: [] };
+    },
     workspace: () => {
       calls.push("workspace");
       return ws;
@@ -361,11 +365,48 @@ describe("tick: stop paths", () => {
     expect(f.comments[0]?.body).toMatch(/missing section "What"/);
   });
 
+  it("stops before building a workspace when Qodo's configuration has drifted from the snapshot", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        qodoCheck: async () => ({
+          exitCode: 1,
+          message: "2 difference(s) from qodo-v6",
+          lines: ["new rule: A rule CLAUDE.md derived (4664849)"],
+        }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toEqual([
+      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+      "save without workspace",
+    ]);
+    expect(f.comments.at(-1)?.body).toMatch(/drifted from the snapshot/);
+    expect(f.comments.at(-1)?.body).toMatch(/new rule: A rule CLAUDE\.md derived \(4664849\)/);
+    expect(f.events.map((e) => e.event)).toEqual(["picked", "claimed", "qodo-checked", "finished", "saved"]);
+  });
+
+  it("stops before building a workspace when Qodo's configuration can't be checked", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { qodoCheck: async () => ({ exitCode: 2, message: "no qodo-vN snapshot found", lines: [] }) },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toEqual([
+      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+      "save without workspace",
+    ]);
+    expect(f.comments.at(-1)?.body).toMatch(/couldn't be checked against the snapshot/);
+  });
+
   it("claims before the agent starts, then finishes done and cleans up", async () => {
     const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls).toEqual([
       `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      "qodo-check",
       "workspace",
       "agent",
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
@@ -377,6 +418,7 @@ describe("tick: stop paths", () => {
     expect(f.events.map((e) => e.event)).toEqual([
       "picked",
       "claimed",
+      "qodo-checked",
       "workspace",
       "ticket-snapshot",
       "agent-started",
@@ -402,6 +444,7 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
       `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      "qodo-check",
       "workspace",
       "agent",
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,

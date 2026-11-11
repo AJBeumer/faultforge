@@ -10,13 +10,15 @@
  *  3. Refuse it unless the repo owner added that label (read from the issue's events), so a stranger's
  *     ticket text never reaches the agent as instructions. Refuse it if it isn't ready.
  *  4. Claim it: `agent-working`, and a comment on the ticket.
- *  5. Fresh worktrees of every repo from `origin/main`, and of the private repo on its own branch,
+ *  5. Check Qodo's configuration against the snapshot (`qodo:check`). A difference or a failed check
+ *     (`qodo-check.ts`) ends the run `agent-needs-help` here, before a workspace is ever built.
+ *  6. Fresh worktrees of every repo from `origin/main`, and of the private repo on its own branch,
  *     laid out like the owner's folders, so the owner's working trees are never touched.
- *  6. Run `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
+ *  7. Run `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
  *     the factory policy hook switched on.
- *  7. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's
+ *  8. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's
  *     review of its head commit is complete, and `main` didn't move during the run.
- *  8. Label the ticket `agent-done` or `agent-needs-help`, comment why, push the run log to the private
+ *  9. Label the ticket `agent-done` or `agent-needs-help`, comment why, push the run log to the private
  *     repo, and clean up (worktrees are kept when the run needs help, for inspection).
  *
  * Every step is appended with a UTC time to `<runs>/<run id>.jsonl` as it happens, and saved under
@@ -41,6 +43,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { telltales } from "./neutral.ts";
+import { checkLiveQodoConfig, formatDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -723,6 +726,14 @@ export interface Workspace {
   fingerprints: Record<string, string>;
 }
 
+/** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
+ * one in `lines`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error). */
+export interface QodoCheckOutcome {
+  exitCode: 0 | 1 | 2;
+  message: string;
+  lines: string[];
+}
+
 export interface TickDeps {
   now(): Date;
   print(line: string): void;
@@ -737,6 +748,9 @@ export interface TickDeps {
   writeTicket(ws: Workspace, text: string): string;
   relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
   comment(github: string, number: number, body: string): void;
+  /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
+   * is built: a drift in the reviewer is caught before an agent is ever started on it. */
+  qodoCheck(): Promise<QodoCheckOutcome>;
   workspace(runId: string): Workspace;
   runAgent(
     ws: Workspace,
@@ -868,6 +882,24 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
+
+    const qodo = await deps.qodoCheck();
+    log("qodo-checked", { exitCode: qodo.exitCode, message: qodo.message, differences: qodo.lines });
+    if (qodo.exitCode !== 0) {
+      relabel([LABELS.working, LABELS.ready], [LABELS.help]);
+      finalLabel = LABELS.help;
+      const reason =
+        qodo.exitCode === 2
+          ? `Qodo's configuration couldn't be checked against the snapshot (${qodo.message})`
+          : `Qodo's configuration has drifted from the snapshot (${qodo.message})`;
+      say(
+        `Agent run \`${runId}\` stopped and needs help: ${reason}${qodo.lines.length ? `\n\n${qodo.lines.map((l) => `- ${l}`).join("\n")}` : ""}.`,
+      );
+      log("finished", { label: LABELS.help, reason, pr: null });
+      log("saved", { evidence: evidenceFile(factory, runId) });
+      deps.saveEvidence(runId, null);
+      return "needs-help";
+    }
 
     ws = deps.workspace(runId);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
@@ -1459,6 +1491,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       ),
     comment: (github, number, body) => {
       gh("issue", "comment", String(number), "--repo", github, "--body", body);
+    },
+    async qodoCheck() {
+      const result = await checkLiveQodoConfig(factory);
+      return { exitCode: result.exitCode, message: result.message, lines: result.differences.map(formatDifference) };
     },
     workspace(runId) {
       const root = join(runs, runId);
