@@ -29,14 +29,19 @@ This writes the ledger entry, an audit event and artefacts under `private/raw-ar
 
 ## 3. Publish the PR
 
+In this order, each command on its own:
+
+1. **Create the target ticket.** `npm run case:ticket -- --template <id> --case <FF-NNNN>`, run in this repository and never chained with a target-repo command. It prints the issue number `<N>`, records a `case.ticket-created` audit event and saves the raw `gh` output. Do this before pushing anything: if it refuses (exit 1), nothing has left the machine. Exit 2 means it could not tell whether the issue was created: check GitHub before retrying, never retry blindly.
+2. **Push the branch,** then
+3. **open the PR** with `Closes #<N>` in the body:
+
 ```bash
 git -C ../faultforge-target push -u origin <branch>
-gh pr create --repo AJBeumer/faultforge-target --base main --head <branch> --title "<commit message>" --body "<one plain sentence>"
+gh pr create --repo AJBeumer/faultforge-target --base main --head <branch> --title "<commit message>" --body "<one plain sentence>. Closes #<N>"
 ```
 
-- The title equals the commit message. The body is one ordinary sentence about the change, never about bugs, tests or reviews, followed by `Closes #<N>` for the target ticket.
+- The title equals the commit message. The body is one ordinary sentence about the change, never about bugs, tests or reviews, followed by `Closes #<N>`.
 - If `gh pr create` fails with a permission error, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body, and wait for the PR number.
-- Create the target ticket first, from the template: `npm run case:ticket -- --template <id> --case <FF-NNNN>` (run on its own, in this repository, never chained with a target-repo command). It prints the issue number; put `Closes #<N>` in the PR body, as plain text in the same sentence-style body. It records a `case.ticket-created` audit event and saves the raw `gh` output. Exit 2 means it could not tell whether the issue was created: check GitHub before retrying, never retry blindly.
 - Not a draft. No reviewers, labels or assignees.
 - Record the PR: append an audit event `pr.opened` with the PR number and head commit, and check that the head commit equals the ledger's `injectionCommit`.
 
