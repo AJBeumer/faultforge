@@ -1,42 +1,19 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { git, gitRepo } from "./fixtures/git-repo.ts";
 import { classify, premiseProblems, premisesOf, proseOf } from "./ticket-premises.ts";
 
 const DELIVERABLES = ["Result", "Done when"];
 
-function git(dir: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", dir, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-  });
-}
-
-/** A git checkout whose `origin/main` holds the committed files. */
-function repo(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "premises-"));
-  git(dir, "init", "-q", "-b", "main");
-  git(dir, "config", "user.email", "t@example.org");
-  git(dir, "config", "user.name", "t");
-  for (const [path, content] of Object.entries(files)) {
-    mkdirSync(join(dir, path, ".."), { recursive: true });
-    writeFileSync(join(dir, path), content);
-  }
-  git(dir, "add", "-A");
-  git(dir, "commit", "-q", "-m", "main");
-  git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
-  return dir;
-}
-
 /** The ticket's repo: one script family, a module with exports, an imported builtin, a doc, private storage. */
 let checkout: string;
 beforeAll(() => {
-  checkout = repo({
+  checkout = gitRepo({
     "package.json": JSON.stringify({ scripts: { check: "vitest", "ticket:ready": "tsx x" } }),
     "src/helpers.ts":
-      'import { existsSync } from "node:fs";\nexport function privateDir() {}\nexport const loadFactory = () => 1;\nfunction hidden() {}\nexport default function entry() {}\nexport { hidden as shown };\n',
+      'import { existsSync } from "node:fs";\nimport {\n  renameSync,\n  statSync,\n} from "node:fs";\nexport function privateDir() {}\nexport const loadFactory = () => 1;\nfunction hidden() {}\nexport default function entry() {}\nexport { hidden as shown };\n',
     "src/main.js": "export class Runner {}\n",
     "docs/guide.md": "# guide\n",
   });
@@ -189,14 +166,16 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
     ]);
   });
 
-  it("reports a function that exists nowhere, but accepts declared, imported, default, aliased and class names (blind 5, 8)", () => {
+  it("reports a function that exists nowhere, but accepts declared, imported, default, aliased and class names (blind 5, 8; Qodo round 2: multi-line imports)", () => {
     expect(problems("`resolvePrivate()` and `report()` are elsewhere.")).toEqual([
       `stale premise: resolvePrivate (function) ${HERE}`,
       `stale premise: report (function) ${HERE}`,
     ]);
-    expect(problems("`hidden()`, `existsSync()`, `entry()`, `shown()` and `Runner()` all exist in some form.")).toEqual(
-      [],
-    );
+    expect(
+      problems(
+        "`hidden()`, `existsSync()`, `renameSync()`, `entry()`, `shown()` and `Runner()` all exist in some form.",
+      ),
+    ).toEqual([]);
   });
 
   it("does not let a path escape the checkout (Qodo 7)", () => {
@@ -216,7 +195,7 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
   });
 
   it("accepts a premise a sibling repo has, and names the places searched when nothing has it (Qodo 2, 11)", () => {
-    const sibling = repo({ "INVARIANTS.md": "# invariants\n" });
+    const sibling = gitRepo({ "INVARIANTS.md": "# invariants\n" });
     expect(problems("Spread across the target's `INVARIANTS.md`; `src/helpers.ts` stays.")).toEqual([
       `stale premise: INVARIANTS.md (file) ${HERE}`,
     ]);

@@ -121,6 +121,22 @@ function git(checkout: string, args: string[]): string {
   });
 }
 
+/**
+ * Fetches the branch behind `ref` (`origin/main`: branch `main` of remote `origin`), so the check reads
+ * today's main and not whatever the checkout last fetched. Throws when the fetch fails: a verdict against
+ * an old main is worse than no verdict.
+ */
+export function refreshRef(checkout: string, ref = MAIN_REF): void {
+  const [remote, ...branch] = ref.split("/");
+  if (!remote || !branch.length) throw new Error(`cannot refresh ${ref}: not a remote-tracking ref`);
+  try {
+    git(checkout, ["fetch", "--quiet", remote, branch.join("/")]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n").slice(-2).join(" ").trim() : String(error);
+    throw new Error(`could not refresh ${ref} in ${checkout}: ${detail}`);
+  }
+}
+
 /** Every path in the tree at `ref`, or a clear error when the checkout has no such revision. */
 function treePaths(checkout: string, ref: string): string[] {
   try {
@@ -131,7 +147,7 @@ function treePaths(checkout: string, ref: string): string[] {
   }
 }
 
-const SOURCE_GLOBS = ["*.ts", "*.mts", "*.js", "*.mjs", "*.cjs"];
+const SOURCE_FILE = /\.(?:ts|mts|js|mjs|cjs)$/;
 const DECLARATION = /(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g;
 
 /** Names in one `export { a, b as c }` or `import { a as b, c }` list: both sides of every alias. */
@@ -143,27 +159,48 @@ function bracedNames(list: string): string[] {
     .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
 }
 
+/** The text of every source file at `ref`, read in one `git cat-file --batch` call. */
+function sourceTexts(checkout: string, ref: string): string[] {
+  const files = treePaths(checkout, ref).filter((path) => SOURCE_FILE.test(path));
+  if (!files.length) return [];
+  const batch = execFileSync("git", ["-C", checkout, "cat-file", "--batch"], {
+    encoding: "utf8",
+    input: files.map((path) => `${ref}:${path}`).join("\n"),
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  // Each entry is "<sha> <type> <size>\n<content>\n"; a missing object is "<name> missing\n".
+  const texts: string[] = [];
+  let at = 0;
+  while (at < batch.length) {
+    const headerEnd = batch.indexOf("\n", at);
+    if (headerEnd < 0) break;
+    const header = batch.slice(at, headerEnd).split(" ");
+    at = headerEnd + 1;
+    if (header[1] === "missing") continue;
+    const size = Number(header[2]);
+    texts.push(batch.slice(at, at + size));
+    at += size + 1;
+  }
+  return texts;
+}
+
 /**
- * Every function-like name a source file at `ref` declares, exports or imports. A ticket that names
- * `main()` (declared, not exported) or `existsSync()` (imported from Node) states a true premise.
+ * Every function-like name a source file at `ref` declares, exports or imports, across line breaks. A
+ * ticket that names `main()` (declared, not exported) or `existsSync()` (imported from Node) states a
+ * true premise.
  */
 function sourceNames(checkout: string, ref: string): Set<string> {
   const names = new Set<string>();
-  let lines: string;
-  try {
-    const pattern = String.raw`^\s*((export\s+)?(default\s+)?(async\s+)?(function|const|let|var|class)\s|export\s*\{|import\s)`;
-    lines = git(checkout, ["grep", "-h", "-I", "-E", pattern, ref, "--", ...SOURCE_GLOBS]);
-  } catch {
-    return names; // git grep exits 1 when nothing matches
-  }
-  for (const line of lines.split("\n")) {
-    for (const match of line.matchAll(DECLARATION)) if (match[1]) names.add(match[1]);
-    const braces = /(?:export|import)\s*(?:type\s*)?\{([^}]*)\}/.exec(line);
-    if (braces?.[1]) for (const name of bracedNames(braces[1])) names.add(name);
-    const defaults = /^\s*import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:,|from)/.exec(line);
-    if (defaults?.[1]) names.add(defaults[1]);
-    const star = /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(line);
-    if (star?.[1]) names.add(star[1]);
+  for (const text of sourceTexts(checkout, ref)) {
+    for (const match of text.matchAll(DECLARATION)) if (match[1]) names.add(match[1]);
+    for (const match of text.matchAll(/\b(?:export|import)\s*(?:type\s*)?\{([^}]*)\}/g)) {
+      if (match[1]) for (const name of bracedNames(match[1])) names.add(name);
+    }
+    for (const match of text.matchAll(/\bimport\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:,|from)/g)) {
+      if (match[1]) names.add(match[1]);
+    }
+    for (const match of text.matchAll(/\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)/g)) if (match[1]) names.add(match[1]);
   }
   return names;
 }

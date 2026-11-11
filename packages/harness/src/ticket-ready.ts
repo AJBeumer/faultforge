@@ -16,7 +16,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
-import { premiseProblems, premisesOf, sectionsOf } from "./ticket-premises.ts";
+import { premiseProblems, premisesOf, refreshRef, sectionsOf } from "./ticket-premises.ts";
 
 const LAB_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -77,6 +77,7 @@ export function checkTicket(
   number: number,
   run: (...args: string[]) => string = gh,
   checkoutOf: (path: string) => string = (path) => resolve(LAB_ROOT, path),
+  refresh: (checkout: string) => void = refreshRef,
 ): { title: string; problems: string[] } {
   const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);
   const checkout = checkoutOf(path);
@@ -95,7 +96,10 @@ export function checkTicket(
   // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.
   const siblings = Object.entries(factory.repos)
     .filter(([key]) => key !== repoKey)
-    .map(([, repo]) => checkoutOf(repo.path));
+    .map(([, repo]) => checkoutOf(repo.path))
+    .filter((dir) => existsSync(dir));
+  // Read today's main, not the last fetch: a run builds from what origin holds now.
+  for (const dir of [checkout, ...siblings]) refresh(dir);
   const stale = premiseProblems(
     premisesOf(body, [sections.sections[0] ?? "", sections.checklist, "Out of scope"]),
     checkout,
