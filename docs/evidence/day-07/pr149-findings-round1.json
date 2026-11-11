@@ -1,0 +1,463 @@
+{
+  "pr_url": "https://github.com/AJBeumer/faultforge/pull/149",
+  "git_provider": null,
+  "finding_count": 11,
+  "review_session": {
+    "run_id": 1916078,
+    "status": "completed",
+    "commit_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+    "started_at": "2026-11-11T19:11:24.043481Z",
+    "git_provider": "github",
+    "review_complete": true
+  },
+  "findings": [
+    {
+      "action_level": "action_required",
+      "id": "7f4ea6d8-4fe1-496a-b924-0f2f571d46db",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`checkTicket` resolves `factory.json` paths to the current working trees rather than the `origin/main` revisions used by the factory workspace. On a local branch with an unmerged helper or file, the premise passes even though the agent's fresh worktree will not contain it; local deletions can also reject a valid ticket.",
+      "title": "Local runs can approve stale tickets",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-ready.ts[79-83]",
+            "citation": "  checkoutOf: (path: string) => string = (path) => resolve(LAB_ROOT, path),\n): { title: string; problems: string[] } {\n  const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);\n  const checkout = checkoutOf(path);\n  if (!existsSync(checkout)) throw new Error(`checkout for ${repoKey} not found at ${checkout}`);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[132-155]",
+            "citation": "  return (premise: Premise): boolean => {\n    switch (premise.kind) {\n      case \"path\":\n        return existsSync(join(checkout, premise.token));\n      case \"file\":\n        return lookup(\"files\", () => fileNames(checkout)).has(premise.token);\n      case \"script\":\n        return lookup(\"scripts\", () => scriptNames(checkout)).has(premise.token);\n      default:\n        return lookup(\"exports\", () => exportedNames(checkout)).has(premise.token);\n    }\n  };\n}\n\n/**\n * One problem line per premise no checkout satisfies, in the ticket's order. `siblings` are the other\n * repos' checkouts (those that exist): a premise found there is a cross-repo mention, not a stale one.\n */\nexport function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {\n  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);\n  const problems: string[] = [];\n  for (const premise of premises) {\n    if (holders.some((has) => has(premise))) continue;\n    problems.push(`stale premise: ${premise.token} (${premise.kind}) not found`);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/factory-tick.ts[871-883]",
+            "citation": "    const readiness = deps.ready(pick.repoKey, pick.number);\n    if (readiness.problems.length) {\n      relabel([LABELS.ready], [LABELS.help]);\n      say(\n        `Not started: this ticket isn't ready yet.\\n\\n${readiness.problems.map((p) => `- ${p}`).join(\"\\n\")}\\n\\nFix the ticket and add \\`${LABELS.ready}\\` again.`,\n      );\n      log(\"not-ready\", { problems: readiness.problems });\n      deps.saveEvidence(runId, null);\n      return \"not-ready\";\n    }\n\n    claimed = pick;\n    relabel([LABELS.ready], [LABELS.working]);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/factory-tick.ts[1545-1565]",
+            "citation": "    workspace(runId) {\n      const root = join(runs, runId);\n      const lab = join(root, basename(LAB_ROOT));\n      const priv = join(lab, \"private\");\n      const mainAtStart: Record<string, string> = {};\n      mkdirSync(root, { recursive: true });\n      try {\n        for (const [key, repo] of Object.entries(factory.repos)) {\n          const source = resolve(LAB_ROOT, repo.path);\n          const target = repo.path === \".\" ? lab : worktreeFor(lab, repo.path);\n          gitLong(source, \"fetch\", \"--quiet\", \"origin\", \"main\");\n          mainAtStart[key] = git(source, \"rev-parse\", \"origin/main\");\n          mkdirSync(dirname(target), { recursive: true });\n          gitLong(source, \"worktree\", \"add\", \"--detach\", target, \"origin/main\");\n        }\n        gitLong(privateRepo, \"fetch\", \"--quiet\", \"origin\", \"main\");\n        mainAtStart[PRIVATE_KEY] = git(privateRepo, \"rev-parse\", \"origin/main\");\n        gitLong(privateRepo, \"worktree\", \"add\", \"-b\", `run-${runId}`, priv, \"origin/main\");\n        for (const repo of Object.values(factory.repos)) {\n          const dir = repo.path === \".\" ? lab : worktreeFor(lab, repo.path);\n          if (!existsSync(join(dir, \"package.json\"))) continue;"
+          }
+        ],
+        "explanation": "The new resolver passes local directories to premise lookups, whereas the factory creates its agent worktrees from `origin/main` only after readiness succeeds."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-ready.ts",
+        "start_line": 79,
+        "end_line": 82,
+        "side": "right",
+        "code_snippet": "+  checkoutOf: (path: string) => string = (path) => resolve(LAB_ROOT, path),\n ): { title: string; problems: string[] } {\n-  const { github: repo, tickets: sections } = repoConfig(factory, repoKey);\n+  const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);\n+  const checkout = checkoutOf(path);"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "70e82959-1bea-4f2c-b0ea-d409d2339f93",
+      "attribution_status": "pending",
+      "category": "Observability",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`premiseProblems` builds each problem as `stale premise: <token> (<kind>) not found` and never includes the checkout or sibling locations that were searched. A maintainer reading the factory's readiness report therefore cannot tell whether a missing file was searched for in this repo only or also in the sibling checkouts, which the rule requires to be reported.",
+      "title": "Stale reports omit the lookup location",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "ticket",
+            "source": "https://github.com/AJBeumer/faultforge/issues/147",
+            "citation": "Check ticket premises against the main checkout"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[150-158]",
+            "citation": "export function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {\n  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);\n  const problems: string[] = [];\n  for (const premise of premises) {\n    if (holders.some((has) => has(premise))) continue;\n    problems.push(`stale premise: ${premise.token} (${premise.kind}) not found`);\n  }\n  return problems;\n}"
+          }
+        ],
+        "explanation": "The rule requires each missing item to report its name and lookup location. The message at line 155 carries only the token and kind, so the lookup location is absent from every stale-premise line."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 155,
+        "end_line": 155,
+        "side": "right",
+        "code_snippet": "+    problems.push(`stale premise: ${premise.token} (${premise.kind}) not found`);"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "93cf10ea-94f8-4abf-899a-b13f78893246",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`classify` skips only paths beginning literally with `private/`, despite accepting a leading `./` in path tokens. A ticket naming `./private/config/snapshot.json` is consequently checked as a repository path and reported stale when private storage is absent from the checkout.",
+      "title": "Private paths can falsely stop tickets",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[36-36]",
+            "citation": "const PATH = /^\\.?[\\w.@-]+(?:\\/[\\w.@-]+)+\\.[a-z][a-z0-9]*$/i;"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[51-53]",
+            "citation": "  const path = text.replace(/:\\d+(?:-\\d+)?$/, \"\");\n  if (PATH.test(path)) return path.startsWith(\"private/\") ? null : { token: path, kind: \"path\" };\n  if (FILE.test(path)) return { token: path, kind: \"file\" };"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[132-136]",
+            "citation": "  return (premise: Premise): boolean => {\n    switch (premise.kind) {\n      case \"path\":\n        return existsSync(join(checkout, premise.token));\n      case \"file\":"
+          }
+        ],
+        "explanation": "`PATH` accepts an optional leading dot, but the exclusion tests only the unnormalized string for a `private/` prefix; path lookups then report missing files."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 51,
+        "end_line": 52,
+        "side": "right",
+        "code_snippet": "+  const path = text.replace(/:\\d+(?:-\\d+)?$/, \"\");\n+  if (PATH.test(path)) return path.startsWith(\"private/\") ? null : { token: path, kind: \"path\" };"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "ffeaef1a-f488-4f13-b6e1-6960592b47e7",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`classify` rejects whitespace in an `npm run` token before `NPM_RUN` can extract its script name. A ticket that writes `npm run test:integration -- --runInBand` in backticks therefore yields no script premise, even when `test:integration` is absent from `package.json`.",
+      "title": "Script commands with arguments go unchecked",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[41-50]",
+            "citation": "const NPM_RUN = /^npm run (?:-s )?([\\w:-]+)/;\n/** Words that announce something the ticket will create, read from the sentence before the token. */\nconst INTRODUCES = /\\b(?:new|creates?|created|adds?|added|gains?|introduces?|introduced|writes?)\\b[^`.]*$/i;\n\n/** One premise from one backtick token, or null when the token isn't a checkable claim. */\nexport function classify(token: string): Premise | null {\n  const text = token.trim();\n  if (!text || /[<>*\\s]/.test(text.replace(/^npm run (?:-s )?/, \"\")) || text.includes(\"://\")) return null;\n  const run = NPM_RUN.exec(text);\n  if (run?.[1]) return { token: run[1], kind: \"script\" };"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[109-115]",
+            "citation": "/** The checkout's npm scripts, or an empty set when it has no package.json. */\nexport function scriptNames(checkout: string): Set<string> {\n  const file = join(checkout, \"package.json\");\n  if (!existsSync(file)) return new Set();\n  const scripts = (JSON.parse(readFileSync(file, \"utf8\")) as { scripts?: Record<string, string> }).scripts ?? {};\n  return new Set(Object.keys(scripts));\n}"
+          }
+        ],
+        "explanation": "The whitespace test runs on everything following the optional `npm run` prefix, while the next line's npm parser only needs the initial script name."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 47,
+        "end_line": 50,
+        "side": "right",
+        "code_snippet": "+  const text = token.trim();\n+  if (!text || /[<>*\\s]/.test(text.replace(/^npm run (?:-s )?/, \"\")) || text.includes(\"://\")) return null;\n+  const run = NPM_RUN.exec(text);\n+  if (run?.[1]) return { token: run[1], kind: \"script\" };"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "0021805e-414c-4a3e-8ee2-5e8e3dfda34d",
+      "attribution_status": "pending",
+      "category": "Reliability",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`allFiles` uses `statSync` and recursively enters directory symlinks without detecting cycles. When a ticket names a bare file or function and its checkout contains a link back to an ancestor, the inventory recurses until it fails; links outside the checkout can also make external files count as premises.",
+      "title": "A checkout link can stall readiness",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[85-93]",
+            "citation": "/** Every file under a checkout, skipping dependencies, build output and private storage. */\nfunction allFiles(dir: string, found: string[] = []): string[] {\n  for (const entry of readdirSync(dir)) {\n    if (SKIPPED_DIRS.has(entry)) continue;\n    const full = join(dir, entry);\n    if (statSync(full).isDirectory()) allFiles(full, found);\n    else found.push(full);\n  }\n  return found;"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[97-105]",
+            "citation": "export function exportedNames(checkout: string): Set<string> {\n  const names = new Set<string>();\n  for (const file of allFiles(checkout).filter((f) => /\\.(?:ts|mts|js|mjs)$/.test(f))) {\n    for (const match of readFileSync(file, \"utf8\").matchAll(\n      /^export\\s+(?:async\\s+)?(?:function|const|let)\\s+([\\w$]+)/gm,\n    )) {\n      if (match[1]) names.add(match[1]);\n    }\n  }"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[117-120]",
+            "citation": "/** Every file name (without its folder) in the checkout. */\nexport function fileNames(checkout: string): Set<string> {\n  return new Set(allFiles(checkout).map((f) => basename(f)));\n}"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[132-142]",
+            "citation": "  return (premise: Premise): boolean => {\n    switch (premise.kind) {\n      case \"path\":\n        return existsSync(join(checkout, premise.token));\n      case \"file\":\n        return lookup(\"files\", () => fileNames(checkout)).has(premise.token);\n      case \"script\":\n        return lookup(\"scripts\", () => scriptNames(checkout)).has(premise.token);\n      default:\n        return lookup(\"exports\", () => exportedNames(checkout)).has(premise.token);\n    }"
+          }
+        ],
+        "explanation": "Both bare-file and function lookups invoke `allFiles`; `statSync` follows symlinks, and the recursive walk has neither a cycle guard nor a checkout boundary."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 89,
+        "end_line": 91,
+        "side": "right",
+        "code_snippet": "+    const full = join(dir, entry);\n+    if (statSync(full).isDirectory()) allFiles(full, found);\n+    else found.push(full);"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "1a1d2153-b0e3-48ff-ac89-70b6b0ff1171",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`exportedNames` scans every `.ts`, `.mts`, `.js` and `.mjs` file in the checkout, and accepts `export let` and `export async function` as well. A ticket naming a helper that is exported from outside `packages/harness/src/` and `.claude/hooks/` therefore passes, although the checklist says it must be reported as stale.",
+      "title": "Helpers exported elsewhere pass the gate",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "ticket",
+            "source": "https://github.com/AJBeumer/faultforge/issues/147",
+            "citation": "Check ticket premises against the main checkout"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[97-107]",
+            "citation": "export function exportedNames(checkout: string): Set<string> {\n  const names = new Set<string>();\n  for (const file of allFiles(checkout).filter((f) => /\\.(?:ts|mts|js|mjs)$/.test(f))) {\n    for (const match of readFileSync(file, \"utf8\").matchAll(\n      /^export\\s+(?:async\\s+)?(?:function|const|let)\\s+([\\w$]+)/gm,\n    )) {\n      if (match[1]) names.add(match[1]);\n    }\n  }\n  return names;\n}"
+          }
+        ],
+        "explanation": "The rule requires functions be checked against `export function` or `export const` declarations in `packages/harness/src/` and `.claude/hooks/`. Lines 98-101 search the whole checkout and accept more export forms, so a missing function is accepted when a file outside those directories exports it."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 98,
+        "end_line": 101,
+        "side": "right",
+        "code_snippet": "+  const names = new Set<string>();\n+  for (const file of allFiles(checkout).filter((f) => /\\.(?:ts|mts|js|mjs)$/.test(f))) {\n+    for (const match of readFileSync(file, \"utf8\").matchAll(\n+      /^export\\s+(?:async\\s+)?(?:function|const|let)\\s+([\\w$]+)/gm,"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "4222515e-dca0-4d37-ae9a-23c811706fc7",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`PATH` accepts `..` components and `holdings` checks the resulting token without verifying that it stays inside the checkout. A ticket containing `../outside.ts` can therefore pass because a file beside the repository exists, although that file is not in the checkout being validated.",
+      "title": "Parent files can pass checkout checks",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[36-36]",
+            "citation": "const PATH = /^\\.?[\\w.@-]+(?:\\/[\\w.@-]+)+\\.[a-z][a-z0-9]*$/i;"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[46-53]",
+            "citation": "export function classify(token: string): Premise | null {\n  const text = token.trim();\n  if (!text || /[<>*\\s]/.test(text.replace(/^npm run (?:-s )?/, \"\")) || text.includes(\"://\")) return null;\n  const run = NPM_RUN.exec(text);\n  if (run?.[1]) return { token: run[1], kind: \"script\" };\n  const path = text.replace(/:\\d+(?:-\\d+)?$/, \"\");\n  if (PATH.test(path)) return path.startsWith(\"private/\") ? null : { token: path, kind: \"path\" };\n  if (FILE.test(path)) return { token: path, kind: \"file\" };"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[132-136]",
+            "citation": "  return (premise: Premise): boolean => {\n    switch (premise.kind) {\n      case \"path\":\n        return existsSync(join(checkout, premise.token));\n      case \"file\":"
+          }
+        ],
+        "explanation": "The path expression permits `../outside.ts`, and the path lookup joins it directly to the checkout before calling `existsSync`. The command exposes a readiness result rather than file contents, so the demonstrated impact is an incorrect existence check."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 134,
+        "end_line": 135,
+        "side": "right",
+        "code_snippet": "+      case \"path\":\n+        return existsSync(join(checkout, premise.token));"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "a4abd903-fa99-4969-a50f-33beb917e862",
+      "attribution_status": "pending",
+      "category": "Reliability",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`checkTicket` now throws when the selected checkout is absent, but the factory calls it before assigning `claimed` or changing the ticket's ready label. On a local run without the configured target sibling clone, the outer error handler leaves that ticket eligible, so subsequent ticks can pick it again instead of reaching younger tickets.",
+      "title": "A missing clone can block the ticket queue",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "factory.json[19-22]",
+            "citation": "      \"github\": \"AJBeumer/faultforge-target\",\n      \"path\": \"../faultforge-target\",\n      \"guard\": \"reviewed\",\n      \"check\": \"npm run check\","
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-ready.ts[81-83]",
+            "citation": "  const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);\n  const checkout = checkoutOf(path);\n  if (!existsSync(checkout)) throw new Error(`checkout for ${repoKey} not found at ${checkout}`);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/factory-tick.ts[871-883]",
+            "citation": "    const readiness = deps.ready(pick.repoKey, pick.number);\n    if (readiness.problems.length) {\n      relabel([LABELS.ready], [LABELS.help]);\n      say(\n        `Not started: this ticket isn't ready yet.\\n\\n${readiness.problems.map((p) => `- ${p}`).join(\"\\n\")}\\n\\nFix the ticket and add \\`${LABELS.ready}\\` again.`,\n      );\n      log(\"not-ready\", { problems: readiness.problems });\n      deps.saveEvidence(runId, null);\n      return \"not-ready\";\n    }\n\n    claimed = pick;\n    relabel([LABELS.ready], [LABELS.working]);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/factory-tick.ts[1021-1026]",
+            "citation": "      // ready-for-agent too: the claim may have left it in place (logged there, not fatal), and this is\n      // the last chance to strip it before a later tick could otherwise pick the same ticket up again.\n      const { removeFailed, addFailed } = deps.relabel(\n        claimed.github,\n        claimed.number,\n        [LABELS.working, LABELS.ready],"
+          }
+        ],
+        "explanation": "The target path is a sibling checkout; the new throw occurs before `claimed = pick`, while the outer catch only relabels a claimed ticket."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-ready.ts",
+        "start_line": 82,
+        "end_line": 83,
+        "side": "right",
+        "code_snippet": "+  const checkout = checkoutOf(path);\n+  if (!existsSync(checkout)) throw new Error(`checkout for ${repoKey} not found at ${checkout}`);"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "c11c70fe-3077-408a-b46b-0471b72b6a5a",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`proseOf` removes only fences beginning at column zero and `<details>` tags with no attributes. Indented Markdown fences or an `<details open>` block in a ticket's Notes remain available to `premisesOf`, so backticked paths in those examples can wrongly stop the ticket.",
+      "title": "Some examples become stale premises",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[23-30]",
+            "citation": "export function proseOf(body: string): string {\n  return body.replace(/^(```|~~~)[\\s\\S]*?^\\1\\s*$/gm, \"\").replace(/<details>[\\s\\S]*?<\\/details>/gi, \"\");\n}\n\n/** A ticket's `###` sections by lower-case name, from its prose. */\nexport function sectionsOf(body: string): Map<string, string> {\n  const parts = new Map<string, string>();\n  for (const match of proseOf(body).matchAll(/^###\\s+(.+?)\\s*$([\\s\\S]*?)(?=^###\\s|(?![\\s\\S]))/gm)) {"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[67-73]",
+            "citation": "  for (const [name, text] of sectionsOf(body)) {\n    if (skip.has(name)) continue;\n    for (const match of text.matchAll(/`([^`\\n]+)`/g)) {\n      const before = text.slice(Math.max(0, match.index - 80), match.index);\n      if (INTRODUCES.test(before)) continue;\n      const premise = classify(match[1] ?? \"\");\n      if (!premise) continue;"
+          },
+          {
+            "source_type": "pr_knowledge",
+            "source": "53",
+            "citation": "A prior ticket-readiness bug came from treating fenced Markdown content as real ticket structure."
+          }
+        ],
+        "explanation": "The first replacement is anchored at column zero, the second requires literal `<details>`, and unremoved text is subsequently searched for backtick tokens. An earlier accepted fix in this parser area likewise excluded fenced headings before interpreting ticket prose."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 24,
+        "end_line": 24,
+        "side": "right",
+        "code_snippet": "+  return body.replace(/^(```|~~~)[\\s\\S]*?^\\1\\s*$/gm, \"\").replace(/<details>[\\s\\S]*?<\\/details>/gi, \"\");"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "d842a7dd-4ddd-4372-a3b1-5d2c1962e094",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`premisesOf` skips the first required section and checklist, and its 80-character introduction heuristic drops backtick tokens even when a preceding verb such as `adds` describes something else. As a result, ticket-named paths, scripts, and functions go unchecked, including a missing helper in a Done-when item or an existing file mentioned after a separate creation clause.",
+      "title": "Deliverable premises escape the check",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "ticket",
+            "source": "https://github.com/AJBeumer/faultforge/issues/147",
+            "citation": "Extract ticket premise references from eligible text"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[63-71]",
+            "citation": "export function premisesOf(body: string, deliverables: string[]): Premise[] {\n  const skip = new Set(deliverables.map((name) => name.toLowerCase()));\n  const seen = new Set<string>();\n  const premises: Premise[] = [];\n  for (const [name, text] of sectionsOf(body)) {\n    if (skip.has(name)) continue;\n    for (const match of text.matchAll(/`([^`\\n]+)`/g)) {\n      const before = text.slice(Math.max(0, match.index - 80), match.index);\n      if (INTRODUCES.test(before)) continue;"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-ready.ts[94-96]",
+            "citation": "  // The first required section and the checklist describe what the ticket delivers, not what it assumes.\n  // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.\n  const siblings = Object.entries(factory.repos)"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[42-43]",
+            "citation": "/** Words that announce something the ticket will create, read from the sentence before the token. */\nconst INTRODUCES = /\\b(?:new|creates?|created|adds?|added|gains?|introduces?|introduced|writes?)\\b[^`.]*$/i;"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[69-72]",
+            "citation": "    for (const match of text.matchAll(/`([^`\\n]+)`/g)) {\n      const before = text.slice(Math.max(0, match.index - 80), match.index);\n      if (INTRODUCES.test(before)) continue;\n      const premise = classify(match[1] ?? \"\");"
+          }
+        ],
+        "explanation": "The extraction rule covers all sections except code blocks and Original wording details, but lines 67–68 skip whole deliverable sections and line 71 skips tokens using a keyword heuristic. The `INTRODUCES` regex can match `adds` anywhere before a token up to a period or backtick, so a semicolon and “reuse the existing” do not stop `premisesOf` from omitting `src/helpers.ts` in “The change adds telemetry; reuse the existing `src/helpers.ts`.” The PR describes these skips as deliberate narrowings, but both exclude eligible references."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 67,
+        "end_line": 71,
+        "side": "right",
+        "code_snippet": "+  for (const [name, text] of sectionsOf(body)) {\n+    if (skip.has(name)) continue;\n+    for (const match of text.matchAll(/`([^`\\n]+)`/g)) {\n+      const before = text.slice(Math.max(0, match.index - 80), match.index);\n+      if (INTRODUCES.test(before)) continue;"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    },
+    {
+      "action_level": "remediation_recommended",
+      "id": "f0e9e8bc-dd0f-4975-af84-b1c220c5292b",
+      "attribution_status": "pending",
+      "category": "Correctness",
+      "git_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "description": "`premiseProblems` treats a premise as satisfied when any configured sibling checkout contains the path, without checking whether the ticket names that sibling. When a faultforge ticket refers to a file missing from its own repo but present in a sibling, the factory proceeds as though the file exists in the ticket’s repo without reporting the stale premise.",
+      "title": "Sibling repos hide missing premises",
+      "evidence": {
+        "citations": [
+          {
+            "source_type": "ticket",
+            "source": "https://github.com/AJBeumer/faultforge/issues/147",
+            "citation": "Check ticket premises against the main checkout"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[146-152]",
+            "citation": "/**\n * One problem line per premise no checkout satisfies, in the ticket's order. `siblings` are the other\n * repos' checkouts (those that exist): a premise found there is a cross-repo mention, not a stale one.\n */\nexport function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {\n  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);\n  const problems: string[] = [];"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-ready.ts[94-99]",
+            "citation": "  // The first required section and the checklist describe what the ticket delivers, not what it assumes.\n  // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.\n  const siblings = Object.entries(factory.repos)\n    .filter(([key]) => key !== repoKey)\n    .map(([, repo]) => checkoutOf(repo.path));\n  const stale = premiseProblems(premisesOf(body, [sections.sections[0] ?? \"\", sections.checklist]), checkout, siblings);"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-ready.ts[94-100]",
+            "citation": "  // The first required section and the checklist describe what the ticket delivers, not what it assumes.\n  // The other repos' checkouts catch cross-repo mentions, such as a lab ticket naming the target's file.\n  const siblings = Object.entries(factory.repos)\n    .filter(([key]) => key !== repoKey)\n    .map(([, repo]) => checkoutOf(repo.path));\n  const stale = premiseProblems(premisesOf(body, [sections.sections[0] ?? \"\", sections.checklist]), checkout, siblings);\n  return { title: issue.title, problems: readinessProblems(body, sections, blockers, stale) };"
+          },
+          {
+            "source_type": "pr_branch_file",
+            "source": "packages/harness/src/ticket-premises.ts[146-155]",
+            "citation": "/**\n * One problem line per premise no checkout satisfies, in the ticket's order. `siblings` are the other\n * repos' checkouts (those that exist): a premise found there is a cross-repo mention, not a stale one.\n */\nexport function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {\n  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);\n  const problems: string[] = [];\n  for (const premise of premises) {\n    if (holders.some((has) => has(premise))) continue;\n    problems.push(`stale premise: ${premise.token} (${premise.kind}) not found`);"
+          }
+        ],
+        "explanation": "`checkTicket` supplies every other configured repo as a sibling, and `premiseProblems` uses `holders.some` to accept a match in any of them without retaining which repo the ticket named. As a result, a path absent from the ticket’s checkout can be counted as present because it exists in an unrelated sibling."
+      },
+      "location": {
+        "file_path": "packages/harness/src/ticket-premises.ts",
+        "start_line": 150,
+        "end_line": 152,
+        "side": "right",
+        "code_snippet": "+export function premiseProblems(premises: Premise[], checkout: string, siblings: string[] = []): string[] {\n+  const holders = [checkout, ...siblings.filter((dir) => existsSync(dir))].map(holdings);\n+  const problems: string[] = [];"
+      },
+      "dismiss_reason": null,
+      "dismiss_explanation": null
+    }
+  ],
+  "review_runs": [
+    {
+      "run_id": 1916078,
+      "commit_sha": "5defd6877d00b9a598261f8ae3a967ef812d7944",
+      "started_at": "2026-11-11T19:11:24.043481Z",
+      "status": "completed",
+      "review_effort": "standard",
+      "review_complete": true
+    }
+  ]
+}
