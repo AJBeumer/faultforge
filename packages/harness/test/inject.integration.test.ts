@@ -59,10 +59,13 @@ describe("inject exit codes (#8: branch derivation)", () => {
         // absent in a fresh clone, such as CI: nothing to drop
       }
 
+      // Whatever branch and state the copy starts in (it mirrors the owner's checkout), it must end the same.
+      const gitStatus = () =>
+        execFileSync("git", ["-C", dir, "status", "--porcelain", "--branch"], { encoding: "utf8" });
+      const before = gitStatus();
       const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--validate-only"]);
       expect(result.status).toBe(0);
-      const status = execFileSync("git", ["-C", dir, "status", "--porcelain", "--branch"], { encoding: "utf8" });
-      expect(status.trim()).toBe("## main...origin/main");
+      expect(gitStatus()).toBe(before);
     },
     90_000,
   );
