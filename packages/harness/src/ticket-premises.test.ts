@@ -15,6 +15,8 @@ beforeAll(() => {
     "src/helpers.ts":
       'import { existsSync } from "node:fs";\nimport {\n  renameSync,\n  statSync,\n} from "node:fs";\nexport function privateDir() {}\nexport const loadFactory = () => 1;\nfunction hidden() {}\nexport default function entry() {}\nexport { hidden as shown };\n',
     "src/main.js": "export class Runner {}\n",
+    "src/a-unicode.ts":
+      "// 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 multi-byte characters before the export\nexport function afterUnicode() {}\n// ✓✓✓\n",
     "docs/guide.md": "# guide\n",
   });
   // The working tree differs from origin/main: a file main lacks, and private storage, which is never committed.
@@ -176,6 +178,10 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
         "`hidden()`, `existsSync()`, `renameSync()`, `entry()`, `shown()` and `Runner()` all exist in some form.",
       ),
     ).toEqual([]);
+  });
+
+  it("finds a name declared after multi-byte characters, in a file after a multi-byte file (Qodo round 3)", () => {
+    expect(problems("Reuse `afterUnicode()` and `privateDir()`.")).toEqual([]);
   });
 
   it("does not let a path escape the checkout (Qodo 7)", () => {

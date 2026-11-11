@@ -172,7 +172,24 @@ describe("stale premises (#147)", () => {
         refreshed.push(dir);
       },
     );
-    expect(refreshed).toEqual([LAB, LAB]);
+    expect(refreshed).toEqual([LAB]);
+  });
+
+  it("consults a sibling only when the ticket's own repo lacks a premise, so an unreachable sibling can't halt a check that doesn't need it (Qodo round 3)", () => {
+    const sibling = gitRepo({ "INVARIANTS.md": "# invariants\n" });
+    const checkoutOf = (path: string) => (path === "." ? LAB : sibling);
+    const refreshed: string[] = [];
+    const refresh = (dir: string) => {
+      refreshed.push(dir);
+      if (dir === sibling) throw new Error("fetch: sibling unreachable");
+    };
+    const own = `${ready}\n\n### Notes\n- Reuse \`loadFactory()\`.`;
+    expect(checkTicket(factory, "faultforge", 1, fakeGh(own), checkoutOf, refresh).problems).toEqual([]);
+    expect(refreshed).toEqual([LAB]);
+    const cross = `${ready}\n\n### Notes\n- The target's \`INVARIANTS.md\`.`;
+    expect(() => checkTicket(factory, "faultforge", 1, fakeGh(cross), checkoutOf, refresh)).toThrow(
+      /sibling unreachable/,
+    );
   });
 
   it("throws when the refresh fails, so the script exits 2 rather than judging against an old main", () => {

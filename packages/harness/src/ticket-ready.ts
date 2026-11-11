@@ -98,12 +98,16 @@ export function checkTicket(
     .filter(([key]) => key !== repoKey)
     .map(([, repo]) => checkoutOf(repo.path))
     .filter((dir) => existsSync(dir));
-  // Read today's main, not the last fetch: a run builds from what origin holds now.
-  for (const dir of [checkout, ...siblings]) refresh(dir);
+  // Read today's main, not the last fetch: a run builds from what origin holds now. Siblings are
+  // refreshed only if a premise turns out to be missing here, so an unreachable sibling can't halt a
+  // check that never needed it.
+  refresh(checkout);
   const stale = premiseProblems(
     premisesOf(body, [sections.sections[0] ?? "", sections.checklist, "Out of scope"]),
     checkout,
     siblings,
+    undefined,
+    refresh,
   );
   return { title: issue.title, problems: readinessProblems(body, sections, blockers, stale) };
 }

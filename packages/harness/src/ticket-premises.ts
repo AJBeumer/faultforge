@@ -164,22 +164,23 @@ function sourceTexts(checkout: string, ref: string): string[] {
   const files = treePaths(checkout, ref).filter((path) => SOURCE_FILE.test(path));
   if (!files.length) return [];
   const batch = execFileSync("git", ["-C", checkout, "cat-file", "--batch"], {
-    encoding: "utf8",
+    encoding: "buffer",
     input: files.map((path) => `${ref}:${path}`).join("\n"),
     maxBuffer: 256 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
   });
   // Each entry is "<sha> <type> <size>\n<content>\n"; a missing object is "<name> missing\n".
+  // Sizes are bytes, so the walk is over the raw bytes; each blob is decoded on its own.
   const texts: string[] = [];
   let at = 0;
   while (at < batch.length) {
-    const headerEnd = batch.indexOf("\n", at);
+    const headerEnd = batch.indexOf(0x0a, at);
     if (headerEnd < 0) break;
-    const header = batch.slice(at, headerEnd).split(" ");
+    const header = batch.toString("utf8", at, headerEnd).split(" ");
     at = headerEnd + 1;
     if (header[1] === "missing") continue;
     const size = Number(header[2]);
-    texts.push(batch.slice(at, at + size));
+    texts.push(batch.toString("utf8", at, at + size));
     at += size + 1;
   }
   return texts;
@@ -268,7 +269,8 @@ function holdings(checkout: string, ref: string): (premise: Premise) => boolean 
 /**
  * One problem line per premise no checkout satisfies at `ref`, in the ticket's order, naming where it
  * was looked for. `siblings` are the other repos' checkouts (those that exist): a premise found there
- * is a cross-repo mention, not a stale one.
+ * is a cross-repo mention, not a stale one. They are touched only when the ticket's own repo lacks a
+ * premise, each prepared by `prepare` (a fetch) just before its first read.
  */
 export function premiseProblems(
   premises: Premise[],
@@ -283,7 +285,7 @@ export function premiseProblems(
   }`;
   const problems: string[] = [];
   for (const premise of premises) {
-    if (holders.some((has) => has(premise))) continue;
+    if (own(premise) || inSiblings(premise)) continue;
     problems.push(`stale premise: ${premise.token} (${premise.kind}) ${where}`);
   }
   return problems;
