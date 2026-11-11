@@ -43,7 +43,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { telltales } from "./neutral.ts";
-import { checkLiveQodoConfig, formatDifference } from "./qodo-check.ts";
+import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -727,11 +727,14 @@ export interface Workspace {
 }
 
 /** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
- * one in `lines`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error). */
+ * one in `differences`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error).
+ * Kept structured, not pre-formatted: a difference's full detail (a rule's `content`, its field values)
+ * is fine for the run log, but never for a ticket comment (Qodo on PR 145) - callers pick the
+ * formatter that matches where the text is going. */
 export interface QodoCheckOutcome {
   exitCode: 0 | 1 | 2;
   message: string;
-  lines: string[];
+  differences: Difference[];
 }
 
 export interface TickDeps {
@@ -750,7 +753,7 @@ export interface TickDeps {
   comment(github: string, number: number, body: string): void;
   /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
    * is built: a drift in the reviewer is caught before an agent is ever started on it. */
-  qodoCheck(): Promise<QodoCheckOutcome>;
+  qodoCheck(runId: string): Promise<QodoCheckOutcome>;
   workspace(runId: string): Workspace;
   runAgent(
     ws: Workspace,
@@ -883,8 +886,12 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     );
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
-    const qodo = await deps.qodoCheck();
-    log("qodo-checked", { exitCode: qodo.exitCode, message: qodo.message, differences: qodo.lines });
+    const qodo = await deps.qodoCheck(runId);
+    log("qodo-checked", {
+      exitCode: qodo.exitCode,
+      message: qodo.message,
+      differences: qodo.differences.map(formatDifference),
+    });
     if (qodo.exitCode !== 0) {
       relabel([LABELS.working, LABELS.ready], [LABELS.help]);
       finalLabel = LABELS.help;
@@ -892,8 +899,11 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         qodo.exitCode === 2
           ? `Qodo's configuration couldn't be checked against the snapshot (${qodo.message})`
           : `Qodo's configuration has drifted from the snapshot (${qodo.message})`;
+      // A summary only: the full detail (a rule's content, a field's before/after) can hold text read
+      // from private storage, which must never reach a ticket a reviewer can read (Qodo on PR 145).
+      const summary = qodo.differences.map(summarizeDifference);
       say(
-        `Agent run \`${runId}\` stopped and needs help: ${reason}${qodo.lines.length ? `\n\n${qodo.lines.map((l) => `- ${l}`).join("\n")}` : ""}.`,
+        `Agent run \`${runId}\` stopped and needs help: ${reason}${summary.length ? `\n\n${summary.map((l) => `- ${l}`).join("\n")}` : ""}.`,
       );
       log("finished", { label: LABELS.help, reason, pr: null });
       log("saved", { evidence: evidenceFile(factory, runId) });
@@ -1492,9 +1502,39 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     comment: (github, number, body) => {
       gh("issue", "comment", String(number), "--repo", github, "--body", body);
     },
-    async qodoCheck() {
-      const result = await checkLiveQodoConfig(factory);
-      return { exitCode: result.exitCode, message: result.message, lines: result.differences.map(formatDifference) };
+    async qodoCheck(runId) {
+      // Its own short-lived worktree, so the live answers reach the private repo's `main` even when
+      // the check stops the run before the ticket's own workspace (and `ws.private`) ever exist, and
+      // even on a clean run: `checkLiveQodoConfig` otherwise writes into this checkout's own `private/`,
+      // which nothing else ever commits or pushes (Qodo on PR 145).
+      const label = `qodo-check-${runId}`;
+      const priv = join(runs, label, "private");
+      try {
+        mkdirSync(dirname(priv), { recursive: true });
+        gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
+        gitLong(privateRepo, "worktree", "add", "-b", label, priv, "origin/main");
+      } catch (error) {
+        return {
+          exitCode: 2 as const,
+          message: `could not prepare a worktree to save Qodo's state: ${(error as Error).message}`,
+          differences: [],
+        };
+      }
+      try {
+        const result = await checkLiveQodoConfig(factory, {
+          snapshotDir: join(priv, "config"),
+          evidenceRoot: join(priv, evidenceInPrivate),
+        });
+        commitAndPublish(priv, evidenceInPrivate, label, git, gitLong);
+        return { exitCode: result.exitCode, message: result.message, differences: result.differences };
+      } finally {
+        try {
+          git(privateRepo, "worktree", "remove", "--force", priv);
+          git(privateRepo, "branch", "-D", label);
+        } finally {
+          rmSync(join(runs, label), { recursive: true, force: true });
+        }
+      }
     },
     workspace(runId) {
       const root = join(runs, runId);

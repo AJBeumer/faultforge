@@ -108,9 +108,21 @@ export function compareSkills(live: SkillFacts[], snapshot: SkillFacts[]): Diffe
   return diffById("skill", live, snapshot, ["state"], (s) => s.id);
 }
 
+/** A plain object's own field, or `undefined` for anything else (a malformed entry - `null`, a string,
+ * a number - has no fields to read, never a reason to throw). */
+function field(value: unknown, key: string): unknown {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
+
 /** A relation's stable identity, with volatile fields (timestamps, the human-written one-liner, the
- * discovery source) dropped: what's left is what "no relationship on the target" is actually about. */
-function relationKey(relation: Record<string, unknown>): string {
+ * discovery source) dropped: what's left is what "no relationship on the target" is actually about.
+ * A malformed entry (not a plain object) still gets a key, from its own JSON text, so one bad entry
+ * can be reported as a difference instead of crashing the comparison. */
+function relationKey(relation: unknown): string {
+  if (!relation || typeof relation !== "object" || Array.isArray(relation))
+    return `malformed:${JSON.stringify(relation)}`;
   const { relationType, status, sourceId, targetId } = relation as Record<string, unknown>;
   return JSON.stringify({ relationType, status, sourceId, targetId });
 }
@@ -119,9 +131,8 @@ function relationKey(relation: Record<string, unknown>): string {
  * by its stable fields. The snapshot's own `relations` is empty, so a non-empty `live` always means
  * "a relationship appeared" - the thing `CLAUDE.md` requires checking before every case. */
 export function compareRelations(live: unknown[], snapshot: unknown[]): Difference[] {
-  const label = (r: Record<string, unknown>) => String(r.relationType ?? r.oneLiner ?? "relation");
-  const withKey = (list: unknown[]) =>
-    list.map((r) => ({ id: relationKey(r as Record<string, unknown>), name: label(r as Record<string, unknown>) }));
+  const label = (r: unknown) => String(field(r, "relationType") ?? field(r, "oneLiner") ?? "relation");
+  const withKey = (list: unknown[]) => list.map((r) => ({ id: relationKey(r), name: label(r) }));
   return diffById("relation", withKey(live), withKey(snapshot), [], (r) => r.name);
 }
 
@@ -215,7 +226,8 @@ export function loadSnapshot(configDir: string): Snapshot {
 
 export interface CheckDeps {
   call(tool: string, args: Record<string, unknown>): Promise<unknown>;
-  /** Saves one live answer before it's compared, so it's kept even if the comparison never runs. */
+  /** Saves one page of one live answer, right after it arrives - a failure elsewhere must never cost
+   * an earlier page that already came back. */
   saveRaw(name: string, data: unknown): void;
   snapshotDir: string;
   targetRepo: string;
@@ -228,9 +240,27 @@ export interface CheckResult {
   snapshotVersion?: string;
 }
 
-/** Reads Qodo's live rules, review skills and the target's relationships, saves each raw, and compares
- * them with the highest-numbered snapshot. Never throws: every way this can't be decided (no snapshot,
- * no key, a failed or unparsable API call) comes back as `exitCode: 2` instead. */
+/** Calls `tool` and saves the page's answer under `prefix.pageN.raw.json` as soon as it arrives, or
+ * `prefix.pageN.error.json` if the call itself failed - either way, before the next page is asked for
+ * and before anything is compared. */
+function paged<T>(deps: CheckDeps, tool: string, prefix: string): (args: Record<string, unknown>) => Promise<T> {
+  return async (args) => {
+    const page = typeof args.page === "number" ? args.page : 1;
+    try {
+      const result = (await deps.call(tool, args)) as T;
+      deps.saveRaw(`${prefix}.page${page}.raw.json`, result);
+      return result;
+    } catch (error) {
+      deps.saveRaw(`${prefix}.page${page}.error.json`, { error: (error as Error).message });
+      throw error;
+    }
+  };
+}
+
+/** Reads Qodo's live rules, review skills and the target's relationships, saves each page raw as it
+ * arrives, and compares them with the highest-numbered snapshot. Never throws: every way this can't
+ * be decided (no snapshot, no key, a failed or unparsable API call, a comparison that can't make sense
+ * of what came back) comes back as `exitCode: 2` instead. */
 export async function runCheck(deps: CheckDeps): Promise<CheckResult> {
   let snapshot: Snapshot;
   try {
@@ -239,76 +269,103 @@ export async function runCheck(deps: CheckDeps): Promise<CheckResult> {
     return { exitCode: 2, differences: [], message: `could not read the snapshot: ${(error as Error).message}` };
   }
 
-  let liveRules: RuleFacts[];
-  let liveSkills: SkillFacts[];
-  let liveRelations: unknown[];
   try {
-    const rawRules = await collectRules((args) => deps.call("rules-list", args) as Promise<RulesPage>);
-    deps.saveRaw("rules.raw.json", rawRules);
-    liveRules = rawRules.map(normalizeRule);
-
-    const rawSkills = await collectSkills((args) => deps.call("review-skills-list", args) as Promise<SkillsPage>);
-    deps.saveRaw("review-skills.raw.json", rawSkills);
-    liveSkills = rawSkills.map(normalizeSkill);
-
-    liveRelations = await fetchRelations(
-      (args) => deps.call("cross-repo-relations", args) as Promise<RelationsPage>,
+    const rawRules = await collectRules(paged<RulesPage>(deps, "rules-list", "rules"));
+    const rawSkills = await collectSkills(paged<SkillsPage>(deps, "review-skills-list", "review-skills"));
+    const liveRelations = await fetchRelations(
+      paged<RelationsPage>(deps, "cross-repo-relations", "cross-repo-relations"),
       deps.targetRepo,
     );
-    deps.saveRaw("cross-repo-relations.raw.json", liveRelations);
+
+    const differences = [
+      ...compareRules(rawRules.map(normalizeRule), snapshot.rules),
+      ...compareSkills(rawSkills.map(normalizeSkill), snapshot.skills),
+      ...compareRelations(liveRelations, snapshot.relations),
+    ];
+    if (differences.length) {
+      return {
+        exitCode: 1,
+        differences,
+        snapshotVersion: snapshot.version,
+        message: `${differences.length} difference(s) from ${snapshot.version}`,
+      };
+    }
+    return { exitCode: 0, differences: [], snapshotVersion: snapshot.version, message: `matches ${snapshot.version}` };
   } catch (error) {
     return { exitCode: 2, differences: [], message: `could not read Qodo's live state: ${(error as Error).message}` };
   }
-
-  const differences = [
-    ...compareRules(liveRules, snapshot.rules),
-    ...compareSkills(liveSkills, snapshot.skills),
-    ...compareRelations(liveRelations, snapshot.relations),
-  ];
-  if (differences.length) {
-    return {
-      exitCode: 1,
-      differences,
-      snapshotVersion: snapshot.version,
-      message: `${differences.length} difference(s) from ${snapshot.version}`,
-    };
-  }
-  return { exitCode: 0, differences: [], snapshotVersion: snapshot.version, message: `matches ${snapshot.version}` };
 }
 
-/** One printable line per difference, with its id, name and (for a change) the field. */
+/** One printable line per difference, with its id, name and (for a change) the field and values. Full
+ * detail: for the run log and the console, never for a ticket comment (a rule's `content` can hold
+ * private text - see `summarizeDifference`). */
 export function formatDifference(d: Difference): string {
   if (d.type === "new") return `new ${d.kind}: ${d.name} (${d.id})`;
   if (d.type === "missing") return `missing ${d.kind}: ${d.name} (${d.id})`;
   return `changed ${d.kind} ${d.name} (${d.id}): ${d.field} was ${JSON.stringify(d.before)}, is now ${JSON.stringify(d.after)}`;
 }
 
-/**
- * Runs the live check against the current snapshot, with the evidence folder resolved from `factory`:
- * what `factory:tick` calls before the hook self-test, and what `main` below calls for the CLI. Never
- * throws: a key that can't be read is reported the same way as any other `exitCode: 2`.
- */
-export async function checkLiveQodoConfig(factory: FactoryConfig): Promise<CheckResult & { evidenceDir: string }> {
-  const targetRepo = repoConfig(factory, "target").github;
-  const evidence = resolve(fileURLToPath(new URL("../../..", import.meta.url)), factory.evidence);
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dir = join(evidence, "qodo-state", stamp);
-  mkdirSync(dir, { recursive: true });
+/** One line per difference with no field values and no name: safe to post to a public ticket, where
+ * `safeText`'s fixed word list can't catch free-form rule or skill text read from private storage. */
+export function summarizeDifference(d: Difference): string {
+  if (d.type === "changed") return `changed ${d.kind} ${d.id} (${d.field})`;
+  return `${d.type} ${d.kind} ${d.id}`;
+}
 
-  let api: QodoApi;
+export interface CheckRoots {
+  /** Where `private/config/qodo-vN` lives; defaults to `privateDir()`'s `config` folder. */
+  snapshotDir?: string;
+  /** The folder `qodo-state/<timestamp>` is created under; defaults to this checkout's evidence root. */
+  evidenceRoot?: string;
+}
+
+/**
+ * Runs the live check against the current snapshot. Called by `factory:tick` (with its own worktree's
+ * roots, before the hook self-test) and by `main` below, for the CLI, with the defaults. Never throws:
+ * everything that keeps this from being decided - the target's repo missing from `factory.json`, an
+ * evidence folder that can't be created, a key that can't be read, a failed or unreadable API answer,
+ * even a comparison that chokes on what came back - is reported the same way, as `exitCode: 2`.
+ */
+export async function checkLiveQodoConfig(
+  factory: FactoryConfig,
+  roots: CheckRoots = {},
+): Promise<CheckResult & { evidenceDir: string | null }> {
+  let dir: string | null = null;
   try {
-    api = new QodoApi();
+    const targetRepo = repoConfig(factory, "target").github;
+    const evidenceRoot =
+      roots.evidenceRoot ?? resolve(fileURLToPath(new URL("../../..", import.meta.url)), factory.evidence);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    dir = join(evidenceRoot, "qodo-state", stamp);
+    mkdirSync(dir, { recursive: true });
+
+    const api = new QodoApi();
+    const saveRaw = (name: string, data: unknown) => {
+      const at = dir as string;
+      writeFileSync(join(at, name), `${JSON.stringify(data, null, 2)}\n`);
+    };
+    const result = await runCheck({
+      call: async (tool, args) => {
+        const page = typeof args.page === "number" ? args.page : 1;
+        try {
+          return await api.call(tool, args);
+        } finally {
+          // The exact wire answer, kept alongside the parsed one `runCheck` itself saves: a reply
+          // that fails to parse, or a session recovery's own retry, is otherwise only in memory.
+          if (api.lastRecoveredRaw.length) {
+            saveRaw(`${tool}.page${page}.recovered.raw.json`, api.lastRecoveredRaw);
+          }
+          if (api.lastRaw) saveRaw(`${tool}.page${page}.wire.raw.json`, api.lastRaw);
+        }
+      },
+      saveRaw,
+      snapshotDir: roots.snapshotDir ?? join(privateDir(), "config"),
+      targetRepo,
+    });
+    return { ...result, evidenceDir: dir };
   } catch (error) {
     return { exitCode: 2, differences: [], message: (error as Error).message, evidenceDir: dir };
   }
-
-  const result = await runCheck({
-    call: (tool, args) => api.call(tool, args),
-    saveRaw: (name, data) => writeFileSync(join(dir, name), `${JSON.stringify(data, null, 2)}\n`),
-    snapshotDir: join(privateDir(), "config"),
-    targetRepo,
-  });
-  return { ...result, evidenceDir: dir };
 }
 
 async function main() {
@@ -324,7 +381,7 @@ async function main() {
   } else {
     console.log(`qodo:check: ${result.message}`);
   }
-  console.log(`Saved in ${dir}`);
+  if (dir) console.log(`Saved in ${dir}`);
   process.exit(result.exitCode);
 }
 

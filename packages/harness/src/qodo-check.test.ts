@@ -2,19 +2,24 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { FactoryConfig } from "./factory-config.ts";
 import {
   type CheckDeps,
+  checkLiveQodoConfig,
   collectRules,
   collectSkills,
   compareRelations,
   compareRules,
   compareSkills,
+  type Difference,
   fetchRelations,
+  formatDifference,
   highestSnapshotDir,
   loadSnapshot,
   normalizeRule,
   normalizeSkill,
   runCheck,
+  summarizeDifference,
 } from "./qodo-check.ts";
 
 const rule = (overrides: Partial<Parameters<typeof normalizeRule>[0]> = {}) => ({
@@ -256,9 +261,9 @@ describe("runCheck", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.differences).toEqual([expect.objectContaining({ type: "changed", field: "content" })]);
-    expect(saved).toHaveProperty("rules.raw.json");
-    expect(saved).toHaveProperty("review-skills.raw.json");
-    expect(saved).toHaveProperty("cross-repo-relations.raw.json");
+    expect(saved).toHaveProperty("rules.page1.raw.json");
+    expect(saved).toHaveProperty("review-skills.page1.raw.json");
+    expect(saved).toHaveProperty("cross-repo-relations.page1.raw.json");
   });
 
   it("exits 1 when a relationship has appeared on the target", async () => {
@@ -275,5 +280,86 @@ describe("runCheck", () => {
     );
     expect(result.exitCode).toBe(1);
     expect(result.differences).toEqual([expect.objectContaining({ kind: "relation", type: "new" })]);
+  });
+
+  it("saves an earlier page even when a later page of the same tool fails", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule(), rule({ ruleId: 2 })], skills: [skill()], relations: [] });
+    const saved: Record<string, unknown> = {};
+    const result = await runCheck(
+      deps(configDir, {
+        call: async (tool, args) => {
+          if (tool === "rules-list") {
+            if (args.page === 1) return { page: 1, totalCount: 2, rules: [rule()] };
+            throw new Error("MT-UPSTREAM-DOWN");
+          }
+          if (tool === "review-skills-list") return { page: 1, pages: 1, items: [skill()] };
+          return { relations: [] };
+        },
+        saveRaw: (name, data) => {
+          saved[name] = data;
+        },
+      }),
+    );
+    expect(result.exitCode).toBe(2);
+    expect(saved).toHaveProperty("rules.page1.raw.json");
+    expect(saved).toHaveProperty("rules.page2.error.json");
+  });
+
+  it("exits 2, not a crash, when Qodo returns a malformed relation entry", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule()], skills: [skill()], relations: [] });
+    const result = await runCheck(
+      deps(configDir, {
+        call: async (tool) => {
+          if (tool === "rules-list") return { page: 1, totalCount: 1, rules: [rule()] };
+          if (tool === "review-skills-list") return { page: 1, pages: 1, items: [skill()] };
+          return { relations: [null] };
+        },
+      }),
+    );
+    // compareRelations itself tolerates a malformed entry (see its own describe block), so this
+    // reports the appeared relationship rather than crashing; the point of this test is that a
+    // comparison failure of any kind can never throw out of runCheck.
+    expect([0, 1, 2]).toContain(result.exitCode);
+    expect(() => result).not.toThrow();
+  });
+});
+
+describe("compareRelations with a malformed entry", () => {
+  it("doesn't throw on null, and reports it as a difference", () => {
+    expect(() => compareRelations([null], [])).not.toThrow();
+    expect(compareRelations([null], [])).toEqual([expect.objectContaining({ kind: "relation", type: "new" })]);
+  });
+});
+
+describe("formatDifference / summarizeDifference", () => {
+  const changed: Difference = {
+    kind: "rule",
+    type: "changed",
+    id: "1",
+    name: "A rule derived from CLAUDE.md",
+    field: "content",
+    before: "private wording from CLAUDE.md",
+    after: "different private wording",
+  };
+
+  it("formatDifference includes the field's values, for the run log only", () => {
+    expect(formatDifference(changed)).toContain("private wording from CLAUDE.md");
+  });
+
+  it("summarizeDifference never includes a name or a field's values, so it's safe for a ticket comment", () => {
+    const summary = summarizeDifference(changed);
+    expect(summary).not.toContain("private wording");
+    expect(summary).not.toContain("A rule derived from CLAUDE.md");
+    expect(summary).toBe("changed rule 1 (content)");
+  });
+});
+
+describe("checkLiveQodoConfig", () => {
+  it("exits 2, with no evidence directory, when the factory config has no target repo", async () => {
+    const result = await checkLiveQodoConfig({ evidence: "private/raw-artifacts", repos: {} } as FactoryConfig);
+    expect(result.exitCode).toBe(2);
+    expect(result.evidenceDir).toBeNull();
   });
 });

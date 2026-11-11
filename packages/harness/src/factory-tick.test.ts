@@ -149,7 +149,7 @@ function fake(
     comment: (github, number, body) => comments.push({ github, number, body }),
     qodoCheck: async () => {
       calls.push("qodo-check");
-      return { exitCode: 0, message: "matches qodo-v1", lines: [] };
+      return { exitCode: 0, message: "matches qodo-v1", differences: [] };
     },
     workspace: () => {
       calls.push("workspace");
@@ -372,7 +372,14 @@ describe("tick: stop paths", () => {
         qodoCheck: async () => ({
           exitCode: 1,
           message: "2 difference(s) from qodo-v6",
-          lines: ["new rule: A rule CLAUDE.md derived (4664849)"],
+          differences: [
+            {
+              kind: "rule",
+              type: "new",
+              id: "4664849",
+              name: "Share helpers used by multiple scripts instead of copying them",
+            },
+          ],
         }),
       },
     );
@@ -383,14 +390,16 @@ describe("tick: stop paths", () => {
       "save without workspace",
     ]);
     expect(f.comments.at(-1)?.body).toMatch(/drifted from the snapshot/);
-    expect(f.comments.at(-1)?.body).toMatch(/new rule: A rule CLAUDE\.md derived \(4664849\)/);
+    // Summarized only: no rule name or content in a comment a reviewer can read (Qodo on PR 145).
+    expect(f.comments.at(-1)?.body).toMatch(/new rule 4664849/);
+    expect(f.comments.at(-1)?.body).not.toMatch(/Share helpers/);
     expect(f.events.map((e) => e.event)).toEqual(["picked", "claimed", "qodo-checked", "finished", "saved"]);
   });
 
   it("stops before building a workspace when Qodo's configuration can't be checked", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
-      { qodoCheck: async () => ({ exitCode: 2, message: "no qodo-vN snapshot found", lines: [] }) },
+      { qodoCheck: async () => ({ exitCode: 2, message: "no qodo-vN snapshot found", differences: [] }) },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
