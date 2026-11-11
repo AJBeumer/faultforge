@@ -15,6 +15,7 @@ export const READ_ONLY_TOOLS = new Set([
   "rules-list",
   "review-skills-list",
   "cross-repo-overview",
+  "cross-repo-relations",
   "litegit-search-repos",
 ]);
 
