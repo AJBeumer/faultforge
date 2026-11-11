@@ -164,7 +164,6 @@ function sourceTexts(checkout: string, ref: string): string[] {
   const files = treePaths(checkout, ref).filter((path) => SOURCE_FILE.test(path));
   if (!files.length) return [];
   const batch = execFileSync("git", ["-C", checkout, "cat-file", "--batch"], {
-    encoding: "buffer",
     input: files.map((path) => `${ref}:${path}`).join("\n"),
     maxBuffer: 256 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
@@ -277,9 +276,19 @@ export function premiseProblems(
   checkout: string,
   siblings: string[] = [],
   ref = MAIN_REF,
+  prepare: (dir: string) => void = () => {},
 ): string[] {
   const present = siblings.filter((dir) => existsSync(dir));
-  const holders = [checkout, ...present].map((dir) => holdings(dir, ref));
+  const own = holdings(checkout, ref);
+  // A sibling is prepared (fetched) and read only the first time the ticket's own repo lacks a premise.
+  let siblingHolders: ((premise: Premise) => boolean)[] | undefined;
+  const inSiblings = (premise: Premise): boolean => {
+    siblingHolders ??= present.map((dir) => {
+      prepare(dir);
+      return holdings(dir, ref);
+    });
+    return siblingHolders.some((has) => has(premise));
+  };
   const where = `not found on ${ref} of the ticket's repo${
     present.length ? ` or ${present.length} sibling repo${present.length > 1 ? "s" : ""}` : ""
   }`;
