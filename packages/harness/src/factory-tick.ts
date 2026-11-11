@@ -599,13 +599,24 @@ export function openActionRequired(record: {
 }
 
 /**
- * A problem naming the reason `revert:check` printed, from its exit code and the record it saved;
- * empty when the change is proven (exit 0). Falls back to the exit code alone when no record exists,
- * which happens only when `revert:check` failed before it could run the check at all (#101).
+ * A problem for `revert:check`'s exit code; empty when the change is proven (exit 0). Only the exit
+ * code and category reach this, never the saved record's own `message` or `failedWithoutChange`: those
+ * can hold agent-written test names and file-load errors, which must never reach a ticket a reviewer
+ * can read (Qodo on PR 155) - the full detail stays in the saved `revert-check.json` record for the
+ * owner to read directly. When no record exists at all (`revert:check` failed before it could save
+ * one), the last line of its own output is used instead, bounded in size for the same reason.
  */
-export function revertCheckProblems(status: number | null, record: { message?: string } | null): string[] {
+export function revertCheckProblems(status: number | null, record: { exit?: 0 | 1 | 2 } | null, output = ""): string[] {
   if (status === 0) return [];
-  return [record?.message ? `revert:check: ${record.message}` : `revert:check gave no result (exit ${status})`];
+  const category: Record<number, string> = {
+    1: "every test still passes without the change, so it doesn't prove it",
+    2: "it couldn't judge the change (no test or code file changed, a dependency change, or the tests failed with the change too)",
+  };
+  if (record && record.exit !== undefined && record.exit in category) {
+    return [`revert:check: ${category[record.exit]} (full detail in its saved record)`];
+  }
+  const tail = output.trim().split("\n").at(-1)?.slice(0, 200) ?? "";
+  return [`revert:check gave no result (exit ${status}${tail ? `: ${tail}` : ""})`];
 }
 
 export interface WindowActivity {
@@ -1142,8 +1153,9 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   };
 }
 
-/** The time limit for an ordinary `gh` or `git` call. A push or a fetch/clone gets `LONG_CALL_TIMEOUT_MS`
- * instead: a slow network can make either legitimately take longer than everything else the tick runs. */
+/** The time limit for an ordinary `gh` or `git` call. A push, a fetch/clone, or an `npm` call (an
+ * install, or a script such as `review:wait`/`revert:check`) gets `LONG_CALL_TIMEOUT_MS` instead: a
+ * slow network or a slow script can legitimately take longer than everything else the tick runs. */
 export const CALL_TIMEOUT_MS = 60_000;
 export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
 
@@ -1263,10 +1275,12 @@ function gitLong(cwd: string, ...args: string[]): string {
 function npm(cwd: string, ...args: string[]): { status: number | null; output: string } {
   // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words and
   // numbers from this file, never ticket text, so joining them into one command line is safe.
+  // Bounded like every other external call, so a hang in a script it runs - a stuck fetch, an API
+  // call with no timeout of its own - can never stall the whole run and its lock (Qodo on PR 155).
   const result =
     process.platform === "win32"
-      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true })
-      : spawnSync("npm", args, { cwd, encoding: "utf8" });
+      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: LONG_CALL_TIMEOUT_MS })
+      : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: LONG_CALL_TIMEOUT_MS });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
@@ -1821,16 +1835,30 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       }
       // Prove the tests, after the review check: the PR's own new or changed tests must fail without
       // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
-      const revert = npm(ws.lab, "run", "-s", "revert:check", "--", repoKey, String(pr));
-      const revertRecordFile = join(
-        ws.lab,
-        factory.evidence,
-        "revert-checks",
-        `${repoKey}-pr${pr}`,
-        `${pushed.slice(0, 7)}.revert-check.json`,
-      );
-      const revertRecord = existsSync(revertRecordFile) ? JSON.parse(readFileSync(revertRecordFile, "utf8")) : null;
-      problems.push(...revertCheckProblems(revert.status, revertRecord));
+      // revert:check runs from this same worktree, so an uncommitted edit to its own source there
+      // (the one thing that would never reach Qodo's review of the pushed commit) could otherwise
+      // forge a clean result; a dirty checkout is treated as unverified instead of trusted (Qodo on
+      // PR 155). A committed-but-unpushed edit is already caught above: `pushed` is the local tip, and
+      // `prViewProblems` already flags it when GitHub's head differs from it.
+      const dirty = git(ws.lab, "status", "--porcelain");
+      if (dirty) {
+        problems.push("the lab checkout has uncommitted changes, so revert:check's own code can't be trusted");
+      } else {
+        const revertRecordFile = join(
+          ws.lab,
+          factory.evidence,
+          "revert-checks",
+          `${repoKey}-pr${pr}`,
+          `${pushed.slice(0, 7)}.revert-check.json`,
+        );
+        // A record left by an earlier attempt at this same commit must never be read as this one's
+        // result: if this run's own revert:check fails before saving a fresh one, the absence has to
+        // show, not an old verdict (same reasoning as runVitest's own report removal, Qodo on PR 155).
+        rmSync(revertRecordFile, { force: true });
+        const revert = npm(ws.lab, "run", "-s", "revert:check", "--", repoKey, String(pr));
+        const revertRecord = existsSync(revertRecordFile) ? JSON.parse(readFileSync(revertRecordFile, "utf8")) : null;
+        problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
+      }
       return { problems };
     },
     record(runId, event) {

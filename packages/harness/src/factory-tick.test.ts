@@ -1447,16 +1447,20 @@ describe("helpers", () => {
     expect(checkProblems([])[0]).toMatch(/no checks ran/);
   });
 
-  it("proves the tests from revert:check's exit code and saved record (#101)", () => {
-    expect(revertCheckProblems(0, { message: "1 test(s) fail without the change, as they should" })).toEqual([]);
-    expect(revertCheckProblems(1, { message: "every test still passes without the change: x.test.ts" })).toEqual([
-      "revert:check: every test still passes without the change: x.test.ts",
+  it("proves the tests from revert:check's exit code and saved record, naming the category only (#101)", () => {
+    expect(revertCheckProblems(0, { exit: 0 })).toEqual([]);
+    expect(revertCheckProblems(1, { exit: 1 })).toEqual([
+      "revert:check: every test still passes without the change, so it doesn't prove it (full detail in its saved record)",
     ]);
-    expect(revertCheckProblems(2, { message: "the PR changes no test file, so there is nothing to prove" })).toEqual([
-      "revert:check: the PR changes no test file, so there is nothing to prove",
-    ]);
+    expect(revertCheckProblems(2, { exit: 2 })[0]).toMatch(/couldn't judge the change/);
+    // Never the record's own message or failed-test names: those can be agent-written test content
+    // (describe/it titles, file-load errors), which must never reach a ticket a reviewer can read.
+    expect(revertCheckProblems(1, { exit: 1 })[0]).not.toMatch(/x\.test\.ts/);
     // No record at all: revert:check failed before it could save one (an early crash, a usage error).
-    expect(revertCheckProblems(2, null)).toEqual(["revert:check gave no result (exit 2)"]);
+    // The last line of its own output is used instead, bounded in size.
+    expect(revertCheckProblems(2, null, "a stack\nError: couldn't reach GitHub")).toEqual([
+      "revert:check gave no result (exit 2: Error: couldn't reach GitHub)",
+    ]);
     expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
   });
 
