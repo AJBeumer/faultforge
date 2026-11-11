@@ -12,13 +12,14 @@ The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16) is t
 1. Read `private/BACKLOG.md`, the open tickets (`gh issue list --repo AJBeumer/faultforge`), the latest entry in `docs/decision-log.md`, and the roadmap row for today in the charter (section 16).
 2. Read the day's challenge text. Its acceptance requirements are mandatory, even when they change the planned order.
 3. Check that all three repos are clean and in sync (`git status -sb` in `.`, `private/` and `../faultforge-target`).
-4. Propose a plan to the owner, in plain English:
+4. Run `npm run qodo:check` (`QODO_KEY_FILE` set). Exit 0: the reviewer matches the current snapshot. Exit 1: the reviewer changed since the snapshot; stop and tell the owner, with the printed differences. Only the owner decides, because results are only comparable under the same configuration: either Qodo is restored to the snapshot, or the owner records a new configuration version in the decision log and takes a new snapshot folder. Never create or edit a snapshot to make the check pass. Exit 2: the check could not run; fix the setup first.
+5. Propose a plan to the owner, in plain English:
    - the challenge's requirements, quoted
    - the smallest increment that meets them and strengthens FaultForge
    - what changes and what stays fixed (match rule, Qodo configuration, published history)
    - which backlog items it closes
    - anything the owner must do by hand (browser steps, tokens)
-5. Wait for agreement before building. If the challenge conflicts with the charter, adapt the implementation. Don't manufacture irrelevant features.
+6. Wait for agreement before building. If the challenge conflicts with the charter, adapt the implementation. Don't manufacture irrelevant features.
 
 ## During the day
 
