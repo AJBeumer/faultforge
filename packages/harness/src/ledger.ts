@@ -22,8 +22,9 @@
  * amendment names it.
  *
  * The audit log's events, one per stage, read by `case-build.ts` (#11):
- *  - `sabotage.injected` / `control.injected`: the case was planted. Carries no record fields of its
- *    own; its presence just confirms the stage happened.
+ *  - `sabotage.injected` / `control.injected`: the case was planted. Carries only `branch`, the name
+ *    actually used in the target (the template's base name, or that with a numeric suffix when a case
+ *    already used the base name); otherwise its presence just confirms the stage happened.
  *  - `review.recorded`: `pr` (`repo`, `number`, `url`) and the parts of the public record's `review`
  *    a saved `review:wait` file doesn't carry — `reviewer`, `path`, `configVersion`, `reviewedCommit`,
  *    `reviewedAt`, `url`.
