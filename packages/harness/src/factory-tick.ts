@@ -598,6 +598,16 @@ export function openActionRequired(record: {
     .map((f) => f.title ?? "(untitled)");
 }
 
+/**
+ * A problem naming the reason `revert:check` printed, from its exit code and the record it saved;
+ * empty when the change is proven (exit 0). Falls back to the exit code alone when no record exists,
+ * which happens only when `revert:check` failed before it could run the check at all (#101).
+ */
+export function revertCheckProblems(status: number | null, record: { message?: string } | null): string[] {
+  if (status === 0) return [];
+  return [record?.message ? `revert:check: ${record.message}` : `revert:check gave no result (exit ${status})`];
+}
+
 export interface WindowActivity {
   /** Comments on any issue or PR, and inline review comments, by the agent's login. */
   comments: { user: string; created_at: string; url: string }[];
@@ -1809,6 +1819,18 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         const open = openActionRequired(JSON.parse(readFileSync(record, "utf8")));
         if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
       }
+      // Prove the tests, after the review check: the PR's own new or changed tests must fail without
+      // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
+      const revert = npm(ws.lab, "run", "-s", "revert:check", "--", repoKey, String(pr));
+      const revertRecordFile = join(
+        ws.lab,
+        factory.evidence,
+        "revert-checks",
+        `${repoKey}-pr${pr}`,
+        `${pushed.slice(0, 7)}.revert-check.json`,
+      );
+      const revertRecord = existsSync(revertRecordFile) ? JSON.parse(readFileSync(revertRecordFile, "utf8")) : null;
+      problems.push(...revertCheckProblems(revert.status, revertRecord));
       return { problems };
     },
     record(runId, event) {

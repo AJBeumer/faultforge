@@ -39,6 +39,7 @@ import {
   realHookRunner,
   redact,
   relabelWith,
+  revertCheckProblems,
   runIdFor,
   runsHook,
   safeText,
@@ -1444,6 +1445,19 @@ describe("helpers", () => {
     expect(checkProblems([{ name: "check", status: "IN_PROGRESS", conclusion: "" }])[0]).toMatch(/check IN_PROGRESS/);
     expect(checkProblems([{ name: "check", conclusion: "FAILURE" }])[0]).toMatch(/FAILURE/);
     expect(checkProblems([])[0]).toMatch(/no checks ran/);
+  });
+
+  it("proves the tests from revert:check's exit code and saved record (#101)", () => {
+    expect(revertCheckProblems(0, { message: "1 test(s) fail without the change, as they should" })).toEqual([]);
+    expect(revertCheckProblems(1, { message: "every test still passes without the change: x.test.ts" })).toEqual([
+      "revert:check: every test still passes without the change: x.test.ts",
+    ]);
+    expect(revertCheckProblems(2, { message: "the PR changes no test file, so there is nothing to prove" })).toEqual([
+      "revert:check: the PR changes no test file, so there is nothing to prove",
+    ]);
+    // No record at all: revert:check failed before it could save one (an early crash, a usage error).
+    expect(revertCheckProblems(2, null)).toEqual(["revert:check gave no result (exit 2)"]);
+    expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
   });
 
   it("replaces lab words only in reviewed repos", () => {
