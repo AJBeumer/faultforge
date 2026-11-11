@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +10,11 @@ import {
   agentArgs,
   agentInstructions,
   agentStep,
+  blockedEvidencePaths,
   buildSnapshot,
   CALL_TIMEOUT_MS,
   checkProblems,
+  commitAndPublish,
   commitToVerify,
   ExternalCallError,
   type HookAnswer,
@@ -156,7 +159,7 @@ function fake(
     audit: () => [],
     saveEvidence: (runId, w) => {
       calls.push(`save ${w ? "with" : "without"} workspace`);
-      return `private/raw-artifacts/factory-runs/${runId}.jsonl`;
+      return { file: `private/raw-artifacts/factory-runs/${runId}.jsonl`, pushed: true, blocked: [] };
     },
     cleanup: () => calls.push("cleanup"),
     record: (_id, event) => events.push(event as Record<string, unknown>),
@@ -386,6 +389,124 @@ describe("tick: stop paths", () => {
     ]);
   });
 
+  it("downgrades an otherwise-done run to needs-help when the evidence save was blocked, and cleans up once it reached its own branch (#102)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId, w) => {
+          f.calls.push(`save ${w ? "with" : "without"} workspace`);
+          return { file: "", pushed: false, blocked: ["config/qodo-rules.yaml"], savedAt: `blocked-${runId}` };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toEqual([
+      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      "workspace",
+      "agent",
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
+      "save with workspace",
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready},${LABELS.done} +${LABELS.help}`,
+      "cleanup",
+    ]);
+    expect(f.comments.at(-1)?.body).toMatch(
+      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
+    );
+    expect(f.comments.at(-1)?.body).toMatch(/blocked-20261109-093001-target-18/);
+  });
+
+  it("keeps the worktrees when even the blocked-branch push failed: the run folder is the only copy left (#102)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (_runId, w) => {
+          f.calls.push(`save ${w ? "with" : "without"} workspace`);
+          return { file: "", pushed: false, blocked: ["config/qodo-rules.yaml"], savedAt: undefined };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain("cleanup");
+    expect(f.comments.at(-1)?.body).toMatch(
+      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
+    );
+    expect(f.comments.at(-1)?.body).toMatch(/run folder \(`\/runs\/r`\), kept for inspection/);
+  });
+
+  it("still reports the blocked paths' recovery branch on a reviewed ticket, even when the paths themselves must be redacted (#102)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => ({
+          file: "",
+          pushed: false,
+          blocked: ["ground-truth.jsonl"],
+          savedAt: `blocked-${runId}`,
+        }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    const body = f.comments.at(-1)?.body ?? "";
+    expect(body).not.toMatch(/ground-truth/);
+    expect(body).toMatch(/blocked-20261109-093001-target-18/);
+  });
+
+  it("still reports the blocked evidence on the ticket even when the corrective relabel keeps failing, retried once (#102)", async () => {
+    let addAttempts = 0;
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => ({
+          file: "",
+          pushed: false,
+          blocked: ["config/qodo-rules.yaml"],
+          savedAt: `blocked-${runId}`,
+        }),
+        relabel: (github, number, remove, add) => {
+          f.calls.push(`relabel ${github}#${number} -${remove.join(",")} +${add.join(",")}`);
+          if (add.includes(LABELS.help)) {
+            addAttempts++;
+            return { removeFailed: null, addFailed: new Error("add failed") };
+          }
+          return { removeFailed: null, addFailed: null };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.comments.at(-1)?.body).toMatch(
+      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
+    );
+    expect(addAttempts).toBe(2);
+  });
+
+  it("still relabels the blocked run even when posting the comment about it fails, retried once (#102)", async () => {
+    let commentAttempts = 0;
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => ({
+          file: "",
+          pushed: false,
+          blocked: ["config/qodo-rules.yaml"],
+          savedAt: `blocked-${runId}`,
+        }),
+        comment: (github, number, body) => {
+          if (!body.includes("outside `raw-artifacts/`")) {
+            f.comments.push({ github, number, body });
+            return;
+          }
+          commentAttempts++;
+          throw new Error("comment API down");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(commentAttempts).toBe(2);
+    expect(f.calls).toContain(
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready},${LABELS.done} +${LABELS.help}`,
+    );
+  });
+
   it("takes the ticket labelled longest ago, across repos, one per tick", async () => {
     const f = fake({
       "owner/target#18": { title: "Later", events: [labelled("owner", "2026-11-09T09:00:00Z")] },
@@ -551,7 +672,7 @@ describe("tick: stop paths", () => {
     const record = f.deps.record;
     f.deps.saveEvidence = () => {
       lastWhenSaved = f.events.at(-1);
-      return "";
+      return { file: "", pushed: true, blocked: [] };
     };
     f.deps.record = record;
     await tick(FACTORY, f.deps, OPTIONS);
@@ -663,6 +784,137 @@ describe("settle", () => {
       label: LABELS.done,
       reason: "waiting for the owner: it changes AGENTS.md",
     });
+  });
+});
+
+describe("blockedEvidencePaths (#102)", () => {
+  it("allows paths under the evidence root or factory-log, nothing else", () => {
+    expect(
+      blockedEvidencePaths(
+        [
+          "raw-artifacts/factory-runs/x.jsonl",
+          "raw-artifacts",
+          "factory-log/2026-11-10.md",
+          "factory-log",
+          "ground-truth.jsonl",
+          "audit-events.jsonl",
+          "templates/evil/template.ts",
+          "config/qodo.yaml",
+          "raw-artifacts-evil/x", // a prefix match, not a path under the root
+        ],
+        "raw-artifacts",
+      ),
+    ).toEqual([
+      "ground-truth.jsonl",
+      "audit-events.jsonl",
+      "templates/evil/template.ts",
+      "config/qodo.yaml",
+      "raw-artifacts-evil/x",
+    ]);
+  });
+
+  it("drops only the genuinely empty line split() leaves after the trailing newline, never trims a real path", () => {
+    expect(blockedEvidencePaths([""], "raw-artifacts")).toEqual([]);
+    // A leading space is part of a real (if unusual) filename, not formatting noise to strip (Qodo on PR 141):
+    // trimming it would make a root-level path look like it's under the evidence root when it is not.
+    expect(blockedEvidencePaths([" raw-artifacts/x"], "raw-artifacts")).toEqual([" raw-artifacts/x"]);
+  });
+});
+
+describe("commitAndPublish: what a run may push to the private repo (#102)", () => {
+  function sh(dir: string, ...args: string[]): string {
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+  }
+
+  function bareOrigin(): string {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-origin-"));
+    sh(dir, "init", "--quiet", "--bare", "-b", "main");
+    const seed = mkdtempSync(join(tmpdir(), "ff-evidence-seed-"));
+    sh(seed, "init", "--quiet", "-b", "main");
+    sh(seed, "config", "user.email", "test@example.com");
+    sh(seed, "config", "user.name", "Test");
+    writeFileSync(join(seed, "README.md"), "seed\n");
+    sh(seed, "add", "README.md");
+    sh(seed, "commit", "--quiet", "-m", "seed");
+    sh(seed, "remote", "add", "origin", dir);
+    sh(seed, "push", "--quiet", "origin", "HEAD:main");
+    rmSync(seed, { recursive: true, force: true });
+    return dir;
+  }
+
+  function clone(origin: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-priv-"));
+    sh(dir, "clone", "--quiet", origin, ".");
+    sh(dir, "config", "user.email", "test@example.com");
+    sh(dir, "config", "user.name", "Test");
+    return dir;
+  }
+
+  it("pushes an allowed run straight to main", () => {
+    const origin = bareOrigin();
+    const priv = clone(origin);
+    mkdirSync(join(priv, "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(priv, "raw-artifacts", "factory-runs", "run1.jsonl"), '{"event":"idle"}\n');
+    const result = commitAndPublish(priv, "raw-artifacts", "run1", sh, sh);
+    expect(result).toEqual({ pushed: true, blocked: [] });
+    expect(sh(origin, "show", "main:raw-artifacts/factory-runs/run1.jsonl")).toContain("idle");
+  });
+
+  it("refuses to push a run that touched the answer key, and moves main not at all", () => {
+    const origin = bareOrigin();
+    const priv = clone(origin);
+    const mainBefore = sh(origin, "rev-parse", "main");
+    mkdirSync(join(priv, "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(priv, "raw-artifacts", "factory-runs", "run2.jsonl"), '{"event":"idle"}\n');
+    writeFileSync(join(priv, "ground-truth.jsonl"), '{"caseId":"FF-0099"}\n');
+    const result = commitAndPublish(priv, "raw-artifacts", "run2", sh, sh);
+    expect(result.pushed).toBe(false);
+    expect(result.blocked).toEqual(["ground-truth.jsonl"]);
+    expect(result.savedAt).toBe("blocked-run2");
+    expect(sh(origin, "rev-parse", "main")).toBe(mainBefore);
+    expect(sh(origin, "show", "blocked-run2:ground-truth.jsonl")).toContain("FF-0099");
+  });
+
+  it("does not mistake a similarly-prefixed root path for one under the evidence root, through the same trimming `git` helper production uses (Qodo on PR 141, round 2)", () => {
+    const origin = bareOrigin();
+    const priv = clone(origin);
+    mkdirSync(join(priv, "raw-artifacts-decoy"), { recursive: true });
+    writeFileSync(join(priv, "raw-artifacts-decoy", "file.txt"), "nope\n");
+    const result = commitAndPublish(priv, "raw-artifacts", "run5", sh, sh);
+    expect(result.pushed).toBe(false);
+    expect(result.blocked).toEqual(["raw-artifacts-decoy/file.txt"]);
+  });
+
+  it("still blocks a protected file moved under the evidence root: the rename's old path still counts as changed (Qodo on PR 141)", () => {
+    const origin = bareOrigin();
+    // Seed `ground-truth.jsonl` on main itself, so moving it is a same-commit rename, not a new file.
+    const seedMain = clone(origin);
+    writeFileSync(join(seedMain, "ground-truth.jsonl"), '{"caseId":"FF-0001"}\n');
+    sh(seedMain, "add", "ground-truth.jsonl");
+    sh(seedMain, "commit", "--quiet", "-m", "seed ground truth");
+    sh(seedMain, "push", "--quiet", "origin", "HEAD:main");
+    rmSync(seedMain, { recursive: true, force: true });
+    const mainBefore = sh(origin, "rev-parse", "main");
+
+    const priv = clone(origin);
+    mkdirSync(join(priv, "raw-artifacts"), { recursive: true });
+    sh(priv, "mv", "ground-truth.jsonl", "raw-artifacts/ground-truth.jsonl");
+    const result = commitAndPublish(priv, "raw-artifacts", "run3", sh, sh);
+    expect(result.pushed).toBe(false);
+    expect(result.blocked).toContain("ground-truth.jsonl");
+    expect(sh(origin, "rev-parse", "main")).toBe(mainBefore);
+  });
+
+  it("sees a change the agent already committed mid-run, before saveEvidence ever stages anything", () => {
+    const origin = bareOrigin();
+    const priv = clone(origin);
+    mkdirSync(join(priv, "config"), { recursive: true });
+    writeFileSync(join(priv, "config", "qodo-rules.yaml"), "rules: []\n");
+    sh(priv, "add", "config/qodo-rules.yaml");
+    sh(priv, "commit", "--quiet", "-m", "agent's own commit mid-run");
+    const result = commitAndPublish(priv, "raw-artifacts", "run4", sh, sh);
+    expect(result.pushed).toBe(false);
+    expect(result.blocked).toEqual(["config/qodo-rules.yaml"]);
   });
 });
 

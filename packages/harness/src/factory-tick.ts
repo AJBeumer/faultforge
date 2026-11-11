@@ -160,6 +160,102 @@ export interface Finish {
 }
 
 /**
+ * True when a git-reported path is `prefix` itself or inside it. Never trims or otherwise normalises
+ * `path`: a leading or trailing space is part of the real filename git is naming, not formatting noise,
+ * and treating ` raw-artifacts/x` as `raw-artifacts/x` would let a root-level path with a stray space
+ * pass as if it were under the evidence root when the file it names is not (Qodo on PR 141).
+ */
+function underEvidencePrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+/**
+ * Of `paths` (as git reports them, forward-slash, unmodified), the ones that fall outside both allowed
+ * evidence roots: the configured evidence root (e.g. `raw-artifacts`) and `factory-log`. Only these ever
+ * stop a push to the private repo's `main` (#102): the answer key and audit log must stay append-only,
+ * and the factory must never be the one to rewrite them. Only drops lines that are genuinely blank (the
+ * trailing empty entry `split("\n")` leaves after the last newline), never a path's own whitespace.
+ */
+export function blockedEvidencePaths(paths: string[], evidenceRoot: string): string[] {
+  return paths.filter(
+    (p) => p !== "" && !underEvidencePrefix(p, evidenceRoot) && !underEvidencePrefix(p, "factory-log"),
+  );
+}
+
+/**
+ * Every path that differs between `priv`'s worktree (as it stands right now, committed or not) and
+ * `origin/main`: committed changes made earlier in the run, plus whatever is modified or untracked in
+ * the working tree. Every one of the three commands below prints a bare path per line, nothing else —
+ * deliberately never `git status --porcelain`, whose leading status characters can be mistaken for part
+ * of the path once the shared `git`/`gitLong` helpers (used here, same as everywhere else) have trimmed
+ * the overall output: a path that starts with its own letter can then read as if a status prefix were
+ * still attached to it, or the reverse (Qodo on PR 141, round 2). `--no-renames` forces a rename apart
+ * into its old and new paths, so a protected file moved under the evidence root still shows its old,
+ * now-missing path — `--name-only` alone would report only the allowed destination and hide that the
+ * source was removed from `main`.
+ */
+function changedAgainst(priv: string, run: (cwd: string, ...args: string[]) => string, origin: string): string[] {
+  const lines = (s: string) => s.split("\n").filter((p) => p !== "");
+  const committed = lines(run(priv, "diff", "--no-renames", "--name-only", origin, "HEAD"));
+  const uncommitted = lines(run(priv, "diff", "--no-renames", "--name-only", "HEAD"));
+  const untracked = lines(run(priv, "ls-files", "--others", "--exclude-standard"));
+  return [...new Set([...committed, ...uncommitted, ...untracked])];
+}
+
+export interface EvidencePush {
+  /** True once the private branch's commits reached `main`. */
+  pushed: boolean;
+  /** Changed paths outside the allowed evidence roots; empty when the push went through. */
+  blocked: string[];
+  /** Where a blocked run's commits were kept instead (a branch name), if that push itself succeeded. */
+  savedAt?: string;
+}
+
+/** How many times a blocked run's quarantine push is retried before giving up on it (Qodo on PR 141: a
+ *  single attempt loses the evidence to a transient failure as surely as to a real one). */
+const QUARANTINE_PUSH_ATTEMPTS = 3;
+
+/**
+ * Lists every path `priv`'s branch changed against `origin/main`, before anything is staged or committed
+ * (#102), and decides from that list alone whether the branch may reach `main`: every path must be under
+ * one of the allowed evidence roots, or nothing does. Only once that's decided does it commit what's
+ * there, and push it either to `main` (allowed) or to a branch of its own (blocked, so the owner still has
+ * somewhere to read it, retried a few times against a transient failure); `main` never moves when blocked.
+ */
+export function commitAndPublish(
+  priv: string,
+  evidenceRoot: string,
+  runId: string,
+  run: (cwd: string, ...args: string[]) => string,
+  runLong: (cwd: string, ...args: string[]) => string,
+): EvidencePush {
+  runLong(priv, "fetch", "--quiet", "origin", "main");
+  const blocked = blockedEvidencePaths(changedAgainst(priv, run, "origin/main"), evidenceRoot);
+  run(priv, "add", "-A");
+  if (run(priv, "status", "--porcelain"))
+    run(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
+  run(priv, "rebase", "--quiet", "origin/main");
+  if (blocked.length) {
+    const branch = `blocked-${runId}`;
+    let savedAt: string | undefined;
+    for (let attempt = 0; attempt < QUARANTINE_PUSH_ATTEMPTS && !savedAt; attempt++) {
+      try {
+        runLong(priv, "push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
+        savedAt = branch;
+      } catch {
+        // Retried, up to the attempt limit; left undefined, the kept worktree/run folder is the
+        // last-resort copy, and that one is not durable once a CI run's own VM is discarded (#102,
+        // disclosed in the PR: durable delivery through that case needs a workflow-level fix, out of
+        // scope for an unattended run that may not touch .github/workflows).
+      }
+    }
+    return { pushed: false, blocked, savedAt };
+  }
+  runLong(priv, "push", "--quiet", "origin", "HEAD:main");
+  return { pushed: true, blocked: [] };
+}
+
+/**
  * What the run delivered, from the agent's own report and the runner's independent checks. Anything the
  * runner can't confirm is a stop for the owner, never a success.
  */
@@ -653,8 +749,8 @@ export interface TickDeps {
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
-  /** Saves the run log (and the agent's transcript) to the private repo and pushes it. */
-  saveEvidence(runId: string, ws: Workspace | null): string;
+  /** Saves the run log (and the agent's transcript) to the private repo, and publishes what's allowed. */
+  saveEvidence(runId: string, ws: Workspace | null): EvidencePush & { file: string };
   cleanup(ws: Workspace): void;
   /** Appends one event to the live run log. */
   record(runId: string, event: object): void;
@@ -832,7 +928,45 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     // Logged before the copy is made, so the saved log ends with it too.
     log(finish.label === LABELS.done ? "cleanup" : "kept", { root: ws.root });
     log("saved", { evidence: evidenceFile(factory, runId) });
-    deps.saveEvidence(runId, ws);
+    const saved = deps.saveEvidence(runId, ws);
+    if (saved.blocked.length) {
+      log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+      const where = saved.savedAt
+        ? `the private repository's \`${saved.savedAt}\` branch`
+        : `the run folder (\`${ws.root}\`), kept for inspection`;
+      // Sanitised on its own, so a protected word among the blocked paths only blanks this clause, never
+      // the branch or folder the owner needs to find the evidence by (Qodo on PR 141).
+      const paths = safeText(saved.blocked.join(", "), reviewed);
+      const blockedMessage = `The run also changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
+      // Said before the relabel, and each retried once on its own: one failing must never also cost the
+      // other, and the run log (which the run-log copy itself always reaches, win or lose) is never the
+      // owner's only way to learn a done-looking ticket was actually blocked (Qodo on PR 141, round 2).
+      const once = (what: string, fn: () => void): boolean => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            fn();
+            return true;
+          } catch (error) {
+            log("error", { message: `couldn't ${what}: ${error instanceof Error ? error.message : error}` });
+          }
+        }
+        return false;
+      };
+      once("comment the blocked evidence on the ticket", () => say(blockedMessage));
+      if (finish.label !== LABELS.help) {
+        if (
+          once(`relabel the blocked run to ${LABELS.help}`, () =>
+            relabel([LABELS.working, LABELS.ready, finish.label], [LABELS.help]),
+          )
+        ) {
+          finalLabel = LABELS.help;
+        }
+      }
+      // The run folder is only kept when even the blocked-branch push failed: that's the one case
+      // left where it's the owner's sole copy (Qodo on PR 141).
+      if (saved.savedAt) deps.cleanup(ws);
+      return "needs-help";
+    }
     if (finish.label === LABELS.done) deps.cleanup(ws);
     return finish.label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
@@ -873,7 +1007,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     }
     if (runId) {
       try {
-        deps.saveEvidence(runId, ws);
+        const saved = deps.saveEvidence(runId, ws);
+        if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
       } catch {
         // The live log under the runs folder still has everything.
       }
@@ -1613,18 +1748,15 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         const file = join(runs, `${runId}${suffix}`);
         if (existsSync(file)) copyFileSync(file, join(dir, `${runId}${suffix}`));
       }
-      git(priv, "add", "-A");
-      if (git(priv, "status", "--porcelain"))
-        git(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);
-      gitLong(priv, "fetch", "--quiet", "origin", "main");
-      git(priv, "rebase", "--quiet", "origin/main");
-      gitLong(priv, "push", "--quiet", "origin", "HEAD:main");
-      if (temporary) {
+      const result = commitAndPublish(priv, evidenceInPrivate, runId, git, gitLong);
+      // Torn down once the evidence reached origin, whether that's main or a blocked run's own branch;
+      // only when even that push failed is the worktree the owner's sole remaining copy (Qodo on PR 141).
+      if ((result.pushed || result.savedAt) && temporary) {
         git(privateRepo, "worktree", "remove", "--force", priv);
         git(privateRepo, "branch", "-D", `run-${runId}`);
         rmSync(join(runs, runId), { recursive: true, force: true });
       }
-      return join(factory.evidence, "factory-runs", `${runId}.jsonl`);
+      return { file: evidenceFile(factory, runId), ...result };
     },
     cleanup(ws) {
       const leftovers = teardown(ws.root, ws.lab, ws.private, basename(ws.root));
