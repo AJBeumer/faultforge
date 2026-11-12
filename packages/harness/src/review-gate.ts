@@ -111,7 +111,7 @@ export function extractReviewRecord(
 const NOT_A_RESULT = /^(poll|result|submit|cancel)(-\d+)?\.raw\.json$/;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
-function walk(dir: string, out: string[], problems: string[]): void {
+function walk(dir: string, out: string[], problems: string[], top = true): void {
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -121,8 +121,11 @@ function walk(dir: string, out: string[], problems: string[]): void {
   }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) walk(path, out, problems);
-    else if (entry.name.endsWith(".json") && !NOT_A_RESULT.test(entry.name)) out.push(path);
+    // Top-level `reviews/` holds pull-request reviews, which are never read, so a failure to list it
+    // must not be reported either.
+    if (entry.isDirectory()) {
+      if (!(top && entry.name === "reviews")) walk(path, out, problems, false);
+    } else if (entry.name.endsWith(".json") && !NOT_A_RESULT.test(entry.name)) out.push(path);
   }
 }
 
@@ -189,6 +192,9 @@ export interface GateResult {
   by: ReviewRecord | null;
   /** When not covered: the most recent review of any tree, to show how stale the evidence is. */
   nearest: ReviewRecord | null;
+  /** How many saved reviews were usable for this repository. Zero means there is nothing to compare
+   * with, which is not the same as a tree that was not reviewed. */
+  considered: number;
   reason: string;
 }
 
@@ -207,17 +213,30 @@ export function checkTree(tree: string, allRecords: ReviewRecord[], scope: GateS
   const byNewest = (a: ReviewRecord, b: ReviewRecord) => b.at - a.at;
   const covering = sameTree.filter((r) => r.complete && !r.skipped).sort(byNewest)[0];
   if (covering)
-    return { covered: true, by: covering, nearest: covering, reason: "a complete review recorded this tree" };
+    return {
+      covered: true,
+      by: covering,
+      nearest: covering,
+      considered: records.length,
+      reason: "a complete review recorded this tree",
+    };
 
   const nearest = [...records].sort(byNewest)[0] ?? null;
   if (sameTree.length > 0) {
     const why = sameTree.some((r) => r.skipped) ? "was skipped" : "had incomplete coverage";
-    return { covered: false, by: null, nearest, reason: `a review recorded this tree, but it ${why}` };
+    return {
+      covered: false,
+      by: null,
+      nearest,
+      considered: records.length,
+      reason: `a review recorded this tree, but it ${why}`,
+    };
   }
   return {
     covered: false,
     by: null,
     nearest,
+    considered: records.length,
     reason: nearest ? "no review recorded this tree" : "no saved review with a recorded tree was found",
   };
 }
@@ -319,6 +338,12 @@ function main(): number {
 
   const what = args.commit !== null ? `the tree of ${args.commit}` : "the staged tree";
   const result = checkTree(tree, records, { repo: config.github, hasCommit: (sha) => commitExists(repoRoot, sha) });
+  if (result.considered === 0) {
+    console.error(
+      `none of the ${records.length} saved review(s) belongs to ${config.github} with a base commit this checkout holds, so there is nothing to compare with`,
+    );
+    return 2;
+  }
   const now = Date.now();
   if (result.covered && result.by) {
     console.log(`Covered: ${what} (${tree}) was reviewed, ${describeAge(result.by.at, now)}, in ${result.by.source}.`);

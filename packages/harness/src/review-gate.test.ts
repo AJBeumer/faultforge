@@ -167,6 +167,13 @@ describe("checkTree", () => {
     expect(checkTree(TREE_A, [record()], { hasCommit: () => true }).covered).toBe(true);
   });
 
+  it("counts how many reviews were usable, so none usable is not the same as not reviewed", () => {
+    const other = record({ repo: "owner/other" });
+    expect(checkTree(TREE_A, [other], { repo: "owner/this" }).considered).toBe(0);
+    expect(checkTree(TREE_A, [other, record()], { repo: "owner/this" }).considered).toBe(1);
+    expect(checkTree(TREE_A, [], {}).considered).toBe(0);
+  });
+
   it("names the most recent review as the nearest when none matches", () => {
     const older = record({ source: "old", at: 1_000 });
     const newer = record({ source: "new", trees: [TREE_B], at: 2_000 });
