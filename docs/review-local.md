@@ -26,7 +26,7 @@ a different, unrelated change surfaced earlier from the same working folder.
 | 0 | Completed; no open action-required finding |
 | 1 | Completed; at least one open action-required finding |
 | 2 | Could not run (no uncommitted change to review, a transport failure, the operation failed or timed out, the result didn't verify) |
-| 3 | Qodo skipped the review, or its coverage was incomplete |
+| 3 | Never a clean result: Qodo skipped the review, its coverage was incomplete, the finding list was not reported complete, or a changed file never reached it (listed in `split.json` and the run output) |
 
 A skipped or partial review is never reported as exit 0: zero findings from a review that didn't
 really run proves nothing.

@@ -58,6 +58,11 @@ export function git(repoRoot: string, args: string[]): string {
 /** Git's own marker for a file it diffed as binary: no hunk, so no text content was actually sent. */
 const BINARY_MARKER = /^Binary files .* differ$/m;
 
+/** How many `diff --git` header lines the text holds, whatever their quoting. */
+export function countDiffHeaders(diffText: string): number {
+  return diffText.match(/^diff --git /gm)?.length ?? 0;
+}
+
 /**
  * A multi-file `git diff`'s text, split at each `diff --git a/… b/<file>` header. Qodo's own local-
  * review tool warns that a filename containing a literal " b/" can make even git's own header
@@ -125,17 +130,24 @@ export function buildLocalDiff(repoRoot: string, baseSha: string, split: Working
 
   const tracked = git(repoRoot, ["-c", "core.quotePath=false", "diff", "--src-prefix=a/", "--dst-prefix=b/", baseSha]);
   const trackedSections = splitDiffSections(tracked);
-  const covered = trackedSections.reduce((n, s) => n + s.body.length, 0);
-  if (covered < tracked.length) {
-    // Content git produced before the first header this recognizes: most likely a quoted header for
-    // a file whose name needs escaping (a quote, a backslash, a control character), which this command
-    // can't reliably attribute to a path. Never silently dropped: flagged as incomplete instead, and
-    // the sections that did parse are still sent (a real gap, 12 November).
+  // Two checks, each of which would otherwise let an unreviewed file pass as reviewed:
+  // 1. every "diff --git" line git printed must have become a section (a quoted header, for a name
+  //    with a quote, a backslash or a control character, is not recognised and would be folded into
+  //    the section before it, wherever it sits);
+  // 2. every tracked path the status split names must have a section (a diff helper or an ignore
+  //    setting can leave a changed file out of git's output).
+  if (countDiffHeaders(tracked) > trackedSections.length) {
     excludedFiles.push("(unrecognized diff header)");
     skippedFiles.push({
       file: "(unrecognized diff header)",
       why: "a tracked file's diff header wasn't in the plain, unquoted a/… b/… format this command expects",
     });
+  }
+  const seen = new Set(trackedSections.map((section) => section.file));
+  for (const path of new Set([...split.staged, ...split.unstaged])) {
+    if (seen.has(path)) continue;
+    excludedFiles.push(path);
+    skippedFiles.push({ file: path, why: "changed according to git status, but git's diff held no section for it" });
   }
   for (const section of trackedSections) {
     if (BINARY_MARKER.test(section.body)) {
