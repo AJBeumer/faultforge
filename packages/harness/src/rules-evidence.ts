@@ -14,7 +14,9 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
+import { evidenceDir, privateDir } from "./paths.ts";
 import type { Finding } from "./review-wait.ts";
 
 /** The parts of a saved `*.review.json` this uses. */
@@ -249,23 +251,21 @@ export function citationProblems(
 }
 
 function main(): void {
-  const args = process.argv.slice(2);
-  const flag = (name: string): string | undefined => {
-    const at = args.indexOf(name);
-    return at >= 0 ? args[at + 1] : undefined;
-  };
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "string" }, out: { type: "string" } },
+  });
 
   const factory = loadFactory();
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-  const evidence = resolve(root, factory.evidence);
-  const privateDir = dirname(evidence);
+  const evidence = evidenceDir(factory);
+  const priv = privateDir(process.env, factory);
   const excluded: Excluded = {
-    prs: casePrs(join(privateDir, "cases")),
-    commits: groundTruthCommits(join(privateDir, "ground-truth.jsonl")),
+    prs: casePrs(join(priv, "cases")),
+    commits: groundTruthCommits(join(priv, "ground-truth.jsonl")),
   };
   const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
 
-  const checkFile = flag("--check");
+  const checkFile = values.check;
   if (checkFile) {
     const { problems, cited } = citationProblems(
       readFileSync(checkFile, "utf8"),
@@ -282,7 +282,7 @@ function main(): void {
     return;
   }
 
-  const out = flag("--out") ?? join(privateDir, "rules", "evidence.json");
+  const out = values.out ?? join(priv, "rules", "evidence.json");
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, `${JSON.stringify(table, null, 2)}\n`);
 

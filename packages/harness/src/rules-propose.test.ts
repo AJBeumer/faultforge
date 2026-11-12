@@ -140,6 +140,75 @@ describe("propose", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("reads cases and ground truth from a non-default evidence path, the same way as the default one", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { propose } = await import("./rules-propose.ts");
+
+    const dir = mkdtempSync(join(tmpdir(), "ff-propose-custom-"));
+    try {
+      // factory.json's evidence is "stash/raw-artifacts" here, not the default "private/raw-artifacts":
+      // the private directory (and so cases/ground-truth) must move to "stash/" right along with it.
+      for (const [at, pr] of [59, 60].entries()) {
+        mkdirSync(join(dir, "stash", "raw-artifacts", "reviews", `faultforge-pr${pr}`), { recursive: true });
+        writeFileSync(
+          join(dir, "stash", "raw-artifacts", "reviews", `faultforge-pr${pr}`, "aaa.review.json"),
+          JSON.stringify({
+            repo: "AJBeumer/faultforge",
+            pr,
+            headSha: `sha${pr}`,
+            state: "complete",
+            recordedAt: `2026-11-06T18:0${at}:00Z`,
+            findings: [
+              {
+                id: `${pr}-a`,
+                file: "src/x.ts",
+                lines: [1, 2],
+                severity: "remediation_recommended",
+                category: "Correctness",
+                title: "Slip",
+                description: null,
+              },
+              {
+                id: `${pr}-b`,
+                file: "src/x.ts",
+                lines: [1, 2],
+                severity: "remediation_recommended",
+                category: "Correctness",
+                title: "Slip",
+                description: null,
+              },
+            ],
+            openFindings: [],
+          }),
+        );
+      }
+      // A case recorded under stash/cases must be excluded; if propose() read private/cases instead
+      // (a folder that doesn't exist here), casePrs would see nothing and this case would leak in.
+      mkdirSync(join(dir, "stash", "cases"), { recursive: true });
+      writeFileSync(
+        join(dir, "stash", "cases", "FF-0001.json"),
+        JSON.stringify({ pr: { repo: "AJBeumer/faultforge", number: 60 } }),
+      );
+      writeFileSync(join(dir, "stash", "ground-truth.jsonl"), "");
+
+      const factory = {
+        evidence: "stash/raw-artifacts",
+        repos: { faultforge: { github: "AJBeumer/faultforge", guard: "lab" } },
+      } as never;
+      const lines: string[] = [];
+      const result = propose(factory, dir, { open: false }, undefined, undefined, (l) => lines.push(l));
+      // PR 60's findings are the excluded case PR's own; only PR 59's two findings remain, under the
+      // pattern threshold (3), so nothing is proposed — but the read itself must not throw or come up
+      // empty because it looked in "private/" instead of "stash/".
+      expect(result.patterns).toEqual([]);
+      expect(lines.join("\n")).toContain("No pattern over the threshold");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("proposalBody", () => {

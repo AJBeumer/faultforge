@@ -12,11 +12,9 @@ import {
   agentStep,
   blockedEvidencePaths,
   buildSnapshot,
-  CALL_TIMEOUT_MS,
   checkProblems,
   commitAndPublish,
   commitToVerify,
-  ExternalCallError,
   type HookAnswer,
   type HookRunner,
   hookProblems,
@@ -24,7 +22,6 @@ import {
   hookTimeoutSeconds,
   type IssueEvent,
   isLabelAlreadyGone,
-  isTimeoutError,
   LABELS,
   LONG_CALL_TIMEOUT_MS,
   lastLabelled,
@@ -50,6 +47,7 @@ import {
   type Workspace,
   windowProblems,
 } from "./factory-tick.ts";
+import { CALL_TIMEOUT_MS, ExternalCallError } from "./github.ts";
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
@@ -1588,27 +1586,7 @@ describe("verifying the commit the agent pushed (Qodo on PR 98)", () => {
 });
 
 describe("time limits on gh and git calls (#107)", () => {
-  it("recognises Node's ETIMEDOUT and nothing else", () => {
-    expect(isTimeoutError({ code: "ETIMEDOUT" })).toBe(true);
-    expect(isTimeoutError({ code: "ENOENT" })).toBe(false);
-    expect(isTimeoutError(new Error("boom"))).toBe(false);
-    expect(isTimeoutError(null)).toBe(false);
-  });
-
-  it("names the call and marks it as a timeout", () => {
-    const err = new ExternalCallError("git push", { code: "ETIMEDOUT" });
-    expect(err.timedOut).toBe(true);
-    expect(err.message).toBe("git push timed out");
-  });
-
-  it("keeps gh's own detail for a call that failed without timing out", () => {
-    const err = new ExternalCallError("gh api", {
-      stderr: "gh: HTTP 403: Forbidden (https://api.github.com/x)\n",
-    });
-    expect(err.timedOut).toBe(false);
-    expect(err.message).toBe("gh api failed: gh: HTTP 403: Forbidden (https://api.github.com/x)");
-  });
-
+  // isTimeoutError and ExternalCallError moved to github.ts (#108); covered by github.test.ts.
   it("gives the long limit to pushes and clones, longer than the default every other call gets", () => {
     expect(LONG_CALL_TIMEOUT_MS).toBeGreaterThan(CALL_TIMEOUT_MS);
   });

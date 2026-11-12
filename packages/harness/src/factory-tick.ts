@@ -26,7 +26,7 @@
  *
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  */
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -41,8 +41,11 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
+import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
+import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
@@ -53,8 +56,6 @@ export const LABELS = {
   done: "agent-done",
   help: "agent-needs-help",
 } as const;
-
-const LAB_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 // ---------------------------------------------------------------------------------------------
 // Pure decisions (unit tested)
@@ -1161,43 +1162,15 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   };
 }
 
-/** The time limit for an ordinary `gh` or `git` call. A push, a fetch/clone, or an ordinary `npm` call
- * (an install, or `review:wait`, which already gives up on its own after its own `--timeout` minutes)
- * gets `LONG_CALL_TIMEOUT_MS` instead: a slow network or a slow script can legitimately take longer
- * than everything else the tick runs. */
-export const CALL_TIMEOUT_MS = 60_000;
+/** The long time limit for a push, a fetch/clone, or an ordinary `npm` call (an install, or `review:wait`,
+ * which gives up on its own after its own `--timeout` minutes): a slow network or script can legitimately take
+ * longer than everything else the tick runs. An ordinary call gets `CALL_TIMEOUT_MS` (`./github.ts`). */
 export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
 /** `revert:check` can legitimately run two full test suites in sequence - with the change, then
  * without it - each allowed up to ten minutes by `runVitest`'s own timeout, so its outer bound must
  * clear that worst case with room for its `gh`/`git` calls too, or a slow but valid run would be
  * killed and misreported as a failed verification (Qodo on PR 155). */
 export const REVERT_CHECK_TIMEOUT_MS = 25 * 60_000;
-
-/** True when a `child_process` error is Node reporting that the call exceeded its `timeout` option. */
-export function isTimeoutError(error: unknown): boolean {
-  return Boolean(error) && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
-}
-
-/**
- * A failed `gh` or `git` call, with the call named so a stop the run reports (the audit, the verify
- * step, a relabel) says which one hung or failed, never just "the runner failed".
- */
-export class ExternalCallError extends Error {
-  readonly timedOut: boolean;
-  readonly stderr: string;
-  constructor(label: string, cause: unknown) {
-    const timedOut = isTimeoutError(cause);
-    const stderr =
-      cause && typeof cause === "object" && "stderr" in cause
-        ? String((cause as { stderr?: unknown }).stderr ?? "")
-        : "";
-    const detail = stderr.trim().split("\n").at(-1) || (cause instanceof Error ? cause.message : String(cause));
-    super(timedOut ? `${label} timed out` : `${label} failed: ${detail}`);
-    this.name = "ExternalCallError";
-    this.timedOut = timedOut;
-    this.stderr = stderr;
-  }
-}
 
 /**
  * True only when a failed label removal is GitHub saying the label wasn't on the issue to begin with
@@ -1249,29 +1222,6 @@ export function relabelWith(
 
 // ---------------------------------------------------------------------------------------------
 // Real side effects
-
-function runsDir(): string {
-  return resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(LAB_ROOT, "..", "faultforge-runs"));
-}
-
-/** Runs an external command with a time limit, throwing a `ExternalCallError` named after it on failure. */
-export function runExternal(
-  label: string,
-  bin: string,
-  args: string[],
-  timeoutMs: number,
-  extra: { maxBuffer?: number; stdio?: ["ignore", "pipe", "pipe"] } = {},
-): string {
-  try {
-    return execFileSync(bin, args, { encoding: "utf8", timeout: timeoutMs, ...extra }) as unknown as string;
-  } catch (error) {
-    throw new ExternalCallError(label, error);
-  }
-}
-
-function gh(...args: string[]): string {
-  return runExternal(`gh ${args[0] ?? ""}`.trim(), "gh", args, CALL_TIMEOUT_MS, { maxBuffer: 64 * 1024 * 1024 });
-}
 
 function git(cwd: string, ...args: string[]): string {
   return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], CALL_TIMEOUT_MS, {
@@ -1464,8 +1414,12 @@ export function pullsSince<P extends { updated_at: string }>(cutoffMs: number, f
 export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
-  const evidenceInPrivate = relative("private", factory.evidence); // e.g. raw-artifacts
+  // Literal, not `privateDir()`: this is the physical "private" worktree this very checkout always
+  // has (the same fixed name `workspace()` below gives it), the one the push and the main-moved check
+  // below act on. Honouring `FAULTFORGE_PRIVATE_DIR` here would push and audit a different folder than
+  // the one actually checked out, so the evidence would silently escape it (Qodo on PR 154).
   const privateRepo = join(LAB_ROOT, "private");
+  const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)); // e.g. raw-artifacts
 
   /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
   const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
@@ -1491,28 +1445,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     print: (line) => console.log(line),
     lock: () => acquireLock(runs),
     labelled: (github, label) =>
-      (
-        JSON.parse(
-          gh(
-            "api",
-            "--paginate",
-            "--slurp",
-            `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
-          ),
-        ) as {
-          number: number;
-          title: string;
-          pull_request?: unknown;
-        }[][]
-      )
-        .flat()
-        .filter((i) => !i.pull_request),
-    events: (github, number) =>
-      (
-        JSON.parse(
-          gh("api", "--paginate", "--slurp", `repos/${github}/issues/${number}/events?per_page=100`),
-        ) as IssueEvent[][]
-      ).flat(),
+      ghAll<{ number: number; title: string; pull_request?: unknown }>(
+        `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+      ).filter((i) => !i.pull_request),
+    events: (github, number) => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
     snapshot(github, number) {
       const [owner, name] = github.split("/");
@@ -1638,20 +1574,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       type Comment = { user?: { login: string }; created_at: string; html_url: string };
       const comments = Object.values(factory.repos).flatMap((repo) =>
         ["issues/comments", "pulls/comments"].flatMap((kind) =>
-          (
-            JSON.parse(
-              gh("api", "--paginate", "--slurp", `repos/${repo.github}/${kind}?since=${from}&per_page=100`),
-            ) as Comment[][]
-          )
-            .flat()
-            .map((c) => ({ user: c.user?.login ?? "", created_at: c.created_at, url: c.html_url })),
+          ghAll<Comment>(`repos/${repo.github}/${kind}?since=${from}&per_page=100`).map((c) => ({
+            user: c.user?.login ?? "",
+            created_at: c.created_at,
+            url: c.html_url,
+          })),
         ),
       );
-      const ticketEvents = (
-        JSON.parse(
-          gh("api", "--paginate", "--slurp", `repos/${ticket.github}/issues/${ticket.number}/events?per_page=100`),
-        ) as IssueEvent[][]
-      ).flat();
+      const ticketEvents = ghAll<IssueEvent>(`repos/${ticket.github}/issues/${ticket.number}/events?per_page=100`);
       // Submitted reviews (approve, request changes) leave no comment: read them from every PR touched since.
       // The pulls endpoint has no `since`, so page through it by hand and stop once a page is older than
       // the window, instead of reading (or silently capping at) the repo's whole pull-request history.
@@ -1659,20 +1589,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       type Review = { user?: { login: string }; submitted_at?: string; html_url: string };
       const cutoffMs = Math.floor(Date.parse(from) / 1000) * 1000;
       const reviews = Object.values(factory.repos).flatMap((repo) =>
-        pullsSince<Pull>(
-          cutoffMs,
-          (page) =>
-            JSON.parse(
-              gh("api", `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50&page=${page}`),
-            ) as Pull[],
+        pullsSince<Pull>(cutoffMs, (page) =>
+          ghJson<Pull[]>(`repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50&page=${page}`),
         )
-          .flatMap((pull) =>
-            (
-              JSON.parse(
-                gh("api", "--paginate", "--slurp", `repos/${repo.github}/pulls/${pull.number}/reviews?per_page=100`),
-              ) as Review[][]
-            ).flat(),
-          )
+          .flatMap((pull) => ghAll<Review>(`repos/${repo.github}/pulls/${pull.number}/reviews?per_page=100`))
           .filter((r) => r.submitted_at)
           .map((r) => ({ user: r.user?.login ?? "", created_at: r.submitted_at ?? "", url: r.html_url })),
       );
@@ -1800,7 +1720,15 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     verifyPr(ws, repoKey, pr) {
       const repo = repoConfig(factory, repoKey);
       const { github } = repo;
-      const first = JSON.parse(gh("pr", "view", String(pr), "--repo", github, "--json", "headRefOid,headRefName"));
+      const first = ghJson<{ headRefOid: string; headRefName: string }>(
+        "pr",
+        "view",
+        String(pr),
+        "--repo",
+        github,
+        "--json",
+        "headRefOid,headRefName",
+      );
       // The agent's branch tip is what it pushed; GitHub's view of the head can lag a push.
       const dir = repo.path === "." ? ws.lab : resolve(ws.lab, repo.path);
       let localTip: string | null = null;
@@ -1833,8 +1761,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (review.status !== 0)
         return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`] };
       // Read again after the review: state, head and checks must all be of the pushed commit.
-      const view = JSON.parse(
-        gh("pr", "view", String(pr), "--repo", github, "--json", "state,headRefOid,statusCheckRollup"),
+      const view = ghJson<Parameters<typeof prViewProblems>[0]>(
+        "pr",
+        "view",
+        String(pr),
+        "--repo",
+        github,
+        "--json",
+        "state,headRefOid,statusCheckRollup",
       );
       const problems = prViewProblems(view, pushed);
       // A complete review can still have findings open: only none action-required counts as ready.
@@ -2023,12 +1957,13 @@ export function agentStep(command: string): string | null {
   return null;
 }
 
-function option(args: string[], name: string, fallback: number): number {
-  const index = args.indexOf(name);
-  const value = index >= 0 ? Number(args[index + 1]) : fallback;
+/** `--minutes` and `--budget`, each a positive number, falling back to the given default; exits 2
+ * naming whichever one isn't. */
+function positiveOption(values: Record<string, unknown>, name: "minutes" | "budget", fallback: number): number {
+  const value = values[name] === undefined ? fallback : Number(values[name]);
   if (!Number.isFinite(value) || value <= 0) {
     console.error(
-      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (${name} must be a positive number)`,
+      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (--${name} must be a positive number)`,
     );
     process.exit(2);
   }
@@ -2036,9 +1971,20 @@ function option(args: string[], name: string, fallback: number): number {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const options = { minutes: option(args, "--minutes", 120), budget: option(args, "--budget", 25) };
-  const mode: RunMode = args.includes("--ci") ? "ci" : "local";
+  let values: { ci?: boolean; minutes?: string; budget?: string };
+  try {
+    ({ values } = parseArgs({
+      args: process.argv.slice(2),
+      options: { ci: { type: "boolean" }, minutes: { type: "string" }, budget: { type: "string" } },
+    }));
+  } catch (error) {
+    console.error(
+      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (${error instanceof Error ? error.message : error})`,
+    );
+    process.exit(2);
+  }
+  const options = { minutes: positiveOption(values, "minutes", 120), budget: positiveOption(values, "budget", 25) };
+  const mode: RunMode = values.ci ? "ci" : "local";
   if (!process.env.GH_TOKEN && process.env.GH_TOKEN_FILE)
     process.env.GH_TOKEN = readFileSync(process.env.GH_TOKEN_FILE, "utf8").trim();
   if (!process.env.GH_TOKEN) {

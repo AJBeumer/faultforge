@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runExternal } from "../src/factory-tick.ts";
+import { runExternal } from "../src/github.ts";
 
 describe("runExternal: a real hanging process (#107)", () => {
   it("actually enforces its time limit, naming the call", () => {

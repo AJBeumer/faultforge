@@ -11,11 +11,11 @@
  * Exits 0 when ready, 1 with the list of problems when not, 2 when the ticket or the checkout could
  * not be read (a missing checkout is never reported as "not ready").
  */
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
+import { gh } from "./github.ts";
 import { premiseProblems, premisesOf, refreshRef, sectionsOf } from "./ticket-premises.ts";
 
 const LAB_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
@@ -62,12 +62,6 @@ export function readinessProblems(
   if (openBlockers.length) problems.push(`blocked by open tickets ${openBlockers.map((n) => `#${n}`).join(", ")}`);
   problems.push(...stalePremises);
   return problems;
-}
-
-const GH_TIMEOUT_MS = 60_000;
-
-function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", timeout: GH_TIMEOUT_MS });
 }
 
 /** Reads a ticket from GitHub and returns its title and readiness problems (empty when ready). */
