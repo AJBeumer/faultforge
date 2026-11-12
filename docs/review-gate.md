@@ -61,7 +61,8 @@ since the recording and the newest reflog entry is a commit. If so it runs `revi
 and, when no finished local review saw those exact files, shows a short note to the person and the agent.
 Because it reads git and not the command, `git commit -a`, `git add … && git commit` in one command, `-q`,
 an amend or an alias are all judged on what was really committed. If one command makes several commits,
-the last is judged.
+the last is judged. The judging hook also runs when a command fails, so a commit followed by a
+failing command is still checked.
 
 Recording before the command is what keeps it honest about who made the commit. A commit made between
 commands, in an IDE or a plain terminal, is already recorded when the next command starts, so it is never
@@ -77,7 +78,8 @@ so it is never committed. A commit that was only reviewed on its pull request, o
 skips, shows the note too: the note says what it knows.
 
 What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
-as already seen. If the check takes longer than the hook's limit (the gate takes about a second today), the
+as already seen. When Claude Code runs several commands in parallel, one command's recording can land after
+another's commit, and that commit goes unwarned. If the check takes longer than the hook's limit (the gate takes about a second today), the
 note says it could not check. A git post-commit hook would cover commits made anywhere. Blocking a commit
 would need a git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command
 and cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are

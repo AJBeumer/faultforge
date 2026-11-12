@@ -20,7 +20,7 @@
  * Exit codes of the gate: 0 covered, 1 not covered, 2 could not check (anything else counts as 2).
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { firstLine, isEntry, readStdin } from "./hook-io.ts";
@@ -133,7 +133,14 @@ export function runGate(projectDir: string, ref: string): GateRun {
  * linked worktree of it, different for a nested repository such as `private/`. */
 function commonDir(dir: string): string | null {
   const out = git(dir, ["rev-parse", "--git-common-dir"]);
-  return out ? resolve(dir, out) : null;
+  if (!out) return null;
+  const path = resolve(dir, out);
+  // Real paths, so a short and a long spelling of one folder (Windows 8.3 names, a junction) compare equal.
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
 }
 
 /** True when `cwd` belongs to the same git repository as the project folder, including its linked
@@ -163,12 +170,12 @@ export function recordHead(stdin: string, deps: Deps, env: Record<string, string
 }
 
 /** Prints a note the way a PostToolUse hook shows one: to the person, and as context to the agent. */
-export function show(note: Note): void {
+export function show(note: Note, event = "PostToolUse"): void {
   if (note.kind === "none") return;
   console.log(
     JSON.stringify({
       systemMessage: note.message,
-      hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note.message },
+      hookSpecificOutput: { hookEventName: event, additionalContext: note.message },
     }),
   );
 }
@@ -201,6 +208,16 @@ function realDeps(projectDir: string, stdin: string): Deps {
   };
 }
 
+/** The event the payload says it is: a failed command reaches the hook as PostToolUseFailure. */
+export function eventOf(stdin: string): string {
+  try {
+    const name = (JSON.parse(stdin) as { hook_event_name?: unknown } | null)?.hook_event_name;
+    return name === "PostToolUseFailure" ? name : "PostToolUse";
+  } catch {
+    return "PostToolUse";
+  }
+}
+
 /** `node review-gate-note.ts before` records HEAD before a command; with no argument it judges after one. */
 function main() {
   try {
@@ -208,7 +225,7 @@ function main() {
     const stdin = readStdin();
     const deps = realDeps(projectDir, stdin);
     if (process.argv[2] === "before") recordHead(stdin, deps);
-    else show(decide(stdin, deps));
+    else show(decide(stdin, deps), eventOf(stdin));
   } catch {
     // After the commit there is nothing to undo, and a hook that crashed must not look like a failed commit.
   }

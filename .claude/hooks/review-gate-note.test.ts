@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   type Deps,
   decide,
+  eventOf,
   type GateRun,
   type HeadState,
   readHead,
@@ -321,6 +322,23 @@ describe("show", () => {
   });
 });
 
+describe("a command that failed after committing", () => {
+  it("is judged from the failure event too, and the note names that event", () => {
+    expect(eventOf(JSON.stringify({ hook_event_name: "PostToolUseFailure" }))).toBe("PostToolUseFailure");
+    expect(eventOf(JSON.stringify({ hook_event_name: "PostToolUse" }))).toBe("PostToolUse");
+    expect(eventOf("not json")).toBe("PostToolUse");
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      show({ kind: "note", message: "m" }, "PostToolUseFailure");
+    } finally {
+      console.log = original;
+    }
+    expect(JSON.parse(lines[0] ?? "{}").hookSpecificOutput.hookEventName).toBe("PostToolUseFailure");
+  });
+});
+
 describe("registration and docs", () => {
   const root = resolve(import.meta.dirname, "..", "..");
 
@@ -343,6 +361,14 @@ describe("registration and docs", () => {
     );
     expect(entry?.matcher).toBe("Bash|PowerShell");
     expect(entry.hooks[0].command).toMatch(/review-gate-note.ts" before$/);
+  });
+
+  it("settings.json also registers the judging hook for commands that fail", () => {
+    const settings = JSON.parse(readFileSync(join(root, ".claude", "settings.json"), "utf8"));
+    const entry = (settings.hooks?.PostToolUseFailure ?? []).find((e: { hooks: { command: string }[] }) =>
+      e.hooks.some((h) => h.command.includes("review-gate-note.ts")),
+    );
+    expect(entry?.matcher).toBe("Bash|PowerShell");
   });
 
   it("the existing PreToolUse guards are still registered", () => {
