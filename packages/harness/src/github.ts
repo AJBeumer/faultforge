@@ -59,6 +59,11 @@ export function ghJson<T>(...args: string[]): T {
   return JSON.parse(gh(...args)) as T;
 }
 
+/** A REST endpoint through `gh api`, parsed as JSON. The path goes here, never to `ghJson`: `gh repos/...` is not a command (#168). */
+export function ghApiJson<T>(path: string): T {
+  return ghJson<T>("api", path);
+}
+
 /** Every item of a `gh api --paginate --slurp` list endpoint, flattened across pages. */
 export function ghAll<T>(path: string, pick: (page: unknown) => T[] = (page) => page as T[]): T[] {
   return (JSON.parse(gh("api", "--paginate", "--slurp", path)) as unknown[]).flatMap(pick);

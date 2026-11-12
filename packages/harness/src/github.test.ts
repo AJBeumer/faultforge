@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
 import { execFileSync } from "node:child_process";
-import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghJson, isTimeoutError } from "./github.ts";
+import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, isTimeoutError } from "./github.ts";
 
 describe("isTimeoutError", () => {
   it("recognises Node's ETIMEDOUT and nothing else", () => {
@@ -46,6 +46,12 @@ describe("gh, ghJson and ghAll: one time-limit policy for every caller", () => {
   it("ghJson parses gh's output", () => {
     vi.mocked(execFileSync).mockReturnValueOnce('{"state":"OPEN"}');
     expect(ghJson<{ state: string }>("pr", "view", "9").state).toBe("OPEN");
+  });
+
+  it("ghApiJson runs gh api with the path and parses the JSON", () => {
+    vi.mocked(execFileSync).mockReturnValueOnce('[{"number":7}]');
+    expect(ghApiJson<{ number: number }[]>("repos/o/r/pulls?page=1")).toEqual([{ number: 7 }]);
+    expect(vi.mocked(execFileSync).mock.calls.at(-1)?.[1]).toEqual(["api", "repos/o/r/pulls?page=1"]);
   });
 
   it("ghAll flattens every page from --paginate --slurp", () => {

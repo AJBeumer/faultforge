@@ -43,7 +43,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
-import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghJson, runExternal } from "./github.ts";
+import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
@@ -1688,7 +1688,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const cutoffMs = Math.floor(Date.parse(from) / 1000) * 1000;
       const reviews = Object.values(factory.repos).flatMap((repo) =>
         pullsSince<Pull>(cutoffMs, (page) =>
-          ghJson<Pull[]>(`repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50&page=${page}`),
+          ghApiJson<Pull[]>(
+            `repos/${repo.github}/pulls?state=all&sort=updated&direction=desc&per_page=50&page=${page}`,
+          ),
         )
           .flatMap((pull) => ghAll<Review>(`repos/${repo.github}/pulls/${pull.number}/reviews?per_page=100`))
           .filter((r) => r.submitted_at)
