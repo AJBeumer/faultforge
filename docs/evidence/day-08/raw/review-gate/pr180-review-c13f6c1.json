@@ -1,0 +1,41 @@
+{
+  "repo": "AJBeumer/faultforge",
+  "pr": 180,
+  "headSha": "c13f6c1f8862b7fdbe157680faf22708d73ab12c",
+  "state": "complete",
+  "headMovedTo": null,
+  "pushSeenAt": "2026-11-12T22:05:54Z",
+  "reviewEffort": "standard",
+  "reviewSeenCompleteAt": "2026-11-12T22:07:51.675Z",
+  "reviewSeenCompleteNote": "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
+  "reviewStartedAt": "2026-11-12T22:06:03.218508Z",
+  "recordedAt": "2026-11-12T22:07:54.564Z",
+  "ci": "npm run check: success, npm run check (windows): success, npm run check: success, npm run check (windows): success",
+  "abTest": {
+    "name": null,
+    "arm": null
+  },
+  "findings": [
+    {
+      "id": "fe1d3b53-9f68-41fb-a2a0-dd8d96fb2188",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [341, 342],
+      "severity": "remediation_recommended",
+      "category": "Observability",
+      "title": "Unreadable evidence gets the wrong diagnosis",
+      "description": "`main()` checks `result.considered === 0` before it checks the read errors collected in `problems`. If the readable records are all from another repository or have unknown bases while another evidence file or directory is unreadable, exit 2 says no review belongs to this checkout and omits the read failure that needs attention."
+    }
+  ],
+  "openFindings": [
+    {
+      "id": "fe1d3b53-9f68-41fb-a2a0-dd8d96fb2188",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [341, 342],
+      "severity": "remediation_recommended",
+      "category": "Observability",
+      "title": "Unreadable evidence gets the wrong diagnosis",
+      "description": "`main()` checks `result.considered === 0` before it checks the read errors collected in `problems`. If the readable records are all from another repository or have unknown bases while another evidence file or directory is unreadable, exit 2 says no review belongs to this checkout and omits the read failure that needs attention.",
+      "commit": "c13f6c1"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "repo": "AJBeumer/faultforge",
+  "pr": 180,
+  "headSha": "2cb2e8bea29dcab780b898f12581c306588c60b5",
+  "state": "complete",
+  "headMovedTo": null,
+  "pushSeenAt": "2026-11-12T21:56:00Z",
+  "reviewEffort": "standard",
+  "reviewSeenCompleteAt": "2026-11-12T21:59:41.335Z",
+  "reviewSeenCompleteNote": "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
+  "reviewStartedAt": "2026-11-12T21:56:25.732846Z",
+  "recordedAt": "2026-11-12T21:59:44.046Z",
+  "ci": "npm run check: success, npm run check (windows): success, npm run check: success, npm run check (windows): success",
+  "abTest": {
+    "name": null,
+    "arm": null
+  },
+  "findings": [
+    {
+      "id": "41d054ee-d55b-4e8f-990f-70e7c69024d5",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [138, 139],
+      "severity": "action_required",
+      "category": "Correctness",
+      "title": "Unreadable scope data can mark a tree covered",
+      "description": "`readSidecar` returns `null` when an existing `split.json` cannot be read or parsed, and `extractReviewRecord` treats a null sidecar as complete scope. If the adjacent `review.json` has complete coverage and an exact tree match, the gate can return 0 without checking whether the local diff omitted files."
+    },
+    {
+      "id": "4f8b7435-fe59-4838-9639-99a0816a18f4",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [273, 273],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Invalid configuration exits as not covered",
+      "description": "`main` calls `loadFactory()` outside its error handling, and that function throws for an unreadable, malformed, or invalid configuration. When `factory.json` or `FAULTFORGE_CONFIG` is bad, the uncaught exception exits with status 1 instead of the gate’s status 2 for an input or evidence failure."
+    },
+    {
+      "id": "1f2b6f3a-1306-4d52-b33e-df2426ecaf10",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [194, 195],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Another repository's review can cover a tree",
+      "description": "`checkTree` rejects a foreign repository only when the review has a non-null `repo`, while records without a sidecar receive `repo: null`. If two configured repositories have identical trees, an unlabelled complete review from one can make the other report covered; the new test explicitly accepts that case."
+    },
+    {
+      "id": "2d4d56f5-5d16-49d9-841f-7659606b757c",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [115, 119],
+      "severity": "remediation_recommended",
+      "category": "Reliability",
+      "title": "Unreadable folders can hide matching reviews",
+      "description": "`walk` silently returns when it cannot list an evidence directory, leaving `readReviewRecords` with a partial set of reviews. If another review remains readable, `main` proceeds to return 0 or 1 rather than exit 2, so a matching review in the unreadable folder can be reported as not covered."
+    }
+  ],
+  "openFindings": [
+    {
+      "id": "41d054ee-d55b-4e8f-990f-70e7c69024d5",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [138, 139],
+      "severity": "action_required",
+      "category": "Correctness",
+      "title": "Unreadable scope data can mark a tree covered",
+      "description": "`readSidecar` returns `null` when an existing `split.json` cannot be read or parsed, and `extractReviewRecord` treats a null sidecar as complete scope. If the adjacent `review.json` has complete coverage and an exact tree match, the gate can return 0 without checking whether the local diff omitted files.",
+      "commit": "2cb2e8b"
+    },
+    {
+      "id": "4f8b7435-fe59-4838-9639-99a0816a18f4",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [273, 273],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Invalid configuration exits as not covered",
+      "description": "`main` calls `loadFactory()` outside its error handling, and that function throws for an unreadable, malformed, or invalid configuration. When `factory.json` or `FAULTFORGE_CONFIG` is bad, the uncaught exception exits with status 1 instead of the gate’s status 2 for an input or evidence failure.",
+      "commit": "2cb2e8b"
+    },
+    {
+      "id": "1f2b6f3a-1306-4d52-b33e-df2426ecaf10",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [194, 195],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Another repository's review can cover a tree",
+      "description": "`checkTree` rejects a foreign repository only when the review has a non-null `repo`, while records without a sidecar receive `repo: null`. If two configured repositories have identical trees, an unlabelled complete review from one can make the other report covered; the new test explicitly accepts that case.",
+      "commit": "2cb2e8b"
+    },
+    {
+      "id": "2d4d56f5-5d16-49d9-841f-7659606b757c",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [115, 119],
+      "severity": "remediation_recommended",
+      "category": "Reliability",
+      "title": "Unreadable folders can hide matching reviews",
+      "description": "`walk` silently returns when it cannot list an evidence directory, leaving `readReviewRecords` with a partial set of reviews. If another review remains readable, `main` proceeds to return 0 or 1 rather than exit 2, so a matching review in the unreadable folder can be reported as not covered.",
+      "commit": "2cb2e8b"
+    }
+  ]
+}

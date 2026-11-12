@@ -1,0 +1,70 @@
+{
+  "repo": "AJBeumer/faultforge",
+  "pr": 180,
+  "headSha": "d72ef145d4da26cad8d0e5a2137d0c40ea28bbf1",
+  "state": "complete",
+  "headMovedTo": null,
+  "pushSeenAt": "2026-11-12T22:01:28Z",
+  "reviewEffort": "standard",
+  "reviewSeenCompleteAt": "2026-11-12T22:04:32.172Z",
+  "reviewSeenCompleteNote": "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
+  "reviewStartedAt": "2026-11-12T22:01:39.503260Z",
+  "recordedAt": "2026-11-12T22:04:35.337Z",
+  "ci": "npm run check: success, npm run check (windows): success, npm run check (windows): success, npm run check: success",
+  "abTest": {
+    "name": null,
+    "arm": null
+  },
+  "findings": [
+    {
+      "id": "00b96536-3b15-496b-8b68-18bd0903d541",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [203, 204],
+      "severity": "action_required",
+      "category": "Correctness",
+      "title": "Not-covered output omits nearest review",
+      "description": "`checkTree` drops reviews from other repositories, and reviews whose base commit this checkout lacks, before it picks `nearest`. `main` only exits 2 when the unfiltered list is empty, so when every saved review is filtered out it prints \"no saved review with a recorded tree was found\" and exits 1 with no nearest tree or age, contradicting the docs' exit 2 for \"no saved review found\"."
+    },
+    {
+      "id": "d20fc27d-086d-41f0-aabb-bcd7b1f9e920",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [118, 119],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Unreadable pull reviews block the gate",
+      "description": "`walk()` records a listing failure inside `reviews/` even though `readReviewRecords()` excludes that subtree from local-review evidence. If pull-request review saves are unreadable while local reviews are readable, an uncovered tree exits 2 instead of reporting not covered with exit 1."
+    }
+  ],
+  "openFindings": [
+    {
+      "id": "00b96536-3b15-496b-8b68-18bd0903d541",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [203, 204],
+      "severity": "action_required",
+      "category": "Correctness",
+      "title": "Not-covered output omits nearest review",
+      "description": "`checkTree` drops reviews from other repositories, and reviews whose base commit this checkout lacks, before it picks `nearest`. `main` only exits 2 when the unfiltered list is empty, so when every saved review is filtered out it prints \"no saved review with a recorded tree was found\" and exits 1 with no nearest tree or age, contradicting the docs' exit 2 for \"no saved review found\".",
+      "commit": "d72ef14"
+    },
+    {
+      "id": "d20fc27d-086d-41f0-aabb-bcd7b1f9e920",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [118, 119],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Unreadable pull reviews block the gate",
+      "description": "`walk()` records a listing failure inside `reviews/` even though `readReviewRecords()` excludes that subtree from local-review evidence. If pull-request review saves are unreadable while local reviews are readable, an uncovered tree exits 2 instead of reporting not covered with exit 1.",
+      "commit": "d72ef14"
+    },
+    {
+      "id": "1f2b6f3a-1306-4d52-b33e-df2426ecaf10",
+      "file": "packages/harness/src/review-gate.ts",
+      "lines": [194, 195],
+      "severity": "remediation_recommended",
+      "category": "Correctness",
+      "title": "Another repository's review can cover a tree",
+      "description": "`checkTree` rejects a foreign repository only when the review has a non-null `repo`, while records without a sidecar receive `repo: null`. If two configured repositories have identical trees, an unlabelled complete review from one can make the other report covered; the new test explicitly accepts that case.",
+      "commit": "2cb2e8b"
+    }
+  ]
+}

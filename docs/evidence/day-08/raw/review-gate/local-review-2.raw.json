@@ -1,0 +1,530 @@
+{
+  "finding_state": {
+    "complete": false,
+    "dismissed": [],
+    "introduced": [
+      {
+        "ab_arm": null,
+        "ab_test_name": null,
+        "action_level": "remediation_recommended",
+        "attribution_reason": null,
+        "attribution_sha": null,
+        "attribution_source": "attribution_engine",
+        "attribution_status": "pending",
+        "branch_name": null,
+        "category": "Correctness",
+        "comment_id": null,
+        "comment_surface": null,
+        "conversion_approved": true,
+        "conversion_label": "maybe",
+        "conversion_reason": "Plausible correctness gap, but the finding itself admits the PR-review payload shape is unconfirmed. No close accepted or rejected precedent found in history.",
+        "conversion_reference_prs": [],
+        "created_at": null,
+        "cwe": null,
+        "deduplication_approved": true,
+        "description": "`readReviewRecords` walks every `.json` under the whole evidence folder and `extractReviewRecord` accepts any document with a `meta.checkpoint` or `meta.run.snapshot` tree, so it never checks that a record came from `local-reviews/`. The docs promise that a pull-request review never counts and that only saved local reviews record a tree, but `review:wait` also saves `*.review.json` files under `reviews/<target>/` in the same evidence folder, so a PR review carrying a matching tree would make a commit show as covered.",
+        "diff_reference": {
+          "code_snippet": "+    if (entry.isDirectory()) walk(path, out);\n+    else if (entry.name.endsWith(\".json\") && !NOT_A_RESULT.test(entry.name)) out.push(path);",
+          "end_line": 123,
+          "file_path": "packages/harness/src/review-gate.ts",
+          "side": "right",
+          "source_sha": null,
+          "start_line": 122
+        },
+        "dismiss_explanation": null,
+        "dismiss_reason": null,
+        "duplicated_with": null,
+        "evidence": {
+          "citations": [
+            {
+              "citation": "function walk(dir: string, out: string[]): void {\n  let entries: import(\"node:fs\").Dirent[];\n  try {\n    entries = readdirSync(dir, { withFileTypes: true });\n  } catch {\n    return;\n  }\n  for (const entry of entries) {\n    const path = join(dir, entry.name);\n    if (entry.isDirectory()) walk(path, out);\n    else if (entry.name.endsWith(\".json\") && !NOT_A_RESULT.test(entry.name)) out.push(path);\n  }\n}",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "packages/harness/src/review-gate.ts[113-125]",
+              "source_type": "pr_branch_file",
+              "url": null
+            },
+            {
+              "citation": "export interface ReviewRecord {\n  /** The saved file this came from, relative to the evidence folder where possible. */\n  source: string;",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "packages/harness/src/review-gate.ts[29-31]",
+              "source_type": "pr_branch_file",
+              "url": null
+            },
+            {
+              "citation": "- **A review of a pull request is not a local review.** Only saved local reviews that record a tree\n  count. A commit that was only reviewed on its pull request shows as not covered.",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "docs/review-gate.md[36-37]",
+              "source_type": "pr_branch_file",
+              "url": null
+            },
+            {
+              "citation": "  const reviewsDir = options.reviewsDir ?? join(root, \"raw-artifacts\", \"reviews\");",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "packages/harness/src/verdict.ts[257]",
+              "source_type": "pr_branch_file",
+              "url": null
+            },
+            {
+              "citation": "// Review shapes mirror the `*.review.json` files `review:wait` saves under private/raw-artifacts,",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "packages/harness/src/rules-evidence.test.ts[15]",
+              "source_type": "pr_branch_file",
+              "url": null
+            }
+          ],
+          "explanation": "The walk is unrestricted under `evidence` and the only gate on a record is the presence of a 40-hex tree and the `complete`/`skipped` flags. Other code in the harness saves PR reviews under `raw-artifacts/reviews/<target>` (verdict.ts reads that directory), so those files are in scope of the walk. Whether a PR review payload carries `meta.checkpoint.tree_sha` could not be confirmed from the repo, which is why this is a remediation rather than a blocker."
+        },
+        "finding_source": "IssueFinding",
+        "fingerprint": null,
+        "fix_suggestion": {
+          "fix_description": "Restrict the walk to local-reviews folder",
+          "prompt_to_fix": "Issue description\nThe gate reads every JSON under the evidence folder, so saved pull-request reviews (`reviews/<target>/*.review.json`) can be treated as local reviews, contradicting docs/review-gate.md.\n\nFix Focus Areas\n- packages/harness/src/review-gate.ts[113-125]\n- packages/harness/src/review-gate.ts[145-165]\n- docs/review-gate.md[36-37]\n\nRecommended Fix\nWalk only `join(evidence, \"local-reviews\")` from `main` (or have `readReviewRecords` skip any path not under that folder), and add a test that a matching-tree record under `reviews/` is ignored."
+        },
+        "git_organization_name": "ajbeumer",
+        "git_provider": null,
+        "git_repo_name": "faultforge",
+        "git_sha": "55e47a7c7554f89b295c3c45ea2829edcd415658",
+        "git_subgroup_name": "",
+        "id": "4db07bd2-04bf-4edd-b3b5-8c29bd1db7f2",
+        "inline_comment_id": null,
+        "local_review_id": "76ea5834-fdce-4bf1-90d6-e9290f4c33da",
+        "match_by_lines": null,
+        "pr_url": null,
+        "precision_approved": null,
+        "precision_is_pr_scope": null,
+        "precision_reason": null,
+        "precision_shadow_approved": null,
+        "review_run_id": null,
+        "review_source": null,
+        "source_agent": null,
+        "title": "Non-local PR reviews can count as local coverage",
+        "workspace_id": null
+      },
+      {
+        "ab_arm": null,
+        "ab_test_name": null,
+        "action_level": "informational",
+        "attribution_reason": null,
+        "attribution_sha": null,
+        "attribution_source": "attribution_engine",
+        "attribution_status": "pending",
+        "branch_name": null,
+        "category": "Maintainability",
+        "comment_id": null,
+        "comment_surface": null,
+        "conversion_approved": true,
+        "conversion_label": "yes",
+        "conversion_reason": "Trivial, deterministic doc-placement fix: the envelope JSDoc sits above Sidecar, not the function. No rejection precedent found.",
+        "conversion_reference_prs": [],
+        "created_at": null,
+        "cwe": null,
+        "deduplication_approved": true,
+        "description": "The JSDoc that describes `extractReviewRecord` (unwrapping the managed-agent envelope) sits above the `Sidecar` interface, and `extractReviewRecord` itself has no doc block right above it. A later reader will see the envelope description attached to the wrong type.",
+        "diff_reference": {
+          "code_snippet": "+/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.\n+ * Unwraps the managed-agent envelope (`{output: \"<json>\"}` holding `{result: payload}`) that earlier\n+ * saves used, and a bare `{result: payload}`. */\n+/** What the run saved next to a review (`split.json`): which repository, and whether every changed",
+          "end_line": 54,
+          "file_path": "packages/harness/src/review-gate.ts",
+          "side": "right",
+          "source_sha": null,
+          "start_line": 51
+        },
+        "dismiss_explanation": null,
+        "dismiss_reason": null,
+        "duplicated_with": null,
+        "evidence": {
+          "citations": [
+            {
+              "citation": "/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.\n * Unwraps the managed-agent envelope (`{output: \"<json>\"}` holding `{result: payload}`) that earlier\n * saves used, and a bare `{result: payload}`. */\n/** What the run saved next to a review (`split.json`): which repository, and whether every changed\n * file reached Qodo. A review whose diff left a file out is never complete coverage, whatever Qodo's\n * own coverage flag says. */\nexport interface Sidecar {\n  repo: string | null;\n  scopeComplete: boolean;\n}\n\nexport function extractReviewRecord(",
+              "citation_reason": null,
+              "cross_repo_file": null,
+              "cross_repo_relationship": null,
+              "external_id": null,
+              "id": null,
+              "persona_identifier": null,
+              "platform_entity_id": null,
+              "platform_entity_type": null,
+              "skill_id": null,
+              "source": "packages/harness/src/review-gate.ts[51-62]",
+              "source_type": "pr_branch_file",
+              "url": null
+            }
+          ],
+          "explanation": "Lines 51-53 document the envelope unwrapping of `extractReviewRecord`, and lines 54-56 document `Sidecar`, which is declared at line 57; the two comment blocks stack directly above the interface with the function following it."
+        },
+        "finding_source": "IssueFinding",
+        "fingerprint": null,
+        "fix_suggestion": {
+          "fix_description": "Move the comment next to its function",
+          "prompt_to_fix": "Issue description\nThe doc comment describing envelope unwrapping sits above the `Sidecar` interface rather than `extractReviewRecord`, so the function's doc is misattributed.\n\nFix Focus Areas\n- packages/harness/src/review-gate.ts[51-67]\n\nRecommended Fix\nMove the `Reads one parsed JSON document...` comment directly above `export function extractReviewRecord`, and keep the `Sidecar` comment directly above `export interface Sidecar`."
+        },
+        "git_organization_name": "ajbeumer",
+        "git_provider": null,
+        "git_repo_name": "faultforge",
+        "git_sha": "55e47a7c7554f89b295c3c45ea2829edcd415658",
+        "git_subgroup_name": "",
+        "id": "7ea62465-dbdb-4f98-8565-eb494b7ea5c3",
+        "inline_comment_id": null,
+        "local_review_id": "76ea5834-fdce-4bf1-90d6-e9290f4c33da",
+        "match_by_lines": null,
+        "pr_url": null,
+        "precision_approved": null,
+        "precision_is_pr_scope": null,
+        "precision_reason": null,
+        "precision_shadow_approved": null,
+        "review_run_id": null,
+        "review_source": null,
+        "source_agent": null,
+        "title": "Review-extraction docs attached to the wrong symbol",
+        "workspace_id": null
+      }
+    ],
+    "resolved": [],
+    "still_open": []
+  },
+  "findings": [
+    {
+      "ab_arm": null,
+      "ab_test_name": null,
+      "action_level": "remediation_recommended",
+      "attribution_reason": null,
+      "attribution_sha": null,
+      "attribution_source": "attribution_engine",
+      "attribution_status": "pending",
+      "branch_name": null,
+      "category": "Correctness",
+      "comment_id": null,
+      "comment_surface": null,
+      "conversion_approved": true,
+      "conversion_label": "maybe",
+      "conversion_reason": "Plausible correctness gap, but the finding itself admits the PR-review payload shape is unconfirmed. No close accepted or rejected precedent found in history.",
+      "conversion_reference_prs": [],
+      "created_at": null,
+      "cwe": null,
+      "deduplication_approved": true,
+      "description": "`readReviewRecords` walks every `.json` under the whole evidence folder and `extractReviewRecord` accepts any document with a `meta.checkpoint` or `meta.run.snapshot` tree, so it never checks that a record came from `local-reviews/`. The docs promise that a pull-request review never counts and that only saved local reviews record a tree, but `review:wait` also saves `*.review.json` files under `reviews/<target>/` in the same evidence folder, so a PR review carrying a matching tree would make a commit show as covered.",
+      "diff_reference": {
+        "code_snippet": "+    if (entry.isDirectory()) walk(path, out);\n+    else if (entry.name.endsWith(\".json\") && !NOT_A_RESULT.test(entry.name)) out.push(path);",
+        "end_line": 123,
+        "file_path": "packages/harness/src/review-gate.ts",
+        "side": "right",
+        "source_sha": null,
+        "start_line": 122
+      },
+      "dismiss_explanation": null,
+      "dismiss_reason": null,
+      "duplicated_with": null,
+      "evidence": {
+        "citations": [
+          {
+            "citation": "function walk(dir: string, out: string[]): void {\n  let entries: import(\"node:fs\").Dirent[];\n  try {\n    entries = readdirSync(dir, { withFileTypes: true });\n  } catch {\n    return;\n  }\n  for (const entry of entries) {\n    const path = join(dir, entry.name);\n    if (entry.isDirectory()) walk(path, out);\n    else if (entry.name.endsWith(\".json\") && !NOT_A_RESULT.test(entry.name)) out.push(path);\n  }\n}",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "packages/harness/src/review-gate.ts[113-125]",
+            "source_type": "pr_branch_file",
+            "url": null
+          },
+          {
+            "citation": "export interface ReviewRecord {\n  /** The saved file this came from, relative to the evidence folder where possible. */\n  source: string;",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "packages/harness/src/review-gate.ts[29-31]",
+            "source_type": "pr_branch_file",
+            "url": null
+          },
+          {
+            "citation": "- **A review of a pull request is not a local review.** Only saved local reviews that record a tree\n  count. A commit that was only reviewed on its pull request shows as not covered.",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "docs/review-gate.md[36-37]",
+            "source_type": "pr_branch_file",
+            "url": null
+          },
+          {
+            "citation": "  const reviewsDir = options.reviewsDir ?? join(root, \"raw-artifacts\", \"reviews\");",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "packages/harness/src/verdict.ts[257]",
+            "source_type": "pr_branch_file",
+            "url": null
+          },
+          {
+            "citation": "// Review shapes mirror the `*.review.json` files `review:wait` saves under private/raw-artifacts,",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "packages/harness/src/rules-evidence.test.ts[15]",
+            "source_type": "pr_branch_file",
+            "url": null
+          }
+        ],
+        "explanation": "The walk is unrestricted under `evidence` and the only gate on a record is the presence of a 40-hex tree and the `complete`/`skipped` flags. Other code in the harness saves PR reviews under `raw-artifacts/reviews/<target>` (verdict.ts reads that directory), so those files are in scope of the walk. Whether a PR review payload carries `meta.checkpoint.tree_sha` could not be confirmed from the repo, which is why this is a remediation rather than a blocker."
+      },
+      "finding_source": "IssueFinding",
+      "fingerprint": null,
+      "fix_suggestion": {
+        "fix_description": "Restrict the walk to local-reviews folder",
+        "prompt_to_fix": "Issue description\nThe gate reads every JSON under the evidence folder, so saved pull-request reviews (`reviews/<target>/*.review.json`) can be treated as local reviews, contradicting docs/review-gate.md.\n\nFix Focus Areas\n- packages/harness/src/review-gate.ts[113-125]\n- packages/harness/src/review-gate.ts[145-165]\n- docs/review-gate.md[36-37]\n\nRecommended Fix\nWalk only `join(evidence, \"local-reviews\")` from `main` (or have `readReviewRecords` skip any path not under that folder), and add a test that a matching-tree record under `reviews/` is ignored."
+      },
+      "git_organization_name": "ajbeumer",
+      "git_provider": null,
+      "git_repo_name": "faultforge",
+      "git_sha": "55e47a7c7554f89b295c3c45ea2829edcd415658",
+      "git_subgroup_name": "",
+      "id": "4db07bd2-04bf-4edd-b3b5-8c29bd1db7f2",
+      "inline_comment_id": null,
+      "local_review_id": "76ea5834-fdce-4bf1-90d6-e9290f4c33da",
+      "match_by_lines": null,
+      "pr_url": null,
+      "precision_approved": null,
+      "precision_is_pr_scope": null,
+      "precision_reason": null,
+      "precision_shadow_approved": null,
+      "review_run_id": null,
+      "review_source": null,
+      "source_agent": null,
+      "title": "Non-local PR reviews can count as local coverage",
+      "workspace_id": null
+    },
+    {
+      "ab_arm": null,
+      "ab_test_name": null,
+      "action_level": "informational",
+      "attribution_reason": null,
+      "attribution_sha": null,
+      "attribution_source": "attribution_engine",
+      "attribution_status": "pending",
+      "branch_name": null,
+      "category": "Maintainability",
+      "comment_id": null,
+      "comment_surface": null,
+      "conversion_approved": true,
+      "conversion_label": "yes",
+      "conversion_reason": "Trivial, deterministic doc-placement fix: the envelope JSDoc sits above Sidecar, not the function. No rejection precedent found.",
+      "conversion_reference_prs": [],
+      "created_at": null,
+      "cwe": null,
+      "deduplication_approved": true,
+      "description": "The JSDoc that describes `extractReviewRecord` (unwrapping the managed-agent envelope) sits above the `Sidecar` interface, and `extractReviewRecord` itself has no doc block right above it. A later reader will see the envelope description attached to the wrong type.",
+      "diff_reference": {
+        "code_snippet": "+/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.\n+ * Unwraps the managed-agent envelope (`{output: \"<json>\"}` holding `{result: payload}`) that earlier\n+ * saves used, and a bare `{result: payload}`. */\n+/** What the run saved next to a review (`split.json`): which repository, and whether every changed",
+        "end_line": 54,
+        "file_path": "packages/harness/src/review-gate.ts",
+        "side": "right",
+        "source_sha": null,
+        "start_line": 51
+      },
+      "dismiss_explanation": null,
+      "dismiss_reason": null,
+      "duplicated_with": null,
+      "evidence": {
+        "citations": [
+          {
+            "citation": "/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.\n * Unwraps the managed-agent envelope (`{output: \"<json>\"}` holding `{result: payload}`) that earlier\n * saves used, and a bare `{result: payload}`. */\n/** What the run saved next to a review (`split.json`): which repository, and whether every changed\n * file reached Qodo. A review whose diff left a file out is never complete coverage, whatever Qodo's\n * own coverage flag says. */\nexport interface Sidecar {\n  repo: string | null;\n  scopeComplete: boolean;\n}\n\nexport function extractReviewRecord(",
+            "citation_reason": null,
+            "cross_repo_file": null,
+            "cross_repo_relationship": null,
+            "external_id": null,
+            "id": null,
+            "persona_identifier": null,
+            "platform_entity_id": null,
+            "platform_entity_type": null,
+            "skill_id": null,
+            "source": "packages/harness/src/review-gate.ts[51-62]",
+            "source_type": "pr_branch_file",
+            "url": null
+          }
+        ],
+        "explanation": "Lines 51-53 document the envelope unwrapping of `extractReviewRecord`, and lines 54-56 document `Sidecar`, which is declared at line 57; the two comment blocks stack directly above the interface with the function following it."
+      },
+      "finding_source": "IssueFinding",
+      "fingerprint": null,
+      "fix_suggestion": {
+        "fix_description": "Move the comment next to its function",
+        "prompt_to_fix": "Issue description\nThe doc comment describing envelope unwrapping sits above the `Sidecar` interface rather than `extractReviewRecord`, so the function's doc is misattributed.\n\nFix Focus Areas\n- packages/harness/src/review-gate.ts[51-67]\n\nRecommended Fix\nMove the `Reads one parsed JSON document...` comment directly above `export function extractReviewRecord`, and keep the `Sidecar` comment directly above `export interface Sidecar`."
+      },
+      "git_organization_name": "ajbeumer",
+      "git_provider": null,
+      "git_repo_name": "faultforge",
+      "git_sha": "55e47a7c7554f89b295c3c45ea2829edcd415658",
+      "git_subgroup_name": "",
+      "id": "7ea62465-dbdb-4f98-8565-eb494b7ea5c3",
+      "inline_comment_id": null,
+      "local_review_id": "76ea5834-fdce-4bf1-90d6-e9290f4c33da",
+      "match_by_lines": null,
+      "pr_url": null,
+      "precision_approved": null,
+      "precision_is_pr_scope": null,
+      "precision_reason": null,
+      "precision_shadow_approved": null,
+      "review_run_id": null,
+      "review_source": null,
+      "source_agent": null,
+      "title": "Review-extraction docs attached to the wrong symbol",
+      "workspace_id": null
+    }
+  ],
+  "meta": {
+    "analysis": {
+      "mode": "full",
+      "reason": "checkpoint_unavailable"
+    },
+    "context": {
+      "ticket_bodies": []
+    },
+    "coverage": {
+      "complete": true
+    },
+    "depth": "auto",
+    "fix_loop": {
+      "drop_below_rank": null,
+      "findings_resolved": 0,
+      "fix_loop": false,
+      "intent": "",
+      "intent_rationale": "",
+      "minutes_since_last_round": null,
+      "reason": "no_checkpoint",
+      "round_count": 0,
+      "skipped_security": false
+    },
+    "local_review_ids": {
+      "4db07bd2-04bf-4edd-b3b5-8c29bd1db7f2": "76ea5834-fdce-4bf1-90d6-e9290f4c33da",
+      "7ea62465-dbdb-4f98-8565-eb494b7ea5c3": "76ea5834-fdce-4bf1-90d6-e9290f4c33da"
+    },
+    "org_config": "applied",
+    "reviewers": {
+      "ran": ["issue", "compliance"],
+      "skipped": ["skills", "spec", "ui", "persona", "cross_repo"]
+    },
+    "run": {
+      "effort": {
+        "effective": "lite",
+        "requested": "auto"
+      },
+      "id": "55507412d8e849dfb89b5986752075b0",
+      "passes": [
+        {
+          "agent_statuses_reported": true,
+          "agents": [
+            {
+              "duration_ms": 9495,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "compliance-agent-turbo",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 9083,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "conversion_agent",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 48536,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "issue-review-agent-turbo",
+              "status": "completed"
+            },
+            {
+              "name": "spec-agent",
+              "reason": "no_spec_content",
+              "status": "skipped"
+            }
+          ],
+          "duration_ms": 64773,
+          "effort": "lite",
+          "kind": "primary",
+          "started_at": "2026-11-12T21:53:20.151189+00:00"
+        }
+      ],
+      "snapshot": {
+        "base_sha": "55e47a7c7554f89b295c3c45ea2829edcd415658",
+        "commit_sha": null,
+        "tree_sha": "2598e82c55e473dcba299a8404a23269fc4886f1"
+      },
+      "timing": {
+        "duration_ms": 347255,
+        "finished_at": "2026-11-12T21:54:24.958687+00:00",
+        "started_at": "2026-11-12T21:48:37.702876+00:00"
+      }
+    },
+    "safety_net": {
+      "ran": false,
+      "reinjected": 0
+    },
+    "skipped_files": []
+  },
+  "review_agent_comment": "The gate's core logic (exact tree match, complete/skipped checks, and the sidecar scope check) matches what `review:local` enforces; I checked it against `review-local.ts` and found no mismatch. The main concern is the evidence scope: the docs say only local reviews count, but the code accepts any saved JSON under the evidence folder. Tightening that to the local-reviews folder would make the doc and the behaviour agree."
+}
