@@ -63,9 +63,11 @@ export interface Deps {
   saveLast: (key: string, sha: string) => void;
   /** Forgets a call's record once it has been judged. */
   clearLast: (key: string) => void;
-  /** Whether this commit was already judged (by this or another call), so it is warned about once. */
-  wasJudged: (sha: string) => boolean;
-  markJudged: (sha: string) => void;
+  /** Claims a commit for judging, atomically: true for exactly one caller, even when two commands see the
+   * same commit at the same moment, so it is warned about once. */
+  claimJudged: (sha: string) => boolean;
+  /** Gives a claim back when the check could not be made, so another call may try again. */
+  releaseJudged: (sha: string) => void;
 }
 
 /** Names one tool call: Claude Code's own id for it, so commands running in parallel each keep their own
@@ -105,16 +107,23 @@ export function decide(stdin: string, deps: Deps, env: Record<string, string | u
   if (!/^commit/.test(head.lastAction)) return NONE;
   // Several commands that started at the same HEAD all see a commit one of them made: judge it once.
   try {
-    if (deps.wasJudged(head.sha)) return NONE;
-    deps.markJudged(head.sha);
+    if (!deps.claimJudged(head.sha)) return NONE;
   } catch {
-    // If this cannot be recorded, a commit may be warned about twice; that is the safer way to be wrong.
+    // If a claim cannot be made, a commit may be warned about twice; that is the safer way to be wrong.
   }
+  const release = () => {
+    try {
+      deps.releaseJudged(head.sha);
+    } catch {
+      // nothing to undo
+    }
+  };
 
   let result: GateRun;
   try {
     result = deps.run(head.sha);
   } catch (error) {
+    release();
     return { kind: "note", message: `review:gate could not check this commit: ${firstLine(error)}` };
   }
   if (result.exitCode === 0) return NONE;
@@ -126,6 +135,7 @@ export function decide(stdin: string, deps: Deps, env: Record<string, string | u
       message: `No finished local review saw the files of this commit. ${first} ${HOW}`,
     };
   }
+  release();
   return { kind: "note", message: "review:gate could not check this commit (exit 2: unreadable evidence or tree)." };
 }
 
@@ -261,11 +271,20 @@ export function realDeps(projectDir: string, stdin: string): Deps {
     clearLast: (key) => {
       if (dir) rmSync(fileFor(dir, key), { force: true });
     },
-    wasJudged: (sha) => (dir ? existsSync(fileFor(dir, `judged-${sha}`)) : false),
-    markJudged: (sha) => {
-      if (!dir) return;
+    claimJudged: (sha) => {
+      if (!dir) return true;
       mkdirSync(dir, { recursive: true });
-      writeFileSync(fileFor(dir, `judged-${sha}`), sha + String.fromCharCode(10));
+      try {
+        // `wx` fails when the file exists: creating it is the claim, and only one process can.
+        writeFileSync(fileFor(dir, `judged-${sha}`), sha + String.fromCharCode(10), { flag: "wx" });
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
+    },
+    releaseJudged: (sha) => {
+      if (dir) rmSync(fileFor(dir, `judged-${sha}`), { force: true });
     },
   };
 }

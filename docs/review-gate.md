@@ -64,6 +64,8 @@ an amend or an alias are all judged on what was really committed. If one command
 the last is judged. The judging hook also runs when a command fails, so a commit followed by a
 failing command is still checked.
 
+A commit that several parallel commands all see is claimed by the first to judge it (an exclusive file in
+the same folder), so it is warned about once; the claim is given back when the check could not be made.
 Each record belongs to one tool call (Claude Code's `tool_use_id`), so commands running in parallel are
 each compared against their own starting point.
 
@@ -82,7 +84,8 @@ skips, shows the note too: the note says what it knows.
 
 What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
 as already seen. If the check takes longer than the hook's limit (the gate takes about a second today), the
-note says it could not check. A git post-commit hook would cover commits made anywhere. Blocking a commit
+note says it could not check; if the hook process itself is killed mid-check, that commit's claim stays and it
+is not warned about again. A git post-commit hook would cover commits made anywhere. Blocking a commit
 would need a git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command
 and cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are
 separate decisions.

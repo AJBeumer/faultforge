@@ -47,8 +47,8 @@ function world(
     clearLast: (key) => {
       cleared.push(key);
     },
-    wasJudged: () => false,
-    markJudged: () => {},
+    claimJudged: () => true,
+    releaseJudged: () => {},
     saveLast: (_key, sha) => {
       saved.push(sha);
     },
@@ -79,9 +79,13 @@ function memory(initial: HeadState) {
     clearLast: (key) => {
       mem.records.delete(key);
     },
-    wasJudged: (sha) => mem.judged.has(sha),
-    markJudged: (sha) => {
+    claimJudged: (sha) => {
+      if (mem.judged.has(sha)) return false;
       mem.judged.add(sha);
+      return true;
+    },
+    releaseJudged: (sha) => {
+      mem.judged.delete(sha);
     },
   };
   return mem;
@@ -239,6 +243,28 @@ describe("recordHead: a commit made between commands is never judged", () => {
     expect(mem.asked).toEqual(["head1"]);
   });
 
+  it("gives the claim back when the check could not be made, so another call can try", () => {
+    for (const run of [
+      { exitCode: 2, output: "" },
+      { exitCode: null, output: "" },
+    ]) {
+      const mem = memory({ sha: "head1", lastAction: "commit: made" });
+      mem.records.set("A", "head0");
+      mem.deps.run = () => run;
+      expect(decide(payload("Bash", undefined, "A"), mem.deps, {}).kind).toBe("note");
+      expect(mem.judged.has("head1")).toBe(false);
+    }
+    const mem = memory({ sha: "head1", lastAction: "commit: made" });
+    mem.records.set("A", "head0");
+    mem.deps.run = mustNotRun;
+    decide(payload("Bash", undefined, "A"), mem.deps, {});
+    expect(mem.judged.has("head1")).toBe(false);
+    const kept = memory({ sha: "head1", lastAction: "commit: made" });
+    kept.records.set("A", "head0");
+    decide(payload("Bash", undefined, "A"), kept.deps, {});
+    expect(kept.judged.has("head1")).toBe(true);
+  });
+
   it("records nothing in a factory run, when switched off, for another tool or another repository", () => {
     for (const [stdin, env, inProject] of [
       [payload(), { FAULTFORGE_FACTORY_RUN: "1" }, true],
@@ -338,13 +364,14 @@ describe("on a real git repository", () => {
     expect(deps.readLast("call-1")).toBe("sha-1");
   });
 
-  it("remembers which commits were judged, per repository", () => {
+  it("lets exactly one caller claim a commit, and lets it be claimed again once released", () => {
     repo();
     const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
-    expect(deps.wasJudged("abc123")).toBe(false);
-    deps.markJudged("abc123");
-    expect(deps.wasJudged("abc123")).toBe(true);
-    expect(deps.wasJudged("def456")).toBe(false);
+    expect(deps.claimJudged("abc123")).toBe(true);
+    expect(deps.claimJudged("abc123")).toBe(false);
+    expect(deps.claimJudged("def456")).toBe(true);
+    deps.releaseJudged("abc123");
+    expect(deps.claimJudged("abc123")).toBe(true);
   });
 
   it("is null outside a repository", () => {
