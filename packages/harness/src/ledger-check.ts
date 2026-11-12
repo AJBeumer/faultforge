@@ -12,6 +12,7 @@
  * repo's git history could not be read.
  */
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerProblems } from "./ledger.ts";
@@ -45,7 +46,9 @@ function ownRepoRoot(repoRoot: string): string {
   } catch (error) {
     throw new Error(`${repoRoot} is not inside a git repository: ${(error as Error).message}`);
   }
-  if (resolve(toplevel) !== resolve(repoRoot)) {
+  // Real paths on both sides: a Windows temp folder can be given by its short 8.3 name (RUNNER~1) while git
+  // reports the long one, and a symlinked folder (macOS /tmp) differs the same way. Same folder, same answer.
+  if (realpathSync.native(toplevel) !== realpathSync.native(repoRoot)) {
     throw new Error(`${repoRoot} is not the root of its own git repository (git found ${toplevel} instead)`);
   }
   return toplevel;
