@@ -1,0 +1,8 @@
+Waiting for faultforge PR 163 to show e7df2c1 as its head…
+Waiting for Qodo's review of faultforge PR 163 at e7df2c1 (up to 9 min)…
+Qodo's review of e7df2c1 is complete (effort: standard). Push seen 2026-11-12T10:50:52Z, review started 2026-11-12T10:51:11.350609Z.
+CI: npm run check (windows): success, npm run check: success, npm run check (windows): success, npm run check: success
+2 finding(s) on e7df2c1; 2 open on this PR in total:
+- [remediation_recommended] Hook event logs after the run is picked (Correctness, packages/harness/src/factory-tick.ts:1037-1038, raised on e7df2c1)
+- [remediation_recommended] Artifact and docs claims lack tests (Maintainability, packages/harness/src/factory-tick.test.ts:1777-1778, raised on e7df2c1)
+Saved in D:\Projects\FaultForge\private\raw-artifacts\reviews\faultforge-pr163

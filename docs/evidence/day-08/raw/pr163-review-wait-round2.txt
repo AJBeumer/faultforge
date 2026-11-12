@@ -1,0 +1,7 @@
+Waiting for faultforge PR 163 to show 37b0e43 as its head…
+Waiting for Qodo's review of faultforge PR 163 at 37b0e43 (up to 9 min)…
+Qodo's review of 37b0e43 is complete (effort: lite). Push seen 2026-11-12T10:53:56Z, review started 2026-11-12T10:54:10.530436Z.
+CI: npm run check: success, npm run check (windows): success, npm run check: success, npm run check (windows): success
+0 finding(s) on 37b0e43; 1 open on this PR in total:
+- [remediation_recommended] Hook event logs after the run is picked (Correctness, packages/harness/src/factory-tick.ts:1037-1038, raised on e7df2c1)
+Saved in D:\Projects\FaultForge\private\raw-artifacts\reviews\faultforge-pr163

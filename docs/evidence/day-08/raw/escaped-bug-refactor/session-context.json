@@ -1,0 +1,4 @@
+{
+  "decisions": [],
+  "notes": "Task (the commit message of the change being reviewed): Share one gh wrapper and one paths module across the harness scripts\n\nreview-wait, revert-check, rules-propose, ticket-ready, factory-tick and\nverdict each spawned gh with their own time limit and buffer; factory-tick\nand rules-propose also computed the private directory without honouring\nFAULTFORGE_PRIVATE_DIR. Both now come from packages/harness/src/github.ts\nand paths.ts, so every script agrees on where things are and how long a\ncall waits. Argument parsing across the scripts that take options now\ngoes through node:util's parseArgs instead of five different hand-rolled\nstyles."
+}
