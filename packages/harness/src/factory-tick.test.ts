@@ -52,6 +52,8 @@ import {
   type TickDeps,
   tick,
   ticketChangeProblems,
+  type VerifyPrIo,
+  verifyPrWith,
   type Workspace,
   windowProblems,
   withCleanupFailure,
@@ -1611,6 +1613,126 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
 describe("removeTrustedCheckout: reports what it couldn't remove, rather than throwing (#161)", () => {
   it("names the folder it couldn't clear, for a path no filesystem call can resolve", () => {
     expect(removeTrustedCheckout("\0not-a-real-path")).toMatch(/couldn't remove the trusted checkout/);
+  });
+});
+
+describe("verifyPrWith: review:wait runs from the trusted checkout, never the agent's worktree (#170)", () => {
+  let root: string;
+  const sh = (repo: string, ...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  /**
+   * `origin`'s main holds a "review-wait-marker.txt" standing in for `review-wait.ts`, saying "real".
+   * `sourceRepo` (standing in for the agent's worktree, `ws.lab`) is cloned from it, then has a branch
+   * with the marker edited to "forged pass", committed but never pushed to `origin` - exactly what an
+   * agent's own pull request branch can hold without ever reaching `main`.
+   */
+  function sourceWithDoctoredMarker() {
+    root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
+    const origin = join(root, "origin.git");
+    const sourceRepo = join(root, "source");
+    sh(root, "init", "-q", "--bare", origin);
+    sh(root, "clone", "-q", origin, sourceRepo);
+    sh(sourceRepo, "config", "user.email", "t@example.com");
+    sh(sourceRepo, "config", "user.name", "t");
+    writeFileSync(join(sourceRepo, "review-wait-marker.txt"), "real\n");
+    writeFileSync(join(sourceRepo, "package.json"), '{"name":"lab","version":"1.0.0"}\n');
+    writeFileSync(
+      join(sourceRepo, "package-lock.json"),
+      '{"name":"lab","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"lab","version":"1.0.0"}}}\n',
+    );
+    sh(sourceRepo, "add", "review-wait-marker.txt", "package.json", "package-lock.json");
+    sh(sourceRepo, "commit", "-qm", "base");
+    sh(sourceRepo, "push", "-q", "origin", "HEAD:main");
+    sh(sourceRepo, "checkout", "-qb", "pr-branch");
+    writeFileSync(join(sourceRepo, "review-wait-marker.txt"), "forged pass\n");
+    sh(sourceRepo, "add", "review-wait-marker.txt");
+    sh(sourceRepo, "commit", "-qm", "always pass");
+    const pushed = sh(sourceRepo, "rev-parse", "--verify", "refs/heads/pr-branch");
+    return { sourceRepo, origin, pushed };
+  }
+
+  it("settles the verdict from the real checkout's marker, never the doctored worktree's", () => {
+    const { sourceRepo, origin, pushed } = sourceWithDoctoredMarker();
+    const short = pushed.slice(0, 7);
+    const factory: FactoryConfig = {
+      evidence: "evidence",
+      repos: {
+        lab: {
+          github: "example/lab",
+          path: ".",
+          guard: "lab",
+          check: "npm run check",
+          tests: "\\.test\\.ts$",
+          start: null,
+          tickets: { sections: ["Result"], checklist: "Result" },
+          board: true,
+        },
+      },
+    };
+    const ws: Workspace = {
+      root: join(root, "run-7"),
+      lab: sourceRepo,
+      private: join(root, "private"),
+      mainAtStart: {},
+      fingerprints: {},
+    };
+    const calls: { cwd: string; args: string[] }[] = [];
+    let markerSeenForReview: string | null = null;
+    const npm: VerifyPrIo["npm"] = (cwd, args) => {
+      calls.push({ cwd, args: [...args] });
+      const evidenceDir = (sub: string) => join(cwd, factory.evidence, sub, "lab-pr42");
+      if (args.includes("review:wait")) {
+        const marker = readFileSync(join(cwd, "review-wait-marker.txt"), "utf8").trim();
+        markerSeenForReview = marker;
+        const dir = evidenceDir("reviews");
+        mkdirSync(dir, { recursive: true });
+        const record =
+          marker === "real"
+            ? { openFindings: [] }
+            : { openFindings: [{ severity: "action_required", title: "a forged finding" }] };
+        writeFileSync(join(dir, `${short}.review.json`), JSON.stringify(record));
+        return { status: 0, output: "" };
+      }
+      if (args.includes("revert:check")) {
+        const dir = evidenceDir("revert-checks");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, `${short}.revert-check.json`), JSON.stringify({ exit: 0 }));
+        return { status: 0, output: "" };
+      }
+      throw new Error(`unexpected npm call: ${args.join(" ")}`);
+    };
+    const ghJson: VerifyPrIo["ghJson"] = ((...args: string[]) => {
+      if (args.includes("headRefOid,headRefName")) return { headRefOid: pushed, headRefName: "pr-branch" };
+      return {
+        state: "OPEN",
+        headRefOid: pushed,
+        statusCheckRollup: [{ name: "check", conclusion: "SUCCESS" }],
+      };
+    }) as VerifyPrIo["ghJson"];
+    const git: VerifyPrIo["git"] = (cwd, ...args) => sh(cwd, ...args);
+
+    const verifyRoot = join(root, "runs");
+    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42);
+
+    // The review:wait call ran against the real checkout's marker ("real"), not the doctored
+    // worktree's ("forged pass"): no action-required finding, even though ws.lab is doctored.
+    expect(result.problems).toEqual([]);
+    const reviewCall = calls.find((c) => c.args.includes("review:wait"));
+    expect(reviewCall?.cwd).not.toBe(sourceRepo);
+    expect(markerSeenForReview).toBe("real");
+    // The evidence review:wait wrote in the (now-removed) trusted checkout reached the permanent,
+    // agent-worktree evidence path `saveEvidence` carries to the private repo.
+    const permanent = JSON.parse(
+      readFileSync(join(sourceRepo, factory.evidence, "reviews", "lab-pr42", `${short}.review.json`), "utf8"),
+    );
+    expect(permanent.openFindings).toEqual([]);
+    // The trusted checkout is gone once verification finishes, so nothing of it lingers to inspect
+    // or tamper with afterwards.
+    expect(existsSync(verifyRoot)).toBe(true);
+    expect(readdirSync(verifyRoot)).toHaveLength(0);
   });
 });
 
