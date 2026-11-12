@@ -64,6 +64,9 @@ an amend or an alias are all judged on what was really committed. If one command
 the last is judged. The judging hook also runs when a command fails, so a commit followed by a
 failing command is still checked.
 
+Each record belongs to one tool call (Claude Code's `tool_use_id`), so commands running in parallel are
+each compared against their own starting point.
+
 Recording before the command is what keeps it honest about who made the commit. A commit made between
 commands, in an IDE or a plain terminal, is already recorded when the next command starts, so it is never
 blamed on that command. It also looks at the repository the command ran in, so a commit in a linked
@@ -73,13 +76,12 @@ worktree of this repository (`git worktree add`) is checked too, and a nested re
 It only warns. It never blocks or undoes a commit, and any failure of a hook ends in silence or a note.
 It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when it moved for
 another reason (a checkout, a pull), in other repositories, in unattended factory runs, and when
-`FAULTFORGE_GATE=off` is set. The last HEAD it saw is kept in the git folder (`faultforge-gate-last-head`),
-so it is never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
+`FAULTFORGE_GATE=off` is set. The records are small files in the git folder (`faultforge-gate-heads/`), one
+per call and cleared once judged (the newest 100 are kept), so they are never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
 skips, shows the note too: the note says what it knows.
 
 What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
-as already seen. When Claude Code runs several commands in parallel, one command's recording can land after
-another's commit, and that commit goes unwarned. If the check takes longer than the hook's limit (the gate takes about a second today), the
+as already seen. If the check takes longer than the hook's limit (the gate takes about a second today), the
 note says it could not check. A git post-commit hook would cover commits made anywhere. Blocking a commit
 would need a git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command
 and cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are

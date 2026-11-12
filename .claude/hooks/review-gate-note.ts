@@ -6,9 +6,10 @@
  *
  * It does not read the command text. Whether a command is a commit, an amend, quiet, aliased, quoted,
  * chained or commented is not guessed: git is asked instead. Run as `node <this file> before`, it records
- * HEAD before a command (in `.git/faultforge-gate-last-head` of the repository the command runs in, so a
- * linked worktree has its own) and judges nothing. Run with no argument, after a command, it judges: a commit
- * was made during the command when HEAD moved since that record and the newest reflog entry is a commit.
+ * HEAD before a command and judges nothing; the record is one small file per tool call (Claude Code's
+ * `tool_use_id`) in `.git/faultforge-gate-heads/` of the repository the command runs in, so parallel commands
+ * never share one and a linked worktree has its own. Run with no argument, after a command, it judges: a commit
+ * was made during the command when HEAD moved since that call's record and the newest reflog entry is a commit.
  * That excludes a commit made between commands (already recorded), a checkout, a failed or dry-run commit
  * (HEAD did not move) and another repository (the folder the tool ran in must belong to this one). If one
  * command makes several commits, the last is judged. Without a record to compare with, nothing is judged.
@@ -20,8 +21,8 @@
  * Exit codes of the gate: 0 covered, 1 not covered, 2 could not check (anything else counts as 2).
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { firstLine, isEntry, readStdin } from "./hook-io.ts";
 
@@ -48,9 +49,18 @@ export interface Deps {
   inProject: (cwd: string) => boolean;
   /** HEAD now, or null when git cannot say. */
   head: () => HeadState | null;
-  /** The HEAD this hook saw last time, or null when it has not looked before. */
-  readLast: () => string | null;
-  saveLast: (sha: string) => void;
+  /** The HEAD recorded before this tool call (`key` names the call), or null when none was recorded. */
+  readLast: (key: string) => string | null;
+  saveLast: (key: string, sha: string) => void;
+  /** Forgets a call's record once it has been judged. */
+  clearLast: (key: string) => void;
+}
+
+/** Names one tool call: Claude Code's own id for it, so commands running in parallel each keep their own
+ * record. Without an id every call shares one record. */
+export function callKey(payload: { tool_use_id?: unknown } | null): string {
+  const id = payload?.tool_use_id;
+  return typeof id === "string" && id !== "" ? id : "default";
 }
 
 const HOW =
@@ -65,18 +75,19 @@ export function decide(stdin: string, deps: Deps, env: Record<string, string | u
   } catch {
     return NONE;
   }
-  const p = payload as { tool_name?: unknown; cwd?: unknown } | null;
+  const p = payload as { tool_name?: unknown; cwd?: unknown; tool_use_id?: unknown } | null;
   if (p?.tool_name !== "Bash" && p?.tool_name !== "PowerShell") return NONE;
   // The folder the tool ran in must be this project's own repository, not another one it happened to be in.
   if (typeof p.cwd === "string" && !deps.inProject(p.cwd)) return NONE;
 
   const head = deps.head();
   if (head === null) return NONE;
-  const last = deps.readLast();
+  const key = callKey(p);
+  const last = deps.readLast(key);
   try {
-    deps.saveLast(head.sha);
+    deps.clearLast(key);
   } catch {
-    // Nothing to undo: the worst case is that the same commit is judged once more.
+    // Nothing to undo: the record is only ever read back by this same call.
   }
   if (last === null || last === head.sha) return NONE;
   if (!/^commit/.test(head.lastAction)) return NONE;
@@ -111,10 +122,27 @@ export function readHead(projectDir: string): HeadState | null {
   return sha && lastAction !== null ? { sha, lastAction } : null;
 }
 
-/** Where the last-seen HEAD is kept: inside the git folder, so it is never committed or shown as a change. */
-function stateFile(projectDir: string): string | null {
-  const path = git(projectDir, ["rev-parse", "--git-path", "faultforge-gate-last-head"]);
+/** Where the per-call records are kept: inside the git folder of the repository the command ran in, so they
+ * are never committed or shown as a change, and a linked worktree has its own. One small file per call, so
+ * parallel commands never write the same file. */
+function stateDir(projectDir: string): string | null {
+  const path = git(projectDir, ["rev-parse", "--git-path", "faultforge-gate-heads"]);
   return path ? resolve(projectDir, path) : null;
+}
+
+/** A file name for a key: letters, digits, dash and underscore only. */
+function fileFor(dir: string, key: string): string {
+  return join(dir, key.replace(/[^A-Za-z0-9_-]/g, "_"));
+}
+
+/** Keeps the newest records only, so abandoned ones (a call that never finished) cannot pile up. */
+function prune(dir: string, keep = 100): void {
+  try {
+    const files = readdirSync(dir).map((name) => ({ name, at: statSync(join(dir, name)).mtimeMs }));
+    for (const f of files.sort((x, y) => y.at - x.at).slice(keep)) rmSync(join(dir, f.name), { force: true });
+  } catch {
+    // best effort
+  }
 }
 
 /** Runs the gate on a commit from the project folder, within the hook's own time limit. */
@@ -159,11 +187,11 @@ export function sameRepository(projectDir: string, cwd: string): boolean {
 export function recordHead(stdin: string, deps: Deps, env: Record<string, string | undefined> = process.env): void {
   if (env.FAULTFORGE_FACTORY_RUN || env.FAULTFORGE_GATE === "off") return;
   try {
-    const p = JSON.parse(stdin) as { tool_name?: unknown; cwd?: unknown } | null;
+    const p = JSON.parse(stdin) as { tool_name?: unknown; cwd?: unknown; tool_use_id?: unknown } | null;
     if (p?.tool_name !== "Bash" && p?.tool_name !== "PowerShell") return;
     if (typeof p.cwd === "string" && !deps.inProject(p.cwd)) return;
     const head = deps.head();
-    if (head !== null) deps.saveLast(head.sha);
+    if (head !== null) deps.saveLast(callKey(p), head.sha);
   } catch {
     // Recording is best effort: a missed record only means one commit is judged a command late.
   }
@@ -182,7 +210,7 @@ export function show(note: Note, event = "PostToolUse"): void {
 
 /** The world for a payload: HEAD and the saved state of the repository the command ran in (the main checkout
  * or a linked worktree of it), and the gate, which always runs from the project folder. */
-function realDeps(projectDir: string, stdin: string): Deps {
+export function realDeps(projectDir: string, stdin: string): Deps {
   let cwd = projectDir;
   try {
     const given = (JSON.parse(stdin) as { cwd?: unknown } | null)?.cwd;
@@ -190,20 +218,26 @@ function realDeps(projectDir: string, stdin: string): Deps {
   } catch {
     // an unreadable payload is judged as no commit by decide()
   }
-  const file = stateFile(cwd);
+  const dir = stateDir(cwd);
   return {
     run: (ref) => runGate(projectDir, ref),
     inProject: (dir) => sameRepository(projectDir, dir),
     head: () => readHead(cwd),
-    readLast: () => {
+    readLast: (key) => {
       try {
-        return file ? readFileSync(file, "utf8").trim() || null : null;
+        return dir ? readFileSync(fileFor(dir, key), "utf8").trim() || null : null;
       } catch {
         return null;
       }
     },
-    saveLast: (sha) => {
-      if (file) writeFileSync(file, `${sha}\n`);
+    saveLast: (key, sha) => {
+      if (!dir) return;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(fileFor(dir, key), sha + String.fromCharCode(10));
+      prune(dir);
+    },
+    clearLast: (key) => {
+      if (dir) rmSync(fileFor(dir, key), { force: true });
     },
   };
 }

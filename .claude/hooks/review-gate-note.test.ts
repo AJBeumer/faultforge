@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,13 +10,15 @@ import {
   type GateRun,
   type HeadState,
   readHead,
+  realDeps,
   recordHead,
   sameRepository,
   show,
 } from "./review-gate-note.ts";
 
 const NL = String.fromCharCode(10);
-const payload = (tool = "Bash", cwd?: string) => JSON.stringify({ tool_name: tool, tool_input: { command: "x" }, cwd });
+const payload = (tool = "Bash", cwd?: string, id?: string) =>
+  JSON.stringify({ tool_name: tool, tool_input: { command: "x" }, cwd, tool_use_id: id });
 const notCovered: GateRun = {
   exitCode: 1,
   output: `Not covered: the tree of abc1234 (abc); no review recorded this tree.${NL}`,
@@ -31,6 +33,7 @@ function world(
   opts: { head?: HeadState | null; last?: string | null; run?: GateRun | (() => GateRun); inProject?: boolean } = {},
 ) {
   const saved: string[] = [];
+  const cleared: string[] = [];
   const asked: string[] = [];
   const run = opts.run ?? notCovered;
   const deps: Deps = {
@@ -41,11 +44,40 @@ function world(
     inProject: () => opts.inProject ?? true,
     head: () => (opts.head === undefined ? { sha: "new1", lastAction: "commit: a message" } : opts.head),
     readLast: () => (opts.last === undefined ? "old1" : opts.last),
-    saveLast: (sha) => {
+    clearLast: (key) => {
+      cleared.push(key);
+    },
+    saveLast: (_key, sha) => {
       saved.push(sha);
     },
   };
-  return { deps, saved, asked };
+  return { deps, saved, cleared, asked };
+}
+
+/** A fake repository whose HEAD a test can move, with the per-call records kept in memory. */
+function memory(initial: HeadState) {
+  const mem = {
+    head: initial,
+    records: new Map<string, string>(),
+    asked: [] as string[],
+    deps: undefined as unknown as Deps,
+  };
+  mem.deps = {
+    run: (ref) => {
+      mem.asked.push(ref);
+      return notCovered;
+    },
+    inProject: () => true,
+    head: () => mem.head,
+    readLast: (key) => mem.records.get(key) ?? null,
+    saveLast: (key, sha) => {
+      mem.records.set(key, sha);
+    },
+    clearLast: (key) => {
+      mem.records.delete(key);
+    },
+  };
+  return mem;
 }
 
 describe("decide: a commit is what git says it is, not what the command looks like", () => {
@@ -84,24 +116,24 @@ describe("decide: a commit is what git says it is, not what the command looks li
     }
   });
 
-  it("only records HEAD the first time, with nothing to compare with", () => {
+  it("says nothing when no HEAD was recorded for this call, and records nothing itself", () => {
     const { deps, saved } = world({ last: null, run: mustNotRun });
     expect(decide(payload(), deps, {})).toEqual({ kind: "none" });
-    expect(saved).toEqual(["new1"]);
+    expect(saved).toEqual([]);
   });
 
-  it("remembers HEAD every time, so one commit is judged once", () => {
-    const { deps, saved } = world({ run: covered });
-    decide(payload(), deps, {});
-    expect(saved).toEqual(["new1"]);
-    const { deps: unchanged, saved: savedAgain } = world({ last: "new1", run: mustNotRun });
-    decide(payload(), unchanged, {});
-    expect(savedAgain).toEqual(["new1"]);
+  it("forgets a call's record once it has judged it, so one commit is judged once", () => {
+    const { deps, cleared } = world({ run: covered });
+    decide(payload("Bash", undefined, "call-1"), deps, {});
+    expect(cleared).toEqual(["call-1"]);
+    const none = world({ run: covered });
+    decide(payload(), none.deps, {});
+    expect(none.cleared).toEqual(["default"]);
   });
 
-  it("is not stopped by a failure to save its state", () => {
+  it("is not stopped by a failure to forget its record", () => {
     const { deps } = world();
-    deps.saveLast = () => {
+    deps.clearLast = () => {
       throw new Error("disk full");
     };
     expect(decide(payload(), deps, {}).kind).toBe("note");
@@ -164,41 +196,30 @@ describe("recordHead: a commit made between commands is never judged", () => {
 
   it("makes a commit from a terminal invisible to the command after it", () => {
     // before: HEAD is already the terminal commit, so it is recorded; after: HEAD did not move.
-    const state = { last: "old1" as string | null };
-    const head = { sha: "terminal-commit", lastAction: "commit: made in a terminal" };
-    const d: Deps = {
-      run: mustNotRun,
-      inProject: () => true,
-      head: () => head,
-      readLast: () => state.last,
-      saveLast: (sha) => {
-        state.last = sha;
-      },
-    };
-    recordHead(payload(), d, {});
-    expect(decide(payload(), d, {})).toEqual({ kind: "none" });
+    const mem = memory({ sha: "terminal-commit", lastAction: "commit: made in a terminal" });
+    mem.records.set("c1", "old1");
+    recordHead(payload("Bash", undefined, "c1"), mem.deps, {});
+    expect(decide(payload("Bash", undefined, "c1"), mem.deps, {})).toEqual({ kind: "none" });
   });
 
   it("still judges a commit made during the command", () => {
-    const state = { last: "old1" as string | null };
-    let head: HeadState = { sha: "old1", lastAction: "checkout: moving from a to b" };
-    const asked: string[] = [];
-    const d: Deps = {
-      run: (ref) => {
-        asked.push(ref);
-        return notCovered;
-      },
-      inProject: () => true,
-      head: () => head,
-      readLast: () => state.last,
-      saveLast: (sha) => {
-        state.last = sha;
-      },
-    };
-    recordHead(payload(), d, {});
-    head = { sha: "made-now", lastAction: "commit: made during the command" };
-    expect(decide(payload(), d, {}).kind).toBe("note");
-    expect(asked).toEqual(["made-now"]);
+    const mem = memory({ sha: "old1", lastAction: "checkout: moving from a to b" });
+    recordHead(payload("Bash", undefined, "c1"), mem.deps, {});
+    mem.head = { sha: "made-now", lastAction: "commit: made during the command" };
+    expect(decide(payload("Bash", undefined, "c1"), mem.deps, {}).kind).toBe("note");
+    expect(mem.asked).toEqual(["made-now"]);
+    expect(mem.records.size).toBe(0);
+  });
+
+  it("judges each of two commands running in parallel against its own record", () => {
+    const mem = memory({ sha: "head0", lastAction: "checkout: moving from a to b" });
+    recordHead(payload("Bash", undefined, "A"), mem.deps, {}); // A starts at head0
+    mem.head = { sha: "head1", lastAction: "commit: made by A" }; // A commits
+    recordHead(payload("Bash", undefined, "B"), mem.deps, {}); // B starts after A committed
+    expect(decide(payload("Bash", undefined, "A"), mem.deps, {}).kind).toBe("note");
+    expect(mem.asked).toEqual(["head1"]);
+    expect(decide(payload("Bash", undefined, "B"), mem.deps, {})).toEqual({ kind: "none" });
+    expect(mem.asked).toEqual(["head1"]);
   });
 
   it("records nothing in a factory run, when switched off, for another tool or another repository", () => {
@@ -260,6 +281,38 @@ describe("on a real git repository", () => {
     writeFileSync(join(dir, "a.txt"), "changed");
     sh("commit", "--dry-run", "-am", "x");
     expect(sh("rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("keeps one record per call inside the git folder, and forgets a call when told to", () => {
+    repo();
+    const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
+    deps.saveLast("call-A", "sha-a");
+    deps.saveLast("call-B", "sha-b");
+    expect(deps.readLast("call-A")).toBe("sha-a");
+    expect(deps.readLast("call-B")).toBe("sha-b");
+    expect(deps.readLast("call-C")).toBeNull();
+    deps.clearLast("call-A");
+    expect(deps.readLast("call-A")).toBeNull();
+    expect(deps.readLast("call-B")).toBe("sha-b");
+    expect(existsSync(join(dir, ".git", "faultforge-gate-heads"))).toBe(true);
+    expect(sh("status", "--porcelain")).not.toContain("faultforge");
+  });
+
+  it("cannot be steered outside its folder by an odd call id", () => {
+    repo();
+    const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
+    deps.saveLast("../../escape", "sha-x");
+    expect(existsSync(join(dir, "escape"))).toBe(false);
+    expect(existsSync(join(dir, ".git", "escape"))).toBe(false);
+    expect(deps.readLast("../../escape")).toBe("sha-x");
+  });
+
+  it("keeps only the newest records, so abandoned calls cannot pile up", () => {
+    repo();
+    const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
+    for (let i = 0; i < 130; i++) deps.saveLast(`call-${i}`, `sha-${i}`);
+    expect(readdirSync(join(dir, ".git", "faultforge-gate-heads")).length).toBeLessThanOrEqual(100);
+    expect(deps.readLast("call-129")).toBe("sha-129");
   });
 
   it("is null outside a repository", () => {
