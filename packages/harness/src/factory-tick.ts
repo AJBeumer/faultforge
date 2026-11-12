@@ -37,6 +37,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -155,6 +156,9 @@ export function prUrlFromToolResult(content: unknown, github: string): string | 
 export interface Verification {
   /** Problems that stop a PR from counting as delivered; empty when it checks out. */
   problems: string[];
+  /** Where `revert:check`'s saved record was read back from, for the run log; null when the check
+   * never ran (an earlier problem, such as an incomplete review, stopped verification first). */
+  revertCheckRecord?: string | null;
 }
 
 export interface Finish {
@@ -717,6 +721,77 @@ export function revertCheckProblems(status: number | null, record: { exit?: 0 | 
   return [`revert:check gave no result (exit ${status}${tail ? `: ${tail}` : ""})`];
 }
 
+/** A saved JSON record, or null when the file is missing, or so damaged it can't be parsed. A reader
+ * must never throw on it: a record a process died before finishing writing is no different from one
+ * that was never written at all - both read as no result, not as a crash (#161). */
+export function readJsonRecord(file: string): unknown | null {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A worktree of `sourceRepo`'s `origin/main`, fresh and agent-untouched, built at
+ * `<verifyRoot>/<labDirName>`: the trusted copy of the harness `verifyPr` runs `revert:check` from, so
+ * a pull request that edits `revert-check.ts` or a module it imports is judged by what's merged into
+ * `main`, never by what that same pull request's own branch holds in the agent's writable worktree
+ * (#161). `sourceRepo`'s installed packages are shared in by a symlink, never reinstalled; when
+ * `sibling` is given (a repo whose `factory.json` path isn't `.`, such as the target), its real
+ * checkout is symlinked in at the same relative path, so `revert-check.ts`'s own path arithmetic
+ * (relative to wherever it's running from) finds it exactly as it would in the agent's worktree.
+ *
+ * Throws, with a clear message, when the checkout can't be built - cleaning up anything already made
+ * first, so a failure here never leaves a worktree registered against `sourceRepo`.
+ */
+export function buildTrustedCheckout(
+  sourceRepo: string,
+  verifyRoot: string,
+  labDirName: string,
+  sibling?: { source: string; path: string },
+): string {
+  const lab = join(verifyRoot, labDirName);
+  try {
+    mkdirSync(verifyRoot, { recursive: true });
+    gitLong(sourceRepo, "fetch", "--quiet", "origin", "main");
+    gitLong(sourceRepo, "worktree", "add", "--detach", lab, "origin/main");
+    const modules = join(sourceRepo, "node_modules");
+    if (existsSync(modules)) symlinkSync(modules, join(lab, "node_modules"), "junction");
+    if (sibling) symlinkSync(sibling.source, resolve(lab, sibling.path), "junction");
+    return lab;
+  } catch (error) {
+    removeTrustedCheckout(sourceRepo, verifyRoot, lab);
+    const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    throw new Error(`couldn't build a clean checkout of origin/main to run revert:check from: ${why}`);
+  }
+}
+
+/**
+ * Removes a checkout `buildTrustedCheckout` made: the worktree registration against `sourceRepo` first
+ * (so it's never left dangling there), then whatever is left of `verifyRoot`. Never throws - a verdict
+ * `revert:check` already reached is worth keeping even when its scratch checkout can't be fully
+ * cleaned up; the message describes what to remove by hand instead.
+ */
+export function removeTrustedCheckout(sourceRepo: string, verifyRoot: string, lab: string): string | null {
+  try {
+    const registered = git(sourceRepo, "worktree", "list", "--porcelain")
+      .split("\n")
+      .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(lab));
+    if (registered) gitLong(sourceRepo, "worktree", "remove", "--force", lab);
+  } catch {
+    // Fall through: still try to clear the folder itself below.
+  }
+  try {
+    rmSync(verifyRoot, { recursive: true, force: true });
+    return null;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return `couldn't remove the trusted checkout at ${verifyRoot}: ${why}`;
+  }
+}
+
 export interface WindowActivity {
   /** Comments on any issue or PR, and inline review comments, by the agent's login. */
   comments: { user: string; created_at: string; url: string }[];
@@ -1069,7 +1144,11 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       result,
       (pr) => {
         const verification = deps.verifyPr(workspace, pick.repoKey, pr);
-        log("verified", { pr, problems: verification.problems });
+        log("verified", {
+          pr,
+          problems: verification.problems,
+          revertCheckRecord: verification.revertCheckRecord ?? null,
+        });
         return verification;
       },
       pick.github,
@@ -1884,31 +1963,51 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       }
       // Prove the tests, after the review check: the PR's own new or changed tests must fail without
       // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
-      // revert:check runs from this same worktree, so an uncommitted edit to its own source there
-      // (the one thing that would never reach Qodo's review of the pushed commit) could otherwise
-      // forge a clean result; a dirty checkout is treated as unverified instead of trusted (Qodo on
-      // PR 155). A committed-but-unpushed edit is already caught above: `pushed` is the local tip, and
-      // `prViewProblems` already flags it when GitHub's head differs from it.
-      const dirty = git(ws.lab, "status", "--porcelain");
-      if (dirty) {
-        problems.push("the lab checkout has uncommitted changes, so revert:check's own code can't be trusted");
-      } else {
+      // Run from a fresh worktree of origin/main, never from `ws.lab` (the agent's own writable
+      // worktree): a committed edit to revert-check.ts or a module it imports, in the very pull
+      // request being checked, would otherwise run as part of its own verdict. Building this worktree
+      // after the agent has already stopped means the agent never had the chance to touch it either
+      // (#161; the dirty-worktree guard it replaces was Qodo on PR 155).
+      const runId = basename(ws.root);
+      const verifyRoot = join(runs, `verify-${runId}-${repoKey}-pr${pr}`);
+      rmSync(verifyRoot, { recursive: true, force: true });
+      let trustedLab: string | null = null;
+      let revertCheckRecord: string | null = null;
+      try {
+        trustedLab = buildTrustedCheckout(
+          LAB_ROOT,
+          verifyRoot,
+          basename(LAB_ROOT),
+          repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
+        );
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : String(error));
+      }
+      if (trustedLab) {
         const revertRecordFile = join(
-          ws.lab,
+          trustedLab,
           factory.evidence,
           "revert-checks",
           `${repoKey}-pr${pr}`,
           `${pushed.slice(0, 7)}.revert-check.json`,
         );
-        // A record left by an earlier attempt at this same commit must never be read as this one's
-        // result: if this run's own revert:check fails before saving a fresh one, the absence has to
-        // show, not an old verdict (same reasoning as runVitest's own report removal, Qodo on PR 155).
-        rmSync(revertRecordFile, { force: true });
-        const revert = npm(ws.lab, ["run", "-s", "revert:check", "--", repoKey, String(pr)], REVERT_CHECK_TIMEOUT_MS);
-        const revertRecord = existsSync(revertRecordFile) ? JSON.parse(readFileSync(revertRecordFile, "utf8")) : null;
-        problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
+        revertCheckRecord = revertRecordFile;
+        try {
+          const revert = npm(
+            trustedLab,
+            ["run", "-s", "revert:check", "--", repoKey, String(pr)],
+            REVERT_CHECK_TIMEOUT_MS,
+          );
+          // A damaged or missing record reads as no result, never throws: the rest of this verdict
+          // (the review checks above) must still reach the caller.
+          const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
+          problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
+        } finally {
+          const leftover = removeTrustedCheckout(LAB_ROOT, verifyRoot, trustedLab);
+          if (leftover) console.error(leftover);
+        }
       }
-      return { problems };
+      return { problems, revertCheckRecord };
     },
     record(runId, event) {
       appendFileSync(join(runs, `${runId}.jsonl`), `${JSON.stringify(event)}\n`);
