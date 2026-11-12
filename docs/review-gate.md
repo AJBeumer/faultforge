@@ -54,27 +54,31 @@ into a hook or a skill is a separate decision.
 
 ## The warning after a commit
 
-A hook (`.claude/hooks/review-gate-note.ts`, registered in `.claude/settings.json`) runs after every
-Bash or PowerShell command in Claude Code. It asks git, not the command text, whether a commit was
-just made in this repository: HEAD moved since the hook last looked, and the newest reflog entry is a
-commit. If so it runs `review:gate` on that commit and, when no finished local review saw those
-exact files, shows a short note to the person and the agent. Because it reads git and not the command,
-`git commit -a`, `git add … && git commit` in one command, `-q`, an amend or an alias are all judged
-on what was really committed. If one command makes several commits, the last is judged.
+Two small hooks (both `.claude/hooks/review-gate-note.ts`, registered in `.claude/settings.json`) work
+together around every Bash or PowerShell command in Claude Code. Before the command, one records git's
+HEAD. After it, the other asks git, not the command text, whether a commit was made during it: HEAD moved
+since the recording and the newest reflog entry is a commit. If so it runs `review:gate` on that commit
+and, when no finished local review saw those exact files, shows a short note to the person and the agent.
+Because it reads git and not the command, `git commit -a`, `git add … && git commit` in one command, `-q`,
+an amend or an alias are all judged on what was really committed. If one command makes several commits,
+the last is judged.
 
-It only warns. It never blocks or undoes a commit, and any failure of the hook ends in silence or a
-note. It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when
-it moved for another reason (a checkout, a pull), when the command ran in another repository (the
-nested `private/` one, the target), in unattended factory runs, and when `FAULTFORGE_GATE=off` is
-set. The first time it runs it only records HEAD, because it has nothing to compare with. The last
-HEAD it saw is kept in `.git/faultforge-gate-last-head`. A commit that was only reviewed on its pull
-request, or a docs-only commit Qodo skips, shows the note too: the note says what it knows.
+Recording before the command is what keeps it honest about who made the commit. A commit made between
+commands, in an IDE or a plain terminal, is already recorded when the next command starts, so it is never
+blamed on that command. It also looks at the repository the command ran in, so a commit in a linked
+worktree of this repository (`git worktree add`) is checked too, and a nested repository such as
+`private/` is not.
 
-It looks only when a Claude Code command finishes. A commit made in an IDE or a plain terminal is
-noticed at the next command Claude Code runs, not when it is made, and the note then names a commit
-the agent did not make. A commit in a linked worktree of this repository (`git worktree add`) is not
-checked, because the hook reads the main checkout's HEAD. If the check takes longer than the hook's
-limit (the gate takes about a second today), the note says it could not check. A git post-commit hook
-would cover commits made anywhere. Blocking a commit would need a git pre-commit hook, not a Claude
-Code hook, because a Claude Code hook runs before the command and cannot see what `git commit -a`
-will stage. Git runs its own pre-commit hook after staging. Both are separate decisions.
+It only warns. It never blocks or undoes a commit, and any failure of a hook ends in silence or a note.
+It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when it moved for
+another reason (a checkout, a pull), in other repositories, in unattended factory runs, and when
+`FAULTFORGE_GATE=off` is set. The last HEAD it saw is kept in the git folder (`faultforge-gate-last-head`),
+so it is never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
+skips, shows the note too: the note says what it knows.
+
+What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
+as already seen. If the check takes longer than the hook's limit (the gate takes about a second today), the
+note says it could not check. A git post-commit hook would cover commits made anywhere. Blocking a commit
+would need a git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command
+and cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are
+separate decisions.

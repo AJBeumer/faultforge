@@ -38,6 +38,16 @@
             "statusMessage": "Checking the unattended-run policy"
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/review-gate-note.ts\" before",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [

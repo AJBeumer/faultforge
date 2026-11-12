@@ -5,11 +5,13 @@
  * tool call depends on, and any failure ends in silence or a note.
  *
  * It does not read the command text. Whether a command is a commit, an amend, quiet, aliased, quoted,
- * chained or commented is not guessed: git is asked instead. A commit was made when HEAD moved since the
- * last time this hook looked (saved in `.git/faultforge-gate-last-head`) and the newest reflog entry is a
- * commit. That excludes a checkout, a failed or dry-run commit (HEAD did not move) and another repository
- * (the folder the tool ran in must belong to this one). If one command makes several commits, the last is
- * judged. The first run has nothing to compare with, so it only records HEAD.
+ * chained or commented is not guessed: git is asked instead. Run as `node <this file> before`, it records
+ * HEAD before a command (in `.git/faultforge-gate-last-head` of the repository the command runs in, so a
+ * linked worktree has its own) and judges nothing. Run with no argument, after a command, it judges: a commit
+ * was made during the command when HEAD moved since that record and the newest reflog entry is a commit.
+ * That excludes a commit made between commands (already recorded), a checkout, a failed or dry-run commit
+ * (HEAD did not move) and another repository (the folder the tool ran in must belong to this one). If one
+ * command makes several commits, the last is judged. Without a record to compare with, nothing is judged.
  *
  * Silent when the run is an unattended factory run (the runner has its own gates) or `FAULTFORGE_GATE=off`.
  *
@@ -127,11 +129,37 @@ export function runGate(projectDir: string, ref: string): GateRun {
   return { exitCode: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-/** True when `cwd` is inside the same git repository as the project folder (not a nested one such as `private/`). */
+/** The shared git folder of the repository a folder belongs to: the same for the main checkout and every
+ * linked worktree of it, different for a nested repository such as `private/`. */
+function commonDir(dir: string): string | null {
+  const out = git(dir, ["rev-parse", "--git-common-dir"]);
+  return out ? resolve(dir, out) : null;
+}
+
+/** True when `cwd` belongs to the same git repository as the project folder, including its linked
+ * worktrees, and not to a nested or unrelated one. */
 export function sameRepository(projectDir: string, cwd: string): boolean {
-  const mine = git(projectDir, ["rev-parse", "--show-toplevel"]);
-  const there = git(cwd, ["rev-parse", "--show-toplevel"]);
-  return mine !== null && there !== null && resolve(mine) === resolve(there);
+  const mine = commonDir(projectDir);
+  const there = commonDir(cwd);
+  return mine !== null && there !== null && mine === there;
+}
+
+/**
+ * Before a command: remember HEAD, and judge nothing. A commit made between two commands (in an IDE or a
+ * terminal) is then already known when the command after it finishes, so only a commit made during a
+ * command is ever judged after it.
+ */
+export function recordHead(stdin: string, deps: Deps, env: Record<string, string | undefined> = process.env): void {
+  if (env.FAULTFORGE_FACTORY_RUN || env.FAULTFORGE_GATE === "off") return;
+  try {
+    const p = JSON.parse(stdin) as { tool_name?: unknown; cwd?: unknown } | null;
+    if (p?.tool_name !== "Bash" && p?.tool_name !== "PowerShell") return;
+    if (typeof p.cwd === "string" && !deps.inProject(p.cwd)) return;
+    const head = deps.head();
+    if (head !== null) deps.saveLast(head.sha);
+  } catch {
+    // Recording is best effort: a missed record only means one commit is judged a command late.
+  }
 }
 
 /** Prints a note the way a PostToolUse hook shows one: to the person, and as context to the agent. */
@@ -145,27 +173,42 @@ export function show(note: Note): void {
   );
 }
 
+/** The world for a payload: HEAD and the saved state of the repository the command ran in (the main checkout
+ * or a linked worktree of it), and the gate, which always runs from the project folder. */
+function realDeps(projectDir: string, stdin: string): Deps {
+  let cwd = projectDir;
+  try {
+    const given = (JSON.parse(stdin) as { cwd?: unknown } | null)?.cwd;
+    if (typeof given === "string" && given) cwd = given;
+  } catch {
+    // an unreadable payload is judged as no commit by decide()
+  }
+  const file = stateFile(cwd);
+  return {
+    run: (ref) => runGate(projectDir, ref),
+    inProject: (dir) => sameRepository(projectDir, dir),
+    head: () => readHead(cwd),
+    readLast: () => {
+      try {
+        return file ? readFileSync(file, "utf8").trim() || null : null;
+      } catch {
+        return null;
+      }
+    },
+    saveLast: (sha) => {
+      if (file) writeFileSync(file, `${sha}\n`);
+    },
+  };
+}
+
+/** `node review-gate-note.ts before` records HEAD before a command; with no argument it judges after one. */
 function main() {
   try {
     const projectDir = process.env.CLAUDE_PROJECT_DIR ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-    const file = stateFile(projectDir);
-    show(
-      decide(readStdin(), {
-        run: (ref) => runGate(projectDir, ref),
-        inProject: (cwd) => sameRepository(projectDir, cwd),
-        head: () => readHead(projectDir),
-        readLast: () => {
-          try {
-            return file ? readFileSync(file, "utf8").trim() || null : null;
-          } catch {
-            return null;
-          }
-        },
-        saveLast: (sha) => {
-          if (file) writeFileSync(file, `${sha}\n`);
-        },
-      }),
-    );
+    const stdin = readStdin();
+    const deps = realDeps(projectDir, stdin);
+    if (process.argv[2] === "before") recordHead(stdin, deps);
+    else show(decide(stdin, deps));
   } catch {
     // After the commit there is nothing to undo, and a hook that crashed must not look like a failed commit.
   }
