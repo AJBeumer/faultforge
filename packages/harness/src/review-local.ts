@@ -91,6 +91,13 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   const requestId = deps.newRequestId();
   let state = await deps.submit(requestId, deps.startParams);
   const operationId = state.operation_id;
+  // The folder is named by our own request id; this file lets an auditor starting from Qodo's operation
+  // id find it (searching the folders for this file's contents).
+  deps.saveArtifact(
+    "operation.json",
+    `${JSON.stringify({ requestId, operationId }, null, 2)}
+`,
+  );
 
   while (!state.terminal) {
     if (deps.now() + state.poll_interval_seconds * 1000 > deadline) {
@@ -251,6 +258,31 @@ export function parseArgs(argv: string[]): Args | null {
   return { repoKey, isolated: Boolean(values.isolated), timeoutMinutes };
 }
 
+/**
+ * Removes a temporary worktree through git, so the source repository's own worktree list is updated,
+ * and only then deletes its folder. If git refuses, the folder is kept and its path reported: deleting
+ * it anyway would leave a registered worktree pointing at nothing. Returns whether it is fully gone.
+ */
+export function removeWorktree(
+  repoRoot: string,
+  worktree: string,
+  parent: string,
+  run: (root: string, args: string[]) => unknown = git,
+  remove: (path: string) => void = (path) => rmSync(path, { recursive: true, force: true }),
+  report: (message: string) => void = (message) => console.error(message),
+): boolean {
+  try {
+    run(repoRoot, ["worktree", "remove", "--force", worktree]);
+  } catch (error) {
+    report(
+      `Could not remove the temporary worktree ${worktree}: ${(error as Error).message}. It is still registered, so the folder was kept; remove it with: git -C ${repoRoot} worktree remove --force ${worktree}`,
+    );
+    return false;
+  }
+  remove(parent);
+  return true;
+}
+
 /** Builds and runs one review, returning the exit code. Never calls `process.exit` itself: a caller
  * that did, from inside this function's own `try`, would skip the `finally` cleanup below it — a real
  * bug on this command's own first run on itself, 12 November (every `--isolated` run left its
@@ -289,30 +321,38 @@ async function main(): Promise<number> {
       git(repoRoot, ["worktree", "add", "--detach", "--quiet", worktree, baseSha]);
     }
     const scopeRoot = worktree ?? repoRoot;
-    const diffResult = buildLocalDiff(repoRoot, baseSha, split);
+    const writeSplit = (
+      diffOutcome: { excludedFiles: string[]; skippedFiles: unknown[]; noNetChangeFiles: string[] } | null,
+    ) =>
+      saveArtifact(
+        "split.json",
+        `${JSON.stringify(
+          {
+            repo: config.github,
+            repoRoot,
+            isolated,
+            baseSha,
+            staged: split.staged,
+            unstaged: split.unstaged,
+            untracked: split.untracked,
+            counts: { staged: split.staged.length, unstaged: split.unstaged.length, untracked: split.untracked.length },
+            diffBuilt: diffOutcome !== null,
+            excludedFiles: diffOutcome?.excludedFiles ?? null,
+            skippedFiles: diffOutcome?.skippedFiles ?? null,
+            noNetChangeFiles: diffOutcome?.noNetChangeFiles ?? null,
+            recordedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}
+`,
+      );
 
-    // Saved before submission, so a failed or unparsable submit answer still leaves a record of what
-    // was attempted (a real gap on this command's own first run on itself, 12 November).
-    saveArtifact(
-      "split.json",
-      `${JSON.stringify(
-        {
-          repo: config.github,
-          repoRoot,
-          isolated,
-          baseSha,
-          staged: split.staged,
-          unstaged: split.unstaged,
-          untracked: split.untracked,
-          counts: { staged: split.staged.length, unstaged: split.unstaged.length, untracked: split.untracked.length },
-          excludedFiles: diffResult.excludedFiles,
-          skippedFiles: diffResult.skippedFiles,
-          recordedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    // Written before the diff is built, and again after: a diff that cannot be built (git failing, a
+    // patch too large) still leaves a record of what the working tree held.
+    writeSplit(null);
+    const diffResult = buildLocalDiff(repoRoot, baseSha, split);
+    writeSplit(diffResult);
 
     const startParams: StartParams = {
       repo_full_name: config.github,
@@ -381,19 +421,15 @@ async function main(): Promise<number> {
     console.log(
       `Working tree: ${split.staged.length} staged, ${split.unstaged.length} unstaged, ${split.untracked.length} untracked.`,
     );
+    if (diffResult.noNetChangeFiles.length > 0) {
+      console.log(`No net change from the base, so not sent: ${diffResult.noNetChangeFiles.join(", ")}.`);
+    }
     for (const f of result.findings) console.log(formatFinding(f));
     console.log(result.message);
     console.log(`Saved in ${dir}`);
     return result.exitCode;
   } finally {
-    if (worktree) {
-      try {
-        git(repoRoot, ["worktree", "remove", "--force", worktree]);
-      } catch (error) {
-        console.error(`Could not remove the temporary worktree ${worktree}: ${(error as Error).message}`);
-      }
-    }
-    if (worktreeParent) rmSync(worktreeParent, { recursive: true, force: true });
+    if (worktree && worktreeParent) removeWorktree(repoRoot, worktree, worktreeParent);
   }
 }
 
@@ -405,5 +441,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     console.error(`review:local could not run: ${error instanceof Error ? error.message : String(error)}`);
     return 2;
   });
-  process.exit(code);
+  // Not process.exit: that can end the process before piped output is written out.
+  process.exitCode = code;
 }

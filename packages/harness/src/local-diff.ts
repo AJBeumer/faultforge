@@ -57,12 +57,22 @@ export interface DiffBuildResult {
   diff: string;
   excludedFiles: string[];
   skippedFiles: SkippedFile[];
+  /** Paths the status split names whose working-tree content equals the base (a staged edit an
+   * unstaged edit undid): nothing to review, and not a gap. */
+  noNetChangeFiles: string[];
   complete: boolean;
 }
 
+const GIT_MAX_BUFFER = 1024 * 1024 * 1024;
+
 /** Runs a read-only git subcommand in `repoRoot`, throwing on a non-zero exit. */
 export function git(repoRoot: string, args: string[]): string {
-  return execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync("git", ["-C", repoRoot, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    // Far above the 1 MiB default: a large patch must be read whole, not throw before anything is saved.
+    maxBuffer: GIT_MAX_BUFFER,
+  });
 }
 
 /** Git's own marker for a file it diffed as binary: no hunk, so no text content was actually sent. */
@@ -120,6 +130,12 @@ function diffUntrackedFile(repoRoot: string, path: string): { ok: true; patch: s
   return { ok: true, patch: result.stdout };
 }
 
+/** True when git's own comparison finds the path identical to the base (exit 0 of `diff --quiet`). */
+function equalsBase(repoRoot: string, baseSha: string, path: string): boolean {
+  const result = spawnSync("git", ["-C", repoRoot, "diff", "--quiet", baseSha, "--", path], { encoding: "utf8" });
+  return result.status === 0;
+}
+
 /**
  * The inline unified diff Qodo's local review wants: committed-since-base, staged and unstaged
  * changes to tracked files in one `git diff <baseSha>` (the working tree already holds all three),
@@ -137,6 +153,7 @@ export function buildLocalDiff(repoRoot: string, baseSha: string, split: Working
   let diff = "";
   const excludedFiles: string[] = [];
   const skippedFiles: SkippedFile[] = [];
+  const noNetChangeFiles: string[] = [];
 
   const tracked = git(repoRoot, ["-c", "core.quotePath=false", "diff", "--src-prefix=a/", "--dst-prefix=b/", baseSha]);
   const trackedSections = splitDiffSections(tracked);
@@ -156,6 +173,10 @@ export function buildLocalDiff(repoRoot: string, baseSha: string, split: Working
   const seen = new Set(trackedSections.map((section) => section.file));
   for (const path of new Set([...split.staged, ...split.unstaged])) {
     if (seen.has(path)) continue;
+    if (equalsBase(repoRoot, baseSha, path)) {
+      noNetChangeFiles.push(path);
+      continue;
+    }
     excludedFiles.push(path);
     skippedFiles.push({ file: path, why: "changed according to git status, but git's diff held no section for it" });
   }
@@ -177,7 +198,7 @@ export function buildLocalDiff(repoRoot: string, baseSha: string, split: Working
     }
     diff += result.patch;
   }
-  return { diff, excludedFiles, skippedFiles, complete: skippedFiles.length === 0 };
+  return { diff, excludedFiles, skippedFiles, noNetChangeFiles, complete: skippedFiles.length === 0 };
 }
 
 /** A stable, opaque identity for a worktree: Qodo keys finding carryover by this, never a path it can read. */

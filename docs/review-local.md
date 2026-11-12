@@ -11,8 +11,8 @@ Submits the current working tree's staged, unstaged and untracked changes to Qod
 it's done. Before anything is sent, the split of the working tree — which paths are staged, unstaged
 or untracked, and how many of each — is written next to the saved review, so answering "what was
 uncommitted when this ran" never needs a session transcript. Every raw answer (the submission, each
-poll, each result chunk) is saved under `private/raw-artifacts/local-reviews/<operation id>/` as it
-arrives, never only after the run finishes.
+poll, each result chunk) is saved under `private/raw-artifacts/local-reviews/<request id>/` as it
+arrives, never only after the run finishes. The folder is named by this command's own request id, never by an id Qodo returns. `operation.json` in it holds both ids, so a search for Qodo's operation id finds the folder. `split.json` is written before the diff is built, then again with the outcome, and lists any file with no net change from the base (not sent, and not a gap).
 
 Each finding is printed with its file, lines, category and severity, and labelled from the review's
 own `finding_state`: "new" when this run introduced it, "carried over" otherwise. A carried-over

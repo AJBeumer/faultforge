@@ -143,7 +143,13 @@ describe("buildLocalDiff on a real git repository", () => {
     const base = sh(repo, "rev-parse", "HEAD");
 
     const result = buildLocalDiff(repo, base, { staged: [], unstaged: [], untracked: [] });
-    expect(result).toEqual({ diff: "", excludedFiles: [], skippedFiles: [], complete: true });
+    expect(result).toEqual({
+      diff: "",
+      excludedFiles: [],
+      skippedFiles: [],
+      noNetChangeFiles: [],
+      complete: true,
+    });
   });
 
   it("excludes a binary file instead of submitting its content-free summary as reviewed", () => {
@@ -229,22 +235,25 @@ describe("buildLocalDiff on a real git repository", () => {
     },
   );
 
-  it("flags a tracked file that is changed but missing from git's diff, never calling the snapshot complete", () => {
-    const repo = initRepo();
-    writeFileSync(join(repo, "a.txt"), "1\n");
-    writeFileSync(join(repo, "b.txt"), "1\n");
-    sh(repo, "add", ".");
-    sh(repo, "commit", "-qm", "base");
-    const base = sh(repo, "rev-parse", "HEAD");
-    writeFileSync(join(repo, "a.txt"), "1\n2\n");
+  // An external diff helper that prints nothing hides every changed file from `git diff`'s text, while
+  // git itself still knows they differ from the base. `true` exists only on POSIX shells.
+  it.skipIf(process.platform === "win32")(
+    "flags a changed file that git's diff leaves out, never calling the snapshot complete",
+    () => {
+      const repo = initRepo();
+      writeFileSync(join(repo, "a.txt"), "1\n");
+      sh(repo, "add", ".");
+      sh(repo, "commit", "-qm", "base");
+      const base = sh(repo, "rev-parse", "HEAD");
+      writeFileSync(join(repo, "a.txt"), "1\n2\n");
+      sh(repo, "config", "diff.external", "true");
 
-    // The caller says b.txt changed too, but git's diff holds no section for it (a diff helper or
-    // an ignore setting could cause this): that gap must show.
-    const result = buildLocalDiff(repo, base, { staged: [], unstaged: ["a.txt", "b.txt"], untracked: [] });
-    expect(result.complete).toBe(false);
-    expect(result.excludedFiles).toEqual(["b.txt"]);
-    expect(result.diff).toContain("diff --git a/a.txt b/a.txt");
-  });
+      const result = buildLocalDiff(repo, base, readWorkingTreeSplit(repo));
+      expect(result.complete).toBe(false);
+      expect(result.excludedFiles).toEqual(["a.txt"]);
+      expect(result.noNetChangeFiles).toEqual([]);
+    },
+  );
 
   it.skipIf(process.platform === "win32")("flags a quoted header that comes after a plain one", () => {
     const repo = initRepo();
@@ -274,5 +283,37 @@ describe("buildLocalDiff on a real git repository", () => {
     const result = buildLocalDiff(repo, base, split);
     expect(result.complete).toBe(true);
     expect(result.skippedFiles).toEqual([]);
+  });
+
+  it("does not throw on a patch larger than a default child-process buffer", () => {
+    const repo = initRepo();
+    writeFileSync(join(repo, "big.txt"), "start\n");
+    sh(repo, "add", ".");
+    sh(repo, "commit", "-qm", "base");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "big.txt"), `${"x".repeat(79)}${"\n"}`.repeat(30_000));
+
+    const result = buildLocalDiff(repo, base, readWorkingTreeSplit(repo));
+    expect(result.complete).toBe(true);
+    expect(result.diff.length).toBeGreaterThan(2_000_000);
+  });
+
+  it("treats a staged edit that an unstaged edit undid as no net change, listed and not a gap", () => {
+    const repo = initRepo();
+    writeFileSync(join(repo, "a.txt"), "1\n");
+    sh(repo, "add", ".");
+    sh(repo, "commit", "-qm", "base");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "a.txt"), "1\n2\n");
+    sh(repo, "add", "a.txt");
+    writeFileSync(join(repo, "a.txt"), "1\n");
+
+    const split = readWorkingTreeSplit(repo);
+    expect(split.staged).toEqual(["a.txt"]);
+    expect(split.unstaged).toEqual(["a.txt"]);
+    const result = buildLocalDiff(repo, base, split);
+    expect(result.diff).toBe("");
+    expect(result.complete).toBe(true);
+    expect(result.noNetChangeFiles).toEqual(["a.txt"]);
   });
 });

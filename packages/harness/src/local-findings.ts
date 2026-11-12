@@ -58,7 +58,12 @@ export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
   const state = payload.finding_state ?? {};
   const introduced = idsOf(state.introduced);
   const stillOpen = idsOf(state.still_open);
-  return (payload.findings ?? []).map((f) => {
+  // The top-level list first, then any open finding only `finding_state` carries: a complete result
+  // that names an open action-required finding there must never read as clean.
+  const all = new Map<string, RawFinding>();
+  for (const f of payload.findings ?? []) all.set(f.id, f);
+  for (const f of [...(state.introduced ?? []), ...(state.still_open ?? [])]) if (!all.has(f.id)) all.set(f.id, f);
+  return [...all.values()].map((f) => {
     const ref = f.diff_reference;
     const lines =
       ref?.start_line != null && ref?.end_line != null ? ([ref.start_line, ref.end_line] as [number, number]) : null;

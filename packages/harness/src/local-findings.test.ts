@@ -45,6 +45,20 @@ describe("labelFindings", () => {
   it("is empty with no finding_state at all", () => {
     expect(labelFindings({ findings: [] })).toEqual([]);
   });
+
+  it("includes an open finding that finding_state lists but the top-level findings array omits", () => {
+    const stateOnly = finding({ id: "only-in-state", title: "Only in the state" });
+    const findings = labelFindings({
+      findings: [],
+      finding_state: { complete: true, introduced: [stateOnly], still_open: [], resolved: [], dismissed: [] },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: "only-in-state", label: "new", open: true, severity: "action_required" });
+  });
+
+  it("lists a finding once when it is in both the findings array and finding_state", () => {
+    expect(labelFindings(payload).filter((f) => f.id === "f1")).toHaveLength(1);
+  });
 });
 
 describe("formatFinding", () => {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { LocalReviewPayload } from "./local-findings.ts";
 import type { OperationState, ResultChunkPage, StartParams } from "./local-review-wire.ts";
-import { parseArgs, type ReviewLocalDeps, runReviewLocal } from "./review-local.ts";
+import { parseArgs, type ReviewLocalDeps, removeWorktree, runReviewLocal } from "./review-local.ts";
 
 describe("parseArgs", () => {
   it("reads the repo key, --isolated and --timeout", () => {
@@ -283,5 +283,52 @@ describe("runReviewLocal", () => {
     );
     expect(seenCursors).toEqual([null, "c2"]);
     expect(result.exitCode).toBe(0);
+  });
+
+  it("records the Qodo operation id next to our own request id, so an auditor can find the folder", async () => {
+    const saved: Record<string, string> = {};
+    await runReviewLocal(
+      makeDeps({
+        saveArtifact: (name, data) => {
+          saved[name] = data;
+        },
+      }),
+      { timeoutMs: 1000 },
+    );
+    expect(JSON.parse(saved["operation.json"] ?? "{}")).toEqual({ requestId: "req-1", operationId: "op-1" });
+  });
+});
+
+describe("removeWorktree", () => {
+  it("removes the folder only after git has unregistered the worktree", () => {
+    const calls: string[] = [];
+    const gone = removeWorktree(
+      "/repo",
+      "/tmp/p/worktree",
+      "/tmp/p",
+      (_root, args) => calls.push(`git ${args.join(" ")}`),
+      (path) => calls.push(`rm ${path}`),
+      () => {},
+    );
+    expect(gone).toBe(true);
+    expect(calls).toEqual(["git worktree remove --force /tmp/p/worktree", "rm /tmp/p"]);
+  });
+
+  it("keeps the folder and says how to remove it when git fails, instead of orphaning the registration", () => {
+    const calls: string[] = [];
+    const reports: string[] = [];
+    const gone = removeWorktree(
+      "/repo",
+      "/tmp/p/worktree",
+      "/tmp/p",
+      () => {
+        throw new Error("locked");
+      },
+      (path) => calls.push(`rm ${path}`),
+      (message) => reports.push(message),
+    );
+    expect(gone).toBe(false);
+    expect(calls).toEqual([]);
+    expect(reports[0]).toContain("worktree remove --force /tmp/p/worktree");
   });
 });
