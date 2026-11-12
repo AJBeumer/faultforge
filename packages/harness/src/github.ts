@@ -40,7 +40,7 @@ export function runExternal(
   bin: string,
   args: string[],
   timeoutMs: number,
-  extra: { maxBuffer?: number; stdio?: ["ignore", "pipe", "pipe"] } = {},
+  extra: { maxBuffer?: number; stdio?: ["ignore", "pipe", "pipe"]; env?: NodeJS.ProcessEnv } = {},
 ): string {
   try {
     return execFileSync(bin, args, { encoding: "utf8", timeout: timeoutMs, ...extra }) as unknown as string;
