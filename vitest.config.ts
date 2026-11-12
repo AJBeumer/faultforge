@@ -29,6 +29,9 @@ export default defineConfig({
           name: "unit",
           include: ["packages/**/*.test.ts", ".claude/**/*.test.ts"],
           exclude: ["**/node_modules/**", "packages/*/test/**"],
+          // Many unit tests build a real git repository. A shared Windows runner can take over the 5 s
+          // default for one of them (a merge-commit test took 5.6 s), which is a slow runner, not a bug.
+          testTimeout: 30_000,
         },
       },
       {
