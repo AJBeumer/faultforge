@@ -51,3 +51,19 @@ still saw them.
 The command changes no branch, file, review or label. Reading the staged tree uses `git write-tree`,
 which adds that tree to git's object store and nothing else. It does not block a commit. Wiring it
 into a hook or a skill is a separate decision.
+
+## The warning after a commit
+
+A hook (`.claude/hooks/review-gate-note.ts`, registered in `.claude/settings.json`) runs after every
+`git commit` made in this repository. It runs `review:gate` on the new commit (`--commit HEAD`) and,
+when no finished local review saw those exact files, shows a short note to the person and the agent.
+It checks the commit that was really made, so `git commit -a`, `git add … && git commit` in one
+command and an amend are all judged correctly.
+
+It only warns. It never blocks or undoes a commit, and any failure of the hook ends in silence or a
+note. It stays silent for commits in other repositories (`git -C`, `cd`), for dry runs, for
+unattended factory runs, and when `FAULTFORGE_GATE=off` is set. A commit that was only reviewed on
+its pull request, or a docs-only commit Qodo skips, shows the note too: the note says what it knows.
+
+Blocking a commit would need a git pre-commit hook instead, because a Claude Code hook cannot see
+what `git commit -a` will stage. That is a separate decision.
