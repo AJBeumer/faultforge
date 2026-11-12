@@ -331,30 +331,29 @@ function main(): number {
     return 2;
   }
   const { records, problems } = readReviewRecords(evidence);
-  if (records.length === 0) {
-    console.error(`no saved review with a recorded tree under ${evidence}`);
-    return 2;
-  }
 
   const what = args.commit !== null ? `the tree of ${args.commit}` : "the staged tree";
   const result = checkTree(tree, records, { repo: config.github, hasCommit: (sha) => commitExists(repoRoot, sha) });
-  if (result.considered === 0) {
-    console.error(
-      `none of the ${records.length} saved review(s) belongs to ${config.github} with a base commit this checkout holds, so there is nothing to compare with`,
-    );
-    return 2;
-  }
   const now = Date.now();
   if (result.covered && result.by) {
     console.log(`Covered: ${what} (${tree}) was reviewed, ${describeAge(result.by.at, now)}, in ${result.by.source}.`);
     console.log("This says a complete review saw this tree, not that its findings were fixed.");
     return 0;
   }
-  // A covering review would have been found even with part of the folder unreadable, but "not covered"
-  // is only an answer if everything was read: otherwise the missing review may be in what was not.
+  // A covering review would have been found even with part of the folder unreadable, but nothing else is
+  // an answer unless everything was read: the missing review may be in what was not. Said first, so
+  // an unreadable folder is never misreported as "no review found".
   if (problems.length > 0) {
-    console.error(`could not read all of the evidence, so "not covered" cannot be trusted:`);
+    console.error(`could not read all of the evidence under ${evidence}, so no other answer can be trusted:`);
     for (const problem of problems.slice(0, 5)) console.error(`  ${problem}`);
+    return 2;
+  }
+  if (result.considered === 0) {
+    console.error(
+      records.length === 0
+        ? `no saved review with a recorded tree under ${evidence}`
+        : `none of the ${records.length} saved review(s) belongs to ${config.github} with a base commit this checkout holds, so there is nothing to compare with`,
+    );
     return 2;
   }
   console.log(`Not covered: ${what} (${tree}); ${result.reason}.`);
