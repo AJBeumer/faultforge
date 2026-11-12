@@ -36,6 +36,7 @@ import {
   realHookRunner,
   redact,
   relabelWith,
+  revertCheckProblems,
   runIdFor,
   runsHook,
   safeText,
@@ -1442,6 +1443,31 @@ describe("helpers", () => {
     expect(checkProblems([{ name: "check", status: "IN_PROGRESS", conclusion: "" }])[0]).toMatch(/check IN_PROGRESS/);
     expect(checkProblems([{ name: "check", conclusion: "FAILURE" }])[0]).toMatch(/FAILURE/);
     expect(checkProblems([])[0]).toMatch(/no checks ran/);
+  });
+
+  it("proves the tests from revert:check's exit code and saved record, naming the category only (#101)", () => {
+    expect(revertCheckProblems(0, { exit: 0 })).toEqual([]);
+    expect(revertCheckProblems(1, { exit: 1 })).toEqual([
+      "revert:check: every test still passes without the change, so it doesn't prove it (full detail in its saved record)",
+    ]);
+    expect(revertCheckProblems(2, { exit: 2 })[0]).toMatch(/couldn't judge the change/);
+    // Never the record's own message or failed-test names: those can be agent-written test content
+    // (describe/it titles, file-load errors), which must never reach a ticket a reviewer can read.
+    expect(revertCheckProblems(1, { exit: 1 })[0]).not.toMatch(/x\.test\.ts/);
+    // No record at all: revert:check failed before it could save one (an early crash, a usage error).
+    // The last line of its own output is used instead, bounded in size.
+    expect(revertCheckProblems(2, null, "a stack\nError: couldn't reach GitHub")).toEqual([
+      "revert:check gave no result (exit 2: Error: couldn't reach GitHub)",
+    ]);
+    expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
+  });
+
+  it("never trusts a bare zero exit on its own: it must agree with a saved record (#101, Qodo on PR 155)", () => {
+    // A forged or stubbed revert:check could exit 0 without ever writing a record, or without really
+    // running the check it claims to.
+    expect(revertCheckProblems(0, null)[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, {})[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, { exit: 1 })[0]).toMatch(/says exit 1.*can't be trusted/);
   });
 
   it("replaces lab words only in reviewed repos", () => {
