@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1620,16 +1620,44 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
   let root: string;
   const sh = (repo: string, ...args: string[]) =>
     execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const EVIDENCE = "evidence";
 
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  /** A tiny stand-in for `review-wait.ts`, run by real `npm run -s review:wait -- <repoKey> <pr>
+   * --commit <sha> --timeout <n>` (the same command `verifyPrWith` runs), so the test proves real
+   * `npm` script resolution picks whichever checkout it runs from, not a hand-written fake of it.
+   * Writes `openFindings` as given, under the same path `verifyPrWith` itself reads back. */
+  function reviewWaitStub(openFindings: unknown[]): string {
+    return `import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const [repoKey, pr, , commit] = process.argv.slice(2);
+const dir = join(process.cwd(), 'evidence', 'reviews', \`\${repoKey}-pr\${pr}\`);
+mkdirSync(dir, { recursive: true });
+const openFindings = ${JSON.stringify(openFindings)};
+writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify({ openFindings }));
+`;
+  }
+
+  // The real revert-check.ts finds the PR's own head itself; this stub isn't under test here (#161
+  // already proved its own checkout), so the test's npm wrapper hands it the commit over the
+  // environment instead, just to name the record file `verifyPrWith` goes looking for.
+  const REVERT_CHECK_STUB = `import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const [repoKey, pr] = process.argv.slice(2);
+const dir = join(process.cwd(), 'evidence', 'revert-checks', \`\${repoKey}-pr\${pr}\`);
+mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.stringify({ exit: 0 }));
+`;
+
   /**
-   * `origin`'s main holds a "review-wait-marker.txt" standing in for `review-wait.ts`, saying "real".
-   * `sourceRepo` (standing in for the agent's worktree, `ws.lab`) is cloned from it, then has a branch
-   * with the marker edited to "forged pass", committed but never pushed to `origin` - exactly what an
-   * agent's own pull request branch can hold without ever reaching `main`.
+   * `origin`'s main holds the genuine `review-wait-stub.mjs`, which reports one real, unresolved
+   * finding. `sourceRepo` (standing in for the agent's worktree, `ws.lab`) is cloned from it, then has
+   * a branch where that very script is edited to always report a clean review instead - a committed,
+   * never-pushed edit to `review-wait.ts` itself, exactly what an agent's own pull request branch can
+   * hold without that edit ever reaching `main`.
    */
-  function sourceWithDoctoredMarker() {
+  function sourceWithForgedStub() {
     root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
     const origin = join(root, "origin.git");
     const sourceRepo = join(root, "source");
@@ -1637,28 +1665,39 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
     sh(root, "clone", "-q", origin, sourceRepo);
     sh(sourceRepo, "config", "user.email", "t@example.com");
     sh(sourceRepo, "config", "user.name", "t");
-    writeFileSync(join(sourceRepo, "review-wait-marker.txt"), "real\n");
-    writeFileSync(join(sourceRepo, "package.json"), '{"name":"lab","version":"1.0.0"}\n');
+    writeFileSync(
+      join(sourceRepo, "review-wait-stub.mjs"),
+      reviewWaitStub([{ severity: "action_required", title: "a real finding Qodo raised" }]),
+    );
+    writeFileSync(join(sourceRepo, "revert-check-stub.mjs"), REVERT_CHECK_STUB);
+    writeFileSync(
+      join(sourceRepo, "package.json"),
+      JSON.stringify({
+        name: "lab",
+        version: "1.0.0",
+        scripts: { "review:wait": "node review-wait-stub.mjs", "revert:check": "node revert-check-stub.mjs" },
+      }),
+    );
     writeFileSync(
       join(sourceRepo, "package-lock.json"),
       '{"name":"lab","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"lab","version":"1.0.0"}}}\n',
     );
-    sh(sourceRepo, "add", "review-wait-marker.txt", "package.json", "package-lock.json");
+    sh(sourceRepo, "add", "review-wait-stub.mjs", "revert-check-stub.mjs", "package.json", "package-lock.json");
     sh(sourceRepo, "commit", "-qm", "base");
     sh(sourceRepo, "push", "-q", "origin", "HEAD:main");
     sh(sourceRepo, "checkout", "-qb", "pr-branch");
-    writeFileSync(join(sourceRepo, "review-wait-marker.txt"), "forged pass\n");
-    sh(sourceRepo, "add", "review-wait-marker.txt");
+    writeFileSync(join(sourceRepo, "review-wait-stub.mjs"), reviewWaitStub([]));
+    sh(sourceRepo, "add", "review-wait-stub.mjs");
     sh(sourceRepo, "commit", "-qm", "always pass");
     const pushed = sh(sourceRepo, "rev-parse", "--verify", "refs/heads/pr-branch");
     return { sourceRepo, origin, pushed };
   }
 
-  it("settles the verdict from the real checkout's marker, never the doctored worktree's", () => {
-    const { sourceRepo, origin, pushed } = sourceWithDoctoredMarker();
+  it("settles the verdict from the real checkout's script, never the doctored worktree's", () => {
+    const { sourceRepo, origin, pushed } = sourceWithForgedStub();
     const short = pushed.slice(0, 7);
     const factory: FactoryConfig = {
-      evidence: "evidence",
+      evidence: EVIDENCE,
       repos: {
         lab: {
           github: "example/lab",
@@ -1680,29 +1719,13 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
       fingerprints: {},
     };
     const calls: { cwd: string; args: string[] }[] = [];
-    let markerSeenForReview: string | null = null;
+    // The real npm, exactly as `realDeps()`'s own `npm` wrapper calls it: whatever script runs is
+    // whatever `package.json` at `cwd` resolves, not a behavior this test hand-picks.
     const npm: VerifyPrIo["npm"] = (cwd, args) => {
       calls.push({ cwd, args: [...args] });
-      const evidenceDir = (sub: string) => join(cwd, factory.evidence, sub, "lab-pr42");
-      if (args.includes("review:wait")) {
-        const marker = readFileSync(join(cwd, "review-wait-marker.txt"), "utf8").trim();
-        markerSeenForReview = marker;
-        const dir = evidenceDir("reviews");
-        mkdirSync(dir, { recursive: true });
-        const record =
-          marker === "real"
-            ? { openFindings: [] }
-            : { openFindings: [{ severity: "action_required", title: "a forged finding" }] };
-        writeFileSync(join(dir, `${short}.review.json`), JSON.stringify(record));
-        return { status: 0, output: "" };
-      }
-      if (args.includes("revert:check")) {
-        const dir = evidenceDir("revert-checks");
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, `${short}.revert-check.json`), JSON.stringify({ exit: 0 }));
-        return { status: 0, output: "" };
-      }
-      throw new Error(`unexpected npm call: ${args.join(" ")}`);
+      const env = args.includes("revert:check") ? { ...process.env, FAKE_SHORT: short } : process.env;
+      const result = spawnSync("npm", args, { cwd, encoding: "utf8", env });
+      return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
     };
     const ghJson: VerifyPrIo["ghJson"] = ((...args: string[]) => {
       if (args.includes("headRefOid,headRefName")) return { headRefOid: pushed, headRefName: "pr-branch" };
@@ -1717,22 +1740,102 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
     const verifyRoot = join(root, "runs");
     const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42);
 
-    // The review:wait call ran against the real checkout's marker ("real"), not the doctored
-    // worktree's ("forged pass"): no action-required finding, even though ws.lab is doctored.
-    expect(result.problems).toEqual([]);
+    // The real finding from main's genuine script survived, even though ws.lab's own copy of the
+    // script was edited to always report a clean review.
+    expect(result.problems).toEqual(["1 action-required finding(s) still open: a real finding Qodo raised"]);
     const reviewCall = calls.find((c) => c.args.includes("review:wait"));
     expect(reviewCall?.cwd).not.toBe(sourceRepo);
-    expect(markerSeenForReview).toBe("real");
     // The evidence review:wait wrote in the (now-removed) trusted checkout reached the permanent,
-    // agent-worktree evidence path `saveEvidence` carries to the private repo.
+    // agent-worktree evidence path `saveEvidence` carries to the private repo - the genuine finding,
+    // not the forged "clean" one the doctored worktree's own script would have written.
     const permanent = JSON.parse(
-      readFileSync(join(sourceRepo, factory.evidence, "reviews", "lab-pr42", `${short}.review.json`), "utf8"),
+      readFileSync(join(sourceRepo, EVIDENCE, "reviews", "lab-pr42", `${short}.review.json`), "utf8"),
     );
-    expect(permanent.openFindings).toEqual([]);
+    expect(permanent.openFindings).toEqual([{ severity: "action_required", title: "a real finding Qodo raised" }]);
     // The trusted checkout is gone once verification finishes, so nothing of it lingers to inspect
     // or tamper with afterwards.
     expect(existsSync(verifyRoot)).toBe(true);
     expect(readdirSync(verifyRoot)).toHaveLength(0);
+  });
+
+  it("keeps review:wait's evidence even when the review doesn't complete", () => {
+    // A timed-out or skipped review still writes what it saw (here, a lone head-wait record) before
+    // its non-zero exit; that's worth keeping even though the PR doesn't count as verified, and the
+    // trusted checkout holding it is removed as soon as this call returns (Qodo on PR 171).
+    root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
+    const origin = join(root, "origin.git");
+    const sourceRepo = join(root, "source");
+    sh(root, "init", "-q", "--bare", origin);
+    sh(root, "clone", "-q", origin, sourceRepo);
+    sh(sourceRepo, "config", "user.email", "t@example.com");
+    sh(sourceRepo, "config", "user.name", "t");
+    sh(sourceRepo, "checkout", "-qB", "main");
+    writeFileSync(
+      join(sourceRepo, "review-wait-stub.mjs"),
+      `import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const [repoKey, pr, , commit] = process.argv.slice(2);
+const dir = join(process.cwd(), 'evidence', 'reviews', \`\${repoKey}-pr\${pr}\`);
+mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, \`\${commit.slice(0, 7)}.head-wait.json\`), JSON.stringify({ seen: ['one-head'] }));
+process.exit(1);
+`,
+    );
+    writeFileSync(
+      join(sourceRepo, "package.json"),
+      JSON.stringify({ scripts: { "review:wait": "node review-wait-stub.mjs" } }),
+    );
+    writeFileSync(
+      join(sourceRepo, "package-lock.json"),
+      '{"name":"lab","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"lab","version":"1.0.0"}}}\n',
+    );
+    sh(sourceRepo, "add", "review-wait-stub.mjs", "package.json", "package-lock.json");
+    sh(sourceRepo, "commit", "-qm", "base");
+    sh(sourceRepo, "push", "-q", "origin", "HEAD:main");
+    const pushed = sh(sourceRepo, "rev-parse", "--verify", "refs/heads/main");
+    const short = pushed.slice(0, 7);
+    const factory: FactoryConfig = {
+      evidence: EVIDENCE,
+      repos: {
+        lab: {
+          github: "example/lab",
+          path: ".",
+          guard: "lab",
+          check: "npm run check",
+          tests: "\\.test\\.ts$",
+          start: null,
+          tickets: { sections: ["Result"], checklist: "Result" },
+          board: true,
+        },
+      },
+    };
+    const ws: Workspace = {
+      root: join(root, "run-8"),
+      lab: sourceRepo,
+      private: join(root, "private"),
+      mainAtStart: {},
+      fingerprints: {},
+    };
+    const npm: VerifyPrIo["npm"] = (cwd, args) => {
+      const result = spawnSync("npm", args, { cwd, encoding: "utf8" });
+      return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+    };
+    const ghJson: VerifyPrIo["ghJson"] = ((..._args: string[]) => ({
+      headRefOid: pushed,
+      headRefName: "main",
+    })) as VerifyPrIo["ghJson"];
+    const git: VerifyPrIo["git"] = (cwd, ...args) => sh(cwd, ...args);
+
+    const verifyRoot = join(root, "runs");
+    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 7);
+
+    expect(result.problems).toEqual([
+      "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
+    ]);
+    const permanent = JSON.parse(
+      readFileSync(join(sourceRepo, EVIDENCE, "reviews", "lab-pr7", `${short}.head-wait.json`), "utf8"),
+    );
+    expect(permanent.seen).toEqual(["one-head"]);
   });
 });
 

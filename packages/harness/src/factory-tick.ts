@@ -904,13 +904,32 @@ export function verifyPrWith(
       "--timeout",
       "5",
     ]);
+    const short = pushed.slice(0, 7);
+    // Copied over whatever review:wait saved before this call's own trusted checkout is removed, win
+    // or lose: a timed-out or skipped review still writes which Qodo comments it saw and the raw API
+    // answers, which are worth keeping even when the PR doesn't count as verified (Qodo on PR 171).
+    // The whole per-PR folder, not just the final record: this is the same permanent path
+    // `saveEvidence` already carries to the private repo.
+    const trustedReviewDir = join(trustedLab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+    const reviewRecordFile = join(trustedReviewDir, `${short}.review.json`);
+    if (existsSync(trustedReviewDir)) {
+      const permanentReviewDir = join(ws.lab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+      try {
+        mkdirSync(permanentReviewDir, { recursive: true });
+        cpSync(trustedReviewDir, permanentReviewDir, { recursive: true });
+      } catch (error) {
+        problems.push(
+          `couldn't save review:wait's evidence where the run log points: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const meaning: Record<number, string> = {
       1: "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
       2: "review:wait couldn't run",
       3: "Qodo skipped the review of the head commit",
     };
     if (review.status !== 0)
-      return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`] };
+      return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`, ...problems] };
     // Read again after the review: state, head and checks must all be of the pushed commit.
     const view = io.ghJson<Parameters<typeof prViewProblems>[0]>(
       "pr",
@@ -923,25 +942,8 @@ export function verifyPrWith(
     );
     problems.push(...prViewProblems(view, pushed));
     // A complete review can still have findings open: only none action-required counts as ready.
-    const short = pushed.slice(0, 7);
-    const trustedReviewDir = join(trustedLab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
-    const reviewRecordFile = join(trustedReviewDir, `${short}.review.json`);
     if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
     else {
-      // Where the un-torn-down evidence lives: the run's own worktree, the same place it always lived
-      // before `review:wait` ran from a scratch copy, which `saveEvidence` already carries to the
-      // private repo. The whole per-PR folder, not just the one record: `review:wait` also saves every
-      // version of Qodo's comments and the raw API answers there, and the trusted checkout holding them
-      // is removed at the end of this very call.
-      const permanentReviewDir = join(ws.lab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
-      try {
-        mkdirSync(permanentReviewDir, { recursive: true });
-        cpSync(trustedReviewDir, permanentReviewDir, { recursive: true });
-      } catch (error) {
-        problems.push(
-          `couldn't save review:wait's evidence where the run log points: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
       const open = openActionRequired(JSON.parse(readFileSync(reviewRecordFile, "utf8")));
       if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
     }
