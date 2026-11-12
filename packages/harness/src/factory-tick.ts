@@ -509,6 +509,20 @@ export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "si
   }
 }
 
+/** What one hook answered to its three self-test payloads, and its slowest answer. */
+export interface HookReport {
+  hook: string;
+  /** Claude Code's reading of each answer: "deny", "allow" or "silent", "ask", "invalid". */
+  outcomes: { deny: string; allow: string; notJson: string };
+  slowestMs: number;
+}
+
+/** The self-test's result: every problem found, and what each hook answered. */
+export interface HooksReport {
+  problems: string[];
+  hooks: HookReport[];
+}
+
 /**
  * Proves both hooks work before an agent runs: each must deny what it exists to deny, allow a harmless
  * command, and deny when its input is not JSON (a crash would otherwise let the tool run). Each answer
@@ -517,13 +531,31 @@ export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "si
  * problems found, or an empty list.
  */
 export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: number, run: HookRunner): string[] {
+  return hookSelfTestReport(lab, reviewedFolder, limitSeconds, run).problems;
+}
+
+/** The same self-test, with each hook's three outcomes and slowest answer, for the run log (#126). */
+export function hookSelfTestReport(
+  lab: string,
+  reviewedFolder: string,
+  limitSeconds: number,
+  run: HookRunner,
+): HooksReport {
   const payload = (tool: string, input: object, cwd: string) =>
     JSON.stringify({ tool_name: tool, cwd, tool_input: input });
   const runEnv = { FAULTFORGE_FACTORY_RUN: "self-test", FAULTFORGE_RUN_ROOT: lab };
-  const cases: { hook: string; name: string; stdin: string; env: Record<string, string>; expectDeny: boolean }[] = [
+  const cases: {
+    hook: string;
+    name: string;
+    kind: "deny" | "allow" | "notJson";
+    stdin: string;
+    env: Record<string, string>;
+    expectDeny: boolean;
+  }[] = [
     {
       hook: "guard-target.ts",
       name: "a telltale commit in a reviewed repo",
+      kind: "deny",
       stdin: payload("Bash", { command: 'git commit -m "Fix the planted bug"' }, reviewedFolder),
       env: {},
       expectDeny: true,
@@ -531,14 +563,23 @@ export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: 
     {
       hook: "guard-target.ts",
       name: "a harmless command",
+      kind: "allow",
       stdin: payload("Bash", { command: "npm run check" }, lab),
       env: {},
       expectDeny: false,
     },
-    { hook: "guard-target.ts", name: "input that is not JSON", stdin: "not json", env: {}, expectDeny: true },
+    {
+      hook: "guard-target.ts",
+      name: "input that is not JSON",
+      kind: "notJson",
+      stdin: "not json",
+      env: {},
+      expectDeny: true,
+    },
     {
       hook: "factory-policy.ts",
       name: "a merge inside a run",
+      kind: "deny",
       stdin: payload("Bash", { command: "gh pr merge 1 --squash" }, lab),
       env: runEnv,
       expectDeny: true,
@@ -546,17 +587,34 @@ export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: 
     {
       hook: "factory-policy.ts",
       name: "a harmless command inside a run",
+      kind: "allow",
       stdin: payload("Bash", { command: "npm run check" }, lab),
       env: runEnv,
       expectDeny: false,
     },
-    { hook: "factory-policy.ts", name: "input that is not JSON", stdin: "not json", env: runEnv, expectDeny: true },
+    {
+      hook: "factory-policy.ts",
+      name: "input that is not JSON",
+      kind: "notJson",
+      stdin: "not json",
+      env: runEnv,
+      expectDeny: true,
+    },
   ];
   const problems: string[] = [];
+  const reports = new Map<string, HookReport>();
   const budgetMs = (limitSeconds * 1000) / 2;
   for (const c of cases) {
     const answer = run(c.hook, c.stdin, c.env);
     const decision = hookDecision(answer);
+    const report = reports.get(c.hook) ?? {
+      hook: c.hook,
+      outcomes: { deny: "", allow: "", notJson: "" },
+      slowestMs: 0,
+    };
+    report.outcomes[c.kind] = decision;
+    report.slowestMs = Math.max(report.slowestMs, answer.ms);
+    reports.set(c.hook, report);
     const detail = `decision ${decision}, exit ${answer.status}, output ${JSON.stringify(answer.stdout.trim().slice(0, 80))}`;
     if (c.expectDeny && decision !== "deny") problems.push(`${c.hook} let through ${c.name} (${detail})`);
     // A harmless command must pass without a question: in an unattended run nobody answers an "ask".
@@ -567,7 +625,38 @@ export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: 
         `${c.hook} took ${answer.ms} ms on ${c.name}; it must answer within half its ${limitSeconds} s limit`,
       );
   }
-  return problems;
+  return { problems, hooks: [...reports.values()] };
+}
+
+/** A failed settings check or self-test, carrying what the check saw so the run log can record it. */
+export class HooksCheckError extends Error {
+  readonly report: HooksReport;
+  constructor(message: string, report: HooksReport) {
+    super(message);
+    this.name = "HooksCheckError";
+    this.report = report;
+  }
+}
+
+/**
+ * The error to throw when a failed start's cleanup also left something behind: the original message plus
+ * what could not be removed. A HooksCheckError stays one, with its report, so the run log still records
+ * the failed hook check (Qodo's local review of #126); any other error becomes a plain Error as before.
+ */
+export function withCleanupFailure(error: unknown, leftovers: string[]): Error {
+  if (!leftovers.length) return error instanceof Error ? error : new Error(String(error));
+  const message = `${error instanceof Error ? error.message : String(error)}; cleanup also failed: ${leftovers.join("; ")}`;
+  return error instanceof HooksCheckError ? new HooksCheckError(message, error.report) : new Error(message);
+}
+
+/** The `hooks-checked` log event for a report: each hook's outcomes, the slowest answer, and any problems. */
+export function hooksEvent(report: HooksReport): Record<string, unknown> {
+  return {
+    ok: report.problems.length === 0,
+    hooks: report.hooks,
+    slowestMs: Math.max(0, ...report.hooks.map((h) => h.slowestMs)),
+    problems: report.problems,
+  };
 }
 
 /** Runs a hook file from the workspace's `.claude/hooks` with node, the way settings.json does. */
@@ -754,6 +843,8 @@ export interface Workspace {
   mainAtStart: Record<string, string>;
   /** Fingerprints taken before the agent starts, compared after it stops: the owner's checkouts and the guardrail files. */
   fingerprints: Record<string, string>;
+  /** What the hook self-test saw, logged as `hooks-checked` before the agent starts. */
+  hooks?: HooksReport;
 }
 
 /** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
@@ -943,6 +1034,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     ws = deps.workspace(runId);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
+    if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
     // The agent works from this exact text, taken after the claim, so nothing added later can steer it.
     const snapshot = deps.snapshot(pick.github, pick.number);
@@ -1043,6 +1135,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     return finish.label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    if (error instanceof HooksCheckError) log("hooks-checked", hooksEvent(error.report));
     log("error", { message, afterLabel: finalLabel });
     // Once the ticket has its final label, a later failure (saving, cleanup) must not add a second one.
     // The relabel and the comment are tried independently: one failing must never also swallow the other,
@@ -1428,16 +1521,22 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
    * Refuses to start the agent unless both hooks run before every shell command and file edit, and
    * unless each hook, run once with payloads it must deny and allow, answers as it should and in time.
    */
-  const requireHooks = (lab: string) => {
+  const requireHooks = (lab: string): HooksReport => {
     const settings = join(lab, ".claude", "settings.json");
     const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
     const missing = hookProblems(text);
-    if (missing.length) throw new Error(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`);
+    if (missing.length)
+      throw new HooksCheckError(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`, {
+        problems: missing,
+        hooks: [],
+      });
     const reviewed = Object.values(factory.repos).find((r) => r.guard === "reviewed");
     const reviewedFolder = reviewed ? worktreeFor(lab, reviewed.path) : lab;
     const limit = hookTimeoutSeconds(text);
-    const failed = hookSelfTest(lab, reviewedFolder, limit, realHookRunner(lab, limit));
-    if (failed.length) throw new Error(`the workspace's hooks failed their self-test: ${failed.join("; ")}`);
+    const report = hookSelfTestReport(lab, reviewedFolder, limit, realHookRunner(lab, limit));
+    if (report.problems.length)
+      throw new HooksCheckError(`the workspace's hooks failed their self-test: ${report.problems.join("; ")}`, report);
+    return report;
   };
 
   const deps: TickDeps = {
@@ -1525,6 +1624,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const lab = join(root, basename(LAB_ROOT));
       const priv = join(lab, "private");
       const mainAtStart: Record<string, string> = {};
+      let hooks: HooksReport | undefined;
       mkdirSync(root, { recursive: true });
       try {
         for (const [key, repo] of Object.entries(factory.repos)) {
@@ -1545,15 +1645,13 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           if (install.status !== 0) throw new Error(`npm ci failed in ${dir}: ${install.output.slice(-400)}`);
         }
         // The agent gets main's hooks, not the runner's: refuse to start it without both of them.
-        requireHooks(lab);
+        hooks = requireHooks(lab);
       } catch (error) {
         // Undo whatever was set up, so a failed start leaves no worktree or branch behind.
         const leftovers = teardown(root, lab, priv, runId);
-        if (leftovers.length)
-          throw new Error(`${(error as Error).message}; cleanup also failed: ${leftovers.join("; ")}`);
-        throw error;
+        throw withCleanupFailure(error, leftovers);
       }
-      return { root, lab, private: priv, mainAtStart, fingerprints: fingerprints(lab) };
+      return { root, lab, private: priv, mainAtStart, fingerprints: fingerprints(lab), hooks };
     },
     audit(ws, ticket, from, to) {
       const problems: string[] = [];
@@ -1867,13 +1965,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       }
       gitLong(privateRepo, "fetch", "--quiet", "origin", "main");
       mainAtStart[PRIVATE_KEY] = git(privateRepo, "rev-parse", "origin/main");
-      requireHooks(LAB_ROOT);
+      const hooks = requireHooks(LAB_ROOT);
       return {
         root: dirname(LAB_ROOT),
         lab: LAB_ROOT,
         private: privateRepo,
         mainAtStart,
         fingerprints: fingerprints(LAB_ROOT),
+        hooks,
       };
     },
     // The VM is thrown away after the run.

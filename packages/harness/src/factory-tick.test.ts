@@ -17,8 +17,12 @@ import {
   commitToVerify,
   type HookAnswer,
   type HookRunner,
+  HooksCheckError,
+  type HooksReport,
   hookProblems,
   hookSelfTest,
+  hookSelfTestReport,
+  hooksEvent,
   hookTimeoutSeconds,
   type IssueEvent,
   isLabelAlreadyGone,
@@ -46,6 +50,7 @@ import {
   ticketChangeProblems,
   type Workspace,
   windowProblems,
+  withCleanupFailure,
 } from "./factory-tick.ts";
 import { CALL_TIMEOUT_MS, ExternalCallError } from "./github.ts";
 
@@ -1766,5 +1771,127 @@ describe("acquireLock (#107)", () => {
     // The other tick's fresh lock must survive untouched, not be replaced by this tick's own.
     expect(JSON.parse(readFileSync(file, "utf8")).pid).toBe(777777);
     expect(readdirSync(dir)).toEqual(["factory.lock"]);
+  });
+});
+
+describe("hooks-checked: the run log records the hook self-test (#126)", () => {
+  const deny = JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "no" },
+  });
+  /** A fake pair of hooks that answer correctly, with optional per-hook delays and hooks that let everything through. */
+  const hooks =
+    (slow: Record<string, number> = {}, lax: string[] = []): HookRunner =>
+    (hook, stdin) => {
+      const ms = slow[hook] ?? 5;
+      if (lax.includes(hook)) return { stdout: "", status: 0, ms };
+      let command = "";
+      try {
+        command = JSON.parse(stdin)?.tool_input?.command ?? "";
+      } catch {
+        return { stdout: deny, status: 0, ms };
+      }
+      const bad = hook === "guard-target.ts" ? /planted/.test(command) : /gh pr merge/.test(command);
+      return { stdout: bad ? deny : "", status: 0, ms };
+    };
+  const run = (runner: HookRunner) => hookSelfTestReport("/lab", "/lab/../faultforge-target", 15, runner);
+
+  it("reports each hook's deny, allow and not-JSON outcomes and its slowest answer", () => {
+    const report = run(hooks({ "factory-policy.ts": 40 }));
+    expect(report.problems).toEqual([]);
+    expect(report.hooks).toEqual([
+      { hook: "guard-target.ts", outcomes: { deny: "deny", allow: "silent", notJson: "deny" }, slowestMs: 5 },
+      { hook: "factory-policy.ts", outcomes: { deny: "deny", allow: "silent", notJson: "deny" }, slowestMs: 40 },
+    ]);
+  });
+
+  it("still reports what each hook answered when one fails", () => {
+    const report = run(hooks({}, ["guard-target.ts"]));
+    expect(report.problems.length).toBeGreaterThan(0);
+    expect(report.hooks.map((h) => h.hook)).toEqual(["guard-target.ts", "factory-policy.ts"]);
+    expect(report.hooks[0]?.outcomes.deny).toBe("silent");
+    expect(report.hooks[1]?.outcomes.deny).toBe("deny");
+  });
+
+  it("the event says ok with the slowest answer overall, or lists the problems", () => {
+    const good = hooksEvent(run(hooks({ "factory-policy.ts": 40 })));
+    expect(good).toMatchObject({ ok: true, slowestMs: 40, problems: [] });
+    const bad = hooksEvent(run(hooks({}, ["guard-target.ts"])));
+    expect(bad).toMatchObject({ ok: false });
+    expect((bad.problems as string[]).length).toBeGreaterThan(0);
+  });
+
+  const hooksOk: HooksReport = run(hooks({ "factory-policy.ts": 40 }));
+  const ticket = { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+  const withHooks = (report: HooksReport | undefined) =>
+    ({
+      workspace: () => ({
+        root: "/runs/r",
+        lab: "/runs/r/lab",
+        private: "/runs/r/lab/private",
+        mainAtStart: {},
+        fingerprints: {},
+        hooks: report,
+      }),
+    }) satisfies Partial<TickDeps>;
+
+  it("the tick logs one hooks-checked event right after the workspace, before the agent starts", async () => {
+    const f = fake(ticket, withHooks(hooksOk));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    const names = f.events.map((e) => e.event);
+    expect(names.filter((n) => n === "hooks-checked")).toHaveLength(1);
+    expect(names.indexOf("hooks-checked")).toBe(names.indexOf("workspace") + 1);
+    expect(names.indexOf("hooks-checked")).toBeLessThan(names.indexOf("agent-started"));
+    expect(f.events.find((e) => e.event === "hooks-checked")).toMatchObject({
+      ok: true,
+      slowestMs: 40,
+      problems: [],
+      hooks: [{ hook: "guard-target.ts" }, { hook: "factory-policy.ts" }],
+    });
+  });
+
+  it("logs no hooks-checked event when the workspace carries no report", async () => {
+    const f = fake(ticket, withHooks(undefined));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.events.map((e) => e.event)).not.toContain("hooks-checked");
+  });
+
+  it("a failed hook check logs the event with its problems before the error, and the run still stops for the owner", async () => {
+    const failed = run(hooks({}, ["guard-target.ts"]));
+    const f = fake(ticket, {
+      workspace: () => {
+        throw new HooksCheckError("the workspace's hooks failed their self-test: x", failed);
+      },
+    });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    const names = f.events.map((e) => e.event);
+    expect(names).not.toContain("agent-started");
+    expect(names.indexOf("hooks-checked")).toBeLessThan(names.indexOf("error"));
+    expect(f.events.find((e) => e.event === "hooks-checked")).toMatchObject({ ok: false, problems: failed.problems });
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+  });
+});
+
+describe("withCleanupFailure: a failed start's cleanup problems keep the hook report (#126)", () => {
+  const report: HooksReport = { problems: ["guard-target.ts let through a telltale commit"], hooks: [] };
+
+  it("keeps a HooksCheckError's report when cleanup also failed, so the run log can still show it", () => {
+    const original = new HooksCheckError("the workspace's hooks failed their self-test: x", report);
+    const combined = withCleanupFailure(original, ["private worktree: busy"]);
+    expect(combined).toBeInstanceOf(HooksCheckError);
+    expect((combined as HooksCheckError).report).toEqual(report);
+    expect(combined.message).toBe(
+      "the workspace's hooks failed their self-test: x; cleanup also failed: private worktree: busy",
+    );
+  });
+
+  it("makes an ordinary error with the same wording, and keeps no report", () => {
+    const combined = withCleanupFailure(new Error("npm ci failed"), ["a", "b"]);
+    expect(combined).not.toBeInstanceOf(HooksCheckError);
+    expect(combined.message).toBe("npm ci failed; cleanup also failed: a; b");
+  });
+
+  it("returns the original error untouched when cleanup left nothing behind", () => {
+    const original = new HooksCheckError("x", report);
+    expect(withCleanupFailure(original, [])).toBe(original);
   });
 });
