@@ -38,6 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
+import { ghJson } from "./github.ts";
 
 export interface Change {
   /** git's name-status letter: A added, M modified, D deleted (renames are split into D and A). */
@@ -360,10 +361,6 @@ export function runVitest(dir: string, files: string[], spawn: Spawn = spawnSync
   return { ran: true, ...parseVitestReport(JSON.parse(readFileSync(report, "utf8"))) };
 }
 
-function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
-}
-
 async function main() {
   const factory = loadFactory();
   const [repoKey, prArg] = process.argv.slice(2);
@@ -375,9 +372,15 @@ async function main() {
   const config = repoConfig(factory, repoKey);
   const lab = fileURLToPath(new URL("../../..", import.meta.url));
   const repo = resolve(lab, config.path);
-  const view = JSON.parse(
-    gh("pr", "view", String(pr), "--repo", config.github, "--json", "headRefOid,baseRefOid,mergeCommit,state"),
-  ) as { headRefOid: string; baseRefOid: string; mergeCommit: { oid: string } | null; state: string };
+  const view = ghJson<{ headRefOid: string; baseRefOid: string; mergeCommit: { oid: string } | null; state: string }>(
+    "pr",
+    "view",
+    String(pr),
+    "--repo",
+    config.github,
+    "--json",
+    "headRefOid,baseRefOid,mergeCommit,state",
+  );
   // A merged PR's change is already in main, so its base is where it forked from main as it was before the merge.
   const fork = view.mergeCommit?.oid ?? view.baseRefOid;
   git(repo, ["fetch", "-q", "origin", `pull/${pr}/head`, fork]);

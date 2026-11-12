@@ -9,7 +9,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadFactory } from "./factory-config.ts";
+import { evidenceDir, runsDir } from "./paths.ts";
 
 export interface RunEvent {
   t: string;
@@ -108,9 +108,8 @@ export function summarize(events: RunEvent[]): string {
 }
 
 function main() {
-  const root = fileURLToPath(new URL("../../..", import.meta.url));
-  const runs = resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(root, "..", "faultforge-runs"));
-  const saved = join(root, loadFactory().evidence, "factory-runs");
+  const runs = runsDir();
+  const saved = join(evidenceDir(), "factory-runs");
   const [arg] = process.argv.slice(2);
   if (!arg) {
     console.error("usage: npm run factory:timeline -- <run id | latest>");

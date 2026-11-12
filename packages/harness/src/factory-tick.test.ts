@@ -12,11 +12,9 @@ import {
   agentStep,
   blockedEvidencePaths,
   buildSnapshot,
-  CALL_TIMEOUT_MS,
   checkProblems,
   commitAndPublish,
   commitToVerify,
-  ExternalCallError,
   type HookAnswer,
   type HookRunner,
   hookProblems,
@@ -24,7 +22,6 @@ import {
   hookTimeoutSeconds,
   type IssueEvent,
   isLabelAlreadyGone,
-  isTimeoutError,
   LABELS,
   LONG_CALL_TIMEOUT_MS,
   lastLabelled,
@@ -39,6 +36,7 @@ import {
   realHookRunner,
   redact,
   relabelWith,
+  revertCheckProblems,
   runIdFor,
   runsHook,
   safeText,
@@ -49,6 +47,7 @@ import {
   type Workspace,
   windowProblems,
 } from "./factory-tick.ts";
+import { CALL_TIMEOUT_MS, ExternalCallError } from "./github.ts";
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
@@ -1446,6 +1445,31 @@ describe("helpers", () => {
     expect(checkProblems([])[0]).toMatch(/no checks ran/);
   });
 
+  it("proves the tests from revert:check's exit code and saved record, naming the category only (#101)", () => {
+    expect(revertCheckProblems(0, { exit: 0 })).toEqual([]);
+    expect(revertCheckProblems(1, { exit: 1 })).toEqual([
+      "revert:check: every test still passes without the change, so it doesn't prove it (full detail in its saved record)",
+    ]);
+    expect(revertCheckProblems(2, { exit: 2 })[0]).toMatch(/couldn't judge the change/);
+    // Never the record's own message or failed-test names: those can be agent-written test content
+    // (describe/it titles, file-load errors), which must never reach a ticket a reviewer can read.
+    expect(revertCheckProblems(1, { exit: 1 })[0]).not.toMatch(/x\.test\.ts/);
+    // No record at all: revert:check failed before it could save one (an early crash, a usage error).
+    // The last line of its own output is used instead, bounded in size.
+    expect(revertCheckProblems(2, null, "a stack\nError: couldn't reach GitHub")).toEqual([
+      "revert:check gave no result (exit 2: Error: couldn't reach GitHub)",
+    ]);
+    expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
+  });
+
+  it("never trusts a bare zero exit on its own: it must agree with a saved record (#101, Qodo on PR 155)", () => {
+    // A forged or stubbed revert:check could exit 0 without ever writing a record, or without really
+    // running the check it claims to.
+    expect(revertCheckProblems(0, null)[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, {})[0]).toMatch(/can't be trusted/);
+    expect(revertCheckProblems(0, { exit: 1 })[0]).toMatch(/says exit 1.*can't be trusted/);
+  });
+
   it("replaces lab words only in reviewed repos", () => {
     expect(safeText("FaultForge says hi", false)).toBe("FaultForge says hi");
     expect(safeText("FaultForge says hi", true)).toBe("The details are in the run log.");
@@ -1562,27 +1586,7 @@ describe("verifying the commit the agent pushed (Qodo on PR 98)", () => {
 });
 
 describe("time limits on gh and git calls (#107)", () => {
-  it("recognises Node's ETIMEDOUT and nothing else", () => {
-    expect(isTimeoutError({ code: "ETIMEDOUT" })).toBe(true);
-    expect(isTimeoutError({ code: "ENOENT" })).toBe(false);
-    expect(isTimeoutError(new Error("boom"))).toBe(false);
-    expect(isTimeoutError(null)).toBe(false);
-  });
-
-  it("names the call and marks it as a timeout", () => {
-    const err = new ExternalCallError("git push", { code: "ETIMEDOUT" });
-    expect(err.timedOut).toBe(true);
-    expect(err.message).toBe("git push timed out");
-  });
-
-  it("keeps gh's own detail for a call that failed without timing out", () => {
-    const err = new ExternalCallError("gh api", {
-      stderr: "gh: HTTP 403: Forbidden (https://api.github.com/x)\n",
-    });
-    expect(err.timedOut).toBe(false);
-    expect(err.message).toBe("gh api failed: gh: HTTP 403: Forbidden (https://api.github.com/x)");
-  });
-
+  // isTimeoutError and ExternalCallError moved to github.ts (#108); covered by github.test.ts.
   it("gives the long limit to pushes and clones, longer than the default every other call gets", () => {
     expect(LONG_CALL_TIMEOUT_MS).toBeGreaterThan(CALL_TIMEOUT_MS);
   });

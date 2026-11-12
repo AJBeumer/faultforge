@@ -30,13 +30,14 @@
  * template can't be read, the review doesn't match the injected commit, the event couldn't be appended,
  * or an answer couldn't be parsed after retrying.
  */
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { parseArgs as parseNodeArgs } from "node:util";
+import { gh } from "./github.ts";
 import { readLedger } from "./ledger.ts";
 import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
@@ -199,7 +200,7 @@ async function defaultAsk(question: string): Promise<string> {
 }
 
 function defaultOwnerLogin(): string {
-  return execFileSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", timeout: 15_000 }).trim();
+  return gh("api", "user", "--jq", ".login").trim();
 }
 
 function defaultAppend(path: string, value: object): void {
@@ -430,13 +431,20 @@ interface CliArgs {
 
 /** The command line, or null when it's wrong. */
 export function parseCliArgs(argv: string[]): CliArgs | null {
-  const [caseId, ...rest] = argv;
+  let values: { "dry-run"?: boolean; review?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseNodeArgs({
+      args: argv,
+      options: { "dry-run": { type: "boolean" }, review: { type: "string" } },
+      allowPositionals: true,
+    }));
+  } catch {
+    return null;
+  }
+  const [caseId] = positionals;
   if (!caseId) return null;
-  const dryRun = rest.includes("--dry-run");
-  const at = rest.indexOf("--review");
-  const reviewPath = at >= 0 ? rest[at + 1] : undefined;
-  if (at >= 0 && !reviewPath) return null;
-  return { caseId, dryRun, reviewPath };
+  return { caseId, dryRun: values["dry-run"] ?? false, reviewPath: values.review };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
