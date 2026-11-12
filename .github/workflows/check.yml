@@ -26,3 +26,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  # The same check on Windows, where the owner develops: path and line-ending assumptions that pass
+  # on Linux fail here first. A separate job, so the Linux job keeps its name.
+  check-windows:
+    name: npm run check (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check

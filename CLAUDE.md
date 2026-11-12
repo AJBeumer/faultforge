@@ -76,6 +76,7 @@ Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for ea
 ## Code layout
 
 - A unit test sits next to the code it tests, as `<name>.test.ts` in the same folder (`packages/harness/src/`, `.claude/hooks/`). It runs with `npm test` and in `npm run check`.
+- Tests must pass on Linux (CI) and Windows (the owner's machine). Build expected paths with `resolve()` or `join()`, never compare against a bare POSIX literal such as `"/repo/x"`, and don't assume `/` separators, drive letters or hard links across drives. Check runs on both in CI. When a local Windows run disagrees with a green Linux Check, the Linux result is the authority for merging; fix the portability bug in the test.
 - A slow or end-to-end test, one that needs a checkout of the target, a network, a real process or more than a few seconds, lives under `packages/<package>/test/`. It runs with `npm run test:integration`, never in `check`. Template proof tests are neither: they run only through `npm run inject`.
 - A helper two scripts need lives in a named module (`neutral.ts`, `factory-config.ts`), never as a copy in each script.
 - A module over 400 lines is split along its seams. `factory-tick.ts` is the standing exception until #109.
