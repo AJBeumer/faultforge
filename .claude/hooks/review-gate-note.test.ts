@@ -1,98 +1,100 @@
-import { describe, expect, it } from "vitest";
-import {
-  type Deps,
-  decide,
-  type GateRun,
-  isOwnCommit,
-  madeCommit,
-  sameRepository,
-  show,
-  withoutText,
-} from "./review-gate-note.ts";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { type Deps, decide, type GateRun, type HeadState, readHead, sameRepository, show } from "./review-gate-note.ts";
 
 const NL = String.fromCharCode(10);
-const made = { stdout: `[main abc1234] a message${NL} 1 file changed` };
-const payload = (command: string, tool = "Bash", response: unknown = made, cwd?: string) =>
-  JSON.stringify({ tool_name: tool, tool_input: { command }, tool_response: response, cwd });
+const payload = (tool = "Bash", cwd?: string) => JSON.stringify({ tool_name: tool, tool_input: { command: "x" }, cwd });
 const notCovered: GateRun = {
   exitCode: 1,
   output: `Not covered: the tree of abc1234 (abc); no review recorded this tree.${NL}`,
 };
 const covered: GateRun = { exitCode: 0, output: "Covered: ..." };
-
-/** Dependencies with a gate that gives `run`, and records what it was asked to check. */
-function deps(run: GateRun | (() => GateRun), overrides: Partial<Deps> = {}) {
-  const asked: string[] = [];
-  const d: Deps = {
-    run: (ref) => {
-      asked.push(ref);
-      return typeof run === "function" ? run() : run;
-    },
-    headAge: () => null,
-    inProject: () => true,
-    ...overrides,
-  };
-  return { d, asked };
-}
 const mustNotRun = (): GateRun => {
   throw new Error("the gate must not run here");
 };
 
-describe("isOwnCommit", () => {
-  it("is true for a plain commit, a commit after an add, and settings before the verb", () => {
-    expect(isOwnCommit('git commit -m "x"')).toBe(true);
-    expect(isOwnCommit("git add a.txt && git commit -F msg.txt")).toBe(true);
-    expect(isOwnCommit("git -c core.autocrlf=false commit -am x")).toBe(true);
+/** Fake world: a HEAD, what the hook saw last, and a gate; records what was saved and what was checked. */
+function world(
+  opts: { head?: HeadState | null; last?: string | null; run?: GateRun | (() => GateRun); inProject?: boolean } = {},
+) {
+  const saved: string[] = [];
+  const asked: string[] = [];
+  const run = opts.run ?? notCovered;
+  const deps: Deps = {
+    run: (ref) => {
+      asked.push(ref);
+      return typeof run === "function" ? run() : run;
+    },
+    inProject: () => opts.inProject ?? true,
+    head: () => (opts.head === undefined ? { sha: "new1", lastAction: "commit: a message" } : opts.head),
+    readLast: () => (opts.last === undefined ? "old1" : opts.last),
+    saveLast: (sha) => {
+      saved.push(sha);
+    },
+  };
+  return { deps, saved, asked };
+}
+
+describe("decide: a commit is what git says it is, not what the command looks like", () => {
+  it("says nothing when the new commit's files were covered", () => {
+    expect(decide(payload(), world({ run: covered }).deps, {})).toEqual({ kind: "none" });
   });
 
-  it("is true with git's other global options before the verb", () => {
-    expect(isOwnCommit("git --no-pager commit -m x")).toBe(true);
-    expect(isOwnCommit("git -p commit -m x")).toBe(true);
-    expect(isOwnCommit("git --no-pager -c core.editor=true commit -m x")).toBe(true);
-  });
-
-  it("is false for other git commands and for words that merely contain commit", () => {
-    expect(isOwnCommit("git status")).toBe(false);
-    expect(isOwnCommit("git log --oneline")).toBe(false);
-    expect(isOwnCommit("echo committed")).toBe(false);
-  });
-
-  it("is false for a commit in another repository", () => {
-    expect(isOwnCommit('git -C private commit -m "x"')).toBe(false);
-    expect(isOwnCommit('cd ../faultforge-target && git commit -m "x"')).toBe(false);
-    expect(isOwnCommit('git --work-tree=../x commit -m "x"')).toBe(false);
-    expect(isOwnCommit('git --git-dir=../x/.git commit -m "x"')).toBe(false);
-  });
-
-  it("is true when the command only moves to the current folder", () => {
-    expect(isOwnCommit('git -C . commit -m "x"')).toBe(true);
-    expect(isOwnCommit('cd . && git commit -m "x"')).toBe(true);
-  });
-
-  it("is false for a dry run", () => {
-    expect(isOwnCommit("git commit --dry-run")).toBe(false);
-  });
-});
-
-describe("decide", () => {
-  it("says nothing when the commit's files were covered", () => {
-    expect(decide(payload("git commit -m x"), deps(covered).d, {})).toEqual({ kind: "none" });
-  });
-
-  it("notes a commit that no finished review saw, and how to run one", () => {
-    const note = decide(payload("git commit -m x"), deps(notCovered).d, {});
+  it("notes a new commit that no finished review saw, and how to run one", () => {
+    const { deps, asked } = world();
+    const note = decide(payload(), deps, {});
     expect(note.kind).toBe("note");
     if (note.kind === "note") {
       expect(note.message).toContain("No finished local review saw the files");
       expect(note.message).toContain("Not covered: the tree of abc1234");
       expect(note.message).toContain("review:local");
     }
+    expect(asked).toEqual(["new1"]);
   });
 
-  it("judges the commit git named in its summary, not whatever HEAD is by then", () => {
-    const { d, asked } = deps(notCovered);
-    decide(payload("git commit -m x && git checkout other"), d, {});
-    expect(asked).toEqual(["abc1234"]);
+  it("judges an amend, an initial commit and a merge commit made by `git commit`", () => {
+    for (const lastAction of ["commit (amend): msg", "commit (initial): msg", "commit (merge): msg"]) {
+      const { deps, asked } = world({ head: { sha: "new1", lastAction } });
+      expect(decide(payload(), deps, {}).kind).toBe("note");
+      expect(asked).toEqual(["new1"]);
+    }
+  });
+
+  it("says nothing when HEAD did not move: no commit, a failed or dry-run commit, any other command", () => {
+    expect(decide(payload(), world({ last: "new1", run: mustNotRun }).deps, {})).toEqual({ kind: "none" });
+  });
+
+  it("says nothing when HEAD moved for another reason, such as a checkout, a pull or a rebase step", () => {
+    for (const lastAction of ["checkout: moving from a to b", "pull: Fast-forward", "rebase (pick): msg"]) {
+      const { deps } = world({ head: { sha: "new1", lastAction }, run: mustNotRun });
+      expect(decide(payload(), deps, {})).toEqual({ kind: "none" });
+    }
+  });
+
+  it("only records HEAD the first time, with nothing to compare with", () => {
+    const { deps, saved } = world({ last: null, run: mustNotRun });
+    expect(decide(payload(), deps, {})).toEqual({ kind: "none" });
+    expect(saved).toEqual(["new1"]);
+  });
+
+  it("remembers HEAD every time, so one commit is judged once", () => {
+    const { deps, saved } = world({ run: covered });
+    decide(payload(), deps, {});
+    expect(saved).toEqual(["new1"]);
+    const { deps: unchanged, saved: savedAgain } = world({ last: "new1", run: mustNotRun });
+    decide(payload(), unchanged, {});
+    expect(savedAgain).toEqual(["new1"]);
+  });
+
+  it("is not stopped by a failure to save its state", () => {
+    const { deps } = world();
+    deps.saveLast = () => {
+      throw new Error("disk full");
+    };
+    expect(decide(payload(), deps, {}).kind).toBe("note");
   });
 
   it("notes that it could not check on exit 2, on a missing exit code and on a throw", () => {
@@ -100,105 +102,96 @@ describe("decide", () => {
       { exitCode: 2, output: "" },
       { exitCode: null, output: "" },
     ]) {
-      const note = decide(payload("git commit -m x"), deps(run).d, {});
+      const note = decide(payload(), world({ run }).deps, {});
       expect(note.kind === "note" && note.message).toContain("could not check");
     }
-    const thrown = decide(payload("git commit -m x"), deps(mustNotRun).d, {});
+    const thrown = decide(payload(), world({ run: mustNotRun }).deps, {});
     expect(thrown.kind === "note" && thrown.message).toContain("could not check");
   });
 
-  it("does not run the gate for a command that is not a commit, or for another tool", () => {
-    expect(decide(payload("git status"), deps(mustNotRun).d, {})).toEqual({ kind: "none" });
-    expect(decide(payload("git commit -m x", "Edit"), deps(mustNotRun).d, {})).toEqual({ kind: "none" });
+  it("says nothing when git cannot say what HEAD is", () => {
+    expect(decide(payload(), world({ head: null, run: mustNotRun }).deps, {})).toEqual({ kind: "none" });
   });
 
-  it("works for PowerShell commands too", () => {
-    expect(decide(payload("git commit -m x", "PowerShell"), deps(notCovered).d, {}).kind).toBe("note");
+  it("works for PowerShell too, and ignores other tools", () => {
+    expect(decide(payload("PowerShell"), world().deps, {}).kind).toBe("note");
+    expect(decide(payload("Edit"), world({ run: mustNotRun }).deps, {})).toEqual({ kind: "none" });
   });
 
   it("stays silent when the tool ran in another repository, and speaks when it ran in this one", () => {
-    const elsewhere = deps(mustNotRun, { inProject: () => false }).d;
-    expect(decide(payload("git commit -m x", "Bash", made, "D:/other"), elsewhere, {})).toEqual({ kind: "none" });
-    expect(decide(payload("git commit -m x", "Bash", made, "D:/here"), deps(notCovered).d, {}).kind).toBe("note");
+    expect(decide(payload("Bash", "D:/other"), world({ inProject: false, run: mustNotRun }).deps, {})).toEqual({
+      kind: "none",
+    });
+    expect(decide(payload("Bash", "D:/here"), world().deps, {}).kind).toBe("note");
   });
 
   it("stays silent in an unattended factory run and when switched off", () => {
-    expect(decide(payload("git commit -m x"), deps(mustNotRun).d, { FAULTFORGE_FACTORY_RUN: "1" })).toEqual({
+    expect(decide(payload(), world({ run: mustNotRun }).deps, { FAULTFORGE_FACTORY_RUN: "1" })).toEqual({
       kind: "none",
     });
-    expect(decide(payload("git commit -m x"), deps(mustNotRun).d, { FAULTFORGE_GATE: "off" })).toEqual({
-      kind: "none",
-    });
+    expect(decide(payload(), world({ run: mustNotRun }).deps, { FAULTFORGE_GATE: "off" })).toEqual({ kind: "none" });
   });
 
   it("stays silent for a payload it cannot read, never failing the commit", () => {
-    expect(decide("not json", deps(mustNotRun).d, {})).toEqual({ kind: "none" });
-    expect(decide("null", deps(mustNotRun).d, {})).toEqual({ kind: "none" });
-    expect(decide(JSON.stringify({ tool_name: "Bash" }), deps(mustNotRun).d, {})).toEqual({ kind: "none" });
+    expect(decide("not json", world({ run: mustNotRun }).deps, {})).toEqual({ kind: "none" });
+    expect(decide("null", world({ run: mustNotRun }).deps, {})).toEqual({ kind: "none" });
   });
 
   it("never denies: its only answers are a note or nothing", () => {
     const kinds = [covered, notCovered, { exitCode: 2, output: "" }].map(
-      (r) => decide(payload("git commit -m x"), deps(r).d, {}).kind,
+      (run) => decide(payload(), world({ run }).deps, {}).kind,
     );
     for (const kind of kinds) expect(["none", "note"]).toContain(kind);
   });
 });
 
-describe("madeCommit: a commit that was not made is not judged", () => {
-  it("gives the hash from git's summary line, in either output shape", () => {
-    expect(madeCommit({ stdout: "[main abc1234] msg" }, () => null)).toBe("abc1234");
-    expect(madeCommit("[detached HEAD 1234567] msg", () => null)).toBe("1234567");
-    expect(madeCommit({ output: "[feature 7654321] msg" }, () => null)).toBe("7654321");
+describe("on a real git repository", () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const sh = (...args: string[]) =>
+    execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  function repo() {
+    dir = mkdtempSync(join(tmpdir(), "gate-note-"));
+    sh("init", "-q", "-b", "main");
+    sh("config", "user.email", "t@example.com");
+    sh("config", "user.name", "t");
+    writeFileSync(join(dir, "a.txt"), "1");
+    sh("add", ".");
+  }
+
+  it("reads HEAD and calls a commit a commit, an amend an amend, and a checkout a checkout", () => {
+    repo();
+    sh("commit", "-qm", "first");
+    expect(readHead(dir)).toEqual({ sha: sh("rev-parse", "HEAD"), lastAction: "commit (initial): first" });
+    writeFileSync(join(dir, "a.txt"), "2");
+    sh("commit", "-qam", "second");
+    expect(readHead(dir)?.lastAction).toBe("commit: second");
+    sh("commit", "-q", "--amend", "-m", "second again");
+    expect(readHead(dir)?.lastAction).toMatch(/^commit \(amend\)/);
+    sh("checkout", "-q", "-b", "other");
+    expect(readHead(dir)?.lastAction).toMatch(/^checkout/);
   });
 
-  it("is null when git says there was nothing to commit or the commit failed", () => {
-    for (const stdout of [
-      "nothing to commit, working tree clean",
-      `On branch main${NL}nothing added to commit`,
-      `error: gpg failed to sign the data${NL}fatal: failed to write commit object`,
-    ]) {
-      expect(madeCommit({ stdout }, () => 5)).toBeNull();
-    }
+  it("does not move HEAD for a failed or dry-run commit", () => {
+    repo();
+    sh("commit", "-qm", "first");
+    const before = sh("rev-parse", "HEAD");
+    expect(() => sh("commit", "-qm", "nothing changed")).toThrow();
+    writeFileSync(join(dir, "a.txt"), "changed");
+    sh("commit", "--dry-run", "-am", "x");
+    expect(sh("rev-parse", "HEAD")).toBe(before);
   });
 
-  it("falls back to a young HEAD for a quiet commit that printed other output", () => {
-    expect(madeCommit({ stdout: "hook ran fine" }, () => 5)).toBe("HEAD");
-    expect(madeCommit({ stdout: "" }, () => 5)).toBe("HEAD");
-    expect(madeCommit(undefined, () => 5)).toBe("HEAD");
+  it("is null outside a repository", () => {
+    dir = mkdtempSync(join(tmpdir(), "gate-note-"));
+    expect(readHead(dir)).toBeNull();
   });
 
-  it("does not judge an old HEAD, or one whose age is unknown", () => {
-    expect(madeCommit({ stdout: "hook ran fine" }, () => 3600)).toBeNull();
-    expect(madeCommit(undefined, () => null)).toBeNull();
-  });
-});
-
-describe("text that only looks like a command", () => {
-  it("is removed before the command is read", () => {
-    expect(withoutText('git commit -m "fix cd x"')).not.toContain("cd");
-    expect(withoutText(`git commit -F - <<'EOF'${NL}cd somewhere${NL}EOF`)).not.toContain("cd");
-  });
-
-  it("does not let a message that mentions cd or -C silence the hook", () => {
-    expect(isOwnCommit('git commit -m "undo the cd step"')).toBe(true);
-    expect(isOwnCommit(`git commit -F - <<'EOF'${NL}move with git -C elsewhere${NL}EOF`)).toBe(true);
-  });
-
-  it("does not take a quoted mention of git commit for a commit", () => {
-    expect(isOwnCommit('echo "run git commit later"')).toBe(false);
-  });
-});
-
-describe("sameRepository", () => {
-  it("is true for the project folder itself and for a folder inside it", () => {
-    const here = process.cwd();
-    expect(sameRepository(here, here)).toBe(true);
-    expect(sameRepository(here, `${here}/packages`)).toBe(true);
-  });
-
-  it("is false for a folder that is not a git repository", () => {
-    expect(sameRepository(process.cwd(), process.platform === "win32" ? "C:/Windows" : "/")).toBe(false);
+  it("sees a subfolder as the same repository and an unrelated folder as another", () => {
+    repo();
+    expect(sameRepository(dir, dir)).toBe(true);
+    expect(sameRepository(dir, join(dir, ".git"))).toBe(false);
   });
 });
 
@@ -218,5 +211,38 @@ describe("show", () => {
     expect(out.systemMessage).toBe("hello");
     expect(out.hookSpecificOutput).toEqual({ hookEventName: "PostToolUse", additionalContext: "hello" });
     expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
+  });
+});
+
+describe("registration and docs", () => {
+  const root = resolve(import.meta.dirname, "..", "..");
+
+  it("settings.json registers the hook after Bash and PowerShell commands, within the time limit", () => {
+    const settings = JSON.parse(readFileSync(join(root, ".claude", "settings.json"), "utf8"));
+    const entries = settings.hooks?.PostToolUse ?? [];
+    const entry = entries.find((e: { hooks: { command: string }[] }) =>
+      e.hooks.some((h) => h.command.includes("review-gate-note.ts")),
+    );
+    expect(entry?.matcher).toBe("Bash|PowerShell");
+    const hook = entry.hooks.find((h: { command: string }) => h.command.includes("review-gate-note.ts"));
+    expect(hook.type).toBe("command");
+    expect(hook.timeout).toBeLessThanOrEqual(15);
+  });
+
+  it("the existing PreToolUse guards are still registered", () => {
+    const settings = JSON.parse(readFileSync(join(root, ".claude", "settings.json"), "utf8"));
+    const commands = JSON.stringify(settings.hooks.PreToolUse);
+    expect(commands).toContain("guard-target.ts");
+    expect(commands).toContain("factory-policy.ts");
+  });
+
+  it("docs/review-gate.md describes the warning and its off switch", () => {
+    const docs = readFileSync(join(root, "docs", "review-gate.md"), "utf8");
+    expect(docs).toContain("review-gate-note.ts");
+    expect(docs).toContain("FAULTFORGE_GATE=off");
+  });
+
+  it("the hook file is the one the settings name", () => {
+    expect(readFileSync(join(root, ".claude", "hooks", "review-gate-note.ts"), "utf8")).toContain("PostToolUse");
   });
 });

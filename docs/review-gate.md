@@ -55,15 +55,23 @@ into a hook or a skill is a separate decision.
 ## The warning after a commit
 
 A hook (`.claude/hooks/review-gate-note.ts`, registered in `.claude/settings.json`) runs after every
-`git commit` made in this repository. It runs `review:gate` on the new commit (`--commit HEAD`) and,
-when no finished local review saw those exact files, shows a short note to the person and the agent.
-It checks the commit that was really made, so `git commit -a`, `git add … && git commit` in one
-command and an amend are all judged correctly.
+Bash or PowerShell command in Claude Code. It asks git, not the command text, whether a commit was
+just made in this repository: HEAD moved since the hook last looked, and the newest reflog entry is a
+commit. If so it runs `review:gate` on that commit and, when no finished local review saw those
+exact files, shows a short note to the person and the agent. Because it reads git and not the command,
+`git commit -a`, `git add … && git commit` in one command, `-q`, an amend or an alias are all judged
+on what was really committed. If one command makes several commits, the last is judged.
 
 It only warns. It never blocks or undoes a commit, and any failure of the hook ends in silence or a
-note. It stays silent for commits in other repositories (`git -C`, `cd`), for dry runs, for
-unattended factory runs, and when `FAULTFORGE_GATE=off` is set. A commit that was only reviewed on
-its pull request, or a docs-only commit Qodo skips, shows the note too: the note says what it knows.
+note. It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when
+it moved for another reason (a checkout, a pull), when the command ran in another repository (the
+nested `private/` one, the target), in unattended factory runs, and when `FAULTFORGE_GATE=off` is
+set. The first time it runs it only records HEAD, because it has nothing to compare with. The last
+HEAD it saw is kept in `.git/faultforge-gate-last-head`. A commit that was only reviewed on its pull
+request, or a docs-only commit Qodo skips, shows the note too: the note says what it knows.
 
-Blocking a commit would need a git pre-commit hook instead, because a Claude Code hook cannot see
-what `git commit -a` will stage. That is a separate decision.
+It sees only commits made through Claude Code's Bash and PowerShell tools. A commit made in an IDE or
+a plain terminal is not seen; a git post-commit hook would cover those. Blocking a commit would need a
+git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command and
+cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are
+separate decisions.
