@@ -52,6 +52,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
@@ -331,9 +332,20 @@ interface CliArgs {
 
 /** The command line, or null when it's wrong. */
 export function parseCliArgs(argv: string[]): CliArgs | null {
-  const [caseId, ...rest] = argv;
+  let values: { write?: boolean };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      options: { write: { type: "boolean" } },
+      allowPositionals: true,
+    }));
+  } catch {
+    return null;
+  }
+  const [caseId] = positionals;
   if (!caseId) return null;
-  return { caseId, write: rest.includes("--write") };
+  return { caseId, write: values.write ?? false };
 }
 
 export interface RunOptions {

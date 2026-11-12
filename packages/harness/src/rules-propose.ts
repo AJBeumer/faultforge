@@ -11,9 +11,12 @@
  * its work keeps producing the same finding — and the owner alone decides what becomes a rule.
  */
 import { execFileSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
+import { gh } from "./github.ts";
+import { evidenceDir, ROOT } from "./paths.ts";
 import { buildTable, casePrs, type EvidenceRow, groundTruthCommits, readSavedReviews } from "./rules-evidence.ts";
 
 /** The pattern threshold, in one place: this many findings, over at least this many PRs. */
@@ -85,11 +88,6 @@ export function newPatterns(patterns: Pattern[], existingTitles: string[]): Patt
   return patterns.filter((p) => !existing.has(proposalTitle(p)));
 }
 
-/** Runs `gh` with a time limit. */
-function gh(...args: string[]): string {
-  return execFileSync("gh", args, { encoding: "utf8", timeout: 60_000 });
-}
-
 /** Every proposal ticket's title, open or closed, every page. */
 function existingProposalTitles(lab: string): string[] {
   const pages = JSON.parse(
@@ -115,11 +113,14 @@ export function propose(
 ): ProposeResult {
   const lab = Object.values(factory.repos).find((r) => r.guard === "lab")?.github;
   if (!lab) throw new Error("no lab repo in factory.json");
-  const evidence = resolve(root, factory.evidence);
-  const privateDir = resolve(evidence, "..");
+  const evidence = evidenceDir(factory, root);
+  // Derived from `root` directly, never from FAULTFORGE_PRIVATE_DIR: `root` names exactly which
+  // checkout to scan (the owner's, or a test fixture), and an env override would read someone else's
+  // private storage instead (the same escape `privateDir()`'s own doc warns against).
+  const priv = dirname(evidence);
   const excluded = {
-    prs: casePrs(join(privateDir, "cases")),
-    commits: groundTruthCommits(join(privateDir, "ground-truth.jsonl")),
+    prs: casePrs(join(priv, "cases")),
+    commits: groundTruthCommits(join(priv, "ground-truth.jsonl")),
   };
   const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
   const patterns = findPatterns(table.rows);
@@ -169,18 +170,22 @@ export function propose(
  * serialized by the tick lock, so only concurrent manual runs can race.
  */
 export function proposeAfterRun(root: string, print: (line: string) => void): ProposeResult {
+  const factory = loadFactory();
   try {
+    // Literal, not derived from the evidence path: this refreshes the physical "private" checkout
+    // itself (always that name, directly under root), which a nested evidence folder — not yet
+    // created locally when it was only just pushed — would otherwise make `git -C` fail to enter
+    // (Qodo on PR 154, round 2).
     execFileSync("git", ["-C", join(root, "private"), "pull", "--ff-only", "--quiet"], { timeout: 60_000 });
   } catch (error) {
     print(`private checkout not refreshed (${error instanceof Error ? error.message : error}); scanning as-is`);
   }
-  return propose(loadFactory(), root, { open: true }, undefined, undefined, print);
+  return propose(factory, root, { open: true }, undefined, undefined, print);
 }
 
 function main(): void {
-  const open = process.argv.includes("--open");
-  const root = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-  propose(loadFactory(), root, { open });
+  const { values } = parseArgs({ args: process.argv.slice(2), options: { open: { type: "boolean" } } });
+  propose(loadFactory(), ROOT, { open: values.open ?? false });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
