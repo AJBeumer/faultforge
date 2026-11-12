@@ -1,0 +1,9 @@
+
+> faultforge@1.0.0 revert:check
+> tsx packages/harness/src/revert-check.ts faultforge 163
+
+revert:check faultforge PR 163: head 37b0e43, base d21666b (open)
+Test files: packages/harness/src/factory-tick.test.ts
+Code files: docs/factory-trigger.md, packages/harness/src/factory-tick.ts
+- fails without the change: C:/Users/aj_be/AppData/Local/Temp/revert-check-Mcfyez/copy/packages/harness/src/factory-tick.test.ts: hookSelfTestReport is not a function
+Caught: 1 test(s) fail without the change, as they should.

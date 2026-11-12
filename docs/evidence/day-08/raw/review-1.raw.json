@@ -1,0 +1,135 @@
+{
+  "findings": [
+    {
+      "id": "9fd82c03-f705-4f0c-b127-2d2255133a9f",
+      "title": "Hook checks trail ticket pickup",
+      "description": "`tick()` logs `picked` before constructing the workspace, then logs `hooks-checked` only after `deps.workspace(runId)` returns or throws. Every run that reaches hook validation therefore records the check after pickup, rather than before `picked` as the ticket requires; the new test asserts only that it precedes agent startup.",
+      "category": "Correctness",
+      "action_level": "remediation_recommended",
+      "attribution_status": "pending",
+      "git_sha": "d21666b954c21faf85b7c13f0dbb1d7328d90392",
+      "location": {
+        "file_path": "packages/harness/src/factory-tick.ts",
+        "start_line": 1026,
+        "end_line": 1026,
+        "side": "right"
+      },
+      "evidence": {
+        "citations": [
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[942-950]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1023-1026]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1125-1128]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.test.ts[1836-1842]" }
+        ]
+      }
+    },
+    {
+      "id": "09f12a3c-089f-42da-98be-7948378b9a0e",
+      "title": "Cleanup failure hides a failed hook check",
+      "description": "`tick()` emits the failure event only when it catches a `HooksCheckError`, but the local workspace setup replaces that error with a plain `Error` if teardown reports leftovers. When a settings check or self-test fails alongside workspace cleanup, the run log records the cleanup error without the hook report or its problems.",
+      "category": "Observability",
+      "action_level": "remediation_recommended",
+      "attribution_status": "pending",
+      "git_sha": "d21666b954c21faf85b7c13f0dbb1d7328d90392",
+      "location": {
+        "file_path": "packages/harness/src/factory-tick.ts",
+        "start_line": 1127,
+        "end_line": 1127,
+        "side": "right"
+      },
+      "evidence": {
+        "citations": [
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1513-1528]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1637-1643]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1125-1128]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1975-2005]" }
+        ]
+      }
+    }
+  ],
+  "finding_state": {
+    "complete": true,
+    "introduced": ["09f12a3c-089f-42da-98be-7948378b9a0e", "9fd82c03-f705-4f0c-b127-2d2255133a9f"],
+    "resolved": [],
+    "still_open": [],
+    "dismissed": []
+  },
+  "review_agent_comment": "The run-log approach fits the existing evidence pipeline. Please reconcile the event’s placement with the ticket’s requested ordering: the implementation and tests establish that it precedes agent startup, but not ticket pickup.",
+  "meta": {
+    "analysis": { "mode": "full", "reason": "no_completed_checkpoint" },
+    "checkpoint": {
+      "base_sha": "d21666b954c21faf85b7c13f0dbb1d7328d90392",
+      "coverage_started_at": "2026-11-12T10:11:53.538647+00:00",
+      "created_at": "2026-11-12T10:11:53.538647+00:00",
+      "id": "c484261861f34deab08f3a5bb464a553",
+      "sequence": 29219,
+      "tree_sha": "29a5c218c582e0d228cec722cbcf56998d7d42c3",
+      "version": 1
+    },
+    "context": {
+      "author_notes": {
+        "input_chars": 3752,
+        "max_tokens": 16000,
+        "offloaded": false,
+        "original_tokens": 837,
+        "outcome": "inline",
+        "rendered_chars": 3922
+      },
+      "ticket_bodies": []
+    },
+    "coverage": { "complete": true },
+    "depth": "auto",
+    "org_config": "applied",
+    "reviewers": { "ran": ["issue", "compliance"], "skipped": ["skills", "spec", "ui", "persona", "cross_repo"] },
+    "run": {
+      "effort": { "effective": "standard", "requested": "auto" },
+      "id": "14e48066c0944316a46125ef180625ab",
+      "passes": [
+        {
+          "agent_statuses_reported": true,
+          "agents": [
+            {
+              "duration_ms": 10521,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "compliance-agent-turbo",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 7680,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "conversion_agent",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 57875,
+              "models": ["multi-provider/gpt-5.6-luna", "multi-provider/gpt-6-sol"],
+              "name": "issue-review-agent-gpt-6-sol_thinking",
+              "status": "completed"
+            },
+            { "name": "spec-agent", "reason": "no_spec_content", "status": "skipped" }
+          ],
+          "duration_ms": 68181,
+          "effort": "standard",
+          "kind": "primary",
+          "started_at": "2026-11-12T10:16:49.838201+00:00"
+        }
+      ],
+      "snapshot": {
+        "base_sha": "d21666b954c21faf85b7c13f0dbb1d7328d90392",
+        "commit_sha": "d21666b954c21faf85b7c13f0dbb1d7328d90392",
+        "tree_sha": "29a5c218c582e0d228cec722cbcf56998d7d42c3"
+      },
+      "timing": {
+        "duration_ms": 365420,
+        "finished_at": "2026-11-12T10:17:58.958678+00:00",
+        "started_at": "2026-11-12T10:11:53.538647+00:00"
+      }
+    },
+    "safety_net": { "ran": false, "reinjected": 0 },
+    "skipped_files": [],
+    "local_review_ids": {
+      "09f12a3c-089f-42da-98be-7948378b9a0e": "b016ab11-6bc6-46bc-abdb-67f3a5311bc0",
+      "9fd82c03-f705-4f0c-b127-2d2255133a9f": "b016ab11-6bc6-46bc-abdb-67f3a5311bc0"
+    }
+  }
+}

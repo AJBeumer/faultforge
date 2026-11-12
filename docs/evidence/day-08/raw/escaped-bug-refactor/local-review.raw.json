@@ -1,0 +1,127 @@
+{
+  "findings": [
+    {
+      "id": "9cfe70f8-c27d-4366-a65c-65e1010d4303",
+      "title": "Case ticket reads keep a separate 30-second gh limit",
+      "description": "This PR adds one shared `gh` wrapper in `github.ts`, with a 60-second limit and a 64 MB buffer, and moves the listed scripts onto it. `packages/harness/src/case-ticket.ts:162` still defines its own inline `gh` around `execFileSync(\"gh\", ...)` with a 30-second timeout and the default buffer. Case-ticket calls therefore keep the inconsistent time-limit policy this change is meant to remove, and later changes to the shared limit or error shape will not reach them.",
+      "category": "Maintainability",
+      "action_level": "remediation_recommended",
+      "attribution_status": "pending",
+      "git_sha": "201513ef003da4722d10409feb06c7e59bc308c0",
+      "location": { "file_path": "packages/harness/src/github.ts", "start_line": 52, "end_line": 54, "side": "right" },
+      "evidence": {
+        "citations": [
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/github.ts[52-55]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/case-ticket.ts[162-162]" },
+          { "source_type": "rules", "source": "https://app.qodo.ai/rules/4754189?state=active" }
+        ]
+      }
+    },
+    {
+      "id": "e0d34669-93f2-411b-b002-76428b112fae",
+      "title": "Factory runs lose evidence with a custom private directory",
+      "description": "`realDeps` computes `evidenceInPrivate` relative to the overridden `privateDir()` but resolves `evidenceDir(factory)` under the repository root, so the result can contain `..` segments that lead outside the private worktree. When `FAULTFORGE_PRIVATE_DIR` points elsewhere, `saveEvidence` writes run logs outside that worktree and `commitAndPublish` cannot stage them for delivery to the private repository.",
+      "category": "Correctness",
+      "action_level": "action_required",
+      "attribution_status": "pending",
+      "git_sha": "201513ef003da4722d10409feb06c7e59bc308c0",
+      "location": {
+        "file_path": "packages/harness/src/factory-tick.ts",
+        "start_line": 1376,
+        "end_line": 1377,
+        "side": "right"
+      },
+      "evidence": {
+        "citations": [
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/paths.ts[15-26]" },
+          { "source_type": "pr_branch_file", "source": "factory.json[2-5]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1374-1377]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[1750-1765]" },
+          { "source_type": "pr_branch_file", "source": "packages/harness/src/factory-tick.ts[225-239]" }
+        ]
+      }
+    }
+  ],
+  "finding_state": {
+    "complete": false,
+    "introduced": ["9cfe70f8-c27d-4366-a65c-65e1010d4303", "e0d34669-93f2-411b-b002-76428b112fae"],
+    "resolved": [],
+    "still_open": [],
+    "dismissed": []
+  },
+  "review_agent_comment": "The shared helpers simplify the scripts, but the factory runner needs to keep its evidence path relative to the private checkout when that checkout is overridden.",
+  "meta": {
+    "analysis": { "mode": "full", "reason": "checkpoint_unavailable" },
+    "context": {
+      "author_notes": {
+        "input_chars": 661,
+        "max_tokens": 16000,
+        "offloaded": false,
+        "original_tokens": 144,
+        "outcome": "inline",
+        "rendered_chars": 831
+      },
+      "ticket_bodies": []
+    },
+    "coverage": { "complete": true },
+    "depth": "auto",
+    "org_config": "applied",
+    "reviewers": { "ran": ["issue", "compliance"], "skipped": ["skills", "spec", "ui", "persona", "cross_repo"] },
+    "run": {
+      "effort": { "effective": "standard", "requested": "auto" },
+      "id": "9179d6ca86a64273ae6893a5655f0dfc",
+      "passes": [
+        {
+          "agent_statuses_reported": true,
+          "agents": [
+            {
+              "duration_ms": 53985,
+              "models": ["multi-provider/claude-haiku-5-5", "multi-provider/gpt-5.6-luna"],
+              "name": "compliance-agent-turbo",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 8738,
+              "models": ["multi-provider/claude-haiku-5-5"],
+              "name": "conversion_agent",
+              "status": "completed"
+            },
+            {
+              "duration_ms": 73234,
+              "models": ["multi-provider/gpt-5.6-luna", "multi-provider/gpt-6-sol"],
+              "name": "issue-review-agent-gpt-6-sol_thinking",
+              "status": "completed"
+            },
+            { "name": "spec-agent", "reason": "no_spec_content", "status": "skipped" }
+          ],
+          "duration_ms": 85700,
+          "effort": "standard",
+          "kind": "primary",
+          "started_at": "2026-11-12T18:52:10.212464+00:00"
+        }
+      ],
+      "snapshot": {
+        "base_sha": "201513ef003da4722d10409feb06c7e59bc308c0",
+        "commit_sha": "201513ef003da4722d10409feb06c7e59bc308c0",
+        "tree_sha": "62b377d0d0b026a83ec19a425e823b13ed92ab7f"
+      },
+      "timing": {
+        "duration_ms": 387059,
+        "finished_at": "2026-11-12T18:53:35.933173+00:00",
+        "started_at": "2026-11-12T18:47:08.873196+00:00"
+      }
+    },
+    "safety_net": { "ran": false, "reinjected": 0 },
+    "skipped_files": [],
+    "local_review_ids": {
+      "9cfe70f8-c27d-4366-a65c-65e1010d4303": "b1640132-e00d-4e73-8998-0caff604bddf",
+      "e0d34669-93f2-411b-b002-76428b112fae": "b1640132-e00d-4e73-8998-0caff604bddf"
+    }
+  },
+  "warnings": [
+    {
+      "code": "finding_state_unavailable",
+      "message": "The finding inventory is incomplete; inspect the full --json result and verify unresolved findings before treating this review as clean."
+    }
+  ]
+}
