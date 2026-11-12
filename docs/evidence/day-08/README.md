@@ -27,8 +27,8 @@ Four planted bugs from adjudicated cases (A to D, FF-0003 to FF-0006) and two cl
 | E, F | control | no finding | no finding |
 
 - **A trap, and the correction.** Qodo keeps a local review's open findings per working folder. A first attempt that reviewed five cases from one checkout carried a finding from one case onto unrelated changes, and a rerun that looked like independent agreement had only carried the first run's finding. That batch was discarded; each case then got its own fresh worktree.
-- The framing varied with the effort Qodo chose: the planted change in D was a test-gap finding once (standard effort) and a correctness finding twice (lite effort).
+- **Framing.** In the first run on D, where the ticket went in as plain notes (standard effort), the only finding was a test gap. In every later run, in a fresh stream with the ticket linked as an issue, it was a correctness finding about the raised limit: two runs at auto depth (lite), then three at `--fast` (lite) and three at `--deep` (extended), all six caught under the match rule. So the framing did not follow the effort level. The one different run also differed in how the ticket was attached, and one run cannot separate the two. (An earlier version of this README said the framing varied with effort; that was not supported.)
 - Raw findings stay in private storage until the final report.
 
 ## Limits
-Six cases, one review of each kind per case, effort chosen by Qodo: a measurement of these cases, not a rate. The local review in section 3 reported `finding_state.complete: false` while `coverage.complete` was true; we do not know what the first means. A local dismissal not carrying to the PR is one observation.
+Six cases, one review of each kind per case (D has more local runs), effort chosen by Qodo unless forced: a measurement of these cases, not a rate. The local review in section 3 reported `finding_state.complete: false` while `coverage.complete` was true; we do not know what the first means. A local dismissal not carrying to the PR is one observation.
