@@ -1608,7 +1608,10 @@ function gitLong(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-function npm(
+/** Runs an npm script with one time limit, the cross-platform way: a plain `spawnSync("npm", ...)`
+ * can't find `npm.cmd` on Windows without a shell (exported so `verifyPrWith`'s own tests can run real
+ * npm scripts, on Linux and Windows alike, instead of each re-implementing this). */
+export function npm(
   cwd: string,
   args: string[],
   timeoutMs: number = LONG_CALL_TIMEOUT_MS,

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,7 @@ import {
   readJsonRecord,
   realDeps,
   realHookRunner,
+  npm as realNpm,
   redact,
   relabelWith,
   removeTrustedCheckout,
@@ -1721,11 +1722,10 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     const calls: { cwd: string; args: string[] }[] = [];
     // The real npm, exactly as `realDeps()`'s own `npm` wrapper calls it: whatever script runs is
     // whatever `package.json` at `cwd` resolves, not a behavior this test hand-picks.
-    const npm: VerifyPrIo["npm"] = (cwd, args) => {
+    const npm: VerifyPrIo["npm"] = (cwd, args, timeoutMs) => {
       calls.push({ cwd, args: [...args] });
-      const env = args.includes("revert:check") ? { ...process.env, FAKE_SHORT: short } : process.env;
-      const result = spawnSync("npm", args, { cwd, encoding: "utf8", env });
-      return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+      const env = args.includes("revert:check") ? { ...process.env, FAKE_SHORT: short } : undefined;
+      return realNpm(cwd, args, timeoutMs, env);
     };
     const ghJson: VerifyPrIo["ghJson"] = ((...args: string[]) => {
       if (args.includes("headRefOid,headRefName")) return { headRefOid: pushed, headRefName: "pr-branch" };
@@ -1816,10 +1816,7 @@ process.exit(1);
       mainAtStart: {},
       fingerprints: {},
     };
-    const npm: VerifyPrIo["npm"] = (cwd, args) => {
-      const result = spawnSync("npm", args, { cwd, encoding: "utf8" });
-      return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
-    };
+    const npm: VerifyPrIo["npm"] = (cwd, args, timeoutMs) => realNpm(cwd, args, timeoutMs);
     const ghJson: VerifyPrIo["ghJson"] = ((..._args: string[]) => ({
       headRefOid: pushed,
       headRefName: "main",
