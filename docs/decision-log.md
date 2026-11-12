@@ -239,3 +239,29 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **What the check found.** Before the next case, `npm run qodo:check` reported one difference from v8: the rule "Keep slow and external-resource tests in the integration suite" went from active to muted at 11:09 UTC. It is one of the five lab-only rules Qodo created on its own earlier the same day (v8). The saved data does not say whether the owner muted it or Qodo did after a finding about integration tests on a lab pull request was dismissed.
 - **Decision.** Record the live state as v9, as for v8, rather than unmute the rule or edit v8. The rule is scoped to this repository only and does not apply to `faultforge-target`. The rules that apply to the target, the review skills and the relationships are unchanged, so case reviews see the same configuration in v7, v8 and v9 and their results stay comparable. Cases from FF-0005 on run under v9. `npm run qodo:check` now reports "matches qodo-v9".
 - **Remaining risk.** The check stopped a case for a change that cannot touch a case review, for the second time in one day. The ticket to fail only for changes that can reach case reviews is #158, and it is now the next harness work.
+
+## Cases FF-0002 to FF-0008: results so far (12 November)
+
+- **What was measured.** Seven cases, each with a target ticket, reviewed once by Qodo at lite effort under the rules in force at the time (configuration v8 for FF-0002 to FF-0004, v9 from FF-0005). Every verdict was confirmed by the owner. The match rule did not change.
+
+  | Case | Kind | Result |
+  |---|---|---|
+  | FF-0002 | Control | Clean |
+  | FF-0003 | Bug | Detected |
+  | FF-0004 | Bug | Detected, as a requirement gap |
+  | FF-0005 | Bug | Detected, plus a test-gap observation |
+  | FF-0006 | Bug | Detected, as a requirement gap |
+  | FF-0007 | Control | Inconclusive: Qodo skipped the review |
+  | FF-0008 | Control | Clean |
+
+  Four of four bugs were detected. Two of three controls were clean and one is inconclusive. Four bugs is a small sample, so this is a measurement of those four cases and not a rate.
+- **What changed from the plan and why.**
+  - **FF-0006 was meant to be a harder test than it was.** The plan assumed the changed limit was written down nowhere. It is in no document, but the old value is the removed line in the diff, and Qodo read it there. Qodo's PR summary called the change an enhancement; only the code review, comparing the diff with the ticket, raised it. That catch depends on the ticket. It counts under the fixed rule and the case record says so.
+  - **FF-0007 was a comment-only control.** Qodo posted "no issues found" within a second of its summary, but its API reported `review_effort: skip`, so the code was not reviewed. It is recorded as review incomplete, not clean, and the case is replaced by FF-0008, a behaviour-neutral refactor that Qodo did review (lite effort, 0 findings).
+  - **Ticket text was generalized before these cases ran.** Dry runs showed that some template tickets named the element a planted change breaks. They now describe the intended change only.
+- **Tests and Qodo evidence.** Each case has a proof test that fails on the planted change and passes on the base, passing public tests, a recorded head commit equal to the injection commit, and the raw Qodo comments, API answers and configuration state in private storage. Two findings in two cases (FF-0005, FF-0006) were true observations about missing tests on the same line as the planted change. They are recorded as observations, not second detections.
+- **Lesson or decision.**
+  - **"No issues found" is not a result until the effort says the code was read.** The review-wait step already refuses to call a skipped review clean; FF-0007 is the first time it mattered.
+  - **A control has to touch code.** A comment-only change is triaged out, so it cannot measure false alarms.
+  - **Requirement gaps carry real catches.** Two of four detections came from comparing the diff to the ticket. A reviewer without the ticket would not have the same chance, which is a reason to keep the ticket plain and general.
+- **Remaining risk.** The controls cannot yet go through `verdict` and `case:build` (ticket #162), so their records were written by hand; the public case schema allows only a clean control, so an inconclusive one cannot be published as it stands; and the first injection attempt on a fresh branch crashed the test runner twice, passing on retry both times. None of these changes a result. Every case so far gave Qodo a ticket, and a reviewer working without one is not measured.
