@@ -21,7 +21,16 @@
  * Exit codes of the gate: 0 covered, 1 not covered, 2 could not check (anything else counts as 2).
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { firstLine, isEntry, readStdin } from "./hook-io.ts";
@@ -54,6 +63,9 @@ export interface Deps {
   saveLast: (key: string, sha: string) => void;
   /** Forgets a call's record once it has been judged. */
   clearLast: (key: string) => void;
+  /** Whether this commit was already judged (by this or another call), so it is warned about once. */
+  wasJudged: (sha: string) => boolean;
+  markJudged: (sha: string) => void;
 }
 
 /** Names one tool call: Claude Code's own id for it, so commands running in parallel each keep their own
@@ -91,6 +103,13 @@ export function decide(stdin: string, deps: Deps, env: Record<string, string | u
   }
   if (last === null || last === head.sha) return NONE;
   if (!/^commit/.test(head.lastAction)) return NONE;
+  // Several commands that started at the same HEAD all see a commit one of them made: judge it once.
+  try {
+    if (deps.wasJudged(head.sha)) return NONE;
+    deps.markJudged(head.sha);
+  } catch {
+    // If this cannot be recorded, a commit may be warned about twice; that is the safer way to be wrong.
+  }
 
   let result: GateRun;
   try {
@@ -135,11 +154,14 @@ function fileFor(dir: string, key: string): string {
   return join(dir, key.replace(/[^A-Za-z0-9_-]/g, "_"));
 }
 
-/** Keeps the newest records only, so abandoned ones (a call that never finished) cannot pile up. */
-function prune(dir: string, keep = 100): void {
+/** Removes records more than a day old: a call that never finished. A call still running is never newer-evicted,
+ * only a record nobody has touched for a day goes. */
+function prune(dir: string, maxAgeMs = 24 * 60 * 60 * 1000): void {
   try {
-    const files = readdirSync(dir).map((name) => ({ name, at: statSync(join(dir, name)).mtimeMs }));
-    for (const f of files.sort((x, y) => y.at - x.at).slice(keep)) rmSync(join(dir, f.name), { force: true });
+    const now = Date.now();
+    for (const name of readdirSync(dir)) {
+      if (now - statSync(join(dir, name)).mtimeMs > maxAgeMs) rmSync(join(dir, name), { force: true });
+    }
   } catch {
     // best effort
   }
@@ -238,6 +260,12 @@ export function realDeps(projectDir: string, stdin: string): Deps {
     },
     clearLast: (key) => {
       if (dir) rmSync(fileFor(dir, key), { force: true });
+    },
+    wasJudged: (sha) => (dir ? existsSync(fileFor(dir, `judged-${sha}`)) : false),
+    markJudged: (sha) => {
+      if (!dir) return;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(fileFor(dir, `judged-${sha}`), sha + String.fromCharCode(10));
     },
   };
 }

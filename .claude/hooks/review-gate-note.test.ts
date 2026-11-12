@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +47,8 @@ function world(
     clearLast: (key) => {
       cleared.push(key);
     },
+    wasJudged: () => false,
+    markJudged: () => {},
     saveLast: (_key, sha) => {
       saved.push(sha);
     },
@@ -59,6 +61,7 @@ function memory(initial: HeadState) {
   const mem = {
     head: initial,
     records: new Map<string, string>(),
+    judged: new Set<string>(),
     asked: [] as string[],
     deps: undefined as unknown as Deps,
   };
@@ -75,6 +78,10 @@ function memory(initial: HeadState) {
     },
     clearLast: (key) => {
       mem.records.delete(key);
+    },
+    wasJudged: (sha) => mem.judged.has(sha),
+    markJudged: (sha) => {
+      mem.judged.add(sha);
     },
   };
   return mem;
@@ -222,6 +229,16 @@ describe("recordHead: a commit made between commands is never judged", () => {
     expect(mem.asked).toEqual(["head1"]);
   });
 
+  it("warns once about a commit that two parallel commands both see", () => {
+    const mem = memory({ sha: "head0", lastAction: "checkout: moving from a to b" });
+    recordHead(payload("Bash", undefined, "A"), mem.deps, {});
+    recordHead(payload("Bash", undefined, "B"), mem.deps, {}); // B starts at the same HEAD as A
+    mem.head = { sha: "head1", lastAction: "commit: made by A" };
+    expect(decide(payload("Bash", undefined, "A"), mem.deps, {}).kind).toBe("note");
+    expect(decide(payload("Bash", undefined, "B"), mem.deps, {})).toEqual({ kind: "none" });
+    expect(mem.asked).toEqual(["head1"]);
+  });
+
   it("records nothing in a factory run, when switched off, for another tool or another repository", () => {
     for (const [stdin, env, inProject] of [
       [payload(), { FAULTFORGE_FACTORY_RUN: "1" }, true],
@@ -307,12 +324,27 @@ describe("on a real git repository", () => {
     expect(deps.readLast("../../escape")).toBe("sha-x");
   });
 
-  it("keeps only the newest records, so abandoned calls cannot pile up", () => {
+  it("never evicts a record a running command may still need, only ones untouched for a day", () => {
     repo();
     const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
+    deps.saveLast("long-running", "sha-start");
     for (let i = 0; i < 130; i++) deps.saveLast(`call-${i}`, `sha-${i}`);
-    expect(readdirSync(join(dir, ".git", "faultforge-gate-heads")).length).toBeLessThanOrEqual(100);
-    expect(deps.readLast("call-129")).toBe("sha-129");
+    expect(deps.readLast("long-running")).toBe("sha-start");
+    const folder = join(dir, ".git", "faultforge-gate-heads");
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    utimesSync(join(folder, "call-0"), old, old);
+    deps.saveLast("trigger", "sha-t");
+    expect(deps.readLast("call-0")).toBeNull();
+    expect(deps.readLast("call-1")).toBe("sha-1");
+  });
+
+  it("remembers which commits were judged, per repository", () => {
+    repo();
+    const deps = realDeps(dir, JSON.stringify({ cwd: dir }));
+    expect(deps.wasJudged("abc123")).toBe(false);
+    deps.markJudged("abc123");
+    expect(deps.wasJudged("abc123")).toBe(true);
+    expect(deps.wasJudged("def456")).toBe(false);
   });
 
   it("is null outside a repository", () => {

@@ -77,7 +77,7 @@ It only warns. It never blocks or undoes a commit, and any failure of a hook end
 It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when it moved for
 another reason (a checkout, a pull), in other repositories, in unattended factory runs, and when
 `FAULTFORGE_GATE=off` is set. The records are small files in the git folder (`faultforge-gate-heads/`), one
-per call and cleared once judged (the newest 100 are kept), so they are never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
+per call and cleared once judged (an untouched record is removed after a day), so they are never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
 skips, shows the note too: the note says what it knows.
 
 What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
