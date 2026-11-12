@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
  * `gh repos/o/r/pulls` is not a command: `gh` prints its help text and exits non-zero. The REST endpoints
  * go through `gh api <path>`, and a refactor once dropped the `api` at one call site (#168). That call runs
  * only after an agent finishes, and no unit test reached it with real arguments, so this test reads the
- * sources instead: a REST path as the first argument of `gh(...)` or `ghJson(...)` fails the build.
+ * sources instead: a REST path written as a string as the first argument of `gh(...)` or `ghJson(...)` fails
+ * the build. That is the form that failed. A path held in a variable, or a call in a file outside this folder,
+ * is not caught: `ghApiJson` is the way to call an endpoint, and this test only backs that rule up.
  */
 const SRC = dirname(fileURLToPath(import.meta.url));
 
