@@ -37,6 +37,7 @@ import {
   prUrlFromToolResult,
   prViewProblems,
   pullsSince,
+  realDeps,
   realHookRunner,
   redact,
   relabelWith,
@@ -1893,5 +1894,37 @@ describe("withCleanupFailure: a failed start's cleanup problems keep the hook re
   it("returns the original error untouched when cleanup left nothing behind", () => {
     const original = new HooksCheckError("x", report);
     expect(withCleanupFailure(original, [])).toBe(original);
+  });
+});
+
+describe("hooks-checked reaches the run's saved and published log (#126)", () => {
+  const LAB = join(import.meta.dirname, "../../..");
+  it("the real log writer appends the event, whole, to the run's .jsonl file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "runs-hooks-"));
+    const before = process.env.FAULTFORGE_RUNS_DIR;
+    process.env.FAULTFORGE_RUNS_DIR = dir;
+    try {
+      const event = { t: "2026-11-12T10:00:00.000Z", event: "hooks-checked", ok: true, slowestMs: 40, problems: [] };
+      realDeps(FACTORY, OPTIONS).record("20261112-100000-lab-1", event);
+      const lines = readFileSync(join(dir, "20261112-100000-lab-1.jsonl"), "utf8").trim().split("\n");
+      expect(lines.map((l) => JSON.parse(l))).toEqual([event]);
+    } finally {
+      if (before === undefined) delete process.env.FAULTFORGE_RUNS_DIR;
+      else process.env.FAULTFORGE_RUNS_DIR = before;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the workflow publishes every run log except the agent's transcript, so the event is public", () => {
+    const workflow = readFileSync(join(LAB, ".github/workflows/factory.yml"), "utf8");
+    expect(workflow).toContain("${{ runner.temp }}/faultforge-runs/*.jsonl");
+    expect(workflow).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
+  });
+
+  it("docs/factory-trigger.md names the event where it describes the self-test", () => {
+    const docs = readFileSync(join(LAB, "docs/factory-trigger.md"), "utf8");
+    const selfTest = docs.indexOf("self-test");
+    expect(selfTest).toBeGreaterThan(-1);
+    expect(docs.slice(selfTest)).toContain("`hooks-checked`");
   });
 });
