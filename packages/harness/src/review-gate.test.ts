@@ -154,8 +154,11 @@ describe("checkTree", () => {
     expect(checkTree(TREE_A, [other], { repo: "owner/other" }).covered).toBe(true);
   });
 
-  it("keeps a review that does not say which repository, so older saves still count", () => {
-    expect(checkTree(TREE_A, [record({ repo: null })], { repo: "owner/this" }).covered).toBe(true);
+  it("keeps a review that does not say which repository only when its base commit is in this checkout", () => {
+    const unlabelled = record({ repo: null });
+    expect(checkTree(TREE_A, [unlabelled], { repo: "owner/this", hasCommit: () => true }).covered).toBe(true);
+    expect(checkTree(TREE_A, [unlabelled], { repo: "owner/this", hasCommit: () => false }).covered).toBe(false);
+    expect(checkTree(TREE_A, [record({ repo: null, baseSha: null })], { hasCommit: () => true }).covered).toBe(false);
   });
 
   it("ignores a review made against a base commit this checkout does not have", () => {
@@ -193,7 +196,7 @@ describe("readReviewRecords", () => {
     const when = new Date("2026-11-11T09:00:00Z");
     utimesSync(join(dir, "local-reviews", "r1", "review.json"), when, when);
 
-    const records = readReviewRecords(dir);
+    const { records } = readReviewRecords(dir);
     expect(records.map((r) => r.trees[0]).sort()).toEqual([TREE_A, TREE_B]);
     expect(records.find((r) => r.trees[0] === TREE_A)?.at).toBe(when.getTime());
   });
@@ -215,7 +218,7 @@ describe("readReviewRecords", () => {
       JSON.stringify({ repo: "o/r", diffBuilt: true, excludedFiles: ["img.bin"], skippedFiles: [{ file: "img.bin" }] }),
     );
 
-    const records = readReviewRecords(dir);
+    const { records } = readReviewRecords(dir);
     expect(records.find((r) => r.trees[0] === TREE_A)).toMatchObject({ complete: true, repo: "o/r" });
     expect(records.find((r) => r.trees[0] === TREE_B)).toMatchObject({ complete: false, repo: "o/r" });
   });
@@ -227,7 +230,7 @@ describe("readReviewRecords", () => {
       join(dir, "split.json"),
       JSON.stringify({ repo: "o/r", diffBuilt: false, excludedFiles: null, skippedFiles: null }),
     );
-    expect(readReviewRecords(dir)[0]?.complete).toBe(false);
+    expect(readReviewRecords(dir).records[0]?.complete).toBe(false);
   });
 
   it("ignores pull-request reviews saved under reviews/, even when they record a tree", () => {
@@ -237,12 +240,36 @@ describe("readReviewRecords", () => {
       join(dir, "reviews", "faultforge-pr1", "abc.review.json"),
       JSON.stringify(payload({ checkpointTree: TREE_A })),
     );
-    expect(readReviewRecords(dir)).toEqual([]);
+    expect(readReviewRecords(dir).records).toEqual([]);
+  });
+
+  it("counts a review as incomplete when its split.json exists but cannot be parsed", () => {
+    dir = mkdtempSync(join(tmpdir(), "review-gate-"));
+    writeFileSync(join(dir, "review.json"), JSON.stringify(payload({ snapshotTree: TREE_A })));
+    writeFileSync(join(dir, "split.json"), "{ not json");
+    expect(readReviewRecords(dir).records[0]?.complete).toBe(false);
+  });
+
+  it("still counts a review with no split.json at all, as older saves have none", () => {
+    dir = mkdtempSync(join(tmpdir(), "review-gate-"));
+    writeFileSync(join(dir, "review.json"), JSON.stringify(payload({ snapshotTree: TREE_A })));
+    expect(readReviewRecords(dir).records[0]?.complete).toBe(true);
+  });
+
+  it("reports a folder it cannot list instead of silently reading less", () => {
+    dir = mkdtempSync(join(tmpdir(), "review-gate-"));
+    // A file where a folder is expected cannot be listed on any platform.
+    writeFileSync(join(dir, "not-a-folder"), "x");
+    const result = readReviewRecords(join(dir, "not-a-folder"));
+    expect(result.records).toEqual([]);
+    expect(result.problems[0]).toMatch(/cannot list/);
   });
 
   it("is empty for a folder that does not exist", () => {
     dir = mkdtempSync(join(tmpdir(), "review-gate-"));
-    expect(readReviewRecords(join(dir, "missing"))).toEqual([]);
+    const result = readReviewRecords(join(dir, "missing"));
+    expect(result.records).toEqual([]);
+    expect(result.problems).toHaveLength(1);
   });
 });
 

@@ -43,6 +43,7 @@ export interface ReviewRecord {
 }
 
 const HASH = /^[0-9a-f]{40}$/;
+const LINE_BREAK = String.fromCharCode(10);
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -110,16 +111,17 @@ export function extractReviewRecord(
 const NOT_A_RESULT = /^(poll|result|submit|cancel)(-\d+)?\.raw\.json$/;
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
-function walk(dir: string, out: string[]): void {
+function walk(dir: string, out: string[], problems: string[]): void {
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    problems.push(`cannot list ${dir}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
     return;
   }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) walk(path, out);
+    if (entry.isDirectory()) walk(path, out, problems);
     else if (entry.name.endsWith(".json") && !NOT_A_RESULT.test(entry.name)) out.push(path);
   }
 }
@@ -128,23 +130,27 @@ function walk(dir: string, out: string[]): void {
  * The scope counts as incomplete when the diff was never built, or left any file out. */
 function readSidecar(reviewFile: string): Sidecar | null {
   if (basename(reviewFile) !== "review.json") return null;
+  const unknownScope: Sidecar = { repo: null, scopeComplete: false };
   try {
     const split = asObject(JSON.parse(readFileSync(join(dirname(reviewFile), "split.json"), "utf8")));
-    if (!split) return null;
+    if (!split) return unknownScope;
     const left = (v: unknown) => (Array.isArray(v) ? v.length : 1);
     const scopeComplete =
       split.diffBuilt !== false && left(split.excludedFiles ?? []) === 0 && left(split.skippedFiles ?? []) === 0;
     return { repo: typeof split.repo === "string" ? split.repo : null, scopeComplete };
-  } catch {
-    return null;
+  } catch (error) {
+    // No split.json at all is an older save. One that exists but cannot be read or parsed is not: it
+    // may have recorded a file that never reached Qodo, so the review cannot count as complete.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : unknownScope;
   }
 }
 
 /** Every saved review with a recorded tree under `root`, however deep. A file that is not JSON, is too
  * large, or holds no review is skipped, never an error: the evidence folder also holds other things. */
-export function readReviewRecords(root: string): ReviewRecord[] {
+export function readReviewRecords(root: string): { records: ReviewRecord[]; problems: string[] } {
   const files: string[] = [];
-  walk(root, files);
+  const problems: string[] = [];
+  walk(root, files, problems);
   const records: ReviewRecord[] = [];
   for (const file of files) {
     try {
@@ -161,11 +167,13 @@ export function readReviewRecords(root: string): ReviewRecord[] {
         readSidecar(file),
       );
       if (rec) records.push(rec);
-    } catch {
-      // not JSON, or unreadable: not a review
+    } catch (error) {
+      // Not JSON is not a review. A file git cannot read might have been one: say so.
+      if (!(error instanceof SyntaxError))
+        problems.push(`cannot read ${file}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
     }
   }
-  return records;
+  return { records, problems };
 }
 
 export interface GateScope {
@@ -192,7 +200,8 @@ export function checkTree(tree: string, allRecords: ReviewRecord[], scope: GateS
   const records = allRecords.filter(
     (r) =>
       !(scope.repo && r.repo && r.repo !== scope.repo) &&
-      !(scope.hasCommit && r.baseSha && !scope.hasCommit(r.baseSha)),
+      // Without a repository name, the base commit is the only link: it must be one this checkout holds.
+      !(scope.hasCommit && !(r.baseSha && scope.hasCommit(r.baseSha))),
   );
   const sameTree = records.filter((r) => r.trees.includes(tree));
   const byNewest = (a: ReviewRecord, b: ReviewRecord) => b.at - a.at;
@@ -270,7 +279,13 @@ export function parseArgs(argv: string[]): Args | null {
 }
 
 function main(): number {
-  const factory = loadFactory();
+  let factory: ReturnType<typeof loadFactory>;
+  try {
+    factory = loadFactory();
+  } catch (error) {
+    console.error(`could not read factory.json: ${(error as Error).message.split(LINE_BREAK)[0]}`);
+    return 2;
+  }
   const args = parseArgs(process.argv.slice(2));
   if (!args) {
     console.error(`usage: npm run review:gate -- <${Object.keys(factory.repos).join("|")}> [--commit <sha>]`);
@@ -296,7 +311,7 @@ function main(): number {
     console.error(`could not read the tree: git answered "${tree}"`);
     return 2;
   }
-  const records = readReviewRecords(evidence);
+  const { records, problems } = readReviewRecords(evidence);
   if (records.length === 0) {
     console.error(`no saved review with a recorded tree under ${evidence}`);
     return 2;
@@ -309,6 +324,13 @@ function main(): number {
     console.log(`Covered: ${what} (${tree}) was reviewed, ${describeAge(result.by.at, now)}, in ${result.by.source}.`);
     console.log("This says a complete review saw this tree, not that its findings were fixed.");
     return 0;
+  }
+  // A covering review would have been found even with part of the folder unreadable, but "not covered"
+  // is only an answer if everything was read: otherwise the missing review may be in what was not.
+  if (problems.length > 0) {
+    console.error(`could not read all of the evidence, so "not covered" cannot be trusted:`);
+    for (const problem of problems.slice(0, 5)) console.error(`  ${problem}`);
+    return 2;
   }
   console.log(`Not covered: ${what} (${tree}); ${result.reason}.`);
   if (result.nearest) {

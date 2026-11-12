@@ -25,7 +25,7 @@ A saved review recorded this exact tree, and all of these hold: Qodo said its co
 it reported its finding list as complete, it did not skip the review, and (when `split.json` sits
 beside it) every changed file reached Qodo. These are the same conditions under which `review:local`
 itself does not exit 3. A review made for another repository, or against a base commit this checkout
-does not have, is ignored, even if the trees are equal. The review can be from any time: if the files are identical, an old review
+does not have, is ignored, even if the trees are equal. A review that names no repository counts only if its base commit is in this checkout. If `split.json` exists but cannot be read, the review counts as incomplete. If part of the evidence folder cannot be read, "not covered" is exit 2, never an answer. The review can be from any time: if the files are identical, an old review
 still saw them.
 
 ## What it does not say
