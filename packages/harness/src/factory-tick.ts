@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -815,6 +816,182 @@ export function removeTrustedCheckout(verifyRoot: string): string | null {
   }
 }
 
+/** The external calls `verifyPrWith` needs, so a test can hand it fakes for `gh` and `npm` while still
+ * exercising the real `buildTrustedCheckout` (a real git clone of a real `main`) underneath it. */
+export interface VerifyPrIo {
+  ghJson: <T>(...args: string[]) => T;
+  git: (cwd: string, ...args: string[]) => string;
+  npm: (cwd: string, args: string[], timeoutMs?: number) => { status: number | null; output: string };
+}
+
+/**
+ * Checks one pull request the agent says is ready: that Qodo's review of its head is complete with no
+ * action-required finding open (`review:wait`), and that its own new or changed tests actually catch
+ * the change (`revert:check`). Both run from the same freshly fetched checkout of `main`, built once by
+ * `buildTrustedCheckout` and removed when this call returns - never from `ws.lab`, the agent's own
+ * writable worktree. Otherwise a committed edit to `review-wait.ts`, `revert-check.ts` or a module
+ * either imports, on the very pull request being checked, could change the verdict the runner reads
+ * about its own review (#161, #170).
+ *
+ * `trustedRemoteUrl` turns the harness's GitHub address into the address `buildTrustedCheckout` fetches
+ * from; a test can pass a local bare repository's path instead, so the whole check runs with no network
+ * and no GitHub credentials, the same way `buildTrustedCheckout`'s own tests do (#161).
+ */
+export function verifyPrWith(
+  io: VerifyPrIo,
+  factory: FactoryConfig,
+  runsRoot: string,
+  trustedRemoteUrl: (github: string) => string,
+  ws: Workspace,
+  repoKey: string,
+  pr: number,
+): Verification {
+  const repo = repoConfig(factory, repoKey);
+  const { github } = repo;
+  const first = io.ghJson<{ headRefOid: string; headRefName: string }>(
+    "pr",
+    "view",
+    String(pr),
+    "--repo",
+    github,
+    "--json",
+    "headRefOid,headRefName",
+  );
+  // The agent's branch tip is what it pushed; GitHub's view of the head can lag a push.
+  const dir = repo.path === "." ? ws.lab : resolve(ws.lab, repo.path);
+  let localTip: string | null = null;
+  try {
+    localTip = io.git(dir, "rev-parse", "--verify", `refs/heads/${String(first.headRefName)}`);
+  } catch {
+    localTip = null;
+  }
+  const pushed = commitToVerify(localTip, String(first.headRefOid));
+  if (!pushed) return { problems: ["no commit id for the pull request's head"] };
+
+  const runId = basename(ws.root);
+  const verifyRoot = join(runsRoot, `verify-${runId}-${repoKey}-pr${pr}`);
+  rmSync(verifyRoot, { recursive: true, force: true });
+  // The repo whose `factory.json` path is "." is the harness itself: its GitHub address, never any
+  // checkout's own (mutable, untracked) `origin`, says where the trusted fetch must come from.
+  const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
+  if (!labRepo)
+    return { problems: ['factory.json names no repo at path ".", so there\'s nowhere trusted to fetch main from'] };
+  let trustedLab: string;
+  try {
+    trustedLab = buildTrustedCheckout(
+      verifyRoot,
+      basename(LAB_ROOT),
+      trustedRemoteUrl(labRepo.github),
+      repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
+    );
+  } catch (error) {
+    return { problems: [error instanceof Error ? error.message : String(error)] };
+  }
+
+  const problems: string[] = [];
+  let revertCheckRecord: string | null = null;
+  try {
+    // --commit: it waits until GitHub shows the pushed commit, then for that commit's review.
+    const review = io.npm(trustedLab, [
+      "run",
+      "-s",
+      "review:wait",
+      "--",
+      repoKey,
+      String(pr),
+      "--commit",
+      pushed,
+      "--timeout",
+      "5",
+    ]);
+    const short = pushed.slice(0, 7);
+    // Copied over whatever review:wait saved before this call's own trusted checkout is removed, win
+    // or lose: a timed-out or skipped review still writes which Qodo comments it saw and the raw API
+    // answers, which are worth keeping even when the PR doesn't count as verified (Qodo on PR 171).
+    // The whole per-PR folder, not just the final record: this is the same permanent path
+    // `saveEvidence` already carries to the private repo.
+    const trustedReviewDir = join(trustedLab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+    const reviewRecordFile = join(trustedReviewDir, `${short}.review.json`);
+    if (existsSync(trustedReviewDir)) {
+      const permanentReviewDir = join(ws.lab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+      try {
+        mkdirSync(permanentReviewDir, { recursive: true });
+        cpSync(trustedReviewDir, permanentReviewDir, { recursive: true });
+      } catch (error) {
+        problems.push(
+          `couldn't save review:wait's evidence where the run log points: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const meaning: Record<number, string> = {
+      1: "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
+      2: "review:wait couldn't run",
+      3: "Qodo skipped the review of the head commit",
+    };
+    if (review.status !== 0)
+      return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`, ...problems] };
+    // Read again after the review: state, head and checks must all be of the pushed commit.
+    const view = io.ghJson<Parameters<typeof prViewProblems>[0]>(
+      "pr",
+      "view",
+      String(pr),
+      "--repo",
+      github,
+      "--json",
+      "state,headRefOid,statusCheckRollup",
+    );
+    problems.push(...prViewProblems(view, pushed));
+    // A complete review can still have findings open: only none action-required counts as ready.
+    if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
+    else {
+      const open = openActionRequired(JSON.parse(readFileSync(reviewRecordFile, "utf8")));
+      if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
+    }
+
+    // Prove the tests, after the review check: the PR's own new or changed tests must fail without
+    // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
+    // Same trusted checkout as review:wait, for the same reason (#161).
+    const revertRecordFile = join(
+      trustedLab,
+      factory.evidence,
+      "revert-checks",
+      `${repoKey}-pr${pr}`,
+      `${short}.revert-check.json`,
+    );
+    const permanentRecordFile = join(
+      ws.lab,
+      factory.evidence,
+      "revert-checks",
+      `${repoKey}-pr${pr}`,
+      `${short}.revert-check.json`,
+    );
+    const revert = io.npm(
+      trustedLab,
+      ["run", "-s", "revert:check", "--", repoKey, String(pr)],
+      REVERT_CHECK_TIMEOUT_MS,
+    );
+    // A damaged or missing record reads as no result, never throws: the rest of this verdict (the
+    // review checks above) must still reach the caller.
+    const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
+    if (existsSync(revertRecordFile)) {
+      try {
+        mkdirSync(dirname(permanentRecordFile), { recursive: true });
+        copyFileSync(revertRecordFile, permanentRecordFile);
+        revertCheckRecord = permanentRecordFile;
+      } catch (error) {
+        problems.push(
+          `couldn't save revert:check's record where the run log points: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
+  } finally {
+    const leftover = removeTrustedCheckout(verifyRoot);
+    if (leftover) console.error(leftover);
+  }
+  return { problems, revertCheckRecord };
+}
+
 export interface WindowActivity {
   /** Comments on any issue or PR, and inline review comments, by the agent's login. */
   comments: { user: string; created_at: string; url: string }[];
@@ -1431,7 +1608,10 @@ function gitLong(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-function npm(
+/** Runs an npm script with one time limit, the cross-platform way: a plain `spawnSync("npm", ...)`
+ * can't find `npm.cmd` on Windows without a shell (exported so `verifyPrWith`'s own tests can run real
+ * npm scripts, on Linux and Windows alike, instead of each re-implementing this). */
+export function npm(
   cwd: string,
   args: string[],
   timeoutMs: number = LONG_CALL_TIMEOUT_MS,
@@ -1921,147 +2101,15 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       });
     },
     verifyPr(ws, repoKey, pr) {
-      const repo = repoConfig(factory, repoKey);
-      const { github } = repo;
-      const first = ghJson<{ headRefOid: string; headRefName: string }>(
-        "pr",
-        "view",
-        String(pr),
-        "--repo",
-        github,
-        "--json",
-        "headRefOid,headRefName",
-      );
-      // The agent's branch tip is what it pushed; GitHub's view of the head can lag a push.
-      const dir = repo.path === "." ? ws.lab : resolve(ws.lab, repo.path);
-      let localTip: string | null = null;
-      try {
-        localTip = git(dir, "rev-parse", "--verify", `refs/heads/${String(first.headRefName)}`);
-      } catch {
-        localTip = null;
-      }
-      const pushed = commitToVerify(localTip, String(first.headRefOid));
-      if (!pushed) return { problems: ["no commit id for the pull request's head"] };
-      // review:wait runs in the run's worktree, so its evidence lands in the run's private branch.
-      // --commit: it waits until GitHub shows the pushed commit, then for that commit's review.
-      const review = npm(ws.lab, [
-        "run",
-        "-s",
-        "review:wait",
-        "--",
+      return verifyPrWith(
+        { ghJson, git, npm },
+        factory,
+        runs,
+        (github) => `https://github.com/${github}.git`,
+        ws,
         repoKey,
-        String(pr),
-        "--commit",
-        pushed,
-        "--timeout",
-        "5",
-      ]);
-      const meaning: Record<number, string> = {
-        1: "Qodo's review of the agent's last commit isn't complete, or the pull request's head never became it",
-        2: "review:wait couldn't run",
-        3: "Qodo skipped the review of the head commit",
-      };
-      if (review.status !== 0)
-        return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`] };
-      // Read again after the review: state, head and checks must all be of the pushed commit.
-      const view = ghJson<Parameters<typeof prViewProblems>[0]>(
-        "pr",
-        "view",
-        String(pr),
-        "--repo",
-        github,
-        "--json",
-        "state,headRefOid,statusCheckRollup",
+        pr,
       );
-      const problems = prViewProblems(view, pushed);
-      // A complete review can still have findings open: only none action-required counts as ready.
-      const record = join(
-        ws.lab,
-        factory.evidence,
-        "reviews",
-        `${repoKey}-pr${pr}`,
-        `${pushed.slice(0, 7)}.review.json`,
-      );
-      if (!existsSync(record)) problems.push("review:wait saved no review record for the head commit");
-      else {
-        const open = openActionRequired(JSON.parse(readFileSync(record, "utf8")));
-        if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
-      }
-      // Prove the tests, after the review check: the PR's own new or changed tests must fail without
-      // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
-      // Run from a fresh checkout of main, never from `ws.lab` (the agent's own writable worktree):
-      // a committed edit to revert-check.ts or a module it imports, in the very pull
-      // request being checked, would otherwise run as part of its own verdict. Building this worktree
-      // after the agent has already stopped means the agent never had the chance to touch it either
-      // (#161; the dirty-worktree guard it replaces was Qodo on PR 155).
-      const runId = basename(ws.root);
-      const verifyRoot = join(runs, `verify-${runId}-${repoKey}-pr${pr}`);
-      rmSync(verifyRoot, { recursive: true, force: true });
-      // The repo whose `factory.json` path is "." is the harness itself: its GitHub address, never any
-      // checkout's own (mutable, untracked) `origin`, says where the trusted fetch must come from.
-      const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
-      let trustedLab: string | null = null;
-      let revertCheckRecord: string | null = null;
-      if (!labRepo) {
-        problems.push('factory.json names no repo at path ".", so there\'s nowhere trusted to fetch main from');
-      } else {
-        try {
-          trustedLab = buildTrustedCheckout(
-            verifyRoot,
-            basename(LAB_ROOT),
-            `https://github.com/${labRepo.github}.git`,
-            repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
-          );
-        } catch (error) {
-          problems.push(error instanceof Error ? error.message : String(error));
-        }
-      }
-      if (trustedLab) {
-        const revertRecordFile = join(
-          trustedLab,
-          factory.evidence,
-          "revert-checks",
-          `${repoKey}-pr${pr}`,
-          `${pushed.slice(0, 7)}.revert-check.json`,
-        );
-        // Where the un-torn-down evidence lives: the run's own worktree, the same place this record
-        // always lived before, which `saveEvidence` already carries to the private repo. The trusted
-        // checkout is removed at the end of this very call, so the run log must point here, never at
-        // the scratch copy's own path (Qodo on PR 167).
-        const permanentRecordFile = join(
-          ws.lab,
-          factory.evidence,
-          "revert-checks",
-          `${repoKey}-pr${pr}`,
-          `${pushed.slice(0, 7)}.revert-check.json`,
-        );
-        try {
-          const revert = npm(
-            trustedLab,
-            ["run", "-s", "revert:check", "--", repoKey, String(pr)],
-            REVERT_CHECK_TIMEOUT_MS,
-          );
-          // A damaged or missing record reads as no result, never throws: the rest of this verdict
-          // (the review checks above) must still reach the caller.
-          const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
-          if (existsSync(revertRecordFile)) {
-            try {
-              mkdirSync(dirname(permanentRecordFile), { recursive: true });
-              copyFileSync(revertRecordFile, permanentRecordFile);
-              revertCheckRecord = permanentRecordFile;
-            } catch (error) {
-              problems.push(
-                `couldn't save revert:check's record where the run log points: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
-          problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
-        } finally {
-          const leftover = removeTrustedCheckout(verifyRoot);
-          if (leftover) console.error(leftover);
-        }
-      }
-      return { problems, revertCheckRecord };
     },
     record(runId, event) {
       appendFileSync(join(runs, `${runId}.jsonl`), `${JSON.stringify(event)}\n`);
