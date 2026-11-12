@@ -733,36 +733,48 @@ export function readJsonRecord(file: string): unknown | null {
   }
 }
 
-/** True when `path` is registered as one of `sourceRepo`'s worktrees. */
-function worktreeRegistered(sourceRepo: string, path: string): boolean {
-  return git(sourceRepo, "worktree", "list", "--porcelain")
-    .split("\n")
-    .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(path));
+/** No inherited git or npm config at all: not the user's global `~/.gitconfig` or `~/.npmrc`, not
+ * system-wide config either. `buildTrustedCheckout`'s whole point is a checkout nothing the agent did
+ * can redirect; a `url.*.insteadOf` rule or a registry override, sitting outside any commit a reviewer
+ * sees, would otherwise do exactly that even to a literal URL (Qodo on PR 167, round 2). */
+function isolatedEnv(home: string): NodeJS.ProcessEnv {
+  return { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1" };
+}
+
+/** `git`, with no config inherited beyond what `isolatedEnv` allows. */
+function gitIsolated(cwd: string, home: string, args: string[], timeoutMs: number): string {
+  return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], timeoutMs, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: isolatedEnv(home),
+  }).trim();
 }
 
 /**
- * A worktree of `main`, fresh and agent-untouched, built at `<verifyRoot>/<labDirName>`: the trusted
- * copy of the harness `verifyPr` runs `revert:check` from, so a pull request that edits
- * `revert-check.ts` or a module it imports is judged by what's merged into `main`, never by what that
- * same pull request's own branch holds in the agent's writable worktree (#161).
+ * A freshly initialized git repository, checked out at `remoteUrl`'s `main`, built at
+ * `<verifyRoot>/<labDirName>`: the trusted copy of the harness `verifyPr` runs `revert:check` from, so
+ * a pull request that edits `revert-check.ts` or a module it imports is judged by what's merged into
+ * `main`, never by what that same pull request's own branch holds in the agent's writable worktree
+ * (#161).
  *
- * Fetches `remoteUrl` by its literal address, never a named remote: `sourceRepo`'s own `origin` is
- * `.git/config`, which the agent's run never commits or pushes anywhere a diff would show it, so a
- * tampered remote there would never be caught the way a tampered `factory.json` would be. `remoteUrl`
- * instead comes from the caller's own `factory.json` reading (Qodo on PR 167). Its packages are a real
- * `npm ci` against the checked-out lockfile, never shared in from `sourceRepo`'s own `node_modules`:
- * that folder is never part of any commit a reviewer sees, so an agent's edit to an installed
- * dependency (`tsx`, a module `revert-check.ts` imports) would otherwise run as if it were trusted,
- * even though the source it was fetched alongside never was (Qodo on PR 167). When `sibling` is given
- * (a repo whose `factory.json` path isn't `.`, such as the target), its real checkout is symlinked in
- * at the same relative path, so `revert-check.ts`'s own path arithmetic (relative to wherever it's
- * running from) finds it exactly as it would in the agent's worktree.
+ * A fresh `git init`, not a worktree of some existing checkout: that checkout's own local config
+ * (`.git/config`) could carry a `url.*.insteadOf` rule an agent set without ever touching a tracked
+ * file, silently redirecting even this literal `remoteUrl` to an attacker-controlled `main`. A brand
+ * new repository, run with no inherited git or npm config at all (`isolatedEnv`), has nothing like
+ * that to inherit (Qodo on PR 167, round 2). `remoteUrl` itself comes from the caller's own
+ * `factory.json` reading, a tracked file any edit to would show up in the pull request's own diff
+ * (Qodo on PR 167). Its packages are a real `npm ci` against the checked-out lockfile, never shared in
+ * from some other checkout's own `node_modules`: that folder is never part of any commit a reviewer
+ * sees, so an agent's edit to an installed dependency (`tsx`, a module `revert-check.ts` imports)
+ * would otherwise run as if it were trusted, even though the source it was fetched alongside never
+ * was (Qodo on PR 167). When `sibling` is given (a repo whose `factory.json` path isn't `.`, such as
+ * the target), its real checkout is symlinked in at the same relative path, so `revert-check.ts`'s own
+ * path arithmetic (relative to wherever it's running from) finds it exactly as it would in the
+ * agent's worktree.
  *
- * Throws, with a clear message, when the checkout can't be built - cleaning up anything already made
- * first, so a failure here never leaves a worktree registered against `sourceRepo`.
+ * Throws, with a clear message, when the checkout can't be built - removing anything already made
+ * first, so a failure here never leaves anything behind to clean up by hand.
  */
 export function buildTrustedCheckout(
-  sourceRepo: string,
   verifyRoot: string,
   labDirName: string,
   remoteUrl: string,
@@ -770,60 +782,37 @@ export function buildTrustedCheckout(
 ): string {
   const lab = join(verifyRoot, labDirName);
   try {
-    mkdirSync(verifyRoot, { recursive: true });
-    gitLong(sourceRepo, "fetch", "--quiet", remoteUrl, "main");
-    git(sourceRepo, "worktree", "add", "--detach", lab, "FETCH_HEAD");
-    const install = npm(lab, ["ci", "--no-audit", "--no-fund"], LONG_CALL_TIMEOUT_MS);
+    mkdirSync(lab, { recursive: true });
+    gitIsolated(lab, verifyRoot, ["init", "-q"], CALL_TIMEOUT_MS);
+    // A real "origin", not just a one-off fetch URL: `revert-check.ts`'s own logic fetches a pull
+    // request's branch from "origin" by name when the repo under test is this very checkout (a
+    // pull request against the harness itself, exactly like this one).
+    gitIsolated(lab, verifyRoot, ["remote", "add", "origin", remoteUrl], CALL_TIMEOUT_MS);
+    gitIsolated(lab, verifyRoot, ["fetch", "--quiet", "origin", "main"], LONG_CALL_TIMEOUT_MS);
+    gitIsolated(lab, verifyRoot, ["checkout", "-q", "FETCH_HEAD"], CALL_TIMEOUT_MS);
+    const install = npm(lab, ["ci", "--no-audit", "--no-fund"], LONG_CALL_TIMEOUT_MS, isolatedEnv(verifyRoot));
     if (install.status !== 0) throw new Error(`npm ci failed in the trusted checkout: ${install.output.slice(-400)}`);
     if (sibling) symlinkSync(sibling.source, resolve(lab, sibling.path), "junction");
     return lab;
   } catch (error) {
-    removeTrustedCheckout(sourceRepo, verifyRoot, lab);
+    removeTrustedCheckout(verifyRoot);
     const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
     throw new Error(`couldn't build a clean checkout of main to run revert:check from: ${why}`);
   }
 }
 
 /**
- * Removes a checkout `buildTrustedCheckout` made: the worktree registration against `sourceRepo` first
- * (so it's never left dangling there), then whatever is left of `verifyRoot`. Falls back to `git
- * worktree prune` when the removal itself fails (a file still in use is enough to make a plain
- * `remove` fail on Windows) - only once the folder is actually gone does pruning have anything to
- * clean up. Never throws, but never pretends either: a registration that outlives both attempts is
- * reported, not swallowed, so `sourceRepo` never quietly accumulates stale worktrees (Qodo on PR 167).
+ * Removes a checkout `buildTrustedCheckout` made: `verifyRoot` and everything in it. There's no shared
+ * repository to deregister from - the checkout is its own freshly initialized one - so this is just a
+ * removal. Never throws; the message describes what to remove by hand instead.
  */
-export function removeTrustedCheckout(sourceRepo: string, verifyRoot: string, lab: string): string | null {
-  // null when `sourceRepo` itself can't even answer (never true once it's been fetched into and a
-  // worktree added, as `buildTrustedCheckout` always does first - only reachable when it's called on
-  // a `sourceRepo` that was never a usable repository to begin with, cleaning up after its own
-  // earlier failure): "never throws" means this must have an answer for that case too.
-  const stillRegistered = (): boolean | null => {
-    try {
-      return worktreeRegistered(sourceRepo, lab);
-    } catch {
-      return null;
-    }
-  };
-  try {
-    if (stillRegistered()) git(sourceRepo, "worktree", "remove", "--force", lab);
-  } catch {
-    // Fall through: still try to clear the folder and prune the registration below.
-  }
+export function removeTrustedCheckout(verifyRoot: string): string | null {
   try {
     rmSync(verifyRoot, { recursive: true, force: true });
+    return null;
   } catch (error) {
     return `couldn't remove the trusted checkout at ${verifyRoot}: ${error instanceof Error ? error.message : String(error)}`;
   }
-  try {
-    if (stillRegistered()) git(sourceRepo, "worktree", "prune");
-  } catch {
-    // Reported below, not swallowed silently.
-  }
-  const registered = stillRegistered();
-  if (registered === null) return `couldn't confirm whether ${sourceRepo} still lists ${lab} as a worktree`;
-  return registered
-    ? `${lab} is gone, but ${sourceRepo} still lists it as a worktree (run \`git worktree prune\` there)`
-    : null;
 }
 
 export interface WindowActivity {
@@ -1446,6 +1435,7 @@ function npm(
   cwd: string,
   args: string[],
   timeoutMs: number = LONG_CALL_TIMEOUT_MS,
+  env?: NodeJS.ProcessEnv,
 ): { status: number | null; output: string } {
   // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words and
   // numbers from this file, never ticket text, so joining them into one command line is safe.
@@ -1453,8 +1443,8 @@ function npm(
   // call with no timeout of its own - can never stall the whole run and its lock (Qodo on PR 155).
   const result =
     process.platform === "win32"
-      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: timeoutMs })
-      : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: timeoutMs });
+      ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: timeoutMs, env })
+      : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: timeoutMs, env });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
@@ -1997,16 +1987,16 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       }
       // Prove the tests, after the review check: the PR's own new or changed tests must fail without
       // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
-      // Run from a fresh worktree of origin/main, never from `ws.lab` (the agent's own writable
-      // worktree): a committed edit to revert-check.ts or a module it imports, in the very pull
+      // Run from a fresh checkout of main, never from `ws.lab` (the agent's own writable worktree):
+      // a committed edit to revert-check.ts or a module it imports, in the very pull
       // request being checked, would otherwise run as part of its own verdict. Building this worktree
       // after the agent has already stopped means the agent never had the chance to touch it either
       // (#161; the dirty-worktree guard it replaces was Qodo on PR 155).
       const runId = basename(ws.root);
       const verifyRoot = join(runs, `verify-${runId}-${repoKey}-pr${pr}`);
       rmSync(verifyRoot, { recursive: true, force: true });
-      // The repo whose `factory.json` path is "." is the harness itself: its GitHub address, never
-      // `sourceRepo`'s own (mutable, untracked) `origin`, says where the trusted fetch must come from.
+      // The repo whose `factory.json` path is "." is the harness itself: its GitHub address, never any
+      // checkout's own (mutable, untracked) `origin`, says where the trusted fetch must come from.
       const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
       let trustedLab: string | null = null;
       let revertCheckRecord: string | null = null;
@@ -2015,7 +2005,6 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       } else {
         try {
           trustedLab = buildTrustedCheckout(
-            LAB_ROOT,
             verifyRoot,
             basename(LAB_ROOT),
             `https://github.com/${labRepo.github}.git`,
@@ -2066,7 +2055,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           }
           problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
         } finally {
-          const leftover = removeTrustedCheckout(LAB_ROOT, verifyRoot, trustedLab);
+          const leftover = removeTrustedCheckout(verifyRoot);
           if (leftover) console.error(leftover);
         }
       }
