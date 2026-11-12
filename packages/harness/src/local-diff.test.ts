@@ -181,18 +181,22 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff).toContain("diff --git a/newdir/b.txt b/newdir/b.txt");
   });
 
-  it("flags a tracked file whose diff header git had to quote, instead of silently dropping it", () => {
-    // A filename with a double quote gets a git-quoted header (`"a/weird\"name" "b/weird\"name"`),
-    // which `splitDiffSections`'s plain a/…/b/… pattern never matches: confirmed live, 12 November.
-    const repo = initRepo();
-    sh(repo, "commit", "-qm", "base", "--allow-empty");
-    writeFileSync(join(repo, 'weird"name.txt'), "x\n");
-    sh(repo, "add", ".");
-    const base = sh(repo, "rev-parse", "HEAD");
+  // A double quote forces git to quote the whole header, which splitDiffSections's plain a/…/b/…
+  // pattern never matches (confirmed live, 12 November) — but Windows itself refuses that character
+  // in a filename, so the scenario can only be built, and so only matters, on Linux and macOS.
+  it.skipIf(process.platform === "win32")(
+    "flags a tracked file whose diff header git had to quote, instead of silently dropping it",
+    () => {
+      const repo = initRepo();
+      sh(repo, "commit", "-qm", "base", "--allow-empty");
+      writeFileSync(join(repo, 'weird"name.txt'), "x\n");
+      sh(repo, "add", ".");
+      const base = sh(repo, "rev-parse", "HEAD");
 
-    const result = buildLocalDiff(repo, base, { staged: [], unstaged: [], untracked: [] });
-    expect(result.complete).toBe(false);
-    expect(result.excludedFiles).toContain("(unrecognized diff header)");
-    expect(result.diff).toBe("");
-  });
+      const result = buildLocalDiff(repo, base, { staged: [], unstaged: [], untracked: [] });
+      expect(result.complete).toBe(false);
+      expect(result.excludedFiles).toContain("(unrecognized diff header)");
+      expect(result.diff).toBe("");
+    },
+  );
 });
