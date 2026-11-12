@@ -1522,10 +1522,11 @@ describe("buildTrustedCheckout: revert:check runs from origin/main, not the agen
   const sh = (repo: string, ...args: string[]) =>
     execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-  /** `sourceRepo` cloned from an `origin` whose `main` holds the real script; `sourceRepo`'s own
-   * working tree is then switched to a branch with a doctored copy of it - standing in for the
-   * agent's worktree with an uncommitted-nowhere-but-here edit to `revert-check.ts` itself, the one
-   * the pull request under test would ship. */
+  /** `origin` is a bare repo whose `main` holds the real script and a trivial, dependency-free
+   * `package.json`/lockfile (so the trusted checkout's own `npm ci` needs no network). `sourceRepo`,
+   * cloned from it, then has its own working tree switched to a branch with a doctored copy of the
+   * script - standing in for the agent's worktree with an edit to `revert-check.ts` itself, committed
+   * but never merged, the one the pull request under test would ship. */
   function sourceWithDoctoredWorktree() {
     root = mkdtempSync(join(tmpdir(), "trusted-checkout-test-"));
     const origin = join(root, "origin.git");
@@ -1535,42 +1536,56 @@ describe("buildTrustedCheckout: revert:check runs from origin/main, not the agen
     sh(sourceRepo, "config", "user.email", "t@example.com");
     sh(sourceRepo, "config", "user.name", "t");
     writeFileSync(join(sourceRepo, "script.ts"), "export const verdict = () => 'real';\n");
-    mkdirSync(join(sourceRepo, "node_modules", "pkg"), { recursive: true });
-    writeFileSync(join(sourceRepo, "node_modules", "pkg", "index.js"), "module.exports = 1;\n");
-    sh(sourceRepo, "add", "script.ts");
+    writeFileSync(join(sourceRepo, "package.json"), '{"name":"lab","version":"1.0.0"}\n');
+    writeFileSync(
+      join(sourceRepo, "package-lock.json"),
+      '{"name":"lab","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"lab","version":"1.0.0"}}}\n',
+    );
+    sh(sourceRepo, "add", "script.ts", "package.json", "package-lock.json");
     sh(sourceRepo, "commit", "-qm", "base");
     sh(sourceRepo, "push", "-q", "origin", "HEAD:main");
     sh(sourceRepo, "checkout", "-qb", "doctor-it");
     writeFileSync(join(sourceRepo, "script.ts"), "export const verdict = () => 'forged pass';\n");
     sh(sourceRepo, "add", "script.ts");
     sh(sourceRepo, "commit", "-qm", "always pass");
-    return { sourceRepo };
+    return { sourceRepo, origin };
   }
 
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it("checks out origin/main untouched by a doctored branch in the agent's own worktree", () => {
-    const { sourceRepo } = sourceWithDoctoredWorktree();
+  it("checks out main untouched by a doctored branch in the agent's own worktree", () => {
+    const { sourceRepo, origin } = sourceWithDoctoredWorktree();
     const verifyRoot = join(root, "verify");
-    const lab = buildTrustedCheckout(sourceRepo, verifyRoot, "lab");
+    const lab = buildTrustedCheckout(sourceRepo, verifyRoot, "lab", origin);
     expect(readFileSync(join(lab, "script.ts"), "utf8")).toContain("'real'");
     // The agent's own worktree is left exactly as it was: still on its branch, still doctored.
     expect(sh(sourceRepo, "branch", "--show-current")).toBe("doctor-it");
     expect(readFileSync(join(sourceRepo, "script.ts"), "utf8")).toContain("forged pass");
-    // Installed packages are shared in, not reinstalled.
-    expect(existsSync(join(lab, "node_modules", "pkg", "index.js"))).toBe(true);
     expect(removeTrustedCheckout(sourceRepo, verifyRoot, lab)).toBeNull();
     expect(existsSync(verifyRoot)).toBe(false);
     expect(sh(sourceRepo, "worktree", "list").split("\n")).toHaveLength(1);
   });
 
+  it("fetches by the given address, not whatever sourceRepo's own origin happens to be", () => {
+    const { sourceRepo, origin } = sourceWithDoctoredWorktree();
+    // Point sourceRepo's own `origin` remote somewhere that was never pushed to: if the checkout
+    // trusted that mutable, untracked config instead of the address it was given, this would fail.
+    const unrelated = join(root, "unrelated.git");
+    sh(root, "init", "-q", "--bare", unrelated);
+    sh(sourceRepo, "remote", "set-url", "origin", unrelated);
+    const verifyRoot = join(root, "verify");
+    const lab = buildTrustedCheckout(sourceRepo, verifyRoot, "lab", origin);
+    expect(readFileSync(join(lab, "script.ts"), "utf8")).toContain("'real'");
+    removeTrustedCheckout(sourceRepo, verifyRoot, lab);
+  });
+
   it("symlinks a sibling repo at the path the checked-out script would resolve it at", () => {
-    const { sourceRepo } = sourceWithDoctoredWorktree();
+    const { sourceRepo, origin } = sourceWithDoctoredWorktree();
     const siblingSource = join(root, "a-sibling-repo");
     mkdirSync(siblingSource, { recursive: true });
     writeFileSync(join(siblingSource, "marker.txt"), "sibling\n");
     const verifyRoot = join(root, "verify");
-    const lab = buildTrustedCheckout(sourceRepo, verifyRoot, "lab", {
+    const lab = buildTrustedCheckout(sourceRepo, verifyRoot, "lab", origin, {
       source: siblingSource,
       path: "../a-sibling-repo",
     });
@@ -1578,14 +1593,44 @@ describe("buildTrustedCheckout: revert:check runs from origin/main, not the agen
     removeTrustedCheckout(sourceRepo, verifyRoot, lab);
   });
 
-  it("throws a clear message, and leaves no worktree registered, when origin can't be reached", () => {
+  it("throws a clear message, and leaves no worktree registered, when the address can't be reached", () => {
     root = mkdtempSync(join(tmpdir(), "trusted-checkout-test-"));
     const notARepo = join(root, "not-a-repo");
     mkdirSync(notARepo, { recursive: true });
-    expect(() => buildTrustedCheckout(notARepo, join(root, "verify"), "lab")).toThrow(
-      /couldn't build a clean checkout of origin\/main/,
+    expect(() => buildTrustedCheckout(notARepo, join(root, "verify"), "lab", join(root, "nowhere.git"))).toThrow(
+      /couldn't build a clean checkout of main/,
     );
     expect(existsSync(join(root, "verify"))).toBe(false);
+  });
+});
+
+describe("removeTrustedCheckout: a stranded registration is reported, not swallowed (#161)", () => {
+  let root: string;
+  const sh = (repo: string, ...args: string[]) =>
+    execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("reports a worktree that stays registered when it's locked, instead of pretending it's gone", () => {
+    root = mkdtempSync(join(tmpdir(), "stranded-worktree-test-"));
+    const sourceRepo = join(root, "source");
+    sh(root, "init", "-q", "-b", "main", sourceRepo);
+    sh(sourceRepo, "config", "user.email", "t@example.com");
+    sh(sourceRepo, "config", "user.name", "t");
+    writeFileSync(join(sourceRepo, "f.txt"), "x\n");
+    sh(sourceRepo, "add", ".");
+    sh(sourceRepo, "commit", "-qm", "base");
+    const verifyRoot = join(root, "verify");
+    const lab = join(verifyRoot, "lab");
+    mkdirSync(verifyRoot, { recursive: true });
+    sh(sourceRepo, "worktree", "add", "--detach", lab, "HEAD");
+    // Locked: neither a plain `remove` nor the `prune` fallback can clear it, the one case where the
+    // registration genuinely outlives both attempts.
+    sh(sourceRepo, "worktree", "lock", lab);
+    const result = removeTrustedCheckout(sourceRepo, verifyRoot, lab);
+    expect(result).toMatch(/still lists it as a worktree/);
+    sh(sourceRepo, "worktree", "unlock", lab);
+    sh(sourceRepo, "worktree", "remove", "--force", lab);
   });
 });
 

@@ -733,15 +733,30 @@ export function readJsonRecord(file: string): unknown | null {
   }
 }
 
+/** True when `path` is registered as one of `sourceRepo`'s worktrees. */
+function worktreeRegistered(sourceRepo: string, path: string): boolean {
+  return git(sourceRepo, "worktree", "list", "--porcelain")
+    .split("\n")
+    .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(path));
+}
+
 /**
- * A worktree of `sourceRepo`'s `origin/main`, fresh and agent-untouched, built at
- * `<verifyRoot>/<labDirName>`: the trusted copy of the harness `verifyPr` runs `revert:check` from, so
- * a pull request that edits `revert-check.ts` or a module it imports is judged by what's merged into
- * `main`, never by what that same pull request's own branch holds in the agent's writable worktree
- * (#161). `sourceRepo`'s installed packages are shared in by a symlink, never reinstalled; when
- * `sibling` is given (a repo whose `factory.json` path isn't `.`, such as the target), its real
- * checkout is symlinked in at the same relative path, so `revert-check.ts`'s own path arithmetic
- * (relative to wherever it's running from) finds it exactly as it would in the agent's worktree.
+ * A worktree of `main`, fresh and agent-untouched, built at `<verifyRoot>/<labDirName>`: the trusted
+ * copy of the harness `verifyPr` runs `revert:check` from, so a pull request that edits
+ * `revert-check.ts` or a module it imports is judged by what's merged into `main`, never by what that
+ * same pull request's own branch holds in the agent's writable worktree (#161).
+ *
+ * Fetches `remoteUrl` by its literal address, never a named remote: `sourceRepo`'s own `origin` is
+ * `.git/config`, which the agent's run never commits or pushes anywhere a diff would show it, so a
+ * tampered remote there would never be caught the way a tampered `factory.json` would be. `remoteUrl`
+ * instead comes from the caller's own `factory.json` reading (Qodo on PR 167). Its packages are a real
+ * `npm ci` against the checked-out lockfile, never shared in from `sourceRepo`'s own `node_modules`:
+ * that folder is never part of any commit a reviewer sees, so an agent's edit to an installed
+ * dependency (`tsx`, a module `revert-check.ts` imports) would otherwise run as if it were trusted,
+ * even though the source it was fetched alongside never was (Qodo on PR 167). When `sibling` is given
+ * (a repo whose `factory.json` path isn't `.`, such as the target), its real checkout is symlinked in
+ * at the same relative path, so `revert-check.ts`'s own path arithmetic (relative to wherever it's
+ * running from) finds it exactly as it would in the agent's worktree.
  *
  * Throws, with a clear message, when the checkout can't be built - cleaning up anything already made
  * first, so a failure here never leaves a worktree registered against `sourceRepo`.
@@ -750,46 +765,65 @@ export function buildTrustedCheckout(
   sourceRepo: string,
   verifyRoot: string,
   labDirName: string,
+  remoteUrl: string,
   sibling?: { source: string; path: string },
 ): string {
   const lab = join(verifyRoot, labDirName);
   try {
     mkdirSync(verifyRoot, { recursive: true });
-    gitLong(sourceRepo, "fetch", "--quiet", "origin", "main");
-    gitLong(sourceRepo, "worktree", "add", "--detach", lab, "origin/main");
-    const modules = join(sourceRepo, "node_modules");
-    if (existsSync(modules)) symlinkSync(modules, join(lab, "node_modules"), "junction");
+    gitLong(sourceRepo, "fetch", "--quiet", remoteUrl, "main");
+    git(sourceRepo, "worktree", "add", "--detach", lab, "FETCH_HEAD");
+    const install = npm(lab, ["ci", "--no-audit", "--no-fund"], LONG_CALL_TIMEOUT_MS);
+    if (install.status !== 0) throw new Error(`npm ci failed in the trusted checkout: ${install.output.slice(-400)}`);
     if (sibling) symlinkSync(sibling.source, resolve(lab, sibling.path), "junction");
     return lab;
   } catch (error) {
     removeTrustedCheckout(sourceRepo, verifyRoot, lab);
     const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    throw new Error(`couldn't build a clean checkout of origin/main to run revert:check from: ${why}`);
+    throw new Error(`couldn't build a clean checkout of main to run revert:check from: ${why}`);
   }
 }
 
 /**
  * Removes a checkout `buildTrustedCheckout` made: the worktree registration against `sourceRepo` first
- * (so it's never left dangling there), then whatever is left of `verifyRoot`. Never throws - a verdict
- * `revert:check` already reached is worth keeping even when its scratch checkout can't be fully
- * cleaned up; the message describes what to remove by hand instead.
+ * (so it's never left dangling there), then whatever is left of `verifyRoot`. Falls back to `git
+ * worktree prune` when the removal itself fails (a file still in use is enough to make a plain
+ * `remove` fail on Windows) - only once the folder is actually gone does pruning have anything to
+ * clean up. Never throws, but never pretends either: a registration that outlives both attempts is
+ * reported, not swallowed, so `sourceRepo` never quietly accumulates stale worktrees (Qodo on PR 167).
  */
 export function removeTrustedCheckout(sourceRepo: string, verifyRoot: string, lab: string): string | null {
+  // null when `sourceRepo` itself can't even answer (never true once it's been fetched into and a
+  // worktree added, as `buildTrustedCheckout` always does first - only reachable when it's called on
+  // a `sourceRepo` that was never a usable repository to begin with, cleaning up after its own
+  // earlier failure): "never throws" means this must have an answer for that case too.
+  const stillRegistered = (): boolean | null => {
+    try {
+      return worktreeRegistered(sourceRepo, lab);
+    } catch {
+      return null;
+    }
+  };
   try {
-    const registered = git(sourceRepo, "worktree", "list", "--porcelain")
-      .split("\n")
-      .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(lab));
-    if (registered) gitLong(sourceRepo, "worktree", "remove", "--force", lab);
+    if (stillRegistered()) git(sourceRepo, "worktree", "remove", "--force", lab);
   } catch {
-    // Fall through: still try to clear the folder itself below.
+    // Fall through: still try to clear the folder and prune the registration below.
   }
   try {
     rmSync(verifyRoot, { recursive: true, force: true });
-    return null;
   } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
-    return `couldn't remove the trusted checkout at ${verifyRoot}: ${why}`;
+    return `couldn't remove the trusted checkout at ${verifyRoot}: ${error instanceof Error ? error.message : String(error)}`;
   }
+  try {
+    if (stillRegistered()) git(sourceRepo, "worktree", "prune");
+  } catch {
+    // Reported below, not swallowed silently.
+  }
+  const registered = stillRegistered();
+  if (registered === null) return `couldn't confirm whether ${sourceRepo} still lists ${lab} as a worktree`;
+  return registered
+    ? `${lab} is gone, but ${sourceRepo} still lists it as a worktree (run \`git worktree prune\` there)`
+    : null;
 }
 
 export interface WindowActivity {
@@ -1971,17 +2005,25 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const runId = basename(ws.root);
       const verifyRoot = join(runs, `verify-${runId}-${repoKey}-pr${pr}`);
       rmSync(verifyRoot, { recursive: true, force: true });
+      // The repo whose `factory.json` path is "." is the harness itself: its GitHub address, never
+      // `sourceRepo`'s own (mutable, untracked) `origin`, says where the trusted fetch must come from.
+      const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
       let trustedLab: string | null = null;
       let revertCheckRecord: string | null = null;
-      try {
-        trustedLab = buildTrustedCheckout(
-          LAB_ROOT,
-          verifyRoot,
-          basename(LAB_ROOT),
-          repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
-        );
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : String(error));
+      if (!labRepo) {
+        problems.push('factory.json names no repo at path ".", so there\'s nowhere trusted to fetch main from');
+      } else {
+        try {
+          trustedLab = buildTrustedCheckout(
+            LAB_ROOT,
+            verifyRoot,
+            basename(LAB_ROOT),
+            `https://github.com/${labRepo.github}.git`,
+            repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
+          );
+        } catch (error) {
+          problems.push(error instanceof Error ? error.message : String(error));
+        }
       }
       if (trustedLab) {
         const revertRecordFile = join(
@@ -1991,7 +2033,17 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           `${repoKey}-pr${pr}`,
           `${pushed.slice(0, 7)}.revert-check.json`,
         );
-        revertCheckRecord = revertRecordFile;
+        // Where the un-torn-down evidence lives: the run's own worktree, the same place this record
+        // always lived before, which `saveEvidence` already carries to the private repo. The trusted
+        // checkout is removed at the end of this very call, so the run log must point here, never at
+        // the scratch copy's own path (Qodo on PR 167).
+        const permanentRecordFile = join(
+          ws.lab,
+          factory.evidence,
+          "revert-checks",
+          `${repoKey}-pr${pr}`,
+          `${pushed.slice(0, 7)}.revert-check.json`,
+        );
         try {
           const revert = npm(
             trustedLab,
@@ -2001,6 +2053,17 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           // A damaged or missing record reads as no result, never throws: the rest of this verdict
           // (the review checks above) must still reach the caller.
           const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
+          if (existsSync(revertRecordFile)) {
+            try {
+              mkdirSync(dirname(permanentRecordFile), { recursive: true });
+              copyFileSync(revertRecordFile, permanentRecordFile);
+              revertCheckRecord = permanentRecordFile;
+            } catch (error) {
+              problems.push(
+                `couldn't save revert:check's record where the run log points: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
           problems.push(...revertCheckProblems(revert.status, revertRecord, revert.output));
         } finally {
           const leftover = removeTrustedCheckout(LAB_ROOT, verifyRoot, trustedLab);
