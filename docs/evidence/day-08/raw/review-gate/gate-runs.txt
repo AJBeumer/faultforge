@@ -1,0 +1,11 @@
+Run 12 November 2026 on main after PR 180 merged. Exit code after each.
+
+$ npm run review:gate -- faultforge --commit e7df2c1
+Covered: the tree of e7df2c1 (68fc3ac165b166dbaadc6fcff20d2ebc4cc3d9f5) was reviewed, 12 hours ago, in day-08\local-review-126\review-2-after-fix.raw.json.
+This says a complete review saw this tree, not that its findings were fixed.
+exit=0
+
+$ npm run review:gate -- faultforge --commit HEAD
+Not covered: the tree of HEAD (507ced5ac9312b950c62b9de848073f638c42f17); no review recorded this tree.
+Nearest review: tree 2598e82c55e473dcba299a8404a23269fc4886f1, 30 minutes ago, in local-reviews\23168d8c-4434-45d1-ab3a-a5196ca34c5a\review.json.
+exit=1

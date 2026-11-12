@@ -1,0 +1,20 @@
+{
+  "repo": "AJBeumer/faultforge",
+  "pr": 180,
+  "headSha": "0494154646c63a0dce708f59e03c04508d7d38f8",
+  "state": "complete",
+  "headMovedTo": null,
+  "pushSeenAt": "2026-11-12T22:08:45Z",
+  "reviewEffort": "lite",
+  "reviewSeenCompleteAt": "2026-11-12T22:09:37.708Z",
+  "reviewSeenCompleteNote": "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
+  "reviewStartedAt": "2026-11-12T22:08:53.439712Z",
+  "recordedAt": "2026-11-12T22:09:40.587Z",
+  "ci": "npm run check (windows): in_progress, npm run check: success, npm run check: success, npm run check (windows): in_progress",
+  "abTest": {
+    "name": null,
+    "arm": null
+  },
+  "findings": [],
+  "openFindings": []
+}
