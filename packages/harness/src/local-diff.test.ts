@@ -3,7 +3,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildLocalDiff, countDiffHeaders, parseGitStatus, splitDiffSections, streamId } from "./local-diff.ts";
+import {
+  buildLocalDiff,
+  countDiffHeaders,
+  parseGitStatus,
+  readWorkingTreeSplit,
+  splitDiffSections,
+  streamId,
+} from "./local-diff.ts";
 
 describe("parseGitStatus", () => {
   it("splits staged, unstaged and untracked paths from git status --porcelain", () => {
@@ -252,5 +259,20 @@ describe("buildLocalDiff on a real git repository", () => {
     const result = buildLocalDiff(repo, base, { staged: [], unstaged: [], untracked: [] });
     expect(result.complete).toBe(false);
     expect(result.excludedFiles).toContain("(unrecognized diff header)");
+  });
+
+  it("keeps a non-ASCII filename complete: status and diff spell it the same", () => {
+    const repo = initRepo();
+    writeFileSync(join(repo, "café.txt"), "1\n");
+    sh(repo, "add", ".");
+    sh(repo, "commit", "-qm", "base");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "café.txt"), "1\n2\n");
+
+    const split = readWorkingTreeSplit(repo);
+    expect(split.unstaged).toEqual(["café.txt"]);
+    const result = buildLocalDiff(repo, base, split);
+    expect(result.complete).toBe(true);
+    expect(result.skippedFiles).toEqual([]);
   });
 });

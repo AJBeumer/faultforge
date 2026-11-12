@@ -39,7 +39,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
-import { buildLocalDiff, git, parseGitStatus, streamId } from "./local-diff.ts";
+import { buildLocalDiff, git, readWorkingTreeSplit, streamId } from "./local-diff.ts";
 import { formatFinding, type LocalReviewPayload, labelFindings } from "./local-findings.ts";
 import {
   callAndSaveRaw,
@@ -270,7 +270,7 @@ async function main(): Promise<number> {
 
   // `--untracked-files=all` so a new directory is listed file by file, never as one `?? dir/` entry
   // that `buildLocalDiff` would then try to diff as if it were a single file (a real gap, 12 November).
-  const split = parseGitStatus(git(repoRoot, ["status", "--porcelain", "--untracked-files=all"]));
+  const split = readWorkingTreeSplit(repoRoot);
   const baseSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
 
   // Our own id, never Qodo's: an operation id from its answer must not decide where this writes (a

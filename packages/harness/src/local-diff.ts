@@ -38,6 +38,16 @@ export function parseGitStatus(porcelain: string): WorkingTreeSplit {
   return split;
 }
 
+/**
+ * The working tree's split, read the way the diff is: with `core.quotePath=false`, so a name with
+ * non-ASCII characters is spelled the same in both and matches its diff section.
+ */
+export function readWorkingTreeSplit(repoRoot: string): WorkingTreeSplit {
+  return parseGitStatus(
+    git(repoRoot, ["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"]),
+  );
+}
+
 export interface SkippedFile {
   file: string;
   why: string;
