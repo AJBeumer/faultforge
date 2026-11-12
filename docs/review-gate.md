@@ -70,8 +70,11 @@ set. The first time it runs it only records HEAD, because it has nothing to comp
 HEAD it saw is kept in `.git/faultforge-gate-last-head`. A commit that was only reviewed on its pull
 request, or a docs-only commit Qodo skips, shows the note too: the note says what it knows.
 
-It sees only commits made through Claude Code's Bash and PowerShell tools. A commit made in an IDE or
-a plain terminal is not seen; a git post-commit hook would cover those. Blocking a commit would need a
-git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command and
-cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are
-separate decisions.
+It looks only when a Claude Code command finishes. A commit made in an IDE or a plain terminal is
+noticed at the next command Claude Code runs, not when it is made, and the note then names a commit
+the agent did not make. A commit in a linked worktree of this repository (`git worktree add`) is not
+checked, because the hook reads the main checkout's HEAD. If the check takes longer than the hook's
+limit (the gate takes about a second today), the note says it could not check. A git post-commit hook
+would cover commits made anywhere. Blocking a commit would need a git pre-commit hook, not a Claude
+Code hook, because a Claude Code hook runs before the command and cannot see what `git commit -a`
+will stage. Git runs its own pre-commit hook after staging. Both are separate decisions.
