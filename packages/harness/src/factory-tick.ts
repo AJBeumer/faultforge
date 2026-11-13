@@ -48,7 +48,7 @@ import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts
 import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
-import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
+import { checkLiveQodoConfig, type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -1124,9 +1124,10 @@ export interface Workspace {
 
 /** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
  * one in `differences`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error).
- * Kept structured, not pre-formatted: a difference's full detail (a rule's `content`, its field values)
- * is fine for the run log, but never for a ticket comment (Qodo on PR 145) - callers pick the
- * formatter that matches where the text is going. */
+ * Kept structured, not pre-formatted: a difference's full detail (a rule's name and `content`, its field
+ * values) can hold text from private storage, so it never goes to a ticket comment (Qodo on PR 145) or to
+ * the run log, which CI prints and uploads from a public repository (#187). Both use `summarizeDifference`;
+ * the full detail is in the private `qodo-state` evidence. */
 export interface QodoCheckOutcome {
   exitCode: 0 | 1 | 2;
   message: string;
@@ -1283,10 +1284,12 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
     const qodo = await deps.qodoCheck(runId);
+    // A summary only, here too: CI prints this log and uploads it from a public repo, and a rule's name
+    // or content can hold text read from private storage. The full state is in the saved Qodo evidence.
     log("qodo-checked", {
       exitCode: qodo.exitCode,
       message: qodo.message,
-      differences: qodo.differences.map(formatDifference),
+      differences: qodo.differences.map(summarizeDifference),
     });
     if (qodo.exitCode !== 0) {
       relabel([LABELS.working, LABELS.ready], [LABELS.help]);

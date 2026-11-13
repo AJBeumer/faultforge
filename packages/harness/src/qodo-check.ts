@@ -297,8 +297,9 @@ export async function runCheck(deps: CheckDeps): Promise<CheckResult> {
 }
 
 /** One printable line per difference, with its id, name and (for a change) the field and values. Full
- * detail: for the run log and the console, never for a ticket comment (a rule's `content` can hold
- * private text - see `summarizeDifference`). */
+ * detail: only for the owner's own console when running `qodo:check` by hand. Never for a ticket comment
+ * or the run log, both of which can be public: a rule's name or `content` can hold private text. Those
+ * use `summarizeDifference`. */
 export function formatDifference(d: Difference): string {
   if (d.type === "new") return `new ${d.kind}: ${d.name} (${d.id})`;
   if (d.type === "missing") return `missing ${d.kind}: ${d.name} (${d.id})`;
