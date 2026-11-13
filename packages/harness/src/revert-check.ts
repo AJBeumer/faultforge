@@ -8,9 +8,10 @@
  * place (they must pass: a test that fails either way proves nothing), then puts back the base
  * version of every changed code file and runs them again. At least one must fail.
  *
- * Exits 0 when at least one test failed without the change, 1 when every test still passed (the
- * tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code file,
- * the PR changes its dependencies, the PR's tests fail even with the change, or the scratch copy
+ * Exits 0 when at least one test ran and failed without the change, 1 when every test still passed
+ * (the tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code
+ * file, the PR changes its dependencies, the PR's tests fail even with the change, the tests only fail
+ * to load without it (they import the change, nothing shows they test it; #217), or the scratch copy
  * can't be built. A dependency change is a lock file that differs, or a `package.json` whose
  * install-deciding fields differ between base and head (`DEPENDENCY_SECTIONS`: the dependency maps,
  * `overrides`, `resolutions`, `peerDependenciesMeta`, bundled packages and `workspaces`); a
@@ -39,6 +40,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { ghJson } from "./github.ts";
+import { parseVitestReport } from "./run-outcome.ts";
 
 export interface Change {
   /** git's name-status letter: A added, M modified, D deleted (renames are split into D and A). */
@@ -135,36 +137,13 @@ export function dependencySectionsChanged(base: string | null, head: string | nu
 export interface TestRun {
   /** False when the runner produced no result at all: the copy couldn't run its tests. */
   ran: boolean;
-  /** Names of the tests that failed, including files that failed before any test ran. */
+  /** Names of the tests that ran and failed. */
   failed: string[];
+  /** Test files that failed before any test ran: they show an import, not a behaviour (#217). */
+  loadFailed?: string[];
   passed: number;
   /** Why the run produced no result, when `ran` is false. */
   error?: string;
-}
-
-/** The tests that failed and passed, from vitest's JSON report. */
-export function parseVitestReport(report: {
-  testResults?: {
-    name?: string;
-    status?: string;
-    message?: string;
-    assertionResults?: { fullName?: string; title?: string; status?: string }[];
-  }[];
-}): Omit<TestRun, "ran"> {
-  const failed: string[] = [];
-  let passed = 0;
-  for (const file of report.testResults ?? []) {
-    const assertions = file.assertionResults ?? [];
-    for (const a of assertions) {
-      if (a.status === "failed") failed.push(a.fullName ?? a.title ?? "(unnamed test)");
-      else if (a.status === "passed") passed++;
-    }
-    // A file that failed to load has no failed assertion, only its own status and message.
-    if (file.status === "failed" && !assertions.some((a) => a.status === "failed")) {
-      failed.push(`${file.name ?? "(file)"}: ${(file.message ?? "failed to run").split("\n")[0]}`);
-    }
-  }
-  return { failed, passed };
 }
 
 export interface Outcome {
@@ -208,12 +187,18 @@ export function verdict(
   if (problem) return none(problem);
   if (!withChange?.ran)
     return none(`the PR's tests couldn't run in the scratch copy: ${withChange?.error ?? "no result"}`);
-  if (withChange.failed.length) {
+  const failingWith = [...withChange.failed, ...(withChange.loadFailed ?? [])];
+  if (failingWith.length) {
     return none(
-      `the PR's tests fail even with its change, so they prove nothing either way: ${withChange.failed.join("; ")}`,
+      `the PR's tests fail even with its change, so they prove nothing either way: ${failingWith.join("; ")}`,
     );
   }
   if (!without?.ran) return none(`the tests couldn't run without the change: ${without?.error ?? "no result"}`);
+  if (!without.failed.length && without.loadFailed?.length) {
+    return none(
+      `without the change the tests only fail to load, which shows they import it, not that they test it: ${without.loadFailed.join("; ")}`,
+    );
+  }
   if (!without.failed.length) {
     return {
       exit: 1,
@@ -223,7 +208,7 @@ export function verdict(
   }
   return {
     exit: 0,
-    message: `${without.failed.length} test(s) fail without the change, as they should`,
+    message: `${without.failed.length} test(s) fail without the change, as they should${without.loadFailed?.length ? ` (and ${without.loadFailed.length} file(s) fail to load)` : ""}`,
     failedWithoutChange: without.failed,
   };
 }
@@ -404,7 +389,7 @@ async function main() {
   process.exit(result.exit);
 }
 
-// Exit codes: 0 caught, 1 not proven, 2 can't judge (no tests, no code, a dependency change, tests that fail with the change, or couldn't run).
+// Exit codes: 0 caught, 1 not proven, 2 can't judge (no tests, no code, a dependency change, tests that fail with the change, tests that only fail to load without it, or couldn't run).
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main().catch((error: unknown) => {
     console.error(`revert:check could not run: ${error instanceof Error ? error.message : String(error)}`);
