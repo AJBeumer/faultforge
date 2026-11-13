@@ -2274,3 +2274,44 @@ describe("hooks-checked reaches the run's saved and published log (#126)", () =>
     expect(docs.slice(selfTest)).toContain("`hooks-checked`");
   });
 });
+
+describe("tick: a Qodo difference in the run log, which CI prints and uploads from a public repo", () => {
+  const MARKER = "PRIVATE-SNAPSHOT-TEXT";
+  const drifted = (overrides: Partial<TickDeps> = {}) =>
+    fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        qodoCheck: async () => ({
+          exitCode: 1,
+          message: "3 difference(s) from qodo-v6",
+          differences: [
+            {
+              kind: "rule",
+              type: "changed",
+              id: "4664849",
+              name: `${MARKER} in a rule's name`,
+              field: "content",
+              before: `the snapshot's rule text: ${MARKER} before`,
+              after: `the live rule text: ${MARKER} after`,
+            },
+            { kind: "rule", type: "new", id: "4664850", name: `${MARKER} in a new rule's name` },
+            { kind: "rule", type: "missing", id: "4664851", name: `${MARKER} in a missing rule's name` },
+          ],
+        }),
+        ...overrides,
+      },
+    );
+
+  it("logs each difference by kind, id and field only: no name and no before or after value", async () => {
+    const f = drifted();
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    const everything = [...f.printed, ...f.events.map((e) => JSON.stringify(e)), ...f.comments.map((c) => c.body)];
+    expect(everything.filter((line) => line.includes(MARKER))).toEqual([]);
+    expect(f.events.find((e) => e.event === "qodo-checked")).toMatchObject({
+      exitCode: 1,
+      message: "3 difference(s) from qodo-v6",
+      differences: ["changed rule 4664849 (content)", "new rule 4664850", "missing rule 4664851"],
+    });
+    expect(f.printed.join("\n")).toContain("changed rule 4664849 (content)");
+  });
+});
