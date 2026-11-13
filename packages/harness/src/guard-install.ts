@@ -13,7 +13,7 @@
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, or git failed.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory } from "./factory-config.ts";
@@ -52,11 +52,13 @@ export function installHooks(checkout: string, script: string): string {
   const relative = git("rev-parse", "--git-path", "hooks");
   const dir = isAbsolute(relative) ? relative : resolve(checkout, relative);
   mkdirSync(dir, { recursive: true });
+  // Ours only when it starts with our exact header and is a plain file: a hook that merely mentions the
+  // marker, or a symlink whose write would land elsewhere, is someone else's (Qodo on PR 213).
   for (const stage of HOOKS) {
     const file = join(dir, stage);
-    if (existsSync(file) && !readFileSync(file, "utf8").includes(MARKER)) {
-      throw new InstallRefused(`${file} exists and wasn't written by guard:install; move it first`);
-    }
+    if (!existsSync(file)) continue;
+    const ours = !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8").startsWith(`#!/bin/sh\n${MARKER}\n`);
+    if (!ours) throw new InstallRefused(`${file} exists and wasn't written by guard:install; move it first`);
   }
   for (const stage of HOOKS) {
     const file = join(dir, stage);

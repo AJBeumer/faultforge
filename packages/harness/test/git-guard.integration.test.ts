@@ -91,3 +91,32 @@ describe("the git-level guard, run by git itself (#191)", () => {
     expect(status("commit", "-q", "-m", "Clean")).not.toBe(0);
   }, 60_000);
 });
+
+describe("the git-level guard reads what a push really sends (Qodo on PR 213)", () => {
+  it("refuses a push to a destination ref named with a giveaway word, from a clean local branch", () => {
+    const { git, status } = guarded();
+    expect(status("push", "-q", "origin", `HEAD:refs/heads/${WORD}-fix`)).not.toBe(0);
+    expect(status("push", "-q", "origin", "HEAD:refs/heads/tidy-fix")).toBe(0);
+    git("push", "-q", "origin", "--delete", "tidy-fix");
+  }, 60_000);
+
+  it("refuses a message line that starts with # when -m keeps it", () => {
+    const { dir, git, status } = guarded();
+    writeFileSync(join(dir, "d.md"), "Clean\n");
+    git("add", "d.md");
+    expect(status("commit", "-q", "-m", "Tidy", "-m", `# the ${WORD} part`)).not.toBe(0);
+  }, 60_000);
+
+  it("refuses a commit one remote already has when it goes to another", () => {
+    const { dir, git, status } = guarded();
+    const backup = mkdtempSync(join(tmpdir(), "git-guard-backup-"));
+    scratch.push(backup);
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", backup]);
+    git("remote", "add", "backup", backup);
+    writeFileSync(join(dir, "e.md"), `${WORD} here\n`);
+    git("add", "e.md");
+    git("commit", "-q", "--no-verify", "-m", "Tidy");
+    git("push", "-q", "--no-verify", "origin", "main");
+    expect(status("push", "-q", "backup", "main")).not.toBe(0);
+  }, 60_000);
+});

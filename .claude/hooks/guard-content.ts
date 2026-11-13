@@ -120,11 +120,18 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
 export function pendingIndex(checkout: string): Pending {
   const staged = list(checkout, ["diff", "--cached", "--name-only", "--diff-filter=d"]);
   if (staged.length > MAX_FILES) throw new Uninspectable(`${staged.length} staged files, more than the guard reads`);
+  // A submodule's entry (mode 160000) is a commit of another repository, not file content here: only its
+  // name is read (Qodo on PR 213).
+  const submodules = new Set(
+    list(checkout, ["ls-files", "--stage"])
+      .filter((line) => line.startsWith("160000 "))
+      .map((line) => line.slice(line.indexOf("\t") + 1)),
+  );
   const texts = [
     ...staged,
     ...blobs(
       checkout,
-      staged.map((file) => `:0:${file}`),
+      staged.filter((file) => !submodules.has(file)).map((file) => `:0:${file}`),
     ),
   ];
   return { reasons: telltales(texts.join("\n")), where: "the staged changes" };
@@ -147,25 +154,7 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
     }
   };
   const commits = git(checkout, ["rev-list", "--all", "--not", "--remotes"]).split("\n").filter(Boolean);
-  if (commits.length > MAX_COMMITS)
-    throw new Uninspectable(`${commits.length} unpushed commits, more than the guard reads`);
-  const texts: string[] = [];
-  for (const sha of commits) {
-    tick();
-    texts.push(git(checkout, ["log", "-1", "--format=%B", sha]));
-    const files = unique(
-      list(checkout, ["diff-tree", "--no-commit-id", "-m", "-r", "--name-only", "--diff-filter=d", "--root", sha]),
-    );
-    if (files.length > MAX_FILES)
-      throw new Uninspectable(`commit ${sha.slice(0, 7)} touches ${files.length} files, more than the guard reads`);
-    texts.push(
-      ...files,
-      ...blobs(
-        checkout,
-        files.map((file) => `${sha}:${file}`),
-      ),
-    );
-  }
+  const texts = commitTexts(checkout, commits, tick);
   tick();
   // A push can also create a branch or tag whose name the reviewer sees: every local branch and tag with no
   // remote branch of the same name is read too (#190). A branch already on a remote was checked when it went.
@@ -185,6 +174,71 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
     ? `a new branch, or a tag (${giveaways.join(", ")})`
     : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
   return { reasons, where };
+}
+
+/**
+ * Each commit's message, and the name and full content of every file it adds or changes, merge commits
+ * included (`-m`: against each parent). Commit by commit: a later commit removing a line does not clean an
+ * earlier one. `tick` is called before each, so a slow scan gives up in time.
+ */
+function commitTexts(checkout: string, commits: string[], tick: () => void): string[] {
+  if (commits.length > MAX_COMMITS)
+    throw new Uninspectable(`${commits.length} unpushed commits, more than the guard reads`);
+  const texts: string[] = [];
+  for (const sha of commits) {
+    tick();
+    texts.push(git(checkout, ["log", "-1", "--format=%B", sha]));
+    const files = unique(
+      list(checkout, ["diff-tree", "--no-commit-id", "-m", "-r", "--name-only", "--diff-filter=d", "--root", sha]),
+    );
+    if (files.length > MAX_FILES)
+      throw new Uninspectable(`commit ${sha.slice(0, 7)} touches ${files.length} files, more than the guard reads`);
+    texts.push(
+      ...files,
+      ...blobs(
+        checkout,
+        files.map((file) => `${sha}:${file}`),
+      ),
+    );
+  }
+  return texts;
+}
+
+/** One ref update git proposes to a pre-push hook: a line of its stdin. */
+export interface PushUpdate {
+  localSha: string;
+  remoteRef: string;
+  remoteSha: string;
+}
+
+const ZERO = /^0+$/;
+
+/**
+ * What one push really sends, read from the updates git hands its pre-push hook (#191): each destination
+ * ref's name, and every commit an update sends that the remote doesn't have, whatever another remote has.
+ * A new ref's commits are the ones no ref of `remote` already holds. Deletions send nothing.
+ */
+export function pendingPushUpdates(checkout: string, remote: string, updates: PushUpdate[]): Pending {
+  const started = Date.now();
+  const tick = () => {
+    if (Date.now() - started > DEFAULT_BUDGET_MS) throw new Uninspectable("reading the pushed commits took too long");
+  };
+  const names = updates.map((u) => u.remoteRef.replace(/^refs\/(heads|tags)\//, ""));
+  const commits = new Set<string>();
+  for (const u of updates) {
+    if (ZERO.test(u.localSha)) continue;
+    const range = ZERO.test(u.remoteSha)
+      ? [u.localSha, "--not", `--remotes=${remote}`]
+      : [u.localSha, `^${u.remoteSha}`];
+    for (const sha of git(checkout, ["rev-list", ...range])
+      .split("\n")
+      .filter(Boolean))
+      commits.add(sha);
+  }
+  const texts = [...names, ...commitTexts(checkout, [...commits], tick)];
+  const giveaways = names.filter((name) => telltales(name).length);
+  const where = giveaways.length ? `the pushed ref (${giveaways.join(", ")})` : "the commits this push sends";
+  return { reasons: telltales(texts.join("\n")), where };
 }
 
 /** The command with quoted text and heredoc bodies blanked, so operators inside them don't count. */

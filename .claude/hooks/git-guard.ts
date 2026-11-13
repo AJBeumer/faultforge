@@ -5,7 +5,8 @@
  *
  *   node git-guard.ts pre-commit <checkout>                  the staged files and their names
  *   node git-guard.ts commit-msg <checkout> <message file>   the commit message
- *   node git-guard.ts pre-push   <checkout>                  every unpushed commit, and new branch and tag names
+ *   node git-guard.ts pre-push   <checkout> <remote> <url>   what this push sends (git's updates on stdin), and
+ *                                                           every unpushed commit and local branch and tag name
  *
  * The checks are the Claude Code guard's own (guard-content.ts), read from git at the moment the content
  * would travel.
@@ -15,31 +16,41 @@
  */
 import { readFileSync } from "node:fs";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { type Pending, pendingIndex, pendingPush } from "./guard-content.ts";
+import { type Pending, type PushUpdate, pendingIndex, pendingPush, pendingPushUpdates } from "./guard-content.ts";
 import { firstLine, isEntry } from "./hook-io.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
-export function check(stage: string, checkout: string, messageFile?: string): Pending | undefined {
+export function check(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
   let pending: Pending;
   if (stage === "pre-commit") pending = pendingIndex(checkout);
-  else if (stage === "pre-push") pending = pendingPush(checkout);
-  else if (stage === "commit-msg") {
-    if (!messageFile) throw new Error("commit-msg needs the message file git passes");
-    // Comment lines are dropped by git before the commit is made, so they are not part of the message.
-    const message = readFileSync(messageFile, "utf8")
-      .split("\n")
-      .filter((line) => !line.startsWith("#"))
-      .join("\n");
-    pending = { reasons: telltales(message), where: "the commit message" };
+  else if (stage === "pre-push") {
+    // Git names the remote and passes each proposed update on stdin: what this push really sends, to the
+    // ref names it really creates, is checked, as well as everything not yet on any remote (Qodo on PR 213).
+    if (!arg) throw new Error("pre-push needs the remote name git passes");
+    const pushed = pendingPushUpdates(checkout, arg, parseUpdates(stdin));
+    pending = pushed.reasons.length ? pushed : pendingPush(checkout);
+  } else if (stage === "commit-msg") {
+    if (!arg) throw new Error("commit-msg needs the message file git passes");
+    // The whole file: with `-m`, git keeps lines that start with `#` (Qodo on PR 213).
+    pending = { reasons: telltales(readFileSync(arg, "utf8")), where: "the commit message" };
   } else throw new Error(`unknown stage ${stage}`);
   return pending.reasons.length ? pending : undefined;
 }
 
+/** The ref updates git writes to a pre-push hook's stdin: `<local ref> <local sha> <remote ref> <remote sha>`. */
+export function parseUpdates(stdin: string): PushUpdate[] {
+  return stdin
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length === 4)
+    .map(([, localSha = "", remoteRef = "", remoteSha = ""]) => ({ localSha, remoteRef, remoteSha }));
+}
+
 function main(): number {
-  const [stage = "", checkout = "", messageFile] = process.argv.slice(2);
+  const [stage = "", checkout = "", arg] = process.argv.slice(2);
   try {
     if (!checkout) throw new Error("usage: git-guard.ts <pre-commit|commit-msg|pre-push> <checkout> [message file]");
-    const found = check(stage, checkout, messageFile);
+    const found = check(stage, checkout, arg, stage === "pre-push" ? readFileSync(0, "utf8") : "");
     if (!found) return 0;
     console.error(
       `review guard: refused. ${found.where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,

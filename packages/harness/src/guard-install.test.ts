@@ -43,3 +43,13 @@ describe("installHooks (#191)", () => {
     expect(() => installHooks(dir, "x")).toThrow(/core.hooksPath/);
   });
 });
+
+describe("installHooks: what counts as its own hook (Qodo on PR 213)", () => {
+  it("doesn't take a hook that only mentions the marker somewhere", () => {
+    const { dir } = repo();
+    const file = join(dir, ".git", "hooks", "pre-commit");
+    writeFileSync(file, `#!/bin/sh\necho mine\n${MARKER}\n`);
+    expect(() => installHooks(dir, "x")).toThrow(InstallRefused);
+    expect(readFileSync(file, "utf8")).toBe(`#!/bin/sh\necho mine\n${MARKER}\n`);
+  });
+});
