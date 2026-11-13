@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // realDeps' wiring, on fakes: no real gh, git, npm or claude process runs in this file. Each module realDeps
@@ -34,6 +34,10 @@ vi.mock("./factory-evidence.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./factory-evidence.ts")>()),
   commitAndPublish: vi.fn(() => ({ pushed: true, blocked: [] })),
 }));
+vi.mock("./factory-hooks.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./factory-hooks.ts")>()),
+  requireHooks: vi.fn(() => ({ problems: [], hooks: [] })),
+}));
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
@@ -44,7 +48,7 @@ import { auditRun } from "./factory-audit.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
-import { git, gitLong } from "./factory-exec.ts";
+import { git, gitLong, npm } from "./factory-exec.ts";
 import type { Candidate, Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
@@ -293,5 +297,64 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     realDeps(FACTORY, OPTIONS, "ci").cleanup(workspace(join(runs, "run-1")));
     expect(vi.mocked(git)).not.toHaveBeenCalled();
     expect(vi.mocked(gitLong)).not.toHaveBeenCalled();
+  });
+});
+
+describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo on PR 240)", () => {
+  let runs: string;
+  let before: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runs = mkdtempSync(join(tmpdir(), "runs-install-"));
+    before = process.env.FAULTFORGE_RUNS_DIR;
+    process.env.FAULTFORGE_RUNS_DIR = runs;
+  });
+
+  afterEach(() => {
+    vi.mocked(npm).mockImplementation(() => ({ status: 0, output: "" }));
+    if (before === undefined) delete process.env.FAULTFORGE_RUNS_DIR;
+    else process.env.FAULTFORGE_RUNS_DIR = before;
+    rmSync(runs, { recursive: true, force: true });
+  });
+
+  /** The folders the faked `git worktree add` would have made: the lab with its guardrails, and the target. */
+  const layout = (runId: string, withTargetPackage: boolean) => {
+    const root = join(runs, runId);
+    const lab = join(root, basename(LAB_ROOT));
+    const target = join(root, "target");
+    mkdirSync(join(lab, ".claude"), { recursive: true });
+    writeFileSync(join(lab, ".claude", "settings.json"), "{}");
+    writeFileSync(join(lab, "package.json"), "{}");
+    mkdirSync(target, { recursive: true });
+    if (withTargetPackage) writeFileSync(join(target, "package.json"), "{}");
+    return { root, lab, target };
+  };
+
+  it("runs npm ci in every worktree that has a package.json, and only there", () => {
+    const { lab, target } = layout("run-1", true);
+    const ws = realDeps(FACTORY, OPTIONS).workspace("run-1");
+    expect(ws.lab).toBe(lab);
+    expect(vi.mocked(npm).mock.calls).toEqual([
+      [lab, ["ci", "--no-audit", "--no-fund"]],
+      [target, ["ci", "--no-audit", "--no-fund"]],
+    ]);
+  });
+
+  it("skips a worktree without a package.json", () => {
+    const { lab } = layout("run-2", false);
+    realDeps(FACTORY, OPTIONS).workspace("run-2");
+    expect(vi.mocked(npm).mock.calls).toEqual([[lab, ["ci", "--no-audit", "--no-fund"]]]);
+  });
+
+  it("throws with the folder and the end of npm's output when an install fails, and removes the run folder", () => {
+    const { root, lab } = layout("run-3", true);
+    const output = `${"x".repeat(100)}${"y".repeat(400)}`;
+    vi.mocked(npm).mockImplementation(() => ({ status: 1, output }));
+    expect(() => realDeps(FACTORY, OPTIONS).workspace("run-3")).toThrow(
+      new Error(`npm ci failed in ${lab}: ${"y".repeat(400)}`),
+    );
+    expect(vi.mocked(npm)).toHaveBeenCalledTimes(1);
+    expect(existsSync(root)).toBe(false);
   });
 });
