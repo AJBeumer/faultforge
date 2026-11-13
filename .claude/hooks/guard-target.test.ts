@@ -3,7 +3,7 @@
  * checkout's pending content from git fixtures are in guard-target.pending.test.ts (#121).
  */
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -475,6 +475,163 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
         bash('cd ../faultforge-target && gh pr create --title "Tidy" --body "Ticket: faultforge-target#6"'),
       ).toBeUndefined();
     });
+  });
+});
+
+describe("guard-target hook reads posted text as written: a repo name next to a slash hides nothing", () => {
+  const TO_TARGET = 'gh pr create --repo AJBeumer/faultforge-target --title "Fix rounding"';
+
+  it("blocks a target PR whose body links a lab ticket", () => {
+    expect(bash(`${TO_TARGET} --body "Follow-up to https://github.com/AJBeumer/faultforge/issues/12"`)).toMatch(
+      /names the lab/,
+    );
+    expect(bash(`${TO_TARGET} --body "See AJBeumer/faultforge#12"`)).toMatch(/names the lab/);
+  });
+
+  it("blocks a comment made from inside the target checkout that links a lab ticket", () => {
+    const command = 'gh issue comment 3 --body "tracked in https://github.com/AJBeumer/faultforge/issues/12"';
+    expect(bash(command, TARGET)).toMatch(/names the lab/);
+  });
+
+  it.each([
+    ["upper case", "see HTTPS://GITHUB.COM/AJBEUMER/FAULTFORGE/ISSUES/12"],
+    ["www", "see https://www.github.com/AJBeumer/FaultForge"],
+    ["an SSH remote", "clone git@github.com:AJBeumer/faultforge.git"],
+    ["owner/name with no number", "used by AJBeumer/faultforge"],
+    ["a path with no host", "see faultforge/issues/12"],
+    ["a markdown link", "[ticket](https://github.com/AJBeumer/faultforge/issues/12)"],
+    ["a local path", "the harness lives in ../FaultForge/packages/harness"],
+  ])("blocks the lab named in a target PR body as %s", (_name, body) => {
+    expect(bash(`${TO_TARGET} --body "${body}"`)).toMatch(/names the lab/);
+  });
+
+  it.each([
+    ["see faultforge/planted bug", /says planted/],
+    ["sabotage/faultforge-target run", /says sabotage/],
+    ["the faultforge-target/ledger folder", /ledger/],
+    ["see FF-0002/faultforge", /case id/],
+  ])("blocks a forbidden word joined to a repo name by a slash: %s", (body, reason) => {
+    expect(bash(`${TO_TARGET} --body "${body}"`)).toMatch(reason);
+  });
+
+  it("blocks the same link in a title, an API field, a heredoc body, a piped body and a commit message", () => {
+    const link = "https://github.com/AJBeumer/faultforge/issues/12";
+    expect(bash(`gh issue create --repo AJBeumer/faultforge-target --title "Follow ${link}" --body "x"`)).toMatch(
+      /names the lab/,
+    );
+    expect(bash(`gh api repos/AJBeumer/faultforge-target/issues/1/comments -f body="see ${link}"`)).toMatch(
+      /names the lab/,
+    );
+    expect(bash(`${TO_TARGET} --body-file - <<EOF\nFollow-up to ${link}\nEOF`)).toMatch(/names the lab/);
+    expect(bash(`echo "see AJBeumer/faultforge#12" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab/);
+    expect(bash(`git commit -m "Follow-up to ${link}"`, TARGET)).toMatch(/names the lab/);
+    expect(bash('git -C D:/Projects/faultforge-target commit -m "Refs AJBeumer/faultforge#12"')).toMatch(
+      /names the lab/,
+    );
+  });
+
+  it("blocks a file edit in the target that links the lab", () => {
+    const file_path = "D:/Projects/faultforge-target/README.md";
+    expect(decide("Write", { file_path, content: "See https://github.com/AJBeumer/faultforge" })).toMatch(
+      /names the lab/,
+    );
+    expect(decide("Edit", { file_path, new_string: "Exercised by AJBeumer/faultforge" })).toMatch(/names the lab/);
+  });
+
+  it("doesn't count the folder a piped or substituted body comes from as posted text", () => {
+    expect(bash(`cat D:/Projects/FaultForge/private/body.md | ${TO_TARGET} --body-file -`)).toBeUndefined();
+    expect(bash(`${TO_TARGET} --body "$(cat ../FaultForge/notes/body.md)"`)).toBeUndefined();
+    expect(bash(`echo "see AJBeumer/faultforge#12" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab/);
+    expect(bash(`${TO_TARGET} --body "$(cat $HOME/FaultForge/notes/body.md)"`)).toBeUndefined();
+    expect(bash(`${TO_TARGET} --body "$(cat %USERPROFILE%\\FaultForge\\body.md)"`)).toBeUndefined();
+  });
+
+  it("doesn't count a heredoc that another command reads as posted text", () => {
+    expect(bash(`${TO_TARGET} --body "Tidy"; cat <<EOF\nAJBeumer/faultforge\nEOF`)).toBeUndefined();
+    expect(bash(`${TO_TARGET} --body "Tidy"; cat <<EOF\n--body "../FaultForge"\nEOF`)).toBeUndefined();
+  });
+
+  it("still reads a path-shaped message that is piped in", () => {
+    expect(bash(`echo "/FaultForge/planted" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab|says planted/);
+  });
+
+  it("reads a heredoc body to its real end: a line with the delimiter after spaces is still body", () => {
+    const body = "Tidy\n  EOF\n../FaultForge/planted\nEOF";
+    expect(bash(`${TO_TARGET} --body-file - <<EOF\n${body}`)).toMatch(/names the lab|says planted/);
+    // The delimiter is the whole word: `EOF` alone doesn't end a body opened with `<<EOF-`.
+    const dashed = "Tidy\nEOF\n../FaultForge/planted\nEOF-";
+    expect(bash(`${TO_TARGET} --body-file - <<EOF-\n${dashed}`)).toMatch(/names the lab|says planted/);
+    // A piped body is read even when a heredoc follows it in the same command.
+    const piped = `echo 'see ../FaultForge/planted' | ${TO_TARGET} --body-file -; cat <<EOF\nx\nEOF`;
+    expect(bash(piped)).toMatch(/names the lab|says planted/);
+    // Two heredocs on one line, a fake opener in a quoted argument, and a quote inside a quoted delimiter:
+    // whatever the shell reads as the posted body, the text from the first `<<` on is judged too.
+    const two = `${TO_TARGET} --body-file - <<A <<B\nTidy\nA\n../FaultForge/planted\nB`;
+    expect(bash(two)).toMatch(/names the lab|says planted/);
+    const fake = `gh pr create --repo AJBeumer/faultforge-target --title "a <<FAKE b" --body-file - <<EOF\n../FaultForge/x\nEOF`;
+    expect(bash(fake)).toMatch(/names the lab/);
+    const quoted = `${TO_TARGET} --body-file - <<'E"OF'\nTidy\nEOF\nhttps://github.com/AJBeumer/faultforge/issues/1\nE"OF`;
+    expect(bash(quoted)).toMatch(/names the lab/);
+    // Quoting inside the delimiter is removed, as the shell does: `EO\F-` means `EOF-`, so a body line
+    // spelled `EO\F-` is text, not the end.
+    const escaped = "Tidy\nEO\\F-\nfaultforge/planted\nEOF-";
+    expect(bash(`${TO_TARGET} --body-file - <<EO\\F-\n${escaped}`)).toMatch(/names the lab|says planted/);
+  });
+
+  it("reads the title of a post whose body is piped in, even when it looks like a redirect", () => {
+    const command = `echo Tidy | gh pr create --repo AJBeumer/faultforge-target --body-file - --title "See <faultforge-target/planted"`;
+    expect(bash(command)).toMatch(/says planted/);
+  });
+
+  it("joins the message parts of every commit in a chain, combined short flags included", () => {
+    expect(bash('git commit -m "Tidy" && git commit --allow-empty -m "injected" -m "bug"', TARGET)).toMatch(
+      /says a bug was injected/,
+    );
+    expect(bash('git commit -am "injected" -m "bug"', TARGET)).toMatch(/says a bug was injected/);
+  });
+
+  it("joins only the commit's own message parts, not text an earlier command posts", () => {
+    const chain = 'gh issue comment 3 --body "Tidy the injected" && git commit -m "bug report"';
+    expect(bash(chain, TARGET)).toBeUndefined();
+  });
+
+  it("judges the message parts git joins into one commit message together", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-commit-parts-"));
+    const first = join(dir, "one.txt").replace(/\\/g, "/");
+    const second = join(dir, "two.txt").replace(/\\/g, "/");
+    writeFileSync(first, "Tidy the injected\n");
+    writeFileSync(second, "bug report\n");
+    expect(bash(`git commit -F ${first} -F ${second}`, TARGET)).toMatch(/says a bug was injected/);
+    expect(bash('git commit -m "Tidy the injected" -m "bug report"', TARGET)).toMatch(/says a bug was injected/);
+  });
+
+  it("judges each posted field on its own, so words from two clean fields never join into a forbidden phrase", () => {
+    expect(bash(`${TO_TARGET.replace('"Fix rounding"', '"Update proof"')} --body "Tests now pass."`)).toBeUndefined();
+    expect(bash(`${TO_TARGET} --body "A planted bug"`)).toMatch(/says planted/);
+  });
+
+  it("still allows the lab's and the target's names where the command needs them: paths, --repo and remotes", () => {
+    const lab = join(mkdtempSync(join(tmpdir(), "guard-lab-")), "FaultForge", "private");
+    mkdirSync(lab, { recursive: true });
+    const body = join(lab, "body.md").replace(/\\/g, "/");
+    writeFileSync(body, "Small cleanup.\n");
+    const ownTicket =
+      '--title "Add a cancel route" --body "Ticket: https://github.com/AJBeumer/faultforge-target/issues/3"';
+    expect(bash(`gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file ${body}`)).toBeUndefined();
+    expect(bash(`gh pr create --repo AJBeumer/faultforge-target ${ownTicket}`, TARGET)).toBeUndefined();
+    expect(bash(`gh pr create ${ownTicket.replace("https://github.com/", "")}`, TARGET)).toBeUndefined();
+    expect(bash("git push https://github.com/AJBeumer/faultforge-target.git HEAD")).toBeUndefined();
+    expect(bash("git push git@github.com:AJBeumer/faultforge-target.git HEAD")).toBeUndefined();
+    expect(bash("cd D:/Projects/FaultForge/../faultforge-target && git status")).toBeUndefined();
+    expect(
+      bash('cd D:/Projects/FaultForge/../faultforge-target && git commit -m "Shorten README intro"'),
+    ).toBeUndefined();
+    expect(bash('git --git-dir=D:/Projects/FaultForge/../faultforge-target/.git commit -m "Tidy"')).toBeUndefined();
+    expect(
+      bash(
+        'cd D:/Projects/FaultForge/../faultforge-target && gh pr create --title "Tidy" --body-file - <<EOF\nCloses #3\nEOF',
+      ),
+    ).toBeUndefined();
   });
 });
 
