@@ -58,6 +58,22 @@ describe("content about to travel, read from git whatever the command text says"
     expect(decide("Bash", { command: "npm run check" }, dir, config)).toBeUndefined();
   });
 
+  it("refuses a push while a local branch or tag not on the remote is named with a telltale (#190)", () => {
+    const { dir, git, config } = reviewedRepo(true);
+    git("switch", "-q", "-c", "planted-bug-7");
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toMatch(
+      /branch or tag not yet on any remote \(planted-bug-7\)[\s\S]*says planted/,
+    );
+    git("switch", "-q", "main");
+    git("branch", "-q", "-D", "planted-bug-7");
+    git("tag", "ff-0002");
+    expect(decide("Bash", { command: "git push --tags" }, dir, config)).toMatch(/case id/);
+    git("tag", "-d", "ff-0002");
+    // An ordinary new branch, and one already on the remote, pass.
+    git("switch", "-q", "-c", "tidy-lookup");
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toBeUndefined();
+  });
+
   it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
     const { dir, git, config } = reviewedRepo(true);
     writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");

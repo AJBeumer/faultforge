@@ -146,7 +146,9 @@ function checkCommand(ctx: Context, command: string) {
   const { cwd, reviewed } = ctx;
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
-    /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
+    /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge)\b/.test(command) ||
+    // Labels and releases post text to the repo too: a label's name and description, a release's notes (#190).
+    /\bgh\s+(label|release)\s+(create|edit)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
   // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its

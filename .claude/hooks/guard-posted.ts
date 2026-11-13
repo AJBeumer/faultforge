@@ -108,7 +108,11 @@ export function commitMessages(step: string): string[] {
  * the command, such as a script that edits a file, are left out.
  */
 export function postedArguments(command: string): string[] {
-  const flag = /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
+  // `--subject` is a merge commit's title, `--notes` a release's, `--description` a label's (#190). Their
+  // short forms (`-n`, `-d`) mean other things to git, so only the long ones are read here; text after a
+  // short one is still in the whole-command check.
+  const flag =
+    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
   const value = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/;
   const pattern = new RegExp(`${flag.source}(?:${value.source})`, "g");
   return [...command.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");

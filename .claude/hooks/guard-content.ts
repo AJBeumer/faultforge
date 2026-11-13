@@ -149,8 +149,22 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
     );
   }
   tick();
-  const where = `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
-  return { reasons: telltales(texts.join("\n")), where };
+  // A push can also create a branch or tag whose name the reviewer sees: every local branch and tag with no
+  // remote branch of the same name is read too (#190). A branch already on a remote was checked when it went.
+  const refs = (...args: string[]) =>
+    git(checkout, ["for-each-ref", ...args])
+      .split("\n")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  const remote = new Set(refs("--format=%(refname:lstrip=3)", "refs/remotes"));
+  const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
+    (name) => !remote.has(name) && telltales(name).length,
+  );
+  const reasons = [...new Set([...telltales(texts.join("\n")), ...giveaways.flatMap((name) => telltales(name))])];
+  const where = giveaways.length
+    ? `a branch or tag not yet on any remote (${giveaways.join(", ")})`
+    : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
+  return { reasons, where };
 }
 
 /** The command with quoted text and heredoc bodies blanked, so operators inside them don't count. */

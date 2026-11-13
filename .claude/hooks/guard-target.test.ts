@@ -478,6 +478,31 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
   });
 });
 
+describe("guard-target hook checks every gh command that posts text to the target (#190)", () => {
+  const R = "--repo AJBeumer/faultforge-target";
+  it.each([
+    [`gh pr merge 5 ${R} --squash --body "planted bug closed"`, /says planted/],
+    [`gh pr merge 5 ${R} --merge --subject "Merge the planted change"`, /says planted/],
+    [`gh label create planted-bug ${R}`, /says planted/],
+    [`gh label create tidy ${R} --description "the ledger"`, /ledger/],
+    [`gh release create v1 ${R} --notes "planted bug"`, /says planted/],
+  ])("refuses %s", (command, reason) => {
+    expect(bash(command)).toMatch(reason);
+  });
+
+  it("refuses a merge of a lab PR whose body links the target, as it refuses a new PR's", () => {
+    expect(bash('gh pr merge 9 --squash --body "see https://github.com/AJBeumer/faultforge-target/pull/3"')).toMatch(
+      /link to the target/,
+    );
+  });
+
+  it("still allows ordinary merges, labels and releases on the target", () => {
+    expect(bash(`gh pr merge 5 ${R} --squash`)).toBeUndefined();
+    expect(bash(`gh label create bug ${R} --description "Something is broken"`)).toBeUndefined();
+    expect(bash(`gh release create v1.1 ${R} --notes "Filter bookings by status"`)).toBeUndefined();
+  });
+});
+
 describe("guard-target hook reads posted text as written: a repo name next to a slash hides nothing", () => {
   const TO_TARGET = 'gh pr create --repo AJBeumer/faultforge-target --title "Fix rounding"';
 
