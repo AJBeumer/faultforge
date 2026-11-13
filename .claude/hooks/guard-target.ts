@@ -161,16 +161,19 @@ function checkCommand(ctx: Context, command: string) {
     /\bgh\s+(label|release)\s+(create|edit)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its
-  // checkout. The folder the command runs in only counts when it names no destination at all (say,
-  // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
-  const destinations = explicitDestinations(outsidePostedText(command));
+  // Every reviewed repo the command touches, by any part of it: a named destination anywhere in the text,
+  // or a move into its checkout. The folder the command runs in counts unless the command really names
+  // another destination (say, a post from there to another repo, judged by where it goes). "Really" means
+  // outside its posted text: `-R` or `--repo` inside a message names nothing. Both readings are used, the
+  // strict one for what is touched, so text that confuses one can't hide a repo from both (Qodo on PR 208).
+  const destinations = explicitDestinations(command);
+  const realDestinations = explicitDestinations(outsidePostedText(command));
   const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
   const touched = reviewed.filter(
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
       entersCheckout(command, r) ||
-      (!destinations.length && inCheckout(cwd, r)),
+      (!realDestinations.length && inCheckout(cwd, r)),
   );
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves

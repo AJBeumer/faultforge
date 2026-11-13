@@ -498,6 +498,11 @@ describe("guard-target hook checks every gh command that posts text to the targe
     expect(bash('git commit -m "planted bug: grep -r src/app"', TARGET)).toMatch(/says planted/);
   });
 
+  it("counts a repo named anywhere, so a fake heredoc in a message can't hide the real --repo (Qodo on PR 208)", () => {
+    const command = 'gh pr create --body "planted bug <<EOF\nordinary text" --repo AJBeumer/faultforge-target';
+    expect(bash(command)).toMatch(/says planted/);
+  });
+
   it("reads no destination from inside posted text, so a post from the target is still judged (Qodo on PR 208)", () => {
     expect(bash('gh pr create --title Tidy --body "planted bug: grep -R src/app"', TARGET)).toMatch(/says planted/);
     expect(bash('gh pr create --title Tidy --body "planted; see --repo other/app"', TARGET)).toMatch(/says planted/);
