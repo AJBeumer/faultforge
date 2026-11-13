@@ -249,8 +249,9 @@ describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", ()
   it("takes a review that didn't finish to an incomplete record", { timeout: 300_000 }, async () => {
     const w = world();
     expect(inject(w, CONTROL_TEMPLATE.id, "FF-9103")).toBe("ok");
-    // Timed out, with no comment feed saved: only "review incomplete" may be recorded.
-    reviewed(w, "FF-9103", 903, { state: "timed out", comment: false, findings: [] });
+    // Timed out, as review:wait saves it ("review incomplete"), with no comment feed: only "review incomplete" may
+    // be recorded (Qodo on PR 241).
+    reviewed(w, "FF-9103", 903, { state: "review incomplete", comment: false, findings: [] });
     const record = await adjudicateAndBuild(w, "FF-9103", "review incomplete");
     expect(record).toMatchObject({ status: "incomplete", human: { disposition: "review_incomplete" } });
   });
