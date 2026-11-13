@@ -41,3 +41,43 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  # The slow tests (packages/*/test), on both systems. They need the reviewed target checked out next to this
+  # repository, as on the owner's machine; it is public, so no token is needed. Not one of the checks
+  # protect-main requires, so a flaky network can't block a merge, but it runs on every push (#229).
+  integration:
+    name: npm run test:integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: FaultForge
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AJBeumer/faultforge-target
+          ref: main
+          path: faultforge-target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            FaultForge/package-lock.json
+            faultforge-target/package-lock.json
+      # The tests commit in scratch copies of the target; git needs an identity for that.
+      - run: |
+          git config --global user.name "integration tests"
+          git config --global user.email "integration@example.com"
+      - run: npm ci
+        working-directory: faultforge-target
+      - run: npm ci
+        working-directory: FaultForge
+      - run: npm run test:integration
+        working-directory: FaultForge
