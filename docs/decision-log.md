@@ -15,7 +15,7 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **Lesson or decision:** a one-line bug planted to break one rule actually broke two. Besides creating duplicate bookings (INV-IDEMP-001), it let one user read another user's booking (INV-AUTH-001). The answer key and the hidden test only knew about the first; Qodo found both. So the answer key has to record everything a planted bug breaks, not just what it was meant to break, or a reviewer's correct extra finding would be counted as noise.
 - **Remaining risk:** Qodo's local structured review is not verified yet; that is the Day 2 gate. The finding's line range covers 38 lines, so "overlapping lines" is a loose test for wide ranges. The Qodo trial shows 14 days, not 30. GitHub also requested a Copilot review automatically. It posted after Qodo, so it didn't affect this case, but it has to be switched off for later ones.
 
-### Decisions made today
+### Decisions made on 2 November
 
 - **Match rule fixed before any data.** A Qodo finding counts as a catch only if it names the injected file, overlaps the injected lines, and describes the right kind of problem. The rule is not loosened after seeing results.
 - **Two repositories.** The harness lives here. The booking API lives in a separate target repository, so the answer key never sits next to the code Qodo reviews.
@@ -306,6 +306,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 8, later: a local review command and a check that it happened
 
+*Recorded 12 November.*
+
 - **Challenge requirement:** the same Day 8 requirement as above: review local changes before the commit, with the task requirements and decisions as context.
 - **Increment delivered:**
   - **`review:local`** ([PR #179](https://github.com/AJBeumer/faultforge/pull/179), ticket #176) runs Qodo's local review on the staged, unstaged and new files, saves exactly what was sent (which files, which were left out), and never reports a skipped or incomplete review as clean. It was built by the factory (run `20261112-195359-faultforge-176`), which stopped at its budget: 61 minutes, $23.34 of $25, 212 turns, with two Qodo findings on the pull request still open and the final review and revert check not yet run. The audit found no problems and `hooks-checked` was logged. I finished the ticket by hand: both findings fixed, then six further notes fixed, then the review, revert check and CI passed.
@@ -321,6 +323,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **Remaining risk:** the gate is not wired into a commit hook; that is a separate decision because the agent cannot change `.claude`. The local findings could not be marked implemented in Qodo: the toolbox command answered "not found" for every id, probably because `review:local` reaches Qodo through its API rather than the CLI's own login (not proven). The runs used throwaway worktrees, so nothing carries over. Three paths that run only through the command's `main` have no unit test.
 
 ## Day 8, last: a warning after every commit
+
+*Recorded 13 November.*
 
 - **Challenge requirement:** the same Day 8 requirement: review before the commit. `review:gate` can say whether a commit was reviewed, but nothing ran it.
 - **Increment delivered:** a hook ([PR #184](https://github.com/AJBeumer/faultforge/pull/184), ticket #183) that runs `review:gate` after each commit made through Claude Code in this repository and shows a short note to the person and the agent when no finished local review saw those files. It warns and never blocks. It is registered in `.claude/settings.json`, and it fired on its own commits while it was being built.

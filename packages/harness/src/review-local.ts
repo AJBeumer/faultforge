@@ -9,7 +9,8 @@
  * Qodo keeps a local review's open findings per working folder: a finding from one change can
  * reappear on an unrelated one reviewed from the same checkout later, so a rerun can look like
  * independent agreement when it only repeated the first run's finding (12 November). `--isolated`
- * avoids that by reviewing from a fresh temporary worktree, removed afterwards.
+ * avoids that: the changes are still read from the current checkout, but under a review stream named by a
+ * fresh temporary worktree's path, which Qodo has never seen; the worktree is removed afterwards.
  *
  * Before submitting anything, the working tree's split (staged, unstaged, untracked paths and
  * counts) is saved under `private/raw-artifacts/local-reviews/<request id>/split.json`, so what was
