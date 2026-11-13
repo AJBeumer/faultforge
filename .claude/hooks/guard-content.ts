@@ -156,13 +156,15 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
       .split("\n")
       .map((name) => name.trim())
       .filter(Boolean);
+  // Tags are always read: without asking the remote, a local tag can't be told apart from a published one,
+  // and a giveaway tag shouldn't stay on the target either way (Qodo on PR 208).
   const remote = new Set(refs("--format=%(refname:lstrip=3)", "refs/remotes"));
-  const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
-    (name) => !remote.has(name) && telltales(name).length,
-  );
+  const branches = refs("--format=%(refname:lstrip=2)", "refs/heads").filter((name) => !remote.has(name));
+  const tags = refs("--format=%(refname:lstrip=2)", "refs/tags");
+  const giveaways = [...branches, ...tags].filter((name) => telltales(name).length);
   const reasons = [...new Set([...telltales(texts.join("\n")), ...giveaways.flatMap((name) => telltales(name))])];
   const where = giveaways.length
-    ? `a branch or tag not yet on any remote (${giveaways.join(", ")})`
+    ? `a new branch, or a tag (${giveaways.join(", ")})`
     : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
   return { reasons, where };
 }

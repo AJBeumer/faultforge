@@ -87,7 +87,8 @@ function failed(error: unknown): Decision {
  */
 function explicitDestinations(command: string): string[] {
   const patterns = [
-    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    // `-R` is gh's short form of `--repo` (Qodo on PR 208).
+    /(?:--repo|(?<=\s)-R)[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
     /\brepos\/([\w.-]+\/[\w.-]+)\//gi,
     /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
     /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
@@ -315,7 +316,7 @@ function referencedFiles(cwd: string, command: string): string[] {
   const ghApi = /\bgh\s+api\b/.test(command);
   // A bare file name ends at whitespace, a quote or a shell separator: `-F msg.txt; echo` names msg.txt.
   for (const match of command.matchAll(
-    /(\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/g,
+    /(\s-F|--file|--body-file|--notes-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/g,
   )) {
     let file = match[2] ?? match[3] ?? match[4];
     if (!file || file === "-") continue;

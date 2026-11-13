@@ -35,7 +35,7 @@ export function postedText(command: string): string[] {
 }
 
 /** A flag that reads its body from stdin (`-`), followed by a blank, a shell operator or the end. */
-export const STDIN_BODY = /(\s-F|--file|--body-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
+export const STDIN_BODY = /(\s-F|--file|--body-file|--notes-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
 
 /**
  * Where each heredoc body sits in the command, as the shell reads it. The delimiter is the word after
