@@ -8,7 +8,7 @@ An adversarial quality laboratory for AI software factories, powered by Qodo.
 |---|---|
 | Event | Qodo hackathon "Build a Software Factory in 30 Days", 2 November to 1 December 2026 |
 | Project type | Solo hackathon project, reproducible developer-tool prototype |
-| Charter version | 2.2, 6 November 2026 (made public; see Charter control) |
+| Charter version | 2.3, 13 November 2026 (wording brought in line with what was decided; see Charter control) |
 | Status | Locked vision and scope. Implementation adapts to the daily challenges |
 
 ---
@@ -254,7 +254,7 @@ TypeScript and Node.js. Fastify or an equally lean HTTP framework. Vitest for te
 
 ### Record contracts
 
-**Private ledger entry** (never leaves private storage):
+**Private ledger entry** (never leaves private storage; an illustrative shape, not a copy of a real entry):
 
 ```json
 {
@@ -343,7 +343,7 @@ This is the project's credibility backbone. The scorecard stays honest when resu
 
 - The invariant is specified before injection. Each mutation is validated against the correct and defective variants.
 - The answer key is private and unavailable to the reviewer and challenger.
-- **Match rule, fixed before data collection:** a finding counts as a detection when it names the injected file, overlaps the injected line range, and carries a category consistent with the defect class. A generic warning is not a detection. Criteria are never loosened after seeing results.
+- **Match rule, fixed before data collection:** a finding counts as a detection when it names the injected file, overlaps the injected line range, and its title, summary or category contains one of the kind terms its template declared before the case ran (`match.kindTerms`). A generic warning is not a detection. Criteria are never loosened after seeing results. The owner's verdict, recorded with its reason, is the check that the finding describes the right kind of problem.
 - Findings outside the injected range, and all findings on control changes, are adjudicated by a human. Unadjudicated findings are reported as unresolved, never as false positives.
 - Clean control changes are included from week one. Precision cannot be estimated without them.
 
@@ -480,7 +480,7 @@ Daily challenges are inputs, not replacements. Sequencing is flexible; dependenc
 | Phase | Non-negotiable milestone | Stretch |
 |---|---|---|
 | Day 1 | Seed app, one validated mutation, ledger entry, one neutral PR, one Qodo review, one recorded outcome | CLI entry point |
-| Day 2 | Qodo integration gate: local JSON verified or fallback chosen; trial coverage confirmed; variance measured | Normalized findings |
+| Day 2 | Qodo integration gate: local JSON verified or fallback chosen; trial coverage confirmed; variance measured (done later: trial coverage settled by the hackathon licence on Day 1; local structured review built on Day 8 as `review:local`; review variance measured with the benchmark cases) | Normalized findings |
 | Days 3 to 7 | Several templates, clean controls, repeatable isolated cases, artefact capture, agent instructions under Qodo review, engine extracted as a library with target and review-source interfaces | CI automation |
 | Days 8 to 14 | Adjudication criteria applied, measured detection and precision, contamination safeguards, frozen baseline config, first audit of an external TypeScript repository with generic templates | More classes, held-out cases |
 | Day 15 | Devil's Advocate reveal: first evidence-based challenge on a real finding, persisted case | Case-file preview |
@@ -630,6 +630,7 @@ Every documented capability is verified against the installed CLI and the accoun
 
 **Changes since 2.1:**
 
+- **2.3, 13 November 2026.** Wording only, after a repository audit. The match rule is stated as the code applies it: a kind term the template declared, in the finding's title, summary or category, rather than "a category consistent with the defect class". The Day 2 gate's row says when each part was done. The sample ledger entry is labelled illustrative. *Improves:* the charter, the decision log and the code say the same thing. *Dropped:* nothing. *Integrity:* no rule changed; this records the rule every case has been judged by.
 - **2.2, 6 November 2026 (Day 3).** The charter, the full 30-day plan and every work ticket are public, including Devil's Advocate and the arbiter. *Improves:* judges can check from Day 3 that the plan and method came before any results. *Dropped:* the Day 15 surprise. *Integrity:* the answer key, raw evidence and the templates of cases not yet reviewed stay in private storage, because a reviewer that could read them would make every result meaningless. A template is published once its case is adjudicated. Held-out benchmark templates are published with the final report.
 
 **North star:** build a software factory that does not merely claim to be trustworthy. It can show the evidence.
