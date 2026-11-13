@@ -258,7 +258,7 @@ function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
   const posted = postedArguments(command);
   // Text read from stdin (a pipe or heredoc) or built from shell variables is in the command
   // itself, not in the extracted arguments, so check the whole command for those.
-  const indirect = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command) || posted.some((p) => /[$`]/.test(p));
+  const indirect = STDIN_BODY.test(command) || posted.some((p) => /[$`]/.test(p));
   const text = [...(indirect ? [command] : posted), ...referencedFiles(ctx.cwd, command)].join("\n");
   const linked = repos.find((r) => linkPattern([r])?.test(text));
   if (linked) {
@@ -290,17 +290,26 @@ function postedText(command: string): string[] {
   for (const span of [...spans].reverse()) outside = outside.slice(0, span.start) + outside.slice(span.end);
   const posted = postedArguments(outside);
   const heredocs = spans.map((span) => command.slice(span.start, span.end));
-  const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
-  // A heredoc is posted only when the command reads a body from stdin; any other heredoc belongs to
-  // another command, and the whole-command check already reads it as before. When stdin is read,
-  // everything from the first `<<` on is also judged as written: whatever the shell takes as the body is
-  // in there, however its delimiter is quoted or however many heredocs share the line. Text after the
-  // body may be refused with it; refusing a clean post is the safe mistake.
-  if (stdin && command.includes("<<")) return [...posted, ...heredocs, command.slice(command.indexOf("<<"))];
-  // The flag values are kept beside the whole command: a title next to a piped body is posted too.
+  const stdin = STDIN_BODY.test(command);
+  // With no body from stdin and nothing built by the shell, the flag values are all that is posted. Any
+  // heredoc then belongs to another command, and the whole-command check already reads it as before.
   if (!stdin && !posted.some((p) => /[$`]/.test(p))) return posted;
-  return [blankLocalPaths(command, true), ...posted.map((value) => blankLocalPaths(value, false))];
+  // Otherwise the posted text can be anywhere: piped from an earlier step, in a heredoc, or built by a
+  // substitution. So the whole command is judged with only the paths it reads from or moves into blanked,
+  // beside the flag values and heredoc bodies. Everything from the first `<<` on is also judged as written,
+  // however its delimiter is quoted or however many heredocs share the line. A clean post can be refused
+  // for text a neighbouring step holds; refusing a clean post is the safe mistake.
+  const fromFirstHeredoc = command.includes("<<") ? [command.slice(command.indexOf("<<"))] : [];
+  return [
+    blankLocalPaths(command, true),
+    ...posted.map((value) => blankLocalPaths(value, false)),
+    ...heredocs,
+    ...fromFirstHeredoc,
+  ];
 }
+
+/** A flag that reads its body from stdin (`-`), followed by a blank, a shell operator or the end. */
+const STDIN_BODY = /(\s-F|--file|--body-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
 
 /**
  * Where each heredoc body sits in the command, as the shell reads it. The delimiter is the word after
@@ -344,7 +353,13 @@ function heredocSpans(command: string): { start: number; end: number }[] {
  * may be the message itself, and inside a quoted value a `<` is just text.
  */
 function blankLocalPaths(text: string, redirects: boolean): string {
-  const reader = redirects ? /\b(?:cat|type|Get-Content|gc)\s+|<\s*/ : /\b(?:cat|type|Get-Content|gc)\s+/;
+  // In a whole command, the folders it moves into are paths too: `cd`, `pushd`, `Set-Location`, `git -C`,
+  // `--git-dir` and `--work-tree` name where it runs, never what it posts.
+  const navigates =
+    /\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+-C\s*|--(?:git-dir|work-tree)[=\s]\s*/;
+  const reader = redirects
+    ? new RegExp(`\\b(?:cat|type|Get-Content|gc)\\s+|<\\s*|${navigates.source}`)
+    : /\b(?:cat|type|Get-Content|gc)\s+/;
   return text.replace(new RegExp(`(${reader.source})(["']?)[^\\s"'\`;&|<>()]+\\2`, "gi"), "$1 ");
 }
 
