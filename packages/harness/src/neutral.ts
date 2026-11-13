@@ -5,16 +5,21 @@
  */
 const TELLTALES: [RegExp, string][] = [
   [/\bfault[\s_-]*forge\b(?!-target)/i, "names the lab"],
-  [/\bsabot(age|aged|eur|eurs)\b/i, "says sabotage"],
-  [/\bplanted\b/i, "says planted"],
-  [/\b(injected|inserted)\s+(bug|defect|fault)s?\b|\b(bug|defect|fault)\s+injection\b/i, "says a bug was injected"],
-  [/\bmutation(s|\s+test(ing)?)?\b/i, "says mutation"],
-  [/\banswer[\s-]*key\b/i, "mentions the answer key"],
+  // Two-word phrases match with a space, a hyphen or an underscore between the words, as branch names
+  // write them, and in either case (#190).
+  [/\bsabot(ag\w*|eurs?)\b/i, "says sabotage"],
+  [/\bplanted\b|\bplant(ing)?[\s_-]+(an?[\s_-]+|the[\s_-]+)?(bug|defect|fault)s?\b/i, "says planted"],
+  [
+    /\b(injected|inserted)[\s_-]+(bug|defect|fault)s?\b|\b(bug|defect|fault)[\s_-]+injection\b/i,
+    "says a bug was injected",
+  ],
+  [/\bmutation(s|[\s_-]+test(ing)?)?\b|\bmutants?\b/i, "says mutation"],
+  [/\banswer[\s_-]*key\b/i, "mentions the answer key"],
   [/\bledger\b/i, "mentions the ledger"],
-  [/\bground[\s-]*truth\b/i, "mentions ground truth"],
-  [/\b(proof|hidden)\s+tests?\b/i, "mentions the hidden proof test"],
-  [/\bdevil'?s\s+advocate\b/i, "names the challenger"],
-  [/\bFF-\d{3,}\b/, "contains a case id"],
+  [/\bground[\s_-]*truth\b/i, "mentions ground truth"],
+  [/\b(proof|hidden)[\s_-]+tests?\b/i, "mentions the hidden proof test"],
+  [/\bdevil'?s[\s_-]+advocate\b/i, "names the challenger"],
+  [/\bff[\s_-]?\d{3,}\b/i, "contains a case id"],
 ];
 
 /** Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. */
@@ -27,9 +32,12 @@ export function telltales(text: string): string[] {
  * the reviewed repository: the branch name and commit message, the text it looks for and the text it
  * writes (`find`, `replace`), and, when the template declares one, its ticket's title, `what` and
  * criteria — the target ticket the case PR will claim to make. The proof test stays in private storage,
- * so its name is not checked. An empty list means the template reads as an ordinary change.
+ * so its name is not checked. The template's own `id` and `invariantId` are refused in every one of those
+ * fields too. An empty list means the template reads as an ordinary change.
  */
 export function templateTelltales(template: {
+  id?: string;
+  invariantId?: string;
   find: string;
   replace: string;
   publish: { branch: string; commitMessage: string };
@@ -48,5 +56,10 @@ export function templateTelltales(template: {
         ] as [string, string][])
       : []),
   ];
-  return fields.flatMap(([field, text]) => telltales(text).map((reason) => `${field}: ${reason}`));
+  // The template's own id and invariant id are names only the lab uses: either one in a visible field
+  // gives the case away whatever the word list says (#190).
+  const ownNames = [template.id, template.invariantId].filter((name): name is string => Boolean(name));
+  const named = (text: string) =>
+    ownNames.filter((name) => text.toLowerCase().includes(name.toLowerCase())).map((name) => `names ${name}`);
+  return fields.flatMap(([field, text]) => [...telltales(text), ...named(text)].map((reason) => `${field}: ${reason}`));
 }

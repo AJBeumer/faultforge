@@ -35,7 +35,7 @@ export function postedText(command: string): string[] {
 }
 
 /** A flag that reads its body from stdin (`-`), followed by a blank, a shell operator or the end. */
-export const STDIN_BODY = /(\s-F|--file|--body-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
+export const STDIN_BODY = /(\s-F|--file|--body-file|--notes-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
 
 /**
  * Where each heredoc body sits in the command, as the shell reads it. The delimiter is the word after
@@ -108,8 +108,30 @@ export function commitMessages(step: string): string[] {
  * the command, such as a script that edits a file, are left out.
  */
 export function postedArguments(command: string): string[] {
-  const flag = /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
+  return [...command.matchAll(postedFlagValue())].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+}
+
+/**
+ * A flag that posts text, with its value. `--subject` is a merge commit's title, `--notes` a release's,
+ * `--description` a label's (#190). Their short forms (`-n`, `-d`) mean other things to git, so only the long
+ * ones are read here; text after a short one is still in the whole-command check.
+ */
+function postedFlagValue(): RegExp {
+  const flag =
+    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
   const value = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/;
-  const pattern = new RegExp(`${flag.source}(?:${value.source})`, "g");
-  return [...command.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+  return new RegExp(`${flag.source}(?:${value.source})`, "g");
+}
+
+/**
+ * The command with its posted text taken out: flag values and heredoc bodies. What is left is what the shell
+ * acts on, so a destination is read from there: `--repo` or `-R` written inside a message names no repo
+ * (Qodo on PR 208).
+ */
+export function outsidePostedText(command: string): string {
+  let outside = command;
+  for (const span of [...heredocSpans(command)].reverse()) {
+    outside = outside.slice(0, span.start) + outside.slice(span.end);
+  }
+  return outside.replace(postedFlagValue(), " ");
 }

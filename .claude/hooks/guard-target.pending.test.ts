@@ -58,6 +58,33 @@ describe("content about to travel, read from git whatever the command text says"
     expect(decide("Bash", { command: "npm run check" }, dir, config)).toBeUndefined();
   });
 
+  it("refuses a push while a local branch or tag not on the remote is named with a telltale (#190)", () => {
+    const { dir, git, config } = reviewedRepo(true);
+    git("switch", "-q", "-c", "planted-bug-7");
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toMatch(
+      /a new branch, or a tag \(planted-bug-7\)[\s\S]*says planted/,
+    );
+    git("switch", "-q", "main");
+    git("branch", "-q", "-D", "planted-bug-7");
+    git("tag", "ff-0002");
+    expect(decide("Bash", { command: "git push --tags" }, dir, config)).toMatch(/case id/);
+    // A tag is read even when a branch of the same name is on the remote, and once it is published too:
+    // without asking the remote the guard can't tell, and a giveaway tag shouldn't stay (Qodo on PR 208).
+    git("push", "-q", "origin", "main:refs/heads/ff-0002");
+    git("fetch", "-q", "origin");
+    expect(decide("Bash", { command: "git push origin main" }, dir, config)).toMatch(/case id/);
+    git("tag", "-d", "ff-0002");
+    // A branch is read even when one remote already has it: a push can send it to another (Qodo on PR 208).
+    git("branch", "ff-0003");
+    git("push", "-q", "origin", "ff-0003");
+    git("fetch", "-q", "origin");
+    expect(decide("Bash", { command: "git push backup --all" }, dir, config)).toMatch(/case id/);
+    git("branch", "-q", "-D", "ff-0003");
+    // An ordinary new branch, and one already on the remote, pass.
+    git("switch", "-q", "-c", "tidy-lookup");
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toBeUndefined();
+  });
+
   it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
     const { dir, git, config } = reviewedRepo(true);
     writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
