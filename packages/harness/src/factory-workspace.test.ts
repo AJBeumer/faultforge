@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
-import { fingerprints, teardown, worktreeFor } from "./factory-workspace.ts";
+import { fingerprints, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
 import { git, gitRepo } from "./fixtures/git-repo.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 
@@ -124,5 +124,21 @@ describe("fingerprints: what the agent must not change", () => {
     writeFileSync(join(privateRepo, "notes.md"), "uncommitted\n");
     const after = fingerprints(FACTORY, privateRepo, "local", lab);
     expect(after[`the owner's checkout ${privateRepo}`]).not.toBe(first[`the owner's checkout ${privateRepo}`]);
+  });
+});
+
+describe("samePath: one folder, however it is spelled (Windows CI on PR 240)", () => {
+  it("matches a folder against its real path and a differently cased drive letter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "same-path-"));
+    expect(samePath(dir, realpathSync.native(dir))).toBe(true);
+    expect(samePath(dir, join(dir, "."))).toBe(true);
+    if (process.platform === "win32")
+      expect(
+        samePath(
+          dir,
+          dir.replace(/^[A-Z]/, (c) => c.toLowerCase()),
+        ),
+      ).toBe(true);
+    expect(samePath(dir, join(dir, "other"))).toBe(false);
   });
 });

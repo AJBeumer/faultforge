@@ -3,7 +3,7 @@
  * of what the agent must not change. Split from factory-tick.ts (#227).
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import type { FactoryConfig } from "./factory-config.ts";
 import { git } from "./factory-exec.ts";
@@ -21,6 +21,23 @@ export type RunMode = "local" | "ci";
 
 /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
 export const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
+
+/**
+ * Whether two paths name the same folder. Real paths on both sides, as `ledger-check.ts` does: on Windows a
+ * temp folder can be given by its short 8.3 name (RUNNER~1) while git reports the long one, and the drive
+ * letter's case can differ. A path that doesn't exist falls back to plain resolution.
+ */
+export function samePath(a: string, b: string): boolean {
+  const real = (p: string) => {
+    try {
+      return realpathSync.native(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const [x, y] = [real(a), real(b)];
+  return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
 
 /**
  * Removes a run's worktrees, its private branch and its folder, as far as they exist. Each step is
@@ -46,7 +63,7 @@ export function teardown(
   const registered = (repo: string, path: string) =>
     git(repo, "worktree", "list", "--porcelain")
       .split("\n")
-      .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === resolve(path));
+      .some((line) => line.startsWith("worktree ") && samePath(line.slice(9), path));
   if (registered(privateRepo, priv))
     attempt("private worktree", () => git(privateRepo, "worktree", "remove", "--force", priv));
   if (git(privateRepo, "branch", "--list", `run-${runId}`))
