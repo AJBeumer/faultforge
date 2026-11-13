@@ -28,6 +28,7 @@ import {
   hookTimeoutSeconds,
   type IssueEvent,
   isLabelAlreadyGone,
+  killTree,
   LABELS,
   LONG_CALL_TIMEOUT_MS,
   lastLabelled,
@@ -2297,8 +2298,10 @@ describe("hooks-checked reaches the run's saved and published log (#126)", () =>
 
   it("the workflow publishes every run log except the agent's transcript, so the event is public", () => {
     const workflow = readFileSync(join(LAB, ".github/workflows/factory.yml"), "utf8");
-    expect(workflow).toContain("${{ runner.temp }}/faultforge-runs/*.jsonl");
-    expect(workflow).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
+    // The workflow's own expression syntax, written as plain text on purpose.
+    const runnerTemp = "$" + "{{ runner.temp }}";
+    expect(workflow).toContain(`${runnerTemp}/faultforge-runs/*.jsonl`);
+    expect(workflow).toContain(`!${runnerTemp}/faultforge-runs/*.agent.jsonl`);
   });
 
   it("docs/factory-trigger.md names the event where it describes the self-test", () => {
@@ -2475,5 +2478,18 @@ describe("acquireLock: the age limit and the release belong to this run (Qodo on
     expect(existsSync(join(dir, "factory.lock"))).toBe(true);
     second.release();
     expect(existsSync(join(dir, "factory.lock"))).toBe(false);
+  });
+});
+
+describe("killTree: a process already gone is no crash (audit N-12)", () => {
+  it.skipIf(process.platform === "win32")("ignores ESRCH and rethrows anything else", () => {
+    const gone = () => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    };
+    expect(() => killTree(12345, gone)).not.toThrow();
+    const denied = () => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    };
+    expect(() => killTree(12345, denied)).toThrow(/not permitted/);
   });
 });

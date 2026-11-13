@@ -21,7 +21,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
+import {
+  blankQuoted,
+  chainProblem,
+  DEFAULT_BUDGET_MS,
+  pendingCommit,
+  pendingPush,
+  Uninspectable,
+  withDeadline,
+} from "./guard-content.ts";
 import {
   commitMessages,
   commitSteps,
@@ -67,11 +75,15 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       cwd: String(input.cwd ?? process.cwd()),
       reviewed: reviewedRepos(env.FAULTFORGE_CONFIG),
     };
-    if (tool === "Bash" || tool === "PowerShell") {
-      checkCommand(ctx, String(args.command ?? ""));
-    } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-      checkFileEdit(ctx, args);
-    }
+    // One deadline for the whole decision, every scan in it included (audit N-4).
+    const budget = Number(env.FAULTFORGE_GUARD_BUDGET_MS) || DEFAULT_BUDGET_MS;
+    withDeadline(budget, () => {
+      if (tool === "Bash" || tool === "PowerShell") {
+        checkCommand(ctx, String(args.command ?? ""));
+      } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+        checkFileEdit(ctx, args);
+      }
+    });
     return ALLOW;
   } catch (error) {
     if (error instanceof Denied) return { kind: "deny", reason: error.message };

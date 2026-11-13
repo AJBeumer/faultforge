@@ -8,7 +8,7 @@
  * place (they must pass: a test that fails either way proves nothing), then puts back the base
  * version of every changed code file and runs them again. At least one must fail.
  *
- * Exits 0 when at least one test ran and failed without the change, 1 when every test still passed
+ * Exit codes: 0 at least one test ran and failed without the change; 1 every test still passed
  * (the tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code
  * file, the PR changes its dependencies, the PR's tests fail even with the change, the tests only fail
  * to load without it (they import the change, nothing shows they test it; #217), or the scratch copy
@@ -40,6 +40,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { ghJson } from "./github.ts";
+import { ROOT } from "./paths.ts";
 import { parseVitestReport } from "./run-outcome.ts";
 
 export interface Change {
@@ -248,6 +249,7 @@ function git(repo: string, args: string[], env?: NodeJS.ProcessEnv): string {
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10 * 60_000, // a fetch must never hang the check, or the runner (audit N-14)
   });
 }
 
@@ -356,7 +358,7 @@ async function main() {
     process.exit(2);
   }
   const config = repoConfig(factory, repoKey);
-  const lab = fileURLToPath(new URL("../../..", import.meta.url));
+  const lab = ROOT;
   const repo = resolve(lab, config.path);
   const view = ghJson<{ headRefOid: string; baseRefOid: string; mergeCommit: { oid: string } | null; state: string }>(
     "pr",
@@ -390,7 +392,6 @@ async function main() {
   process.exit(result.exit);
 }
 
-// Exit codes: 0 caught, 1 not proven, 2 can't judge (no tests, no code, a dependency change, tests that fail with the change, tests that only fail to load without it, or couldn't run).
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main().catch((error: unknown) => {
     console.error(`revert:check could not run: ${error instanceof Error ? error.message : String(error)}`);

@@ -50,7 +50,7 @@
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
  * listed); 2 nothing was built, because an input is missing or unreadable (the answer key, the events, a
  * bug case's template, the saved review, or an overlay file that exists), the answer key or audit log has an
- * amendment problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
+ * amendment or history problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
  * wrong PR). The message names which.
  */
 
@@ -62,12 +62,12 @@ import { parseArgs } from "node:util";
 import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
+import { applyMatchRule, type Criterion, type MatchFinding } from "./match-rule.ts";
+import { ROOT } from "./paths.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
 import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
-const ROOT = join(import.meta.dirname, "../../..");
 /** Where a record names its schema, by version (#162: version 2 adds two outcomes a control can have). */
 const schemaRef = (version: number) => `../schemas/case-record.v${version}.json`;
 /** A record whose overlay says nothing about a challenge says it hasn't run (#162: a control needs no overlay). */
@@ -103,9 +103,9 @@ export interface BuildInputs {
   templateUrl?: string;
 }
 
-/** Strips a git remote URL down to `owner/repo`. */
+/** Strips a git remote URL, https or ssh (`git@host:owner/repo`, `ssh://git@host/owner/repo`), to `owner/repo`. */
 export function repoSlug(url: string): string {
-  return url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "");
+  return url.replace(/^(?:https?:\/\/|ssh:\/\/[^@/]+@)[^/]+\/|^[^@/\s]+@[^:/]+:/, "").replace(/\.git$/, "");
 }
 
 /** The most recent event of `types` (by `at`), so a later verdict or a re-review is the one that counts. */
@@ -188,8 +188,8 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   });
 
   const record: Record<string, unknown> = {
-    $schema: schemaRef(recordVersionFor(kind, disposition)),
-    schemaVersion: recordVersionFor(kind, disposition),
+    $schema: schemaRef(recordVersionFor(kind)),
+    schemaVersion: recordVersionFor(kind),
     caseId,
     kind,
     target: { repo: repoSlug(entry.targetRepo as string), baseCommit: entry.targetCommit },
@@ -242,7 +242,7 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
       }),
     );
     const result = applyMatchRule(
-      { file: entry.injectedFile as string, lines: isRange(injectionLines) ? injectionLines : injectionLines },
+      { file: entry.injectedFile as string, lines: injectionLines },
       matchFindings,
       kindTerms,
     );

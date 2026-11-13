@@ -16,11 +16,24 @@
  */
 import { readFileSync } from "node:fs";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { type Pending, type PushUpdate, pendingIndex, pendingPush, pendingPushUpdates } from "./guard-content.ts";
+import {
+  DEFAULT_BUDGET_MS,
+  type Pending,
+  type PushUpdate,
+  pendingIndex,
+  pendingPush,
+  pendingPushUpdates,
+  withDeadline,
+} from "./guard-content.ts";
 import { firstLine, isEntry } from "./hook-io.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
 export function check(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
+  // One deadline for every scan this hook runs (audit N-4).
+  return withDeadline(DEFAULT_BUDGET_MS, () => checkNow(stage, checkout, arg, stdin));
+}
+
+function checkNow(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
   let pending: Pending;
   if (stage === "pre-commit") pending = pendingIndex(checkout);
   else if (stage === "pre-push") {

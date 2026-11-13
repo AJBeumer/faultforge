@@ -17,6 +17,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
+import { ROOT } from "./paths.ts";
 import { QodoApi } from "./qodo-api.ts";
 import { privateDir } from "./templates.ts";
 
@@ -334,8 +335,7 @@ export async function checkLiveQodoConfig(
   let dir: string | null = null;
   try {
     const targetRepo = repoConfig(factory, "target").github;
-    const evidenceRoot =
-      roots.evidenceRoot ?? resolve(fileURLToPath(new URL("../../..", import.meta.url)), factory.evidence);
+    const evidenceRoot = roots.evidenceRoot ?? resolve(ROOT, factory.evidence);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     dir = join(evidenceRoot, "qodo-state", stamp);
     mkdirSync(dir, { recursive: true });

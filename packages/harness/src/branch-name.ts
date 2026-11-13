@@ -27,7 +27,8 @@ export function deriveBranchName(base: string, git: BranchExistence): string {
  * later push collide with a branch this run never actually saw.
  */
 export function gitBranchExistence(dir: string): BranchExistence {
-  const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  // A timed-out ls-remote has no status, so it throws below, never reads as "not on origin" (audit N-14).
+  const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8", timeout: 60_000 });
   return {
     existsLocally: (name) => git("rev-parse", "--verify", "--quiet", `refs/heads/${name}`).status === 0,
     existsOnOrigin: (name) => {

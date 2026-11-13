@@ -118,6 +118,7 @@ function git(checkout: string, args: string[]): string {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5 * 60_000, // a fetch over the network must not hang the readiness check (audit N-14)
   });
 }
 

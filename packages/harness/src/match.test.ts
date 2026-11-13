@@ -75,6 +75,18 @@ describe("npm run match: what it refuses with exit 2", () => {
     }
   });
 
+  it("a detection without its match, or with criteria that aren't booleans (audit N-1)", () => {
+    const withoutMatch = ff0001();
+    delete withoutMatch.detection.match;
+    const half = ff0001();
+    half.detection.match.kind = {};
+    for (const record of [withoutMatch, half, { ...ff0001(), detection: null }]) {
+      const refused = runOn(record);
+      expect(refused.code).toBe(2);
+      expect(refused.err).toContain("has a detection without");
+    }
+  });
+
   it("a template id that would leave the templates folder (Qodo on PR 128, round 2)", () => {
     const record = ff0001();
     record.injection.templateId = "../../examples/FF-0001";

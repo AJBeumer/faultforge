@@ -12,9 +12,9 @@ const URL = "https://sdk.qodo.ai/v1/tools/mcp/";
 /** How long one request may take before it counts as failed, so a stalled call can't hang a caller. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-function apiKey(): string {
-  const key =
-    process.env.QODO_API_KEY ?? (process.env.QODO_KEY_FILE && readFileSync(process.env.QODO_KEY_FILE, "utf8"));
+export function apiKey(env: NodeJS.ProcessEnv = process.env): string {
+  // `||`, not `??`: an empty QODO_API_KEY must not block the key file (audit N-6).
+  const key = env.QODO_API_KEY?.trim() || (env.QODO_KEY_FILE && readFileSync(env.QODO_KEY_FILE, "utf8"));
   if (!key?.trim()) throw new Error("Set QODO_API_KEY, or QODO_KEY_FILE to the path of the key file.");
   return key.trim();
 }
@@ -36,8 +36,10 @@ export function parseRpcBody(text: string): { result?: unknown; error?: unknown 
 
 /** A tool result's JSON. A tool-level error is thrown, never returned as if it were data. */
 export function parseToolText(result: { isError?: boolean; content?: { type: string; text?: string }[] }): unknown {
-  const text = result.content?.find((c) => c.type === "text")?.text ?? "null";
-  if (result.isError) throw new Error(`Qodo tool error: ${text.slice(0, 500)}`);
+  const text = result.content?.find((c) => c.type === "text")?.text;
+  if (result.isError) throw new Error(`Qodo tool error: ${(text ?? "(no text)").slice(0, 500)}`);
+  // No text is no answer, never the data `null` (audit N-7).
+  if (text === undefined) throw new Error("Qodo tool answered with no text");
   return JSON.parse(text);
 }
 
@@ -144,12 +146,13 @@ export class QodoTransport {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     this.session ??= res.headers.get("mcp-session-id") ?? undefined;
-    // Kept before anything is checked or parsed, so any failure below still leaves it saved.
-    const text = await res.text();
+    // Kept before anything is checked or parsed, so any failure below still leaves it saved. The key is the
+    // one thing taken out: a body that echoed it must not carry it into saved evidence (audit N-6).
+    const text = (await res.text()).replaceAll(this.key, "***");
     this.lastRaw = text;
     if (!res.ok) {
       this.lastRaw = JSON.stringify({ httpStatus: res.status, body: text });
-      throw new TransportError(`${method}: HTTP ${res.status} ${text.slice(0, 300).replaceAll(this.key, "***")}`);
+      throw new TransportError(`${method}: HTTP ${res.status} ${text.slice(0, 300)}`);
     }
     if (notify || !text.trim()) return undefined;
     let json: { result?: unknown; error?: unknown };

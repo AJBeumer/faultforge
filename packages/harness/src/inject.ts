@@ -201,7 +201,7 @@ let failure: string | undefined;
 git("switch", "--quiet", "-c", actualBranch);
 try {
   injectedLines = applyMutation();
-  if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
+  if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), run("git", ["diff"], targetDir).stdout); // untrimmed (N-14)
 
   // The typecheck runs in --validate-only too: a variant that doesn't compile proves nothing (#217).
   typecheck = runStep("typecheck", process.execPath, [

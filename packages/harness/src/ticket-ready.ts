@@ -8,17 +8,16 @@
  *   npm run ticket:ready -- target 4
  *
  * The repo key, its GitHub name, checkout path and ticket sections come from `factory.json`.
- * Exits 0 when ready, 1 with the list of problems when not, 2 when the ticket or the checkout could
- * not be read (a missing checkout is never reported as "not ready").
+ * Exit codes: 0 the ticket is ready; 1 it isn't, with the list of problems; 2 the ticket or the checkout
+ * could not be read (a missing checkout is never reported as "not ready").
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
 import { gh } from "./github.ts";
+import { ROOT } from "./paths.ts";
 import { premiseProblems, premisesOf, refreshRef, sectionsOf } from "./ticket-premises.ts";
-
-const LAB_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 type Sections = RepoConfig["tickets"];
 
@@ -70,7 +69,7 @@ export function checkTicket(
   repoKey: string,
   number: number,
   run: (...args: string[]) => string = gh,
-  checkoutOf: (path: string) => string = (path) => resolve(LAB_ROOT, path),
+  checkoutOf: (path: string) => string = (path) => resolve(ROOT, path),
   refresh: (checkout: string) => void = refreshRef,
 ): { title: string; problems: string[] } {
   const { github: repo, tickets: sections, path } = repoConfig(factory, repoKey);
