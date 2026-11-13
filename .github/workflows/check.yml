@@ -54,9 +54,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
+      # No checkout keeps its token: `npm ci` runs the target's install scripts, which could otherwise read it
+      # from ../FaultForge/.git/config (Qodo on PR 241). This job never pushes.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: FaultForge
+          persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: AJBeumer/faultforge-target
