@@ -87,8 +87,10 @@ function failed(error: unknown): Decision {
  */
 function explicitDestinations(command: string): string[] {
   const patterns = [
-    // `-R` is gh's short form of `--repo` (Qodo on PR 208).
-    /(?:--repo|(?<=\s)-R)[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    // gh's short form, `-R`, only in capitals (`-r` is another flag, such as grep's) and with or without a
+    // space before its value: `-RAJBeumer/x` works too (Qodo on PR 208).
+    /(?<=\s)-R[\s=]*["']?([\w.-]+\/[\w.-]+)/g,
     /\brepos\/([\w.-]+\/[\w.-]+)\//gi,
     /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
     /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,

@@ -74,6 +74,12 @@ describe("content about to travel, read from git whatever the command text says"
     git("fetch", "-q", "origin");
     expect(decide("Bash", { command: "git push origin main" }, dir, config)).toMatch(/case id/);
     git("tag", "-d", "ff-0002");
+    // A branch is read even when one remote already has it: a push can send it to another (Qodo on PR 208).
+    git("branch", "ff-0003");
+    git("push", "-q", "origin", "ff-0003");
+    git("fetch", "-q", "origin");
+    expect(decide("Bash", { command: "git push backup --all" }, dir, config)).toMatch(/case id/);
+    git("branch", "-q", "-D", "ff-0003");
     // An ordinary new branch, and one already on the remote, pass.
     git("switch", "-q", "-c", "tidy-lookup");
     expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toBeUndefined();

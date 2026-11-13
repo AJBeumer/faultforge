@@ -156,12 +156,12 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
       .split("\n")
       .map((name) => name.trim())
       .filter(Boolean);
-  // Tags are always read: without asking the remote, a local tag can't be told apart from a published one,
-  // and a giveaway tag shouldn't stay on the target either way (Qodo on PR 208).
-  const remote = new Set(refs("--format=%(refname:lstrip=3)", "refs/remotes"));
-  const branches = refs("--format=%(refname:lstrip=2)", "refs/heads").filter((name) => !remote.has(name));
-  const tags = refs("--format=%(refname:lstrip=2)", "refs/tags");
-  const giveaways = [...branches, ...tags].filter((name) => telltales(name).length);
+  // Every local branch and tag name is read, pushed or not: a push can send a branch to a remote that doesn't
+  // have it yet, and without asking the remotes the guard can't tell which (Qodo on PR 208). A giveaway name
+  // shouldn't stay on the target either way, so this blocks pushes until it is removed.
+  const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
+    (name) => telltales(name).length,
+  );
   const reasons = [...new Set([...telltales(texts.join("\n")), ...giveaways.flatMap((name) => telltales(name))])];
   const where = giveaways.length
     ? `a new branch, or a tag (${giveaways.join(", ")})`

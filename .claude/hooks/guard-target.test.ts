@@ -488,9 +488,14 @@ describe("guard-target hook checks every gh command that posts text to the targe
     [`gh release create v1 ${R} --notes "planted bug"`, /says planted/],
     // `-R` is the short form of `--repo`, from anywhere (Qodo on PR 208).
     ["gh label create planted-bug -R AJBeumer/faultforge-target", /says planted/],
+    ['gh pr create -RAJBeumer/faultforge-target --title Tidy --body "planted bug"', /says planted/],
     ['gh pr merge 5 -R AJBeumer/faultforge-target --body "planted"', /says planted/],
   ])("refuses %s", (command, reason) => {
     expect(bash(command)).toMatch(reason);
+  });
+
+  it("doesn't read a lower-case -r in a message as a repo flag (Qodo on PR 208)", () => {
+    expect(bash('git commit -m "planted bug: grep -r src/app"', TARGET)).toMatch(/says planted/);
   });
 
   it("reads release notes from a file, as it reads a body file (Qodo on PR 208)", () => {
