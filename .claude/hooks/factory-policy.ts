@@ -48,7 +48,7 @@ const COMMAND_RULES: [RegExp, string][] = [
   ],
   // The branch may be quoted, and may end the step with a shell operator right after it (#194).
   [
-    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s["']?([^\s"']+:)?(refs\/heads\/)?(main|master)["']?(?=[\s;&|)]|$)/i,
+    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s([^\s:]*:)?["']?(refs\/heads\/)?(main|master)["']?(?=[\s;&|)]|$)/i,
     "never push to main",
   ],
   [/\b(schtasks|setx|crontab|launchctl|reg\s+(add|delete|import))\b/i, "no scheduled tasks or persistent settings"],

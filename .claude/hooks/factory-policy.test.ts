@@ -79,6 +79,8 @@ describe("factory policy: commands", () => {
     "(git push origin main)",
     'git push origin "main"',
     "git push origin 'HEAD:refs/heads/master'",
+    'git push origin "HEAD":main',
+    "git push origin 'HEAD':'main'",
   ])("refuses a push to main however the step ends or quotes it (#194): %s", (command) => {
     expect(commandViolations(command)).toContain("never push to main");
   });
