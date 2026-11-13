@@ -704,3 +704,31 @@ describe("QodoApi: recovers from a session Qodo later forgot", () => {
     expect(toolCalls).toBe(1);
   });
 });
+
+describe("reviewState: a skip belongs to one commit (#188)", () => {
+  const HEAD = "a".repeat(40);
+  const OLDER = "b".repeat(40);
+  const session = { commit_sha: HEAD, status: "completed", review_complete: false };
+
+  it("is running, not skipped, when only an earlier commit's run was skipped", () => {
+    const review = {
+      review_session: session,
+      review_runs: [
+        { commit_sha: OLDER, run_id: 1, review_effort: "skip", status: "completed" },
+        { commit_sha: HEAD, run_id: 2, review_effort: "standard", status: "completed" },
+      ],
+    } as QodoReview;
+    expect(reviewState(review, HEAD)).toBe("running");
+  });
+
+  it("is skipped when the head commit's own run was skipped, wherever it sits in the list", () => {
+    const review = {
+      review_session: session,
+      review_runs: [
+        { commit_sha: OLDER, run_id: 1, review_effort: "standard", status: "completed" },
+        { commit_sha: HEAD, run_id: 2, review_effort: "skip", status: "completed" },
+      ],
+    } as QodoReview;
+    expect(reviewState(review, HEAD)).toBe("skipped");
+  });
+});
