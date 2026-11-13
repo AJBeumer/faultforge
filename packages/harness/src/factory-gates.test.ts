@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reviewerRuleGates } from "./factory-gates.ts";
+import { MAX_LISTED_FILES, reviewerRuleGates } from "./factory-gates.ts";
 
 const pages = (...names: (string | { filename: string; previous_filename?: string })[]) => [
   names.map((n) => (typeof n === "string" ? { filename: n } : n)),
@@ -23,6 +23,19 @@ describe("reviewerRuleGates (#215)", () => {
     expect(reviewerRuleGates([[{ filename: "src/a.ts" }], [{ filename: "INVARIANTS.md" }]])).toEqual([
       expect.stringContaining("INVARIANTS.md"),
     ]);
+  });
+
+  it("gates a list GitHub may have cut off at 3,000 files (Qodo on PR 220)", () => {
+    const many = Array.from({ length: MAX_LISTED_FILES }, (_, i) => `src/f${i}.ts`);
+    expect(reviewerRuleGates(pages(...many))).toEqual([expect.stringContaining("can't rule out")]);
+    expect(reviewerRuleGates(pages(...many.slice(1)))).toEqual([]);
+  });
+
+  it("names rule files only as plain paths in code spans, never as a mention or a link (Qodo on PR 220)", () => {
+    const [reason] = reviewerRuleGates(pages(".qodo/@victim", ".qodo/[read this](https://example.com)"));
+    expect(reason).toContain("`.qodo/?victim`");
+    expect(reason).not.toContain("@");
+    expect(reason).not.toMatch(/\[|\]|\(https/);
   });
 
   it("gates a list it can't read: not knowing is never read as no change", () => {
