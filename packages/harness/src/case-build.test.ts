@@ -2,21 +2,14 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  type BuildInputs,
-  buildCaseRecord,
-  type Overlay,
-  overlayFieldsTaken,
-  overlayProblems,
-  parseCliArgs,
-  printRecord,
-  repoSlug,
-  run,
-} from "./case-build.ts";
+import { parseCliArgs, run } from "./case-build.ts";
+import { type BuildInputs, buildCaseRecord, type Overlay, repoSlug } from "./case-builder.ts";
+import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { validateCaseRecord } from "./case-record.ts";
 import type { LedgerEntry } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
-import type { Finding } from "./review-wait.ts";
+import type { Finding } from "./qodo-review.ts";
+import { printRecord } from "./record-print.ts";
 import { isPublishedTemplate } from "./templates.ts";
 
 const ENTRY: LedgerEntry = {
