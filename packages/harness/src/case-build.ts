@@ -38,9 +38,9 @@
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
  * per finding) and (for a legacy review only) re-worded by `matchDetailOverrides`.
  *
- * A control (#162) reads no match terms and has no `detection`. Its record is version 1 when the version-1
- * schema can hold its outcome (`confirmed_clean`), and version 2 otherwise (`confirmed_false_alarm`,
- * `review_incomplete`): the lowest version that fits, so every existing record keeps its bytes.
+ * A control (#162) reads no match terms and has no `detection`. Its record has a `change` block from the
+ * answer key (template, file, lines, commit) and the overlay's `notes`, which only version 2 holds, so a
+ * control's record is always version 2. A bug case's record stays version 1 and keeps its bytes.
  *
  * `--write` also appends a `case.published` audit event (the written record's `sha256` and `path`).
  * Writing the same case twice with unchanged content is a no-op the second time (the file is
@@ -63,7 +63,7 @@ import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.t
 import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
-import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
+import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
@@ -75,6 +75,8 @@ const NOT_CHALLENGED = { verdict: "not_run", note: "Not challenged yet." };
 const TEMPLATE_REPO = "AJBeumer/faultforge";
 
 export interface Overlay {
+  /** A control's notes; a bug case's go in `detection.notes`. */
+  notes?: string[];
   detection?: {
     notes?: string[];
     /** Replaces a criterion's `detail` text for a review that predates match-rule.ts's current wording. */
@@ -203,6 +205,15 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
       commit: entry.injectionCommit,
       ...(templateUrl ? { template: templateUrl } : {}),
     };
+  } else {
+    // What a control changed, from the answer key: no invariant or defect class, since it plants no bug.
+    record.change = {
+      templateId: entry.templateId,
+      file: entry.injectedFile,
+      lines: entry.injectedLines,
+      commit: entry.injectionCommit,
+      ...(templateUrl ? { template: templateUrl } : {}),
+    };
   }
 
   record.pr = { repo: pr.repo, number: pr.number, url: pr.url };
@@ -248,6 +259,8 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
     };
   }
 
+  if (overlay.notes && kind !== "control") throw new Error("overlay sets notes, which only a control may use");
+  if (overlay.notes) record.notes = overlay.notes;
   if (overlay.collateral) record.collateral = overlay.collateral;
   if (overlay.otherReviewers) record.otherReviewers = overlay.otherReviewers;
   record.challenge = overlay.challenge ?? NOT_CHALLENGED;
@@ -258,7 +271,7 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   return record;
 }
 
-const OVERLAY_TOP_LEVEL = ["detection", "collateral", "otherReviewers", "challenge", "review"];
+const OVERLAY_TOP_LEVEL = ["detection", "collateral", "otherReviewers", "challenge", "review", "notes"];
 /** Only a case whose review predates `review:wait` (no saved review file) may use these. */
 const LEGACY_ONLY_TOP_LEVEL = ["findings", "legacyFindingsPath"];
 
@@ -298,6 +311,9 @@ export function overlayProblems(raw: Record<string, unknown>, isLegacy = false):
       if (key !== "linkedRepositories") problems.push(`overlay sets review.${key}, which is not allowed`);
     }
   }
+  if (raw.notes !== undefined && (!Array.isArray(raw.notes) || raw.notes.some((n) => typeof n !== "string"))) {
+    problems.push("overlay sets notes, which must be a list of strings");
+  }
   if (raw.findings !== undefined && isLegacy) {
     if (!Array.isArray(raw.findings)) {
       problems.push("overlay sets findings, which must be an array");
@@ -324,6 +340,7 @@ export function overlayFieldsTaken(raw: Record<string, unknown>): string[] {
   const detection = isPlainObject(raw.detection) ? raw.detection : undefined;
   if (detection?.notes) taken.push("detection.notes");
   if (detection?.matchDetailOverrides) taken.push("detection.matchDetailOverrides");
+  if (raw.notes) taken.push("notes");
   if (raw.collateral) taken.push("collateral");
   if (raw.otherReviewers) taken.push("otherReviewers");
   if (raw.challenge) taken.push("challenge");
@@ -538,9 +555,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const templateId = entry.templateId as string | undefined;
   let kindTerms: string[] = [];
   let templateUrl: string | undefined;
-  // A control's template declares no match terms (the schema forbids them), and its record has no
-  // injection or detection, so there is nothing to read the template for (#162).
-  if (templateId && entry.kind !== "control") {
+  // A control's template declares no match terms (the schema forbids them): it is looked up only for the
+  // published template's URL (#162).
+  if (templateId && entry.kind === "control") {
+    const dir = templateDir(templateId, env);
+    if (dir && isPublishedTemplate(dir)) {
+      templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
+    }
+  } else if (templateId) {
     const dir = templateDir(templateId, env);
     if (!dir) {
       error(`case:build: template ${templateId} not found in private/templates or templates/seed`);
@@ -552,7 +574,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       error(`case:build: can't use ${dir}/template.json: ${message(e)}`);
       return 2;
     }
-    if (resolve(dir).startsWith(resolve(ROOT, "templates", "seed"))) {
+    if (isPublishedTemplate(dir)) {
       templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
     }
   }

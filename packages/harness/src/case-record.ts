@@ -5,16 +5,17 @@ import { isRange, normalisePath, overlaps } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
 // Formats are documentation here; the checks that matter are structure and the fixed fields. Version 2 is
-// version 1 plus two outcomes a control can have (#162); a record is checked against the version it names.
+// version 1 plus what a control records: two outcomes, its `change` and `notes` (#162); a record is checked
+// against the version it names.
 const ajv = new Ajv2020({ allErrors: true, validateFormats: false });
 const schemaChecks = {
   1: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"))),
   2: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v2.json"), "utf8"))),
 };
 
-/** The lowest record version that can hold a disposition: version 1 unless the outcome is new in version 2. */
+/** A record's version: 2 for a control (its `change` block and `notes`, and two outcomes, are new in 2), else 1. */
 export function recordVersionFor(kind: string, disposition: string): 1 | 2 {
-  return kind === "control" && disposition !== "confirmed_clean" ? 2 : 1;
+  return kind === "control" ? 2 : 1;
 }
 
 interface Detection {
@@ -40,6 +41,8 @@ interface CaseRecord {
   detection?: Detection;
   human: { disposition: string };
   injection?: Injection;
+  /** A control's change: only its line range is checked here. */
+  change?: { lines: [number, number] };
   review?: { reviewedCommit: string };
 }
 
@@ -54,7 +57,7 @@ export function validateCaseRecord(record: unknown): string[] {
 }
 
 /** Cross-field rules JSON Schema can't express: a catch must follow from the findings and the match rule. */
-function consistencyProblems({ findings, detection, human, injection, review }: CaseRecord): string[] {
+function consistencyProblems({ findings, detection, human, injection, change, review }: CaseRecord): string[] {
   const problems: string[] = [];
   // One finding per id, or the checks below could judge a different finding from the one the rule matched.
   const seen = new Set<string>();
@@ -67,6 +70,9 @@ function consistencyProblems({ findings, detection, human, injection, review }: 
   }
   if (injection && !isRange(injection.lines)) {
     problems.push(`injection.lines ${(injection.lines as number[]).join("-")} ends before it starts`);
+  }
+  if (change && !isRange(change.lines)) {
+    problems.push(`change.lines ${(change.lines as number[]).join("-")} ends before it starts`);
   }
   if (!detection) return problems;
   const findingsById = new Map(findings.map((f) => [f.id, f]));

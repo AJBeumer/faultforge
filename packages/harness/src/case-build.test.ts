@@ -15,7 +15,9 @@ import {
 } from "./case-build.ts";
 import { validateCaseRecord } from "./case-record.ts";
 import type { LedgerEntry } from "./ledger.ts";
+import { ROOT } from "./paths.ts";
 import type { Finding } from "./review-wait.ts";
+import { isPublishedTemplate } from "./templates.ts";
 
 const ENTRY: LedgerEntry = {
   caseId: "FF-0002",
@@ -316,6 +318,7 @@ describe("overlayFieldsTaken", () => {
   });
 
   it("lists nothing for an empty overlay", () => {
+    expect(overlayFieldsTaken({ notes: ["n"] })).toEqual(["notes"]);
     expect(overlayFieldsTaken({})).toEqual([]);
   });
 });
@@ -439,6 +442,27 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     return { out, err, code };
   }
 
+  it("refuses a bug case whose overlay sets notes: only a control may (Qodo on PR 222)", async () => {
+    const fx = fixture();
+    const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "complete",
+        reviewSeenCompleteAt: null,
+        findings: [],
+      }),
+    );
+    const { code, err, out } = await runOn(fx, { notes: ["a note"] });
+    expect(code).not.toBe(0);
+    expect(err.join("\n")).toContain("only a control may use");
+    expect(out.join("\n")).not.toContain('"notes"');
+  });
+
   it("prefers a genuine saved review over an overlay's legacyFindingsPath, even with null pushSeenAt/reviewStartedAt", async () => {
     const fx = fixture();
     const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
@@ -490,7 +514,13 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     // Missing pushSeenAt/reviewStartedAt/reviewSeenCompleteAt: hand-backfilled, not review:wait's own.
     writeFileSync(
       join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
-      JSON.stringify({ repo: "Owner/target", pr: 5, headSha: INJECTION_COMMIT, state: "complete", findings: [] }),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "complete",
+        findings: [],
+      }),
     );
     writeFileSync(
       join(fx.root, "legacy-findings.json"),
@@ -636,7 +666,9 @@ describe("run: a control case (#162)", () => {
     return { root, groundTruthPath, auditEventsPath };
   }
 
-  async function build(fx: ReturnType<typeof fixture>) {
+  async function build(fx: ReturnType<typeof fixture>, overlay?: object) {
+    const overlayPath = join(fx.root, overlay ? "overlay.json" : "no-overlay.json");
+    if (overlay) writeFileSync(overlayPath, JSON.stringify(overlay));
     const out: string[] = [];
     const err: string[] = [];
     const code = await run(CASE_ID, {
@@ -646,18 +678,20 @@ describe("run: a control case (#162)", () => {
       groundTruthPath: fx.groundTruthPath,
       auditEventsPath: fx.auditEventsPath,
       reviewsDir: join(fx.root, "raw-artifacts", "reviews"),
-      overlayPath: join(fx.root, "no-overlay.json"),
+      overlayPath,
       examplesDir: join(fx.root, "examples"),
     });
     const text = out.join("\n");
     return { code, err: err.join("\n"), record: code === 0 ? JSON.parse(text.slice(text.indexOf("{"))) : null };
   }
 
-  it("builds a clean control with no overlay as a version 1 record", async () => {
+  it("builds a clean control with no overlay as a version 2 record, with what it changed from the answer key", async () => {
     const { code, err, record } = await build(fixture("confirmed_clean"));
     expect(err).toBe("");
     expect(code).toBe(0);
-    expect(record).toMatchObject({ schemaVersion: 1, kind: "control", human: { disposition: "confirmed_clean" } });
+    expect(record).toMatchObject({ schemaVersion: 2, kind: "control", human: { disposition: "confirmed_clean" } });
+    expect(record.change).toEqual({ templateId: "c1", file: "src/x.ts", lines: [1, 2], commit: COMMIT });
+    expect(record).not.toHaveProperty("injection");
     expect(record).not.toHaveProperty("detection");
     expect(validateCaseRecord(record)).toEqual([]);
   });
@@ -673,6 +707,49 @@ describe("run: a control case (#162)", () => {
     expect(record).toMatchObject({ schemaVersion: 2, human: { disposition }, status });
     expect(record.$schema).toBe("../schemas/case-record.v2.json");
     expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("refuses a control whose change ends before it starts (Qodo on PR 222)", async () => {
+    const { record } = await build(fixture("confirmed_clean"));
+    expect(validateCaseRecord({ ...record, change: { ...record.change, lines: [10, 2] } })).toEqual([
+      "change.lines 10-2 ends before it starts",
+    ]);
+  });
+
+  it("links only a template inside templates/seed itself, not a folder whose name starts the same (Qodo on PR 222)", () => {
+    const seed = join(ROOT, "templates", "seed");
+    expect(isPublishedTemplate(join(seed, "c1"))).toBe(true);
+    expect(isPublishedTemplate(join(`${seed}-private`, "c1"))).toBe(false);
+    expect(isPublishedTemplate(seed)).toBe(false);
+    expect(isPublishedTemplate(join(ROOT, "private", "templates", "c1"))).toBe(false);
+  });
+
+  it("takes a control's notes from its overlay", async () => {
+    const { code, err, record } = await build(fixture("confirmed_clean"), { notes: ["Qodo raised nothing."] });
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(record.notes).toEqual(["Qodo raised nothing."]);
+    expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("refuses overlay notes that aren't a list of strings", () => {
+    expect(overlayProblems({ notes: "one line" })).toEqual(["overlay sets notes, which must be a list of strings"]);
+    expect(overlayProblems({ notes: ["fine"] })).toEqual([]);
+  });
+
+  it("the schema refuses a change block or notes on a bug case's record", async () => {
+    const { record } = await build(fixture("confirmed_clean"));
+    const { change, ...rest } = record;
+    const bug = {
+      ...rest,
+      kind: "sabotage",
+      injection: { ...change, invariantId: "INV-1", defectClass: "bug" },
+      detection: { caught: false, matchedFindingIds: [], match: {} },
+      human: { ...record.human, disposition: "confirmed_missed" },
+    };
+    const problems = (extra: object) => validateCaseRecord({ ...bug, ...extra }).join(" | ");
+    expect(problems({ change })).toMatch(/must NOT be valid/);
+    expect(problems({ notes: ["x"] })).toMatch(/must NOT be valid/);
   });
 
   it("refuses a control with no review event, naming the stage (Qodo on PR 214)", async () => {
