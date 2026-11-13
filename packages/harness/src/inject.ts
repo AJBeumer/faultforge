@@ -19,54 +19,27 @@
  * and failed on the variant, or (otherwise) the case was planted and recorded; 1 a refusal or a failed
  * validation, printed on stderr.
  */
-import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  appendFileSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
+import { appendJsonl, git as gitIn, log, readJsonl, run, runProof, runStep, sha256 } from "./inject-run.ts";
+import {
+  applyMutation,
+  loadTemplate,
+  type Proof,
+  proofsOf,
+  type Template,
+  templateRefusal,
+} from "./inject-template.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { telltales, templateTelltales } from "./neutral.ts";
+import { telltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
-import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
-import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
-
-interface AlsoBreaks {
-  invariantId: string;
-  proofTest: string;
-}
-
-interface Template {
-  id: string;
-  kind: "bug" | "control";
-  summary: string;
-  file: string;
-  find: string;
-  replace: string;
-  publish: { branch: string; commitMessage: string };
-  ticket: { title: string; what: string; criteria: string[] };
-  invariantId?: string;
-  defectClass?: string;
-  proofTest?: string;
-  match?: { kindTerms?: string[] };
-  alsoBreaks?: AlsoBreaks[];
-}
-
-interface Proof {
-  invariantId: string;
-  proofTest: string;
-}
+import type { Outcome } from "./run-outcome.ts";
+import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
 const PRIVATE_DIR = privateDir();
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
@@ -95,36 +68,12 @@ const targetDir = resolve(args.target);
 const foundTemplateDir = findTemplateDir(args.template);
 if (!foundTemplateDir) fail(`template ${args.template} not found in private/templates or templates/seed`);
 const templateDir: string = foundTemplateDir;
-const template: Template = JSON.parse(readFileSync(join(templateDir, "template.json"), "utf8"));
+const template: Template = loadTemplate(templateDir);
 
-// Checked before anything else: a template that fails the schema is refused without planting anything.
-const schemaProblems = templateProblems(template);
-if (schemaProblems.length) {
-  fail(`template ${args.template} fails the schema:\n${schemaProblems.map((p) => `  ${p}`).join("\n")}`);
-}
-// Everything the template would put in front of the reviewer must read as an ordinary change: the branch
-// name and commit message, the code it looks for and writes, and its target ticket.
-const giveaways = templateTelltales(template);
-if (giveaways.length) fail(`the template gives the case away (${giveaways.join("; ")})`);
+const refusal = templateRefusal(template, args.template as string, templateDir);
+if (refusal) fail(refusal);
 
-// The terms the match rule's third criterion looks for, declared here before any case runs the template.
-// Only a bug template carries one: a control has no injected problem to describe.
-if (template.kind === "bug") {
-  try {
-    kindTermsOf(template, `${templateDir}/template.json`);
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-  }
-}
-
-// Every proof the variant must break: the template's own invariant, plus whatever it breaks as collateral.
-const proofs: Proof[] =
-  template.kind === "bug"
-    ? [
-        { invariantId: template.invariantId as string, proofTest: template.proofTest as string },
-        ...(template.alsoBreaks ?? []),
-      ]
-    : [];
+const proofs: Proof[] = proofsOf(template);
 
 const artefactDir = validateOnly
   ? mkdtempSync(join(tmpdir(), "faultforge-validate-"))
@@ -133,6 +82,8 @@ const artefactDir = validateOnly
 // nothing from --validate-only may survive, not even a scratch folder outside private storage.
 if (validateOnly) process.on("exit", () => rmSync(artefactDir, { recursive: true, force: true }));
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");
+const places = { targetDir, artefactDir, templateDir };
+const git = (...gitArgs: string[]) => gitIn(targetDir, ...gitArgs);
 
 // History too, in --validate-only as well: nothing is planted next to a broken answer key (#224, Qodo on PR 232).
 const ledgerIssues = ledgerProblemsWithHistory([ledgerPath, join(PRIVATE_DIR, "audit-events.jsonl")]);
@@ -179,7 +130,7 @@ log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
 // Indexed by position in `proofs`, never by invariantId: alsoBreaks may name the same invariant twice
 // (collateral the template didn't separate), and keying by invariantId would let a later proof's result
 // silently overwrite an earlier one's.
-const proofsOnBase: Outcome[] = proofs.map((proof, i) => runProof("base", proof, i));
+const proofsOnBase: Outcome[] = proofs.map((proof, i) => runProof(places, "base", proof, i));
 const notRunOnBase = proofs.filter((_, i) => proofsOnBase[i] === "not_run").map((p) => p.invariantId);
 if (notRunOnBase.length) {
   fail(
@@ -200,22 +151,25 @@ let failure: string | undefined;
 
 git("switch", "--quiet", "-c", actualBranch);
 try {
-  injectedLines = applyMutation();
+  injectedLines = applyMutation(targetDir, template);
   const diff = run("git", ["diff"], targetDir); // untrimmed (N-14); a failed or cut-off diff stops the run (Qodo on PR 233)
   if (diff.status !== 0 || diff.error) throw new Error(`git diff failed: ${diff.stderr.trim()}`);
   if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), diff.stdout);
 
   // The typecheck runs in --validate-only too: a variant that doesn't compile proves nothing (#217).
-  typecheck = runStep("typecheck", process.execPath, [
+  typecheck = runStep(places, "typecheck", process.execPath, [
     join(targetDir, "node_modules/typescript/bin/tsc"),
     "-p",
     "tsconfig.json",
     "--noEmit",
   ]);
   if (!validateOnly) {
-    publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
+    publicTests = runStep(places, "public-tests", process.execPath, [
+      join(targetDir, "node_modules/vitest/vitest.mjs"),
+      "run",
+    ]);
   }
-  proofsOnVariant = proofs.map((proof, i) => runProof("variant", proof, i));
+  proofsOnVariant = proofs.map((proof, i) => runProof(places, "variant", proof, i));
 
   const notRunOnVariant = proofs.filter((_, i) => proofsOnVariant[i] === "not_run").map((p) => p.invariantId);
   const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
@@ -330,117 +284,6 @@ log(
   `${caseId} -> branch ${actualBranch} @ ${injectionCommit.slice(0, 7)}, ${template.file}:${injectedLines.join("-")}`,
 );
 log(`ledger: ${ledgerPath}`);
-
-/** Replaces the template's `find` text, which must occur exactly once. Returns the new lines. */
-function applyMutation(): [number, number] {
-  const path = join(targetDir, template.file);
-  const source = readFileSync(path, "utf8");
-  const at = source.indexOf(template.find);
-  if (at === -1 || source.indexOf(template.find, at + 1) !== -1) {
-    throw new Error(`find text must occur exactly once in ${template.file}`);
-  }
-  writeFileSync(path, source.slice(0, at) + template.replace + source.slice(at + template.find.length));
-  const start = source.slice(0, at).split("\n").length;
-  const lineCount = template.replace.replace(/\n$/, "").split("\n").length;
-  return [start, start + lineCount - 1];
-}
-
-/** Runs one proof test in a scratch folder holding only that file, so proof file names never collide. */
-function runProof(stage: "base" | "variant", proof: Proof, index: number): Outcome {
-  const scratch = mkdtempSync(join(tmpdir(), "faultforge-proof-"));
-  try {
-    const dest = join(scratch, proof.proofTest);
-    mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(join(templateDir, proof.proofTest), dest);
-    // The JSON report says whether a test ran and failed; an exit code alone can't tell that from a
-    // proof that failed to load (#217).
-    const report = join(scratch, "proof-report.json");
-    const outcome = runStep(
-      // Numbered: two proofs may share an invariant id, and each keeps its own log (#193).
-      `proof-${stage}-${index + 1}-${proof.invariantId}`,
-      process.execPath,
-      [
-        join(ROOT, "node_modules/vitest/vitest.mjs"),
-        "run",
-        "--root",
-        scratch,
-        "--config",
-        join(ROOT, "vitest.proof.config.ts"),
-        "--reporter=default",
-        "--reporter=json",
-        `--outputFile.json=${report}`,
-      ],
-      ROOT,
-      { FAULTFORGE_TARGET_DIR: targetDir },
-      (result) => proofOutcomeOf(result, readVitestReport(report)),
-    );
-    log(`proof ${proof.invariantId} on ${stage}: ${outcome}`);
-    return outcome;
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-}
-
-/**
- * Runs a command, stores its output as an artefact, and reports the outcome: "not_run", never
- * "fail", when the command hit its time limit or could not be spawned at all, since no test result
- * was ever produced for either.
- */
-function runStep(
-  name: string,
-  cmd: string,
-  cmdArgs: string[],
-  cwd = targetDir,
-  env: Record<string, string> = {},
-  judge: (result: ReturnType<typeof run>) => Outcome = outcomeOf,
-): Outcome {
-  const result = run(cmd, cmdArgs, cwd, env);
-  const outcome = judge(result);
-  writeFileSync(join(artefactDir, `${name}.log`), stepLogText(cmdArgs, result, outcome));
-  return outcome;
-}
-
-function run(cmd: string, cmdArgs: string[], cwd: string, env: Record<string, string> = {}) {
-  const result = spawnSync(cmd, cmdArgs, {
-    cwd,
-    encoding: "utf8",
-    env: { ...process.env, ...env, NO_COLOR: "1" },
-    timeout: 120_000,
-  });
-  return {
-    status: result.status,
-    signal: result.signal,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    error: result.error,
-  };
-}
-
-function git(...gitArgs: string[]): string {
-  const result = run("git", gitArgs, targetDir);
-  if (result.status !== 0) throw new Error(`git ${gitArgs.join(" ")} failed: ${result.stderr.trim()}`);
-  return result.stdout.trim();
-}
-
-function readJsonl(path: string): Record<string, unknown>[] {
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-function appendJsonl(path: string, value: object) {
-  appendFileSync(path, `${JSON.stringify(value)}\n`);
-}
-
-function sha256(data: string | Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-function log(message: string) {
-  console.log(`[inject] ${message}`);
-}
 
 function fail(message: string): never {
   console.error(`[inject] ${message}`);

@@ -3,16 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyMatchRule } from "./match-rule.ts";
-import {
-  type AskFn,
-  findSavedReview,
-  parseCliArgs,
-  printReport,
-  type RunOptions,
-  run,
-  type SavedFinding,
-  toMatchFinding,
-} from "./verdict.ts";
+import { findSavedReview, type SavedFinding, toMatchFinding } from "./saved-review.ts";
+import { type AskFn, parseCliArgs, printReport, type RunOptions, run } from "./verdict.ts";
 
 const TEMPLATE = {
   id: "idempotency-guard-bypass-v1",

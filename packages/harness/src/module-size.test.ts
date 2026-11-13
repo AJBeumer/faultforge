@@ -48,11 +48,6 @@ describe("CLAUDE.md's module size rule", () => {
     const MARGIN = 40;
     const recorded: Record<string, number> = {
       "factory-tick.ts": 632,
-      "case-build.ts": 598,
-      "review-wait.ts": 524,
-      "verdict.ts": 463,
-      "review-local.ts": 446,
-      "inject.ts": 410,
     };
     const sizes = new Map(sourceModules().map((path) => [basename(path), lineCount(path)]));
     const grown = Object.entries(recorded).filter(([name, size]) => (sizes.get(name) ?? 0) > size + MARGIN);
