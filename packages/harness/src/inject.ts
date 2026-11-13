@@ -37,7 +37,7 @@ import { parseArgs } from "node:util";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
-import { type Outcome, outcomeOf, proofOutcomeOf, stepLogText, type VitestReport } from "./run-outcome.ts";
+import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
 interface AlsoBreaks {
@@ -362,11 +362,7 @@ function runProof(stage: "base" | "variant", proof: Proof, index: number): Outco
       ],
       ROOT,
       { FAULTFORGE_TARGET_DIR: targetDir },
-      (result) =>
-        proofOutcomeOf(
-          result,
-          existsSync(report) ? (JSON.parse(readFileSync(report, "utf8")) as VitestReport) : undefined,
-        ),
+      (result) => proofOutcomeOf(result, readVitestReport(report)),
     );
     log(`proof ${proof.invariantId} on ${stage}: ${outcome}`);
     return outcome;

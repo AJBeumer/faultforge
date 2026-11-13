@@ -208,7 +208,7 @@ export function verdict(
   }
   return {
     exit: 0,
-    message: `${without.failed.length} test(s) fail without the change, as they should${without.loadFailed?.length ? ` (and ${without.loadFailed.length} file(s) fail to load)` : ""}`,
+    message: `${without.failed.length} test(s) fail without the change, as they should${without.loadFailed?.length ? `; these files also fail to load: ${without.loadFailed.join("; ")}` : ""}`,
     failedWithoutChange: without.failed,
   };
 }
@@ -292,7 +292,8 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
       return judge({ ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` });
     }
     const withChange = input.runTests(copy, files.tests);
-    if (!withChange.ran || withChange.failed.length) return judge(withChange);
+    // A file that fails to load with the change already decides it: no second run (Qodo on PR 219).
+    if (!withChange.ran || withChange.failed.length || withChange.loadFailed?.length) return judge(withChange);
     // Added files go; modified and deleted ones come back from the base, checked out the same way as
     // the head (same line-ending conversion), so the only difference is the change itself.
     for (const change of files.code) if (change.status === "A") rmSync(join(copy, change.path), { force: true });

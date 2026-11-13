@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { outcomeOf, parseVitestReport, proofOutcomeOf, stepLogText } from "./run-outcome.ts";
+import { outcomeOf, parseVitestReport, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 
 describe("outcomeOf", () => {
   it("passes on a clean exit", () => {
@@ -107,5 +110,22 @@ describe("a proof's outcome (#217)", () => {
     expect(proofOutcomeOf({ status: 1 })).toBe("not_run");
     expect(proofOutcomeOf({ status: 1 }, ran("passed"))).toBe("not_run");
     expect(proofOutcomeOf({ status: null }, ran("failed"))).toBe("not_run");
+  });
+});
+
+describe("readVitestReport (Qodo on PR 219)", () => {
+  it("reads a report, and gives undefined for a missing or truncated one, so the proof is not_run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-"));
+    try {
+      const path = join(dir, "r.json");
+      expect(readVitestReport(path)).toBeUndefined();
+      writeFileSync(path, '{"testResults":[{"name":"/p.test.ts","status":"failed","assertionRes');
+      expect(readVitestReport(path)).toBeUndefined();
+      expect(proofOutcomeOf({ status: 1 }, readVitestReport(path))).toBe("not_run");
+      writeFileSync(path, JSON.stringify({ testResults: [] }));
+      expect(readVitestReport(path)).toEqual({ testResults: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

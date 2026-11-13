@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 /**
  * A proof or public-test run's outcome: "pass", "fail", or "not_run" when the run itself never
  * finished (hit its time limit, or could not even be spawned). "fail" means the test ran and found
@@ -85,4 +87,17 @@ export function proofOutcomeOf(result: { status: number | null; error?: unknown 
   if (loadFailed.length || failed.length + passed === 0) return "not_run";
   if (failed.length) return "fail";
   return result.status === 0 ? "pass" : "not_run";
+}
+
+/**
+ * The JSON report at `path`, or undefined when there is none or it doesn't parse: a run interrupted while
+ * writing its report leaves a truncated file, which must read as no result, never crash the caller
+ * (Qodo on PR 219).
+ */
+export function readVitestReport(path: string): VitestReport | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as VitestReport;
+  } catch {
+    return undefined;
+  }
 }
