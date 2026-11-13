@@ -14,11 +14,6 @@ on:
 permissions:
   contents: read
 
-# One run at a time. A second trigger waits instead of cancelling the run in progress.
-concurrency:
-  group: factory
-  cancel-in-progress: false
-
 jobs:
   look:
     name: Any ticket ready?
@@ -59,6 +54,13 @@ jobs:
     needs: look
     if: needs.look.outputs.ready != '0'
     runs-on: ubuntu-latest
+    # One tick at a time; a second waits instead of cancelling the one in progress. On the job, not the
+    # workflow: a tick's own label events start workflow runs too, and at workflow level such a run could
+    # replace the owner's queued one and leave the ticket for the schedule. Every run's `look` job now runs
+    # at once, and only ticks wait; two waiting ticks are alike, each takes the oldest ready ticket (audit N-5).
+    concurrency:
+      group: factory-tick
+      cancel-in-progress: false
     # The agent gets --minutes; the tick then audits, verifies the PR (revert:check alone may take 25
     # minutes) and saves evidence. 45 minutes beyond the agent keeps a cancelled job from stranding a ticket.
     timeout-minutes: 165

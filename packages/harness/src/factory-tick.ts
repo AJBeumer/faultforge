@@ -1740,7 +1740,8 @@ export function acquireLock(
   return {
     acquired: true,
     release,
-    note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})`,
+    // Says so when the holder still runs past every run's limit: a hung agent may still act (#226).
+    note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})${held.pid && isAlive(held.pid) ? "; that process is still running past the run limit: check it" : ""}`,
   };
 }
 
