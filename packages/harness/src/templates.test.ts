@@ -98,6 +98,16 @@ describe("templateProblems: the version-2 schema", () => {
     expect(templateProblems(VALID_CONTROL_TEMPLATE)).toEqual([]);
   });
 
+  it("refuses an invariant id that isn't safe as a file name, in both places (#193)", () => {
+    // A trailing newline is refused too: ajv's patterns use JavaScript's `$` (Qodo on PR 207).
+    for (const bad of ["a/../../x", "INV IDEMP", "../x", "-flag", "", "INV-1\n"]) {
+      expect(templateProblems({ ...VALID_BUG_TEMPLATE, invariantId: bad }), bad).not.toEqual([]);
+      const alsoBreaks = [{ invariantId: bad, proofTest: "proof.test.ts" }];
+      expect(templateProblems({ ...VALID_BUG_TEMPLATE, alsoBreaks }), bad).not.toEqual([]);
+    }
+    expect(templateProblems({ ...VALID_BUG_TEMPLATE, invariantId: "INV-IDEMP_001.v2" })).toEqual([]);
+  });
+
   it("refuses a template with no kind, naming the field", () => {
     const { kind, ...rest } = VALID_BUG_TEMPLATE;
     const problems = templateProblems(rest);

@@ -85,6 +85,8 @@ if (!args.template || !args.target || (!validateOnly && !args.case)) {
 }
 
 const caseId = args.case;
+// A case id becomes a folder name and a permanent answer-key line, so a typo must stop here (#193).
+if (!validateOnly && !/^FF-\d{4}$/.test(caseId ?? "")) fail(`--case must look like FF-NNNN, not ${caseId}`);
 const targetDir = resolve(args.target);
 // Unreleased templates live in private storage; only adjudicated ones are copied to templates/seed.
 const foundTemplateDir = findTemplateDir(args.template);
@@ -135,6 +137,19 @@ if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === case
 if (git("status", "--porcelain")) fail(`target has uncommitted changes: ${targetDir}`);
 const baseBranch = git("rev-parse", "--abbrev-ref", "HEAD");
 const baseCommit = git("rev-parse", "HEAD");
+// The checkout is put back on this branch at the end, so it must be one (#193): from a detached HEAD the
+// switch back would fail after the commit, leaving a planted commit with no answer-key line.
+if (baseBranch === "HEAD") fail(`target is on a detached HEAD: switch to main first (${targetDir})`);
+// A case is planted on the published main, never on top of an earlier case branch (#193). Read from the
+// local copy of origin/main: no network, so fetch first if main moved.
+if (!validateOnly) {
+  const originMain = run("git", ["rev-parse", "--verify", "--quiet", "origin/main"], targetDir).stdout.trim();
+  if (baseCommit !== originMain) {
+    fail(
+      `target HEAD ${baseCommit.slice(0, 7)} is not origin/main (${originMain.slice(0, 7) || "missing"}): switch to main and pull first`,
+    );
+  }
+}
 // --validate-only derives nothing and never asks origin: its temporary branch is deleted before the run
 // ends, so it only needs the one local check it always had, to avoid `git switch -c` failing outright.
 const actualBranch = validateOnly
@@ -155,7 +170,7 @@ log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
 // Indexed by position in `proofs`, never by invariantId: alsoBreaks may name the same invariant twice
 // (collateral the template didn't separate), and keying by invariantId would let a later proof's result
 // silently overwrite an earlier one's.
-const proofsOnBase: Outcome[] = proofs.map((proof) => runProof("base", proof));
+const proofsOnBase: Outcome[] = proofs.map((proof, i) => runProof("base", proof, i));
 const notRunOnBase = proofs.filter((_, i) => proofsOnBase[i] === "not_run").map((p) => p.invariantId);
 if (notRunOnBase.length) {
   fail(`proof test did not finish on the base commit, so it cannot prove anything: ${notRunOnBase.join(", ")}`);
@@ -186,7 +201,7 @@ try {
     ]);
     publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
   }
-  proofsOnVariant = proofs.map((proof) => runProof("variant", proof));
+  proofsOnVariant = proofs.map((proof, i) => runProof("variant", proof, i));
 
   const notRunOnVariant = proofs.filter((_, i) => proofsOnVariant[i] === "not_run").map((p) => p.invariantId);
   const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
@@ -317,14 +332,15 @@ function applyMutation(): [number, number] {
 }
 
 /** Runs one proof test in a scratch folder holding only that file, so proof file names never collide. */
-function runProof(stage: "base" | "variant", proof: Proof): Outcome {
+function runProof(stage: "base" | "variant", proof: Proof, index: number): Outcome {
   const scratch = mkdtempSync(join(tmpdir(), "faultforge-proof-"));
   try {
     const dest = join(scratch, proof.proofTest);
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(templateDir, proof.proofTest), dest);
     const outcome = runStep(
-      `proof-${stage}-${proof.invariantId}`,
+      // Numbered: two proofs may share an invariant id, and each keeps its own log (#193).
+      `proof-${stage}-${index + 1}-${proof.invariantId}`,
       process.execPath,
       [
         join(ROOT, "node_modules/vitest/vitest.mjs"),
