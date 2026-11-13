@@ -45,6 +45,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
+import { lockIsStale, pidAlive, recoverStranded } from "./factory-recovery.ts";
 import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
@@ -1198,6 +1199,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   };
   try {
     if (lock.note) log("lock", { note: lock.note });
+    const recovery = recoverStranded(Object.values(factory.repos), deps);
+    if (recovery.recovered.length || recovery.failed.length) log("recovered", recovery);
     const candidates: Candidate[] = [];
     for (const [repoKey, repo] of Object.entries(factory.repos)) {
       for (const issue of deps.labelled(repo.github, LABELS.ready)) {
@@ -1277,7 +1280,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     }
 
     claimed = pick;
-    relabel([LABELS.ready], [LABELS.working]);
+    // An earlier run's result label goes too: a ticket carries one state at a time (#197).
+    relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
     say(
       `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
@@ -1410,7 +1414,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       }
       // The run folder is only kept when even the blocked-branch push failed: that's the one case
       // left where it's the owner's sole copy (Qodo on PR 141).
-      if (saved.savedAt) deps.cleanup(ws);
+      // A run that needs help keeps its worktrees, as its log says: they may hold its only copy (#197).
+      if (saved.savedAt && finish.label === LABELS.done) deps.cleanup(ws);
       return "needs-help";
     }
     if (finish.label === LABELS.done) deps.cleanup(ws);
@@ -1631,15 +1636,6 @@ export function npm(
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
  * an unheld lock can never both get it.
@@ -1663,11 +1659,20 @@ function pidAlive(pid: number): boolean {
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
+  maxAgeMs = 3 * 60 * 60_000,
 ): { acquired: boolean; release(): void; note?: string } {
   const file = join(dir, "factory.lock");
+  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const take = () =>
-    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
-  const release = () => rmSync(file, { force: true });
+    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token }), { flag: "wx" });
+  // Releases only a lock that is still this tick's: one taken over meanwhile belongs to the tick that took it.
+  const release = () => {
+    try {
+      if (JSON.parse(readFileSync(file, "utf8")).token === token) rmSync(file, { force: true });
+    } catch {
+      // gone already, or unreadable: nothing of ours to remove
+    }
+  };
   try {
     take();
     return { acquired: true, release };
@@ -1682,7 +1687,9 @@ export function acquireLock(
   } catch {
     // An unreadable lock is treated as stale below; heldText stays "" and won't match anything real.
   }
-  if (held.pid && isAlive(held.pid))
+  // A live holder keeps it, unless the lock is older than any run can last: after a restart its pid may
+  // belong to another program (#197).
+  if (!lockIsStale(held, isAlive, Date.now(), maxAgeMs))
     return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${Math.random().toString(36).slice(2)}`);
   try {
@@ -1828,7 +1835,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    lock: () => acquireLock(runs),
+    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
+    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
     labelled: (github, label) =>
       ghAll<{ number: number; title: string; pull_request?: unknown }>(
         `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
