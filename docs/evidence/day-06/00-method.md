@@ -16,7 +16,7 @@ Every answer from the remote tools is treated like a reviewer finding: it is a c
 
 ## Step 3 questions (triage the backlog)
 
-For each open ticket, the question is the same: is the work already delivered, partly delivered, or not started, judged by whether the files, scripts and behaviours the ticket names exist on `main`? The eleven week-1 tickets come first because the Day 3 to 5 work may have delivered them.
+For each open ticket, the question is the same: is the work already delivered, partly delivered, or not started, judged by whether the files, scripts and behaviours the ticket names exist on `main`? The ten week-1 tickets come first because the Day 3 to 5 work may have delivered them.
 
 ## Step 4
 

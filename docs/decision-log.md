@@ -6,6 +6,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 1: Your factory's first delivery
 
+*Recorded 2 November.*
+
 - **Challenge requirement:** introduce the project, sign up for Qodo, build one small capability with a coding agent, open a focused PR, run a Qodo review, and share one lesson.
 - **Increment delivered:** a small booking API with one invariant: sending the same request twice with the same idempotency key never creates two bookings. One injected bug bypasses the idempotency check, confirmed by a hidden test, and goes out as a normal-looking PR for Qodo to review. Recorded as case FF-0001.
 - **What changed from the plan and why:** the injected bug is a one-line slip rather than a removed guard. On a repeat request, the code looks up the original booking by the idempotency key instead of the booking id it saved. Removing the whole guard would also have broken an existing public test, so the PR would have arrived with red CI and given the answer away. With this version, the target's own tests and typecheck still pass, and only the hidden proof test fails.
@@ -13,7 +15,7 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **Lesson or decision:** a one-line bug planted to break one rule actually broke two. Besides creating duplicate bookings (INV-IDEMP-001), it let one user read another user's booking (INV-AUTH-001). The answer key and the hidden test only knew about the first; Qodo found both. So the answer key has to record everything a planted bug breaks, not just what it was meant to break, or a reviewer's correct extra finding would be counted as noise.
 - **Remaining risk:** Qodo's local structured review is not verified yet; that is the Day 2 gate. The finding's line range covers 38 lines, so "overlapping lines" is a loose test for wide ranges. The Qodo trial shows 14 days, not 30. GitHub also requested a Copilot review automatically. It posted after Qodo, so it didn't affect this case, but it has to be switched off for later ones.
 
-### Decisions made today
+### Decisions made on 2 November
 
 - **Match rule fixed before any data.** A Qodo finding counts as a catch only if it names the injected file, overlaps the injected lines, and describes the right kind of problem. The rule is not loosened after seeing results.
 - **Two repositories.** The harness lives here. The booking API lives in a separate target repository, so the answer key never sits next to the code Qodo reviews.
@@ -22,7 +24,7 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **The replay check is not in the target's own tests.** Repeat-request behaviour is checked only by the hidden proof test, so a planted bug there doesn't show up as a CI failure.
 - **One reviewer per case.** Only Qodo reviews target PRs. Any other bot's output is saved but doesn't count. The two repositories are never linked in Qodo, so FaultForge's templates can't reach the review.
 - **No force-pushes to the target's `main`.** Published history stays as it is. Cases record the exact commit that was reviewed.
-- **Unreleased templates stay private.** This changes the charter's layout: a bug template and its proof test live in the private repository until their case is adjudicated, and only then may be copied to `templates/seed/`. Held-back benchmark templates never go public. The inject command looks in private storage first.
+- **Unreleased templates stay private.** This changes the charter's layout: a bug template and its proof test live in the private repository until their case is adjudicated, and only then may be copied to `templates/seed/`. Held-back benchmark templates go public only with the final report, as the charter says. The inject command looks in private storage first.
 - **Rules enforced in code, not just in docs.** `CLAUDE.md` holds the rules for coding agents. A Claude Code hook blocks giveaway words in anything sent to the target repository and blocks force pushes to it. The inject command refuses giveaway branch names and commit messages. The `/new-case` and `/daily-challenge` skills hold the repeatable routines.
 - **Qodo configuration v2 for every case after FF-0001.** FF-0001 ran on Qodo's default Precision preset (v1). Qodo's own data showed it had then linked this repository and the target by itself, and that it can mine its own review rules from past PRs and activate them without approval. Either would let earlier cases or the lab itself influence later reviews. v2 switches off three settings: the cross-repository review agent, rule mining from review history, and auto-approval of mined rules. Everything else stays on the Precision preset. FF-0001 isn't affected: its review used no cross-repository context and no rules existed. Before every case we now check through Qodo's API that the target has no linked repositories and that no rules exist.
 - **One history rewrite in this repository, on Day 1.** The first commit's message had a `Co-Authored-By: Claude` line, which I removed so GitHub's contributor list matches who owns the project. Only that one line changed; files, authors and dates are the same. No case refers to this repository's commit ids. The target repository was not rewritten, so FF-0001's commits are unchanged. Claude Code is still the coding agent used to build this project.
@@ -30,6 +32,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 ---
 
 ## Day 2: House rules
+
+*Recorded 6 November.*
 
 - **Challenge requirement:** create an `AGENTS.md` at the repository root with a short project description, setup and verification commands, and three to five project rules, each saying where it applies and why it exists. Commit and push it, and check that Qodo has turned the rules into review standards.
 - **Increment delivered:** an [`AGENTS.md`](https://github.com/AJBeumer/faultforge-target/blob/main/AGENTS.md) in faultforge-target, the repository Qodo reviews. Four rules: idempotency keys belong to a user; someone else's booking is "not found", never "forbidden"; check the whole request before touching the store; no real clock or random ids in application code. Merged through [faultforge-target#2](https://github.com/AJBeumer/faultforge-target/pull/2) (merge commit `841d69d`). Qodo imported the rules, and they are now part of the reviewer's configuration (v3).
@@ -44,6 +48,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 ---
 
 ## Day 3: Connect your factory to the backlog
+
+*Recorded 6 November.*
 
 - **Challenge requirement:** connect a ticketing system to the coding agent through MCP or a CLI, and check that it can list tickets and read one back. Choose tickets and their order. Work them one at a time, each on its own branch and PR, with the ticket link and acceptance criteria in the PR. Investigate Qodo's findings, run the delivered behaviour against every criterion, fix what's confirmed, and use the feedback before the next ticket.
 - **Increment delivered:**
@@ -101,6 +107,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 4: Automate your factory's first job
 
+*Recorded 9 November.*
+
 - **Challenge requirement:** start the agent with a trigger (a schedule or a `ready-for-agent` label) without opening a session. The agent reads the ticket and the project rules, implements, runs the checks against the acceptance criteria, opens a PR for Qodo, fixes confirmed findings and repeats, with a retry limit, stopping for help when stuck. The owner decides on the merge. Try it and note the checks, reviews, retries and blockers.
 - **Increment delivered:**
   - **The factory runs in GitHub Actions** ([`factory.yml`](../.github/workflows/factory.yml), [docs](factory-trigger.md)). The owner's `ready-for-agent` label on a ticket in this repo starts a run at once; a schedule every 15 minutes picks up target tickets. A cheap first job checks whether anything is labelled. One run takes one ticket, runs the `/factory` loop in headless Claude Code with a $25 budget, a 120-minute limit and at most three review rounds, and ends with `agent-done` or `agent-needs-help` and a comment saying why. It never merges. Keys are repo secrets; pushes use the owner's token, because Qodo ignores pushes by bots.
@@ -150,6 +158,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 5: Make your factory self-improve
 
+*Recorded 9 November.*
+
 - **Challenge requirement:** "Use Qodo or your coding agent to look back at the code and review feedback, find an expectation worth capturing, and propose a rule for future work. You'll check the evidence and refine the suggestion before deciding what belongs in your factory." Then save the rule via a PR, verify it in Qodo with the intended scope, and share the decision with its evidence (discussion 7).
 - **Increment delivered:**
   - **An evidence table the proposals stand on** ([#77](https://github.com/AJBeumer/faultforge/issues/77), [PR #81](https://github.com/AJBeumer/faultforge/pull/81)): `rules:evidence` builds one deduplicated table from the saved reviews — finding, category, PR, first-seen commit, whether it was still open at the PR's last complete review — excluding case PRs by case record and answer key, failing closed when an exclusion source is unreadable. `--check` verifies any citation against the table.
@@ -191,6 +201,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 6: Ask your codebase before you build
 
+*Recorded 11 November.*
+
 - **Challenge requirement:** "Connect the Agentic Toolbox. Explore your project with Codebase Wisdom. Ask how relevant features work, where their implementation lives, and which components depend on them. Check important answers against the referenced code. Review your backlog and choose one ticket. Keep the original ticket wording for comparison. Investigate the approach. Request source references and check the claims that influence your decision. Improve the work order. Revise the ticket or implementation plan and explain your decisions. Record unanswered questions." Share with the three-section template (discussion 8).
 - **Increment delivered:**
   - **The toolbox connected and inventoried** (above). The first thing done with it was the configuration check that found the drift (above).
@@ -213,6 +225,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 7: Close the feedback loop
 
+*Recorded 11 November.*
+
 - **Challenge requirement:** "Choose an open PR with Qodo review findings… or implement the ticket you investigated yesterday and have Qodo review it. Ask your agent to use Review Resolver to retrieve the findings and investigate them against the relevant code… Keep a reason for anything left unchanged, including disagreements and findings that need more information. Check the fixes. Run the relevant tests or reproduce the reported behavior, inspect the changes, and update the PR. Check the latest Qodo review against the updated code and record anything still unresolved." Share with the four-section template (discussion 9).
 - **Increment delivered:**
   - **The write-back policy first** (above, 11 November evening): `mark-implemented` by the owner after a test and `revert:check`; `dismiss` only as intentional with the reason on the PR; never on the target. Recorded before any finding was read.
@@ -231,7 +245,7 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 ## Configuration v8: five lab-scoped rules Qodo created itself (12 November, before any ticketed case)
 
 - **What the start-of-day check found.** `npm run qodo:check` reported five new rules against v7. Qodo created them between 09:08:33 and 09:08:57 UTC from this repository's `CLAUDE.md`, as it already does for 20 other rules from that file. Nobody on the project added or edited them. They restate existing text: all three match criteria are required for a catch, the answer key and audit log are append-only, expected paths in tests use `resolve()` or `join()`, slow tests live in the integration suite, and shared helpers live in named modules.
-- **Decision.** Record the live state as v8 rather than delete the rules or edit v7. All five are scoped to this repository only; none applies to `faultforge-target`, where case PRs are reviewed. The 19 rules scoped to the target are unchanged, and skills and relationships are unchanged. Case reviews therefore see the same rules in v7 and v8, and their results are comparable. The matching rules from v7 are unchanged. Lab PRs are reviewed under the extra five from today. `npm run qodo:check` now reports "matches qodo-v8".
+- **Decision.** Record the live state as v8 rather than delete the rules or edit v7. All five are scoped to this repository only; none applies to `faultforge-target`, where case PRs are reviewed. The 19 rules scoped to the target (17 of them active) are unchanged, and skills and relationships are unchanged. Case reviews therefore see the same rules in v7 and v8, and their results are comparable. The matching rules from v7 are unchanged. Lab PRs are reviewed under the extra five from today. `npm run qodo:check` now reports "matches qodo-v8".
 - **Remaining risk.** Qodo derives rules from `CLAUDE.md` whenever it changes, so the same drift can recur on any edit. The check cannot yet tell a rule that applies to the target from one that applies only to this repository. A ticket splits the two: drift in target-scoped rules fails the check, lab-only drift is reported.
 
 ## Configuration v9: one lab-scoped rule muted (12 November, before the capacity case)
@@ -268,6 +282,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 8: Review before you commit
 
+*Recorded 12 November.*
+
 - **Challenge requirement:** "Use the Agentic Toolbox's Reviewer skill to review your local changes, including staged and unstaged code. Give the review the task requirements and any decisions that shaped the implementation… Ask your agent to investigate them against the actual code and the task requirements, then choose which findings to address. Keep evidence for any disagreements… Run the relevant checks, then ask it to rerun Qodo local review on the updated, still-uncommitted code. Record what changed and anything still unresolved." (discussion 10)
 - **Increment delivered:**
   - **Ticket #126 built uncommitted and reviewed locally before any commit** ([PR #163](https://github.com/AJBeumer/faultforge/pull/163)): the factory tick now logs one `hooks-checked` event per run, with each guard hook's outcomes and its slowest answer. Context sent with the review: the ticket's Done-when list and five decisions, one of them a deliberate departure from the ticket.
@@ -290,6 +306,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 
 ## Day 8, later: a local review command and a check that it happened
 
+*Recorded 12 November.*
+
 - **Challenge requirement:** the same Day 8 requirement as above: review local changes before the commit, with the task requirements and decisions as context.
 - **Increment delivered:**
   - **`review:local`** ([PR #179](https://github.com/AJBeumer/faultforge/pull/179), ticket #176) runs Qodo's local review on the staged, unstaged and new files, saves exactly what was sent (which files, which were left out), and never reports a skipped or incomplete review as clean. It was built by the factory (run `20261112-195359-faultforge-176`), which stopped at its budget: 61 minutes, $23.34 of $25, 212 turns, with two Qodo findings on the pull request still open and the final review and revert check not yet run. The audit found no problems and `hooks-checked` was logged. I finished the ticket by hand: both findings fixed, then six further notes fixed, then the review, revert check and CI passed.
@@ -305,6 +323,8 @@ One entry per daily challenge: what was asked, what was built, and what was lear
 - **Remaining risk:** the gate is not wired into a commit hook; that is a separate decision because the agent cannot change `.claude`. The local findings could not be marked implemented in Qodo: the toolbox command answered "not found" for every id, probably because `review:local` reaches Qodo through its API rather than the CLI's own login (not proven). The runs used throwaway worktrees, so nothing carries over. Three paths that run only through the command's `main` have no unit test.
 
 ## Day 8, last: a warning after every commit
+
+*Recorded 13 November.*
 
 - **Challenge requirement:** the same Day 8 requirement: review before the commit. `review:gate` can say whether a commit was reviewed, but nothing ran it.
 - **Increment delivered:** a hook ([PR #184](https://github.com/AJBeumer/faultforge/pull/184), ticket #183) that runs `review:gate` after each commit made through Claude Code in this repository and shows a short note to the person and the agent when no finished local review saw those files. It warns and never blocks. It is registered in `.claude/settings.json`, and it fired on its own commits while it was being built.

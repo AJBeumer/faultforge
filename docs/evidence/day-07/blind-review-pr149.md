@@ -1,6 +1,6 @@
-# Blind review of PR 147 (stale premise gate)
+# Blind review of PR 149 (stale premise gate)
 
-Reviewed: `pr-147.diff` against ticket `ticket-premise-gate.md`, with `ticket-ready.ts`, `factory-tick.ts`, `factory-config.ts` and `factory.json` on branch `stale-premise-gate` read for the call sites. No tests run, no other reviewer's output seen.
+Reviewed: `pr-147.diff` (PR 149's diff, its file named after the ticket, #147) against ticket `ticket-premise-gate.md`, with `ticket-ready.ts`, `factory-tick.ts`, `factory-config.ts` and `factory.json` on branch `stale-premise-gate` read for the call sites. No tests run, no other reviewer's output seen.
 
 ## Findings
 
