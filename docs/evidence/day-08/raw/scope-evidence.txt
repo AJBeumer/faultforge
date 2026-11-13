@@ -8,5 +8,5 @@ base=d21666b954c21faf85b7c13f0dbb1d7328d90392
 
 The first column is empty and the second is M: modified in the working tree, none staged, no untracked files. No `git add` ran between 09:50Z and 10:30Z.
 
-Round 1 (operation 119f772d-1e62-438a-802a-1d45dbe74c90, 10:11:45Z): "Reviewing AJBeumer/faultforge @ d21666b95 - 22063B of local changes - auto depth".
-Round 2, after the fix (operation 81042ac8-791b-4708-a773-568fec2843c4, 10:19:01Z): "24315B of local changes - auto depth".
+Round 1 (operation <removed>, 10:11:45Z): "Reviewing AJBeumer/faultforge @ d21666b95 - 22063B of local changes - auto depth".
+Round 2, after the fix (operation <removed>, 10:19:01Z): "24315B of local changes - auto depth".
