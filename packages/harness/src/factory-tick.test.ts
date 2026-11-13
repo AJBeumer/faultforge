@@ -49,6 +49,7 @@ import {
   revertCheckProblems,
   runIdFor,
   runsHook,
+  type SnapshotField,
   safeText,
   settle,
   type TickDeps,
@@ -790,6 +791,21 @@ describe("settle", () => {
     });
   });
 
+  it("holds a PR the agent called ready when the runner's own gate says the owner decides (#215)", () => {
+    const gated = () => ({ problems: [], ownerGates: ["it changes the reviewer's rules (AGENTS.md)"] });
+    expect(settle(AGENT_OK, result, gated, "owner/target", 120)).toMatchObject({
+      label: LABELS.done,
+      reason: "waiting for the owner: it changes the reviewer's rules (AGENTS.md)",
+    });
+    const asked = { outcome: "owner-gate" as const, pr: result?.pr ?? null, reason: "a product question" };
+    expect(settle(AGENT_OK, asked, gated, "owner/target", 120).reason).toBe(
+      "waiting for the owner: a product question; it changes the reviewer's rules (AGENTS.md)",
+    );
+    expect(settle(AGENT_OK, result, verified, "owner/target", 120).reason).toBe(
+      "the pull request is ready for the owner to merge",
+    );
+  });
+
   it("needs help when the PR is in another repo, or missing", () => {
     expect(settle(AGENT_OK, result, verified, "owner/lab", 120).reason).toMatch(/without a pull request in owner\/lab/);
     expect(settle(AGENT_OK, { outcome: "ready", pr: null, reason: "x" }, verified, "owner/target", 120).label).toBe(
@@ -1172,9 +1188,11 @@ describe("buildSnapshot: GitHub's pages", () => {
   /** A fake GitHub: each field's pages, keyed by the cursor that leads to them ("" for the first). */
   const github = (pages: Record<string, Record<string, { nodes: unknown[]; next: string | null }>>) => {
     const asked: string[] = [];
-    const fetch = (field: "userContentEdits" | "comments", cursor: string | null) => {
+    const fetch = (field: SnapshotField, cursor: string | null) => {
       asked.push(`${field}@${cursor ?? ""}`);
-      const page = pages[field]?.[cursor ?? ""];
+      // No renames unless a test gives some.
+      const none = field === "timelineItems" && !pages[field] && !cursor ? { nodes: [], next: null } : undefined;
+      const page = pages[field]?.[cursor ?? ""] ?? none;
       if (!page) throw new Error(`no page ${field}@${cursor}`);
       return {
         title: "Filter",
@@ -1205,10 +1223,24 @@ describe("buildSnapshot: GitHub's pages", () => {
       "userContentEdits@e2",
       "comments@",
       "comments@c1",
+      "timelineItems@",
     ]);
     expect(snapshot.provenance.editors).toEqual(["owner", "owner", "mallory"]);
     expect(provenanceProblems(snapshot.provenance, "owner")).toEqual(["edited by mallory", "commented on by eve"]);
     expect(snapshot.text).toContain("Comment by eve, 2026-11-09T08:05:00Z:\n\ntext by eve");
+  });
+
+  it("refuses a ticket someone else renamed, and accepts the owner's own renames (#215)", () => {
+    const pages = (renamers: string[]) =>
+      github({
+        userContentEdits: { "": { nodes: [], next: null } },
+        comments: { "": { nodes: [], next: null } },
+        timelineItems: { "": { nodes: renamers.map((r) => ({ actor: who(r) })), next: null } },
+      }).fetch;
+    expect(provenanceProblems(buildSnapshot(pages(["owner"])).provenance, "owner")).toEqual([]);
+    expect(provenanceProblems(buildSnapshot(pages(["owner", "mallory"])).provenance, "owner")).toEqual([
+      "renamed by mallory",
+    ]);
   });
 
   it("stops with an error when GitHub repeats a cursor, never with a short answer", () => {
