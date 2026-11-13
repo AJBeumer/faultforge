@@ -154,6 +154,21 @@ function reviewed(
   return entry;
 }
 
+/**
+ * The change the answer key says was planted, read from the scratch target itself: the recorded commit's own
+ * diff, and that it sits on the base the key names. Bookkeeping alone can't stand in for the planted change
+ * (Qodo on PR 241).
+ */
+function plantedDiff(w: ReturnType<typeof world>, caseId: string): string {
+  const entry = readLedger(w.groundTruthPath).find((e) => e.caseId === caseId) as unknown as {
+    injectionCommit: string;
+    targetCommit: string;
+  };
+  const git = (...args: string[]) => execFileSync("git", ["-C", w.target, ...args], { encoding: "utf8" });
+  expect(git("rev-parse", `${entry.injectionCommit}^`).trim()).toBe(entry.targetCommit);
+  return git("show", "--format=", entry.injectionCommit).replace(/\r\n/g, "\n");
+}
+
 /** The owner's answers: the verdict, then a reason, then "real" for every other finding. */
 const owner = (answer: string) => async (question: string) =>
   question.startsWith("Verdict") ? answer : question.startsWith("Judge") ? "real" : "Checked against the saved review.";
@@ -195,6 +210,7 @@ describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", ()
   it("takes a bug case to a detected record", { timeout: 300_000 }, async () => {
     const w = world();
     expect(inject(w, "idempotency-guard-bypass-v1", "FF-9101")).toBe("ok");
+    expect(plantedDiff(w, "FF-9101")).toContain("+    const original = deps.store.getBooking(idempotencyKey);");
     const entry = readLedger(w.groundTruthPath).find((e) => e.caseId === "FF-9101") as unknown as {
       injectedFile: string;
       injectedLines: [number, number];
@@ -235,6 +251,7 @@ describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", ()
   it("takes a clean control to a clean record", { timeout: 300_000 }, async () => {
     const w = world();
     expect(inject(w, CONTROL_TEMPLATE.id, "FF-9102")).toBe("ok");
+    expect(plantedDiff(w, "FF-9102")).toContain("+  const own = deps.store.listBookings(userId);");
     reviewed(w, "FF-9102", 902, { state: "complete", comment: true, findings: [] });
     const record = await adjudicateAndBuild(w, "FF-9102", "clean");
     expect(record).toMatchObject({
