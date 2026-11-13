@@ -56,7 +56,9 @@ jobs:
     needs: look
     if: needs.look.outputs.ready != '0'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # The agent gets --minutes; the tick then audits, verifies the PR (revert:check alone may take 25
+    # minutes) and saves evidence. 45 minutes beyond the agent keeps a cancelled job from stranding a ticket.
+    timeout-minutes: 165
     # Secrets are given to the steps that need them, never to the whole job, and no checkout keeps its token
     # in .git/config: git authenticates through gh, which reads GH_TOKEN from the environment at push time.
     steps:

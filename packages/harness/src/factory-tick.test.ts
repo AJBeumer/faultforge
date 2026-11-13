@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
+import { lockIsStale, pidAlive, STRANDED_COMMENT } from "./factory-recovery.ts";
 import {
   type AgentRun,
   acquireLock,
@@ -115,7 +116,7 @@ interface Fake {
 
 /** A fake world: `issues` maps "github#n" to its title and events; everything else is overridable. */
 function fake(
-  issues: Record<string, { title: string; events: IssueEvent[] }>,
+  issues: Record<string, { title: string; events: IssueEvent[]; labels?: string[] }>,
   overrides: Partial<TickDeps> = {},
   busy = false,
 ): Fake {
@@ -142,9 +143,10 @@ function fake(
       busy
         ? { acquired: false, release: () => {}, note: "pid 1" }
         : { acquired: true, release: () => (released = true) },
-    labelled: (github) =>
+    // Each fake ticket carries `ready-for-agent` unless it names its own labels.
+    labelled: (github, label) =>
       Object.entries(issues)
-        .filter(([key]) => key.startsWith(`${github}#`))
+        .filter(([key, value]) => key.startsWith(`${github}#`) && (value.labels ?? [LABELS.ready]).includes(label))
         .map(([key, value]) => ({ number: Number(key.split("#")[1]), title: value.title })),
     events: (github, number) => issues[`${github}#${number}`]?.events ?? [],
     ready: () => ({ title: "t", problems: [] }),
@@ -396,7 +398,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
@@ -414,7 +416,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
@@ -425,7 +427,7 @@ describe("tick: stop paths", () => {
     const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       "qodo-check",
       "workspace",
       "agent",
@@ -463,7 +465,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       "qodo-check",
       "workspace",
       "agent",
@@ -640,7 +642,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain("agent");
     // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -${LABELS.ready} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
     expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
@@ -660,7 +662,7 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     // The fallback relabel is still tried, even though the finish-step one failed.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -${LABELS.ready} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
@@ -722,7 +724,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -ready-for-agent +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
     ]);
     expect(f.comments).toHaveLength(2);
@@ -2313,5 +2315,60 @@ describe("tick: a Qodo difference in the run log, which CI prints and uploads fr
       differences: ["changed rule 4664849 (content)", "new rule 4664850", "missing rule 4664851"],
     });
     expect(f.printed.join("\n")).toContain("changed rule 4664849 (content)");
+  });
+});
+
+describe("tick: recovering from an interrupted run (#197)", () => {
+  it("moves a ticket left agent-working to needs-help with a comment before it picks anything", async () => {
+    const f = fake({ "owner/target#7": { title: "Old", events: [], labels: [LABELS.working] } });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("idle");
+    expect(f.calls).toContain(`relabel owner/target#7 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    expect(f.comments).toEqual([{ github: "owner/target", number: 7, body: STRANDED_COMMENT }]);
+    expect(f.events.find((e) => e.event === "recovered")).toBeUndefined();
+    expect(f.printed.join("\n")).toMatch(/recovered .*owner\/target#7/);
+  });
+
+  it("clears an earlier result label when a ticket is claimed again", async () => {
+    const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(f.calls[0]).toBe(
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+    );
+  });
+
+  it("keeps the worktrees of a run that needs help, even when its evidence went to the quarantine branch", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        runAgent: async () => ({
+          ...AGENT_OK,
+          resultText: 'FACTORY_RESULT {"outcome":"stuck","pr":null,"reason":"needs a decision"}',
+        }),
+        saveEvidence: (runId) => ({ file: "", pushed: false, blocked: ["config/x.yaml"], savedAt: `blocked-${runId}` }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain("cleanup");
+  });
+});
+
+describe("acquireLock and pidAlive after a restart (#197)", () => {
+  it("takes over a lock older than any run can last, even when its pid now names a live process", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-lock-old-"));
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-01T00:00:00.000Z" }));
+    expect(acquireLock(dir, () => true).acquired).toBe(true);
+  });
+
+  it("keeps a recent lock whose holder is alive", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-lock-new-"));
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: new Date().toISOString() }));
+    expect(acquireLock(dir, () => true).acquired).toBe(false);
+  });
+
+  it("reads a permission error as a live process, and only 'no such process' as gone", () => {
+    expect(lockIsStale({ pid: 1, at: new Date().toISOString() }, () => true, Date.now(), 60_000)).toBe(false);
+    expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, Date.now(), 60_000)).toBe(true);
+    expect(pidAlive(process.pid)).toBe(true);
+    expect(pidAlive(2_147_483_646)).toBe(false);
   });
 });
