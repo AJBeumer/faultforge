@@ -49,8 +49,8 @@ still saw them.
 ## Reading only
 
 The command changes no branch, file, review or label. Reading the staged tree uses `git write-tree`,
-which adds that tree to git's object store and nothing else. It does not block a commit. Wiring it
-into a hook or a skill is a separate decision.
+which adds that tree to git's object store and nothing else. It does not block a commit. The hook that runs
+it after every commit is described below.
 
 ## The warning after a commit
 
