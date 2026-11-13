@@ -241,3 +241,21 @@ describe("content about to travel, read from git whatever the command text says"
     });
   });
 });
+
+describe("one deadline for the whole decision (audit N-4)", () => {
+  it("denies a commit whose scans can't finish within the decision's one deadline", async () => {
+    const { decide: guardDecide } = await import("./guard-target.ts");
+    const { dir, git } = tempRepo();
+    const config = guardConfig(MISSING_TARGET, (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: dir };
+    });
+    writeFileSync(join(dir, "README.md"), "# App\n\nRelease notes.\n");
+    git("add", "README.md");
+    const payload = JSON.stringify({ tool_name: "Bash", cwd: dir, tool_input: { command: 'git commit -m "Notes"' } });
+    // A deadline already past: the same harmless commit that passes below is refused, not let through.
+    const late = guardDecide(payload, { ...process.env, FAULTFORGE_CONFIG: config, FAULTFORGE_GUARD_BUDGET_MS: "-1" });
+    expect(late.kind).toBe("deny");
+    expect(late.kind === "deny" && late.reason).toMatch(/can't inspect[\s\S]*ran out/);
+    expect(guardDecide(payload, { ...process.env, FAULTFORGE_CONFIG: config }).kind).toBe("allow");
+  });
+});

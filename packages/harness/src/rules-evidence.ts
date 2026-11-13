@@ -10,6 +10,10 @@
  * left out, and only their count is reported: the factory learns from its own work, never from the
  * exam. Exclusion fails closed: if the case records or the answer key can't be read, the command
  * stops instead of writing a table that might contain exam findings.
+ *
+ * Exit codes: 0 the table was written, or every citation checked is in it; 1 a citation in the `--check` file
+ * is not in the table; 2 the table couldn't be built (a file couldn't be read, or the case PRs couldn't be
+ * excluded), so nothing was written.
  */
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -293,4 +297,12 @@ function main(): void {
   for (const [pr, count] of [...perPr.entries()].sort()) console.log(`  ${pr}: ${count}`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // Anything thrown is "couldn't build the table" (2), never the "citation missing" of exit 1.
+  try {
+    main();
+  } catch (error) {
+    console.error(`rules:evidence: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+}

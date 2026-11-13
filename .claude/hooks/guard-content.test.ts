@@ -2,7 +2,14 @@ import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { canSymlink, tempRepo } from "./fixtures.ts";
-import { chainProblem, pendingCommit, pendingIndex, pendingPush, Uninspectable } from "./guard-content.ts";
+import {
+  chainProblem,
+  pendingCommit,
+  pendingIndex,
+  pendingPush,
+  Uninspectable,
+  withDeadline,
+} from "./guard-content.ts";
 
 describe("chainProblem: the steps a git chain may contain inside a reviewed checkout", () => {
   it.each([
@@ -123,5 +130,30 @@ describe("pendingIndex: what the next commit records (#191)", () => {
       reasons: [],
       where: "the staged changes",
     });
+  });
+});
+
+describe("withDeadline (audit N-4)", () => {
+  it("makes every scan inside it share one deadline, and a spent one a failure to inspect", () => {
+    const { dir } = tempRepo();
+    expect(() => withDeadline(-1, () => pendingCommit(dir, false))).toThrow(Uninspectable);
+    expect(() => withDeadline(-1, () => pendingPush(dir))).toThrow(/ran out/);
+    expect(withDeadline(8000, () => pendingCommit(dir, false)).reasons).toEqual([]);
+    // Outside any deadline, as before.
+    expect(pendingCommit(dir, false).reasons).toEqual([]);
+  });
+});
+
+describe("withDeadline: a decision that finished late (Qodo on PR 233)", () => {
+  it("refuses work that ran past the deadline even when no git call came after it", () => {
+    const slow = () => {
+      const until = Date.now() + 30;
+      while (Date.now() < until) {
+        // a long scan of posted text, with no git call to notice the time
+      }
+      return "allow";
+    };
+    expect(() => withDeadline(5, slow)).toThrow(/ran out before it finished/);
+    expect(withDeadline(5000, slow)).toBe("allow");
   });
 });

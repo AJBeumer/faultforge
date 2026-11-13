@@ -25,6 +25,10 @@
  * `<evidence>/factory-runs/`. `npm run factory:timeline` prints it as a table.
  *
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
+ *
+ * Exit codes: 0 the tick ended normally (a run delivered, or nothing to take: busy, idle, a ticket refused or
+ * not ready, each logged); 1 a run stopped and needs the owner (`agent-needs-help`); 2 the command line or the
+ * environment was wrong, so no tick ran.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -960,8 +964,13 @@ export function verifyPrWith(
     // A complete review can still have findings open: only none action-required counts as ready.
     if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
     else {
-      const open = openActionRequired(JSON.parse(readFileSync(reviewRecordFile, "utf8")));
-      if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
+      // A damaged record is a problem to report, never a crash that loses the rest of this verdict (audit N-12).
+      const record = readJsonRecord(reviewRecordFile) as Parameters<typeof openActionRequired>[0] | null;
+      if (!record) problems.push("review:wait's record for the head commit couldn't be read");
+      else {
+        const open = openActionRequired(record);
+        if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
+      }
     }
 
     // Prove the tests, after the review check: the PR's own new or changed tests must fail without
@@ -1744,9 +1753,16 @@ export function acquireLock(
   };
 }
 
-function killTree(pid: number) {
+/** Kills the agent and its children. Called from a timer: a process already gone is no crash (audit N-12). */
+export function killTree(pid: number, kill: (pid: number, signal: string) => void = process.kill) {
   if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
-  else process.kill(-pid, "SIGKILL");
+  else {
+    try {
+      kill(-pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
 }
 
 /** The Claude Code binary: FAULTFORGE_CLAUDE, else the npm install's `claude.exe` on Windows, else `claude`. */
@@ -1821,7 +1837,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   // below act on. Honouring `FAULTFORGE_PRIVATE_DIR` here would push and audit a different folder than
   // the one actually checked out, so the evidence would silently escape it (Qodo on PR 154).
   const privateRepo = join(LAB_ROOT, "private");
-  const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)); // e.g. raw-artifacts
+  const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths (N-12)
 
   /** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
   const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
@@ -2082,17 +2098,16 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             }
           }
         };
-        child.stdout.on("data", (chunk: Buffer) => {
-          buffer += chunk.toString("utf8");
+        child.stdout.setEncoding("utf8"); // decoded whole, never split mid-character (audit N-12)
+        child.stdout.on("data", (chunk: string) => {
+          buffer += chunk;
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           lines.forEach(onLine);
         });
-        child.stderr.on("data", (chunk: Buffer) =>
-          appendFileSync(
-            transcript,
-            `${JSON.stringify({ t: new Date().toISOString(), stderr: chunk.toString("utf8") })}\n`,
-          ),
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk: string) =>
+          appendFileSync(transcript, `${JSON.stringify({ t: new Date().toISOString(), stderr: chunk })}\n`),
         );
         let settled = false;
         // A binary that can't start emits "error" and maybe never "close": report it, don't hang or crash.

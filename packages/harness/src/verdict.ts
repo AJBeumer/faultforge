@@ -31,7 +31,7 @@
  *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
  * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
- * answer key or audit log has an amendment problem (`ledgerProblems`); the case, its review or its template
+ * answer key or audit log has an amendment or history problem (`ledgerProblemsWithHistory`); the case, its review or its template
  * can't be read; the review doesn't match the injected commit; an answer couldn't be parsed after retrying;
  * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
  */
@@ -44,7 +44,8 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { gh } from "./github.ts";
 import { readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
+import { applyMatchRule, type MatchFinding } from "./match-rule.ts";
+import { ROOT } from "./paths.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import {
   type AskFn,
@@ -56,7 +57,6 @@ import {
   printReport,
 } from "./verdict-ask.ts";
 
-const ROOT = join(import.meta.dirname, "../../..");
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 /** The relevant parts of a saved `*.review.json` (the shape `review:wait` writes). */

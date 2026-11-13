@@ -201,7 +201,9 @@ let failure: string | undefined;
 git("switch", "--quiet", "-c", actualBranch);
 try {
   injectedLines = applyMutation();
-  if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
+  const diff = run("git", ["diff"], targetDir); // untrimmed (N-14); a failed or cut-off diff stops the run (Qodo on PR 233)
+  if (diff.status !== 0 || diff.error) throw new Error(`git diff failed: ${diff.stderr.trim()}`);
+  if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), diff.stdout);
 
   // The typecheck runs in --validate-only too: a variant that doesn't compile proves nothing (#217).
   typecheck = runStep("typecheck", process.execPath, [

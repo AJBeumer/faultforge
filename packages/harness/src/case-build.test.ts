@@ -236,6 +236,12 @@ describe("repoSlug", () => {
   it("strips the host and the .git suffix", () => {
     expect(repoSlug("https://github.com/AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
   });
+
+  it("strips an ssh remote too, in both spellings (audit N-14)", () => {
+    expect(repoSlug("git@github.com:AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
+    expect(repoSlug("ssh://git@github.com/AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
+    expect(repoSlug("https://github.com/AJBeumer/faultforge-target")).toBe("AJBeumer/faultforge-target");
+  });
 });
 
 describe("overlayProblems", () => {

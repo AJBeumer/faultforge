@@ -5,6 +5,8 @@
  *   npm run factory:timeline -- latest
  *
  * Reads `<runs>/<run id>.jsonl` (the live log), or the copy under `<evidence>/factory-runs/`.
+ *
+ * Exit codes: 0 the timeline was printed; 2 no run id was given, or no log for it was found.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

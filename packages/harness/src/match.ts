@@ -98,6 +98,23 @@ function shapeProblem(record: unknown): string | undefined {
   if (typeof templateId !== "string" || typeof file !== "string" || !isRange(lines)) {
     return "needs templateId, file and a line range in its injection";
   }
+  // A detection that is there must be whole: comparing against a broken one would crash or read as a
+  // disagreement (exit 1) when the record itself is unreadable (exit 2, audit N-1).
+  if (r.detection !== undefined) {
+    const d = r.detection as Partial<NonNullable<CaseRecord["detection"]>> | null;
+    const criteria = ["file", "lines", "kind"] as const;
+    if (
+      !d ||
+      typeof d.caught !== "boolean" ||
+      !Array.isArray(d.matchedFindingIds) ||
+      !d.matchedFindingIds.every((id) => typeof id === "string") ||
+      !d.match ||
+      typeof d.match !== "object" ||
+      !criteria.every((c) => typeof (d.match as Record<string, { pass?: unknown } | undefined>)[c]?.pass === "boolean")
+    ) {
+      return "has a detection without caught, matchedFindingIds and a pass for file, lines and kind";
+    }
+  }
   return undefined;
 }
 

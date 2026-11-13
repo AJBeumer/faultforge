@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type FACTORY, guardConfig, guardDecision, tempRepo } from "./fixtures.ts";
-import { decide as guardDecide } from "./guard-target.ts";
+import { guardBudget, decide as guardDecide } from "./guard-target.ts";
 
 const HOOK = join(import.meta.dirname, "guard-target.ts");
 const HARNESS = "D:\\Projects\\FaultForge";
@@ -179,6 +179,14 @@ describe("guard-target hook", () => {
       writeFileSync(file, "see https://github.com/AJBeumer/faultforge-target/issues/3");
       expect(bash(`gh issue create --repo AJBeumer/faultforge --title "x" --body-file "${file}"`)).toMatch(
         /link to the target/,
+      );
+    });
+
+    it("refuses a posted file too large to read within the hook's time (Qodo on PR 233)", () => {
+      const file = join(mkdtempSync(join(tmpdir(), "big-body-")), "body.md");
+      writeFileSync(file, "ordinary text\n".repeat(80_000)); // over 1 MiB
+      expect(bash(`gh issue create --repo AJBeumer/faultforge --title "x" --body-file "${file}"`)).toMatch(
+        /more than the guard reads/,
       );
     });
 
@@ -739,5 +747,14 @@ describe("guard-target hook as a process (node <file>), the way Claude Code runs
     expect(result.status).toBe(2);
     expect(result.stdout.trim()).toBe("");
     expect(result.stderr.trim()).toMatch(/^guard-target hook failed: EISDIR/);
+  });
+});
+
+describe("guardBudget (Qodo on PR 233)", () => {
+  it("may shorten the decision's budget, never lengthen it past the default", () => {
+    expect(guardBudget({})).toBe(8000);
+    expect(guardBudget({ FAULTFORGE_GUARD_BUDGET_MS: "60000" })).toBe(8000);
+    expect(guardBudget({ FAULTFORGE_GUARD_BUDGET_MS: "500" })).toBe(500);
+    expect(guardBudget({ FAULTFORGE_GUARD_BUDGET_MS: "not a number" })).toBe(8000);
   });
 });

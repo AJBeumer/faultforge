@@ -22,10 +22,39 @@ export interface Pending {
 const MAX_FILES = 500;
 const MAX_COMMITS = 50;
 /** The hook has 15 s in settings.json; the scan gives up well before that, so a timeout can't let the tool run. */
-const DEFAULT_BUDGET_MS = 8000;
+export const DEFAULT_BUDGET_MS = 8000;
+
+/** The one deadline every git call and scan in the current decision shares, while one is set (audit N-4). */
+let active: { end: number; ms: number } | undefined;
+
+/**
+ * Runs `fn` with one deadline for all of it: every scan and every git call inside shares `ms`, so a commit
+ * scan and a push scan in one command can't each take a full budget and together pass the hook's 15 s, after
+ * which Claude Code would run the tool unchecked (audit N-4). Running out is a failure to inspect: a deny.
+ */
+export function withDeadline<T>(ms: number, fn: () => T): T {
+  const outer = active;
+  active = { end: Date.now() + ms, ms };
+  try {
+    const result = fn();
+    // Git calls check the deadline as they start; a slow scan between them (a large posted file) can only
+    // be caught here, at the end. A decision that finished late is refused, never allowed (Qodo on PR 233).
+    if (Date.now() > (active?.end ?? Number.POSITIVE_INFINITY)) {
+      throw new Uninspectable(`the guard's ${ms} ms for this decision ran out before it finished`);
+    }
+    return result;
+  } finally {
+    active = outer;
+  }
+}
 
 function run(checkout: string, args: string[], input?: string): Buffer {
-  const result = spawnSync("git", ["-C", checkout, ...args], { input, timeout: 10_000, maxBuffer: 256 * 1024 * 1024 });
+  if (active && Date.now() >= active.end) {
+    throw new Uninspectable(`the guard's ${active.ms} ms for this decision ran out before git ${args[0]}`);
+  }
+  // Never longer than what is left of the decision's deadline, nor than 10 s for one call.
+  const timeout = active ? Math.max(1, Math.min(10_000, active.end - Date.now())) : 10_000;
+  const result = spawnSync("git", ["-C", checkout, ...args], { input, timeout, maxBuffer: 256 * 1024 * 1024 });
   if (result.status !== 0) {
     const detail = (result.stderr?.toString() || result.error?.message || "").trim().split("\n")[0];
     throw new Uninspectable(`git ${args[0]} failed: ${detail}`);

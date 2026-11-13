@@ -15,7 +15,7 @@
  * Exit codes: 0 the event was appended (or printed with `--dry-run`); 1 the case already has a
  * `review.recorded` event, so nothing was written (the log is append-only; correct one with an amendment);
  * 2 nothing was written, because an input is missing or unreadable, the answer key or audit log has an
- * amendment problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
+ * amendment or history problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";

@@ -7,9 +7,12 @@
  *
  * A Qodo comment is not a finished review: on Day 3 it twice said "no open findings" and was edited
  * minutes later to add findings. Only Qodo's API saying the run for the head commit is `completed`
- * counts. Read-only throughout. Exits 0 when the review is complete, 1 when it timed out (or, with
- * `--commit`, the head never became that commit or moved past it), 3 when Qodo finished the run but
- * skipped reviewing it.
+ * counts. Read-only throughout.
+ *
+ * Exit codes: 0 Qodo's review of the head (with `--commit`, of that commit) is complete; 1 there is no
+ * complete review of it within the time limit, whether Qodo didn't finish or, with `--commit`, the head
+ * never became that commit or moved past it; 2 it couldn't run (usage, a missing key, or every poll
+ * failed); 3 Qodo finished the run but skipped reviewing it.
  *
  * After a push, pass `--commit`: right after a push GitHub can still show the previous head, and
  * without it the previous commit's finished review would be reported as the answer (PR 65, 9 Nov).
@@ -20,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { gh, ghAll } from "./github.ts";
+import { ROOT } from "./paths.ts";
 import { QodoApi } from "./qodo-api.ts";
 
 /** The parts of Qodo's `get-pr-review-findings` (extended) response this uses. */
@@ -345,12 +349,7 @@ async function main() {
   const { repoKey, pr, timeoutMinutes, commit } = args;
   const { github } = repoConfig(factory, repoKey);
   const deadline = Date.now() + timeoutMinutes * 60_000;
-  const dir = resolve(
-    fileURLToPath(new URL("../../..", import.meta.url)),
-    factory.evidence,
-    "reviews",
-    `${repoKey}-pr${pr}`,
-  );
+  const dir = resolve(ROOT, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
   const readHead = async () => gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim();
   let headSha: string;
   if (commit === null) headSha = await readHead();
@@ -533,7 +532,6 @@ async function main() {
 }
 
 // Run only when called as a script, not when the tests import it.
-// Exit codes: 0 complete, 1 timed out, 2 couldn't run (usage, missing key, or every poll failed), 3 skipped.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main().catch((error: unknown) => {
     console.error(`review:wait could not run: ${error instanceof Error ? error.message : String(error)}`);
