@@ -1,0 +1,125 @@
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { qodoReviewComment, run } from "./case-review.ts";
+
+const CASE_ID = "FF-9003";
+const COMMIT = "f".repeat(40);
+const SHORT = COMMIT.slice(0, 7);
+const REVIEW_URL = "https://github.com/Owner/target/pull/7#issuecomment-2";
+
+/** The comment feeds review:wait saves: each a `gh api --paginate --slurp` text, an array of pages. */
+function feeds(comments: object[]): string {
+  return JSON.stringify({ pr: JSON.stringify([comments]), inline: "[[]]" });
+}
+
+const QODO_REVIEW = {
+  user: { login: "qodo-code-review[bot]" },
+  body: "<h3>Code Review by Qodo</h3>\n\nfindings",
+  html_url: REVIEW_URL,
+  updated_at: "2026-11-01T00:06:00Z",
+};
+const QODO_SUMMARY = { ...QODO_REVIEW, body: "<h3>PR Summary by Qodo</h3>", html_url: "summary-url" };
+
+function fixture(opts: { comments?: object[]; reviewed?: boolean; savedPr?: number } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "case-review-"));
+  const groundTruthPath = join(root, "ground-truth.jsonl");
+  const auditEventsPath = join(root, "audit-events.jsonl");
+  writeFileSync(groundTruthPath, `${JSON.stringify({ caseId: CASE_ID, kind: "control", injectionCommit: COMMIT })}\n`);
+  const events: object[] = [
+    {
+      eventId: "e1",
+      type: "pr.opened",
+      caseId: CASE_ID,
+      at: "2026-11-01T00:00:00Z",
+      pr: 7,
+      qodoConfiguration: "qodo-v9",
+    },
+  ];
+  if (opts.reviewed)
+    events.push({ eventId: "e2", type: "review.recorded", caseId: CASE_ID, at: "2026-11-01T00:07:00Z" });
+  writeFileSync(auditEventsPath, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const dir = join(root, "raw-artifacts", "reviews", "target-pr7");
+  mkdirSync(dir, { recursive: true });
+  const save = { repo: "Owner/target", pr: opts.savedPr ?? 7, headSha: COMMIT, state: "complete", findings: [] };
+  writeFileSync(join(dir, `${SHORT}.review.json`), JSON.stringify(save));
+  writeFileSync(join(dir, `${SHORT}.comments.latest.raw.json`), feeds(opts.comments ?? [QODO_SUMMARY, QODO_REVIEW]));
+  const out: string[] = [];
+  const err: string[] = [];
+  const go = (dryRun = false) =>
+    run(CASE_ID, {
+      dryRun,
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+      now: () => "2026-11-01T01:00:00.000Z",
+      groundTruthPath,
+      auditEventsPath,
+      reviewsDir: join(root, "raw-artifacts", "reviews"),
+    });
+  return { go, out, err, auditEventsPath };
+}
+
+describe("qodoReviewComment", () => {
+  it("picks Qodo's review comment, not its summary or anyone else's", () => {
+    const other = { ...QODO_REVIEW, user: { login: "someone" }, html_url: "other" };
+    expect(qodoReviewComment(feeds([QODO_SUMMARY, QODO_REVIEW, other]))).toEqual({
+      url: REVIEW_URL,
+      updatedAt: "2026-11-01T00:06:00Z",
+    });
+    expect(qodoReviewComment(feeds([QODO_SUMMARY]))).toBeUndefined();
+  });
+});
+
+describe("npm run case:review (#162)", () => {
+  it("appends the review.recorded event case:build needs, from what review:wait saved", () => {
+    const fx = fixture();
+    expect(fx.go()).toBe(0);
+    const lines = readFileSync(fx.auditEventsPath, "utf8").trim().split("\n");
+    expect(JSON.parse(lines.at(-1) as string)).toMatchObject({
+      type: "review.recorded",
+      caseId: CASE_ID,
+      pr: { repo: "Owner/target", number: 7, url: "https://github.com/Owner/target/pull/7" },
+      review: {
+        reviewer: "qodo-code-review[bot]",
+        path: "pr-comments",
+        configVersion: "qodo-v9",
+        reviewedCommit: COMMIT,
+        reviewedAt: "2026-11-01T00:06:00Z",
+        url: REVIEW_URL,
+      },
+      state: "complete",
+    });
+  });
+
+  it("writes nothing with --dry-run, and nothing when the case already has its review event", () => {
+    const dry = fixture();
+    const before = readFileSync(dry.auditEventsPath, "utf8");
+    expect(dry.go(true)).toBe(0);
+    expect(readFileSync(dry.auditEventsPath, "utf8")).toBe(before);
+    const again = fixture({ reviewed: true });
+    expect(again.go()).toBe(1);
+  });
+
+  it("refuses when the saved feed holds no review comment from Qodo", () => {
+    const fx = fixture({ comments: [QODO_SUMMARY] });
+    expect(fx.go()).toBe(2);
+    expect(fx.err.join("\n")).toContain("no review comment from Qodo");
+  });
+
+  it("refuses a save for another pull request than the case's", () => {
+    const fx = fixture({ savedPr: 8 });
+    expect(fx.go()).toBe(2);
+    expect(fx.err.join("\n")).toContain("names PR 7");
+  });
+
+  it("refuses to run while the audit log has an amendment problem", () => {
+    const fx = fixture();
+    appendFileSync(
+      fx.auditEventsPath,
+      `${JSON.stringify({ kind: "amendment", amends: "missing", reason: "r", evidence: "e" })}\n`,
+    );
+    expect(fx.go()).toBe(2);
+    expect(fx.err.join("\n")).toContain("has problems");
+  });
+});

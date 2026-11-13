@@ -4,10 +4,18 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { isRange, normalisePath, overlaps } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
-const schema = JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"));
+// Formats are documentation here; the checks that matter are structure and the fixed fields. Version 2 is
+// version 1 plus two outcomes a control can have (#162); a record is checked against the version it names.
+const ajv = new Ajv2020({ allErrors: true, validateFormats: false });
+const schemaChecks = {
+  1: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"))),
+  2: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v2.json"), "utf8"))),
+};
 
-// Formats are documentation here; the checks that matter are structure and the fixed fields.
-const schemaCheck = new Ajv2020({ allErrors: true, validateFormats: false }).compile(schema);
+/** The lowest record version that can hold a disposition: version 1 unless the outcome is new in version 2. */
+export function recordVersionFor(kind: string, disposition: string): 1 | 2 {
+  return kind === "control" && disposition !== "confirmed_clean" ? 2 : 1;
+}
 
 interface Detection {
   caught: boolean;
@@ -37,6 +45,8 @@ interface CaseRecord {
 
 /** Problems with a public case record, or an empty list if it is valid. */
 export function validateCaseRecord(record: unknown): string[] {
+  const version = (record as { schemaVersion?: unknown } | null)?.schemaVersion === 2 ? 2 : 1;
+  const schemaCheck = schemaChecks[version];
   if (!schemaCheck(record)) {
     return (schemaCheck.errors ?? []).map((e) => `${e.instancePath || "/"} ${e.message}`);
   }
