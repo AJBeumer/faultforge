@@ -1124,9 +1124,10 @@ export interface Workspace {
 
 /** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
  * one in `differences`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error).
- * Kept structured, not pre-formatted: a difference's full detail (a rule's `content`, its field values)
- * is fine for the run log, but never for a ticket comment (Qodo on PR 145) - callers pick the
- * formatter that matches where the text is going. */
+ * Kept structured, not pre-formatted: a difference's full detail (a rule's name and `content`, its field
+ * values) can hold text from private storage, so it never goes to a ticket comment (Qodo on PR 145) or to
+ * the run log, which CI prints and uploads from a public repository (#187). Both use `summarizeDifference`;
+ * the full detail is in the private `qodo-state` evidence. */
 export interface QodoCheckOutcome {
   exitCode: 0 | 1 | 2;
   message: string;

@@ -344,7 +344,7 @@ describe("formatDifference / summarizeDifference", () => {
     after: "different private wording",
   };
 
-  it("formatDifference includes the field's values, for the run log only", () => {
+  it("formatDifference includes the field's values, for the owner's console only", () => {
     expect(formatDifference(changed)).toContain("private wording from CLAUDE.md");
   });
 
