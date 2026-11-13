@@ -208,14 +208,22 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   }
   deps.saveArtifact("review.json", `${JSON.stringify(payload, null, 2)}\n`);
 
+  // Checked before the labels are read from them: a state list that doesn't hold findings with ids can't
+  // say which findings are open, and may not even be a list (Qodo on PR 209).
+  if (!stateListsReadable(payload)) {
+    return {
+      exitCode: 3,
+      message: "Qodo's finding_state lists don't hold findings with ids, so open and closed can't be told apart",
+      findings: [],
+      operationId,
+    };
+  }
   const findings = labelFindings(payload);
   const effort = payload.meta?.run?.effort?.effective ?? null;
   // Absent coverage counts as incomplete, same as an explicit `false`: a result that marks its finding
   // inventory complete without saying what it actually covered is not evidence of a clean review.
   const coverageComplete = payload.meta?.coverage?.complete === true;
-  // A state list that doesn't hold findings with ids can't say which findings are open, so the inventory
-  // is not complete, whatever its flag says (#196).
-  const findingsComplete = payload.finding_state?.complete === true && stateListsReadable(payload);
+  const findingsComplete = payload.finding_state?.complete === true;
   const scopeComplete = deps.startParams.review_scope.complete;
 
   if (effort === "skip") {

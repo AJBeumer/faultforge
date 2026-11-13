@@ -69,6 +69,7 @@ export function stateListsReadable(payload: LocalReviewPayload): boolean {
 export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
   const state = payload.finding_state ?? {};
   const introduced = idsOf(state.introduced);
+  const stillOpen = idsOf(state.still_open);
   const closed = new Set([...idsOf(state.resolved), ...idsOf(state.dismissed)]);
   // The top-level list first, then any open finding only `finding_state` carries: a complete result
   // that names an open action-required finding there must never read as clean.
@@ -88,8 +89,9 @@ export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
       title: f.title ?? null,
       description: f.description ?? null,
       label: introduced.has(f.id) ? "new" : "carried over",
-      // Open unless Qodo says it was resolved or dismissed: a finding no list names is not closed (#196).
-      open: !closed.has(f.id),
+      // Open when a list says so, or when no list closes it: a finding no list names is not closed (#196),
+      // and one listed both open and closed counts as open, the reading that can't hide a blocker.
+      open: introduced.has(f.id) || stillOpen.has(f.id) || !closed.has(f.id),
     };
   });
 }

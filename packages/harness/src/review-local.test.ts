@@ -145,6 +145,37 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(3);
   });
 
+  it("counts a finding listed both open and resolved as open, so a blocker can't hide (Qodo on PR 209)", async () => {
+    const finding = { id: "f1", action_level: "action_required", title: "Both" };
+    const payload = completePayload({
+      findings: [finding] as never,
+      finding_state: {
+        complete: true,
+        introduced: [],
+        still_open: [finding],
+        resolved: [finding],
+        dismissed: [],
+      } as never,
+    });
+    const result = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(payload) }), {
+      timeoutMs: 1000,
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("is exit 3, not a crash, when a state list holds null or isn't a list (Qodo on PR 209)", async () => {
+    for (const finding_state of [
+      { complete: true, introduced: [], still_open: [], resolved: [null], dismissed: [] },
+      { complete: true, introduced: "f1", still_open: [], resolved: [], dismissed: [] },
+    ]) {
+      const payload = completePayload({ finding_state: finding_state as never });
+      const result = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(payload) }), {
+        timeoutMs: 1000,
+      });
+      expect(result.exitCode).toBe(3);
+    }
+  });
+
   it("retries a poll that fails once and finishes the review (#196)", async () => {
     let polls = 0;
     const result = await runReviewLocal(
