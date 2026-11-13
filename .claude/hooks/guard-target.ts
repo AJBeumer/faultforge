@@ -22,7 +22,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
-import { commitMessages, commitSteps, postedArguments, postedText, STDIN_BODY } from "./guard-posted.ts";
+import {
+  commitMessages,
+  commitSteps,
+  outsidePostedText,
+  postedArguments,
+  postedText,
+  STDIN_BODY,
+} from "./guard-posted.ts";
 import {
   entersCheckout,
   esc,
@@ -157,7 +164,7 @@ function checkCommand(ctx: Context, command: string) {
   // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its
   // checkout. The folder the command runs in only counts when it names no destination at all (say,
   // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
-  const destinations = explicitDestinations(command);
+  const destinations = explicitDestinations(outsidePostedText(command));
   const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
   const touched = reviewed.filter(
     (r) =>

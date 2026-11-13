@@ -498,6 +498,14 @@ describe("guard-target hook checks every gh command that posts text to the targe
     expect(bash('git commit -m "planted bug: grep -r src/app"', TARGET)).toMatch(/says planted/);
   });
 
+  it("reads no destination from inside posted text, so a post from the target is still judged (Qodo on PR 208)", () => {
+    expect(bash('gh pr create --title Tidy --body "planted bug: grep -R src/app"', TARGET)).toMatch(/says planted/);
+    expect(bash('gh pr create --title Tidy --body "planted; see --repo other/app"', TARGET)).toMatch(/says planted/);
+    expect(bash("gh pr create --title Tidy --body-file - <<EOF\nplanted --repo other/app\nEOF", TARGET)).toMatch(
+      /says planted/,
+    );
+  });
+
   it("reads release notes from a file, as it reads a body file (Qodo on PR 208)", () => {
     const file = join(mkdtempSync(join(tmpdir(), "guard-notes-")), "notes.md").replace(/\\/g, "/");
     writeFileSync(file, "Fixes the planted bug\n");
