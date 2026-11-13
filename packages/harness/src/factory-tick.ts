@@ -1749,7 +1749,6 @@ export function acquireLock(
   return {
     acquired: true,
     release,
-    // Says when a process with the holder's pid still runs: maybe a hung agent, maybe a reused pid (#226).
     note: `took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"})${held.pid && isAlive(held.pid) ? "; a process with that pid is still running: if it is the old run, it has run past every limit, so check it" : ""}`,
   };
 }
