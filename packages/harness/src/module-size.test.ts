@@ -47,7 +47,7 @@ describe("CLAUDE.md's module size rule", () => {
     // is split first. Lower a number when a module shrinks; never raise one.
     const MARGIN = 40;
     const recorded: Record<string, number> = {
-      "factory-tick.ts": 2314,
+      "factory-tick.ts": 632,
       "case-build.ts": 598,
       "review-wait.ts": 524,
       "verdict.ts": 463,
