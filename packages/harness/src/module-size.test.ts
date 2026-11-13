@@ -42,6 +42,25 @@ describe("CLAUDE.md's module size rule", () => {
     expect(over.filter((name) => !namedInRule().includes(name))).toEqual([]);
   });
 
+  it("lets no named module grow more than a fix's worth past its size when the rule was written", () => {
+    // Sizes on 13 November 2026 (#199). A named module may take a fix, not a feature: past this margin it
+    // is split first. Lower a number when a module shrinks; never raise one.
+    const MARGIN = 40;
+    const recorded: Record<string, number> = {
+      "factory-tick.ts": 2314,
+      "case-build.ts": 598,
+      "review-wait.ts": 524,
+      "verdict.ts": 463,
+      "review-local.ts": 446,
+      "revert-check.ts": 413,
+      "inject.ts": 410,
+    };
+    const sizes = new Map(sourceModules().map((path) => [basename(path), lineCount(path)]));
+    const grown = Object.entries(recorded).filter(([name, size]) => (sizes.get(name) ?? 0) > size + MARGIN);
+    expect(grown).toEqual([]);
+    expect(Object.keys(recorded).sort()).toEqual([...namedInRule()].sort());
+  });
+
   it("names no module that is back under the limit", () => {
     const sizes = new Map(sourceModules().map((path) => [basename(path), lineCount(path)]));
     expect(namedInRule().filter((name) => (sizes.get(name) ?? 0) <= LIMIT)).toEqual([]);
