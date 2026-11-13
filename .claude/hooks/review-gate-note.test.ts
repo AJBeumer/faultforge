@@ -243,6 +243,18 @@ describe("recordHead: a commit made between commands is never judged", () => {
     expect(mem.asked).toEqual(["head1"]);
   });
 
+  it("reads exit 1 without a verdict as a crash, not as 'not covered', and gives the claim back (#196)", () => {
+    const crash = { exitCode: 1, output: "TypeError: Cannot find module 'ajv'\n    at loader" };
+    const note = decide(payload(), world({ run: crash }).deps, {});
+    expect(note.kind === "note" && note.message).toContain("could not check");
+    expect(note.kind === "note" && note.message).not.toContain("No finished local review");
+    const mem = memory({ sha: "head1", lastAction: "commit: made" });
+    mem.records.set("A", "head0");
+    mem.deps.run = () => crash;
+    decide(payload("Bash", undefined, "A"), mem.deps, {});
+    expect(mem.judged.has("head1")).toBe(false);
+  });
+
   it("gives the claim back when the check could not be made, so another call can try", () => {
     for (const run of [
       { exitCode: 2, output: "" },

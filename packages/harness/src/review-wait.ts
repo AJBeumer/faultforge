@@ -41,6 +41,20 @@ export interface QodoReview {
     attribution_status?: string | null;
     dismiss_reason?: string | null;
   }[];
+  finding_count?: number;
+}
+
+/**
+ * Why a review Qodo calls complete can't be read as a list of findings, or undefined. A missing or renamed
+ * `findings` list would otherwise read as zero findings, which for a case is a miss: the one answer the
+ * evidence doesn't support (#196). `finding_count`, when present, must agree with the list.
+ */
+export function findingsShapeProblem(review: QodoReview): string | undefined {
+  if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
+  if (typeof review.finding_count === "number" && review.finding_count !== review.findings.length) {
+    return `Qodo's complete review counts ${review.finding_count} findings but lists ${review.findings.length}`;
+  }
+  return undefined;
 }
 
 export interface Finding {
@@ -445,6 +459,10 @@ async function main() {
   );
 
   if (result.review) writeFileSync(join(dir, `${short}.qodo-api.raw.json`), JSON.stringify(result.review, null, 2));
+  // Checked after the raw answer is saved and before any record is written: a complete review in a shape
+  // this can't read is a failure to read, exit 2, never zero findings.
+  const shape = result.state === "complete" && result.review ? findingsShapeProblem(result.review) : undefined;
+  if (shape) throw new Error(`${shape}; the raw answer is saved in ${dir}`);
   const findings = result.review ? findingsFor(result.review, headSha) : [];
   const open = result.review ? openFindings(result.review) : [];
   const effort = result.review ? reviewEffort(result.review, headSha) : null;

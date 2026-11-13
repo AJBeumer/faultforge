@@ -127,16 +127,23 @@ export function decide(stdin: string, deps: Deps, env: Record<string, string | u
     return { kind: "note", message: `review:gate could not check this commit: ${firstLine(error)}` };
   }
   if (result.exitCode === 0) return NONE;
-  if (result.exitCode === 1) {
-    const first =
-      result.output.split(String.fromCharCode(10)).find((l) => l.startsWith("Not covered")) ?? "Not covered.";
+  // Exit 1 means "not covered" only when the gate says so: node also exits 1 when a script crashes, and a
+  // crash says nothing about the commit, so it is released to be judged again (#196).
+  const notCovered = result.output.split(String.fromCharCode(10)).find((l) => l.startsWith("Not covered"));
+  if (result.exitCode === 1 && notCovered) {
     return {
       kind: "note",
-      message: `No finished local review saw the files of this commit. ${first} ${HOW}`,
+      message: `No finished local review saw the files of this commit. ${notCovered} ${HOW}`,
     };
   }
   release();
-  return { kind: "note", message: "review:gate could not check this commit (exit 2: unreadable evidence or tree)." };
+  const why =
+    result.exitCode === 1
+      ? "it stopped without an answer (exit 1, no verdict)"
+      : result.exitCode === null
+        ? "it did not finish in time"
+        : `exit ${result.exitCode}: unreadable evidence or tree`;
+  return { kind: "note", message: `review:gate could not check this commit (${why}).` };
 }
 
 function git(dir: string, args: string[]): string | null {

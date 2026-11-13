@@ -40,7 +40,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { buildLocalDiff, git, readWorkingTreeSplit, streamId } from "./local-diff.ts";
-import { formatFinding, type LocalReviewPayload, labelFindings } from "./local-findings.ts";
+import { formatFinding, type LocalReviewPayload, labelFindings, stateListsReadable } from "./local-findings.ts";
 import {
   callAndSaveRaw,
   type OperationState,
@@ -82,6 +82,12 @@ const MAX_RESULT_PAGES = 1000;
  * skipped the review, its coverage was incomplete, or it didn't report its finding inventory complete
  * — however few, or many, findings came back.
  */
+/** The wait between polls: Qodo's own interval, kept between 1 and 60 seconds, 5 when it gives none (#196). */
+export function pollIntervalMs(seconds: unknown): number {
+  const n = typeof seconds === "number" ? seconds : Number.NaN;
+  return (Number.isFinite(n) && n >= 0 ? Math.min(Math.max(n, 1), 60) : 5) * 1000;
+}
+
 export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: number }): Promise<ReviewLocalResult> {
   if (!deps.startParams.diff.trim()) {
     return { exitCode: 2, message: "no uncommitted changes to review", findings: [], operationId: null };
@@ -99,19 +105,32 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
 `,
   );
 
-  while (!state.terminal) {
-    if (deps.now() + state.poll_interval_seconds * 1000 > deadline) {
-      if (deps.cancel) {
-        try {
-          await deps.cancel(operationId);
-        } catch {
-          // Best-effort: the operation is reported as unfinished either way.
-        }
+  // A failed poll is retried until the deadline, as review:wait does: one network error must not lose a
+  // review that takes minutes. Leaving without a finished operation, for any reason, cancels it (#196).
+  let lastPollError: string | null = null;
+  try {
+    while (!state.terminal) {
+      const waitMs = pollIntervalMs(state.poll_interval_seconds);
+      if (deps.now() + waitMs > deadline) {
+        const why = lastPollError ? ` (last poll failed: ${lastPollError})` : "";
+        return { exitCode: 2, message: `review did not finish within the time limit${why}`, findings: [], operationId };
       }
-      return { exitCode: 2, message: "review did not finish within the time limit", findings: [], operationId };
+      await deps.sleep(waitMs);
+      try {
+        state = await deps.poll(operationId);
+        lastPollError = null;
+      } catch (error) {
+        lastPollError = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+      }
     }
-    await deps.sleep(state.poll_interval_seconds * 1000);
-    state = await deps.poll(operationId);
+  } finally {
+    if (!state.terminal && deps.cancel) {
+      try {
+        await deps.cancel(operationId);
+      } catch {
+        // Best-effort: the operation is reported as unfinished either way.
+      }
+    }
   }
 
   if (state.status !== "completed" || !state.result_available) {
@@ -189,6 +208,16 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   }
   deps.saveArtifact("review.json", `${JSON.stringify(payload, null, 2)}\n`);
 
+  // Checked before the labels are read from them: a state list that doesn't hold findings with ids can't
+  // say which findings are open, and may not even be a list (Qodo on PR 209).
+  if (!stateListsReadable(payload)) {
+    return {
+      exitCode: 3,
+      message: "Qodo's finding_state lists don't hold findings with ids, so open and closed can't be told apart",
+      findings: [],
+      operationId,
+    };
+  }
   const findings = labelFindings(payload);
   const effort = payload.meta?.run?.effort?.effective ?? null;
   // Absent coverage counts as incomplete, same as an explicit `false`: a result that marks its finding
