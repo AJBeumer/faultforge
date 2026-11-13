@@ -35,7 +35,7 @@
     "file": { "$ref": "#/$defs/relativePath" },
     "find": { "type": "string", "minLength": 1 },
     "replace": { "type": "string" },
-    "invariantId": { "type": "string", "minLength": 1 },
+    "invariantId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
     "defectClass": { "type": "string", "minLength": 1 },
     "proofTest": { "$ref": "#/$defs/relativePath" },
     "match": {
@@ -54,7 +54,7 @@
         "additionalProperties": false,
         "required": ["invariantId", "proofTest"],
         "properties": {
-          "invariantId": { "type": "string", "minLength": 1 },
+          "invariantId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
           "proofTest": { "$ref": "#/$defs/relativePath" }
         }
       }
