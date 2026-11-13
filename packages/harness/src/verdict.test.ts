@@ -476,6 +476,14 @@ describe("npm run verdict: a control case, whose template declares no match term
     expect(appended[0]).toMatchObject({ disposition: "confirmed_clean", judgements: [] });
   });
 
+  it("refuses a false alarm while a finding is left open (Qodo on PR 214)", async () => {
+    const { ask } = fakeAsk(["false alarm", "harmless change", ""]);
+    const { code, err, appended } = await runOn("FF-0002", controlFixture({ findings: [OTHER_FINDING] }), { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("left open");
+    expect(appended).toEqual([]);
+  });
+
   it("records a control with a finding as a false alarm, with every finding judged", async () => {
     const { ask, questions } = fakeAsk(["false alarm", "harmless change", "false alarm", "nothing changed there"]);
     const { code, out, appended } = await runOn("FF-0002", controlFixture({ findings: [MATCHING_FINDING] }), { ask });

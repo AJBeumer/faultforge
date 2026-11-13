@@ -389,6 +389,11 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     );
     return 2;
   }
+  // A false alarm is a judgement on every finding: one left open isn't judged yet (Qodo on PR 214).
+  if (isControl && bugAnswer === "false alarm" && judgements.some((j) => j.verdict === "open")) {
+    error("verdict: a false alarm needs every finding judged a false alarm; one was left open, so nothing recorded");
+    return 2;
+  }
 
   const event: AdjudicationEvent = {
     eventId: randomUUID(),

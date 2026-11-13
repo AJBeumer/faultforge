@@ -48,10 +48,10 @@
  *
  * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
- * listed); 2 an input is missing, unreadable or inconsistent (the ledger, the events, a bug case's
- * template, the saved review, or an overlay file that exists), or the answer key or audit log has an
- * amendment problem; or the inputs are inconsistent (a missing stage, disagreeing commits, or a saved review for the wrong PR), named in
- * the message.
+ * listed); 2 nothing was built, because an input is missing or unreadable (the answer key, the events, a
+ * bug case's template, the saved review, or an overlay file that exists), the answer key or audit log has an
+ * amendment problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
+ * wrong PR). The message names which.
  */
 
 import { createHash, randomUUID } from "node:crypto";

@@ -41,8 +41,15 @@ export interface RunOptions {
   reviewsDir?: string;
 }
 
-/** Qodo's review comment in a saved `comments.latest.raw.json`: its URL and when it was last updated. */
-export function qodoReviewComment(savedFeeds: string): { url: string; updatedAt: string } | undefined {
+/**
+ * Qodo's review comment in a saved `comments.latest.raw.json`: its URL and when it was last updated. Qodo
+ * rewrites its comment in place after every push, so only a version updated at or after `since` (the push
+ * `review:wait` saw) can be this commit's review (Qodo on PR 214).
+ */
+export function qodoReviewComment(
+  savedFeeds: string,
+  since?: string | null,
+): { url: string; updatedAt: string } | undefined {
   const feeds = JSON.parse(savedFeeds) as { pr?: string };
   const pages = JSON.parse(feeds.pr ?? "[]") as unknown[];
   const comments = pages.flat() as {
@@ -51,8 +58,18 @@ export function qodoReviewComment(savedFeeds: string): { url: string; updatedAt:
     html_url?: string;
     updated_at?: string;
   }[];
-  const review = comments.filter((c) => c.user?.login === REVIEWER && /Code Review by Qodo/.test(c.body ?? "")).pop();
+  const review = comments
+    .filter((c) => c.user?.login === REVIEWER && /Code Review by Qodo/.test(c.body ?? ""))
+    .filter((c) => !since || (c.updated_at ?? "") >= since.replace(/\.\d+Z$/, "Z"))
+    .pop();
   return review?.html_url && review.updated_at ? { url: review.html_url, updatedAt: review.updated_at } : undefined;
+}
+
+/** The PR number a `pr.opened` event names, however it was written: a number, a string, or `{ number }`. */
+function openedPr(value: unknown): number | undefined {
+  const n = typeof value === "object" && value !== null ? (value as { number?: unknown }).number : value;
+  const parsed = typeof n === "string" ? Number(n) : n;
+  return typeof parsed === "number" && Number.isInteger(parsed) ? parsed : undefined;
 }
 
 export function run(caseId: string, options: RunOptions = {}): number {
@@ -93,20 +110,33 @@ export function run(caseId: string, options: RunOptions = {}): number {
       error(`case:review: no review:wait save for ${entry.injectionCommit} under ${reviewsDir}; run review:wait first`);
       return 2;
     }
-    const save = found.review as unknown as { repo?: string; pr?: number; headSha?: string; state?: string };
+    const save = found.review as unknown as {
+      repo?: string;
+      pr?: number;
+      headSha?: string;
+      state?: string;
+      pushSeenAt?: string | null;
+      recordedAt?: string;
+    };
     if (save.headSha !== entry.injectionCommit) {
       error(`case:review: ${found.path} reviewed ${save.headSha}, not ${caseId}'s injected commit`);
       return 2;
     }
-    if (typeof opened?.pr === "number" && opened.pr !== save.pr) {
-      error(`case:review: the save is for PR ${save.pr}, but ${caseId}'s pr.opened event names PR ${opened.pr}`);
+    // The save must be for the case's own PR: read from pr.opened however it was written (Qodo on PR 214).
+    const casePr = openedPr(opened?.pr);
+    if (casePr === undefined || casePr !== save.pr) {
+      error(`case:review: the save is for PR ${save.pr}, but ${caseId}'s pr.opened event names PR ${opened?.pr}`);
       return 2;
     }
     const short = entry.injectionCommit.slice(0, 7);
-    const comment = qodoReviewComment(
-      readFileSync(join(dirname(found.path), `${short}.comments.latest.raw.json`), "utf8"),
-    );
-    if (!comment) {
+    const feedsPath = join(dirname(found.path), `${short}.comments.latest.raw.json`);
+    const comment = qodoReviewComment(readFileSync(feedsPath, "utf8"), save.pushSeenAt);
+    // A review that never finished may have no review comment at all; its stage is still recorded, pointing at
+    // the PR and the time review:wait gave up, so an inconclusive record can be built (Qodo on PR 214).
+    const unfinished = save.state !== "complete";
+    const prUrl = `https://github.com/${save.repo}/pull/${save.pr}`;
+    const where = comment ?? (unfinished && save.recordedAt ? { url: prUrl, updatedAt: save.recordedAt } : undefined);
+    if (!where) {
       error(`case:review: the saved comment feed holds no review comment from Qodo for ${short}`);
       return 2;
     }
@@ -124,8 +154,8 @@ export function run(caseId: string, options: RunOptions = {}): number {
         path: "pr-comments",
         configVersion,
         reviewedCommit: entry.injectionCommit,
-        reviewedAt: comment.updatedAt,
-        url: comment.url,
+        reviewedAt: where.updatedAt,
+        url: where.url,
       },
       state: save.state ?? null,
     };
@@ -135,7 +165,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
       return 0;
     }
     appendFileSync(auditEventsPath, `${JSON.stringify(event)}\n`);
-    log(`recorded: ${caseId} review of ${short} (${save.state ?? "state not saved"}), ${comment.url}`);
+    log(`recorded: ${caseId} review of ${short} (${save.state ?? "state not saved"}), ${where.url}`);
     return 0;
   } catch (e) {
     error(`case:review: ${message(e)}`);

@@ -675,6 +675,15 @@ describe("run: a control case (#162)", () => {
     expect(validateCaseRecord(record)).toEqual([]);
   });
 
+  it("refuses a control with no review event, naming the stage (Qodo on PR 214)", async () => {
+    const fx = fixture("confirmed_clean");
+    const lines = readFileSync(fx.auditEventsPath, "utf8").trim().split("\n");
+    writeFileSync(fx.auditEventsPath, `${lines.filter((l) => !l.includes("review.recorded")).join("\n")}\n`);
+    const { code, err } = await build(fx);
+    expect(code).toBe(2);
+    expect(err).toContain("the review stage is missing");
+  });
+
   it("refuses a control with no adjudication, naming the stage", async () => {
     const { code, err } = await build(fixture(null));
     expect(code).toBe(2);

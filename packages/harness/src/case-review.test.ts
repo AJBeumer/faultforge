@@ -123,3 +123,48 @@ describe("npm run case:review (#162)", () => {
     expect(fx.err.join("\n")).toContain("has problems");
   });
 });
+
+describe("npm run case:review: unfinished reviews, stale comments and how pr.opened names the PR (Qodo on PR 214)", () => {
+  it("records an unfinished review that has no review comment, pointing at the PR", () => {
+    const fx = fixture({ comments: [QODO_SUMMARY] });
+    const dir = join(fx.auditEventsPath, "..", "raw-artifacts", "reviews", "target-pr7");
+    const save = JSON.parse(readFileSync(join(dir, `${SHORT}.review.json`), "utf8"));
+    writeFileSync(
+      join(dir, `${SHORT}.review.json`),
+      JSON.stringify({ ...save, state: "review incomplete", recordedAt: "2026-11-01T00:30:00.000Z" }),
+    );
+    expect(fx.go()).toBe(0);
+    const event = JSON.parse(readFileSync(fx.auditEventsPath, "utf8").trim().split("\n").at(-1) as string);
+    expect(event).toMatchObject({
+      state: "review incomplete",
+      review: { url: "https://github.com/Owner/target/pull/7", reviewedAt: "2026-11-01T00:30:00.000Z" },
+    });
+  });
+
+  it("ignores a Qodo review comment last updated before this commit's push", () => {
+    expect(qodoReviewComment(feeds([QODO_REVIEW]), "2026-11-01T00:10:00.000Z")).toBeUndefined();
+    expect(qodoReviewComment(feeds([QODO_REVIEW]), "2026-11-01T00:05:59.123Z")).toEqual({
+      url: REVIEW_URL,
+      updatedAt: "2026-11-01T00:06:00Z",
+    });
+  });
+
+  it("reads the PR from pr.opened as a number, a string or an object, and refuses when it names none", () => {
+    for (const [pr, code] of [
+      [7, 0],
+      ["7", 0],
+      [{ number: 7 }, 0],
+      [{ number: 8 }, 2],
+      [undefined, 2],
+    ] as const) {
+      const fx = fixture();
+      const lines = readFileSync(fx.auditEventsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l));
+      lines[0].pr = pr;
+      writeFileSync(fx.auditEventsPath, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+      expect(fx.go(true)).toBe(code);
+    }
+  });
+});
