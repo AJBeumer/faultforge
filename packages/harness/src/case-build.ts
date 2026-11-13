@@ -54,7 +54,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
-import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
@@ -365,15 +365,13 @@ function sha256(data: string): string {
 }
 
 /**
- * `pushSeenAt` and `reviewStartedAt` can genuinely be `null` even in a real `review:wait` save (no
- * check suite found, no `started_at` reported), so they can't tell a real save from a hand-backfilled
- * one apart. `reviewSeenCompleteAt` can't: `review:wait` sets it to a real timestamp the moment it
- * sees the review finished, for every state it ever saves (`complete` or `skipped` — a `timeout` is
- * never saved as a case's review). A backfilled file, written before that convention existed, has
- * none of these fields at all.
+ * True for a file `review:wait` wrote. Every save it writes carries the `reviewSeenCompleteAt` field: a
+ * time when it saw the review finish, or `null` when it never did (timed out, or the head moved). A file
+ * backfilled by hand, as FF-0001's was, has no such field. The value can't be the test: a save of a review
+ * that never finished is a real save too, and the one an inconclusive record is built from (#192).
  */
 function isReviewWaitSave(review: Record<string, unknown>): boolean {
-  return typeof review.reviewSeenCompleteAt === "string";
+  return Object.hasOwn(review, "reviewSeenCompleteAt");
 }
 
 const LINE_WIDTH = 120;
@@ -435,6 +433,13 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   let entry: LedgerEntry | undefined;
   let events: LedgerEntry[];
   try {
+    // A record is built only from an answer key and audit log whose amendments check out (#192), checked
+    // before anything is read from them: an amendment that changes a case id would hide the case itself.
+    const ledgerIssues = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+    if (ledgerIssues.length) {
+      error(`case:build: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
+      return 2;
+    }
     entry = readLedger(groundTruthPath).find((e) => e.caseId === caseId);
     events = readAuditLog(auditEventsPath).filter((e) => e.caseId === caseId);
   } catch (e) {

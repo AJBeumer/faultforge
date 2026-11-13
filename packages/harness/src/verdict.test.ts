@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -278,16 +278,41 @@ describe("npm run verdict: the event it appends", () => {
   });
 
   it("maps each disposition word, case-insensitively, to the schema's enum value", async () => {
-    for (const [word, disposition] of [
-      ["DETECTED", "confirmed_detected"],
-      ["missed", "confirmed_missed"],
-      ["Review Incomplete", "review_incomplete"],
+    // The fixture's finding is a catch, so "missed" contradicts the rule and is confirmed first (#192).
+    for (const [word, answers, disposition] of [
+      ["DETECTED", ["reason"], "confirmed_detected"],
+      ["missed", ["yes", "reason"], "confirmed_missed"],
+      ["Review Incomplete", ["reason"], "review_incomplete"],
     ] as const) {
       const root = fixture();
-      const { ask } = fakeAsk([word, "reason"]);
+      const { ask } = fakeAsk([word, ...answers]);
       const { appended } = await runOn("FF-0001", root, { ask });
       expect(appended[0]).toMatchObject({ disposition });
     }
+  });
+
+  it("asks before recording an answer the rule contradicts, and writes nothing without a yes (#192)", async () => {
+    const refused = await runOn("FF-0001", fixture(), { ask: fakeAsk(["missed", "no"]).ask });
+    expect(refused.code).toBe(2);
+    expect(refused.err).toContain("contradicts the rule");
+    expect(refused.appended).toEqual([]);
+    const { ask, questions } = fakeAsk(["detected", "agrees with the rule"]);
+    const agreed = await runOn("FF-0001", fixture(), { ask });
+    expect(agreed.code).toBe(0);
+    expect(questions.some((q) => q.includes("Record it anyway"))).toBe(false);
+  });
+
+  it("refuses to run while the answer key has an amendment that changes a locked field (#192)", async () => {
+    const root = fixture();
+    const groundTruth = join(root, "ground-truth.jsonl");
+    appendFileSync(
+      groundTruth,
+      `${JSON.stringify({ kind: "amendment", amends: "FF-0001", change: { caseId: "FF-9" }, reason: "r", evidence: "e" })}\n`,
+    );
+    const { code, err, appended } = await runOn("FF-0001", root, { ask: fakeAsk(["detected", "r"]).ask });
+    expect(code).toBe(2);
+    expect(err).toContain("changes caseId");
+    expect(appended).toEqual([]);
   });
 
   it("with --dry-run, prints the event and appends nothing", async () => {

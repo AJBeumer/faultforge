@@ -38,7 +38,7 @@
  * `case-build.ts` requires `sabotage.injected`/`control.injected`, `review.recorded` and
  * `case.adjudicated` for the case it's building; a case missing one is refused, naming the stage.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 export interface Amendment {
   kind: "amendment";
@@ -126,6 +126,14 @@ export function readLedger(path: string): LedgerEntry[] {
 /** The audit log's events, amendments applied. */
 export function readAuditLog(path: string): LedgerEntry[] {
   return applyAmendments(path);
+}
+
+/**
+ * `ledgerProblems` for each file that exists, each problem prefixed with its file. `verdict` and
+ * `case:build` refuse to run while this is not empty (#192); a missing file is not a problem here.
+ */
+export function ledgerProblemsIn(paths: string[]): string[] {
+  return paths.filter((path) => existsSync(path)).flatMap((path) => ledgerProblems(path).map((p) => `${path}: ${p}`));
 }
 
 /** Problems with the amendments in a ledger or audit log file, or an empty list if there are none. */
