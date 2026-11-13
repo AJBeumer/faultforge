@@ -8,9 +8,10 @@ permissions:
   contents: read
 
 # A newer push to the same branch or PR cancels the run it replaces. Never on main: every merge's run must
-# finish, so a red main shows on the commit that turned it red.
+# finish, so a red main shows on the commit that turned it red. Each main commit gets its own group, because
+# within one group GitHub replaces a queued run with a newer one even when nothing in progress is cancelled.
 concurrency:
-  group: check-${{ github.ref }}
+  group: check-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
