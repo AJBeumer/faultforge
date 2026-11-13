@@ -6,7 +6,7 @@ answers as evidence, and score them against a private answer key.
 
 ## Setup and checks
 
-- Node 22 or newer, then `npm install`.
+- Node 22.18 or newer (it runs TypeScript files directly), then `npm install`.
 - `npm run check` — typecheck, lint (Biome) and tests. It must pass before every commit.
 - `npm run format` — apply Biome's formatting and safe fixes.
 
