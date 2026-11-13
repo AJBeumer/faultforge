@@ -46,7 +46,11 @@ const COMMAND_RULES: [RegExp, string][] = [
     /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*(\s(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)\b|\s\+\S|\s:\S)/i,
     "no force push or remote delete",
   ],
-  [/\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s(\S+:)?(refs\/heads\/)?(main|master)(\s|$)/i, "never push to main"],
+  // The branch may be quoted, and may end the step with a shell operator right after it (#194).
+  [
+    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s([^\s:]*:)?["']?(refs\/heads\/)?(main|master)["']?(?=[\s;&|)]|$)/i,
+    "never push to main",
+  ],
   [/\b(schtasks|setx|crontab|launchctl|reg\s+(add|delete|import))\b/i, "no scheduled tasks or persistent settings"],
   [/\bdismiss/i, "never dismiss a finding"],
 ];

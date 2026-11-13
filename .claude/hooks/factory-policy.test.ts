@@ -71,6 +71,26 @@ describe("factory policy: commands", () => {
   ])("allows %s", (command) => {
     expect(commandViolations(command)).toEqual([]);
   });
+
+  it.each([
+    "git push origin main; echo ok",
+    "git push origin HEAD:main&& echo ok",
+    "git push origin main | cat",
+    "(git push origin main)",
+    'git push origin "main"',
+    "git push origin 'HEAD:refs/heads/master'",
+    'git push origin "HEAD":main',
+    "git push origin 'HEAD':'main'",
+  ])("refuses a push to main however the step ends or quotes it (#194): %s", (command) => {
+    expect(commandViolations(command)).toContain("never push to main");
+  });
+
+  it.each(["git push origin main-fixes; echo ok", 'git push origin "maintenance"', "git push -u origin tidy-main"])(
+    "still allows a branch that only starts or ends with main (#194): %s",
+    (command) => {
+      expect(commandViolations(command)).not.toContain("never push to main");
+    },
+  );
 });
 
 describe("factory policy: keys and network", () => {
