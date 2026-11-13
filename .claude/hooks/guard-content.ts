@@ -113,6 +113,24 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
 }
 
 /**
+ * The telltales in what is staged in `checkout`, exactly what the next commit records: each staged file's
+ * name and its index copy. Used by the git-level pre-commit hook (#191), which runs when the commit is made,
+ * so unstaged and untracked files are not part of it.
+ */
+export function pendingIndex(checkout: string): Pending {
+  const staged = list(checkout, ["diff", "--cached", "--name-only", "--diff-filter=d"]);
+  if (staged.length > MAX_FILES) throw new Uninspectable(`${staged.length} staged files, more than the guard reads`);
+  const texts = [
+    ...staged,
+    ...blobs(
+      checkout,
+      staged.map((file) => `:0:${file}`),
+    ),
+  ];
+  return { reasons: telltales(texts.join("\n")), where: "the staged changes" };
+}
+
+/**
  * The telltales in what a push could take from `checkout`: every local commit not yet on any remote
  * branch, whichever branch or tag the push names, commit by commit (a later commit removing a line does
  * not clean an earlier one): each commit's message, and the full content and name of every file it adds
