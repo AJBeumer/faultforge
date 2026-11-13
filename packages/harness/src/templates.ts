@@ -4,7 +4,7 @@
  * read the same template for the same id.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { privateDir, ROOT } from "./paths.ts";
 
@@ -59,4 +59,10 @@ export function templateProblems(template: unknown): string[] {
     }
     return `${e.instancePath || "/"} ${e.message}`;
   });
+}
+
+/** True when `dir` is inside `templates/seed` itself, not a folder whose name only starts the same (Qodo on PR 222). */
+export function isPublishedTemplate(dir: string): boolean {
+  const inside = relative(resolve(ROOT, "templates", "seed"), resolve(dir));
+  return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
 }

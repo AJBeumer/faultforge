@@ -63,7 +63,7 @@ import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.t
 import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
-import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
+import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
@@ -559,7 +559,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   // published template's URL (#162).
   if (templateId && entry.kind === "control") {
     const dir = templateDir(templateId, env);
-    if (dir && resolve(dir).startsWith(resolve(ROOT, "templates", "seed"))) {
+    if (dir && isPublishedTemplate(dir)) {
       templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
     }
   } else if (templateId) {
@@ -574,7 +574,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       error(`case:build: can't use ${dir}/template.json: ${message(e)}`);
       return 2;
     }
-    if (resolve(dir).startsWith(resolve(ROOT, "templates", "seed"))) {
+    if (isPublishedTemplate(dir)) {
       templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
     }
   }

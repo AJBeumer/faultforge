@@ -15,7 +15,9 @@ import {
 } from "./case-build.ts";
 import { validateCaseRecord } from "./case-record.ts";
 import type { LedgerEntry } from "./ledger.ts";
+import { ROOT } from "./paths.ts";
 import type { Finding } from "./review-wait.ts";
+import { isPublishedTemplate } from "./templates.ts";
 
 const ENTRY: LedgerEntry = {
   caseId: "FF-0002",
@@ -440,6 +442,27 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     return { out, err, code };
   }
 
+  it("refuses a bug case whose overlay sets notes: only a control may (Qodo on PR 222)", async () => {
+    const fx = fixture();
+    const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "complete",
+        reviewSeenCompleteAt: null,
+        findings: [],
+      }),
+    );
+    const { code, err, out } = await runOn(fx, { notes: ["a note"] });
+    expect(code).not.toBe(0);
+    expect(err.join("\n")).toContain("only a control may use");
+    expect(out.join("\n")).not.toContain('"notes"');
+  });
+
   it("prefers a genuine saved review over an overlay's legacyFindingsPath, even with null pushSeenAt/reviewStartedAt", async () => {
     const fx = fixture();
     const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
@@ -491,7 +514,13 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     // Missing pushSeenAt/reviewStartedAt/reviewSeenCompleteAt: hand-backfilled, not review:wait's own.
     writeFileSync(
       join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
-      JSON.stringify({ repo: "Owner/target", pr: 5, headSha: INJECTION_COMMIT, state: "complete", findings: [] }),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "complete",
+        findings: [],
+      }),
     );
     writeFileSync(
       join(fx.root, "legacy-findings.json"),
@@ -678,6 +707,21 @@ describe("run: a control case (#162)", () => {
     expect(record).toMatchObject({ schemaVersion: 2, human: { disposition }, status });
     expect(record.$schema).toBe("../schemas/case-record.v2.json");
     expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("refuses a control whose change ends before it starts (Qodo on PR 222)", async () => {
+    const { record } = await build(fixture("confirmed_clean"));
+    expect(validateCaseRecord({ ...record, change: { ...record.change, lines: [10, 2] } })).toEqual([
+      "change.lines 10-2 ends before it starts",
+    ]);
+  });
+
+  it("links only a template inside templates/seed itself, not a folder whose name starts the same (Qodo on PR 222)", () => {
+    const seed = join(ROOT, "templates", "seed");
+    expect(isPublishedTemplate(join(seed, "c1"))).toBe(true);
+    expect(isPublishedTemplate(join(`${seed}-private`, "c1"))).toBe(false);
+    expect(isPublishedTemplate(seed)).toBe(false);
+    expect(isPublishedTemplate(join(ROOT, "private", "templates", "c1"))).toBe(false);
   });
 
   it("takes a control's notes from its overlay", async () => {

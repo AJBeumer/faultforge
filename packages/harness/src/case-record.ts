@@ -41,6 +41,8 @@ interface CaseRecord {
   detection?: Detection;
   human: { disposition: string };
   injection?: Injection;
+  /** A control's change: only its line range is checked here. */
+  change?: { lines: [number, number] };
   review?: { reviewedCommit: string };
 }
 
@@ -55,7 +57,7 @@ export function validateCaseRecord(record: unknown): string[] {
 }
 
 /** Cross-field rules JSON Schema can't express: a catch must follow from the findings and the match rule. */
-function consistencyProblems({ findings, detection, human, injection, review }: CaseRecord): string[] {
+function consistencyProblems({ findings, detection, human, injection, change, review }: CaseRecord): string[] {
   const problems: string[] = [];
   // One finding per id, or the checks below could judge a different finding from the one the rule matched.
   const seen = new Set<string>();
@@ -68,6 +70,9 @@ function consistencyProblems({ findings, detection, human, injection, review }: 
   }
   if (injection && !isRange(injection.lines)) {
     problems.push(`injection.lines ${(injection.lines as number[]).join("-")} ends before it starts`);
+  }
+  if (change && !isRange(change.lines)) {
+    problems.push(`change.lines ${(change.lines as number[]).join("-")} ends before it starts`);
   }
   if (!detection) return problems;
   const findingsById = new Map(findings.map((f) => [f.id, f]));
