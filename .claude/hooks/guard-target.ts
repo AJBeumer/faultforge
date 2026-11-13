@@ -292,9 +292,11 @@ function postedText(command: string): string[] {
   const heredocs = spans.map((span) => command.slice(span.start, span.end));
   const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
   // A heredoc is posted only when the command reads a body from stdin; any other heredoc belongs to
-  // another command, and the whole-command check already reads it as before. When stdin has more than
-  // one heredoc to choose from, all of them count: refusing a clean post is the safe mistake.
-  if (stdin && heredocs.length) return [...posted, ...heredocs];
+  // another command, and the whole-command check already reads it as before. When stdin is read,
+  // everything from the first `<<` on is also judged as written: whatever the shell takes as the body is
+  // in there, however its delimiter is quoted or however many heredocs share the line. Text after the
+  // body may be refused with it; refusing a clean post is the safe mistake.
+  if (stdin && command.includes("<<")) return [...posted, ...heredocs, command.slice(command.indexOf("<<"))];
   // The flag values are kept beside the whole command: a title next to a piped body is posted too.
   if (!stdin && !posted.some((p) => /[$`]/.test(p))) return posted;
   return [blankLocalPaths(command, true), ...posted.map((value) => blankLocalPaths(value, false))];

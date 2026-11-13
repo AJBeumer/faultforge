@@ -561,6 +561,14 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
     // The delimiter is the whole word: `EOF` alone doesn't end a body opened with `<<EOF-`.
     const dashed = "Tidy\nEOF\n../FaultForge/planted\nEOF-";
     expect(bash(`${TO_TARGET} --body-file - <<EOF-\n${dashed}`)).toMatch(/names the lab|says planted/);
+    // Two heredocs on one line, a fake opener in a quoted argument, and a quote inside a quoted delimiter:
+    // whatever the shell reads as the posted body, the text from the first `<<` on is judged too.
+    const two = `${TO_TARGET} --body-file - <<A <<B\nTidy\nA\n../FaultForge/planted\nB`;
+    expect(bash(two)).toMatch(/names the lab|says planted/);
+    const fake = `gh pr create --repo AJBeumer/faultforge-target --title "a <<FAKE b" --body-file - <<EOF\n../FaultForge/x\nEOF`;
+    expect(bash(fake)).toMatch(/names the lab/);
+    const quoted = `${TO_TARGET} --body-file - <<'E"OF'\nTidy\nEOF\nhttps://github.com/AJBeumer/faultforge/issues/1\nE"OF`;
+    expect(bash(quoted)).toMatch(/names the lab/);
     // Quoting inside the delimiter is removed, as the shell does: `EO\F-` means `EOF-`, so a body line
     // spelled `EO\F-` is text, not the end.
     const escaped = "Tidy\nEO\\F-\nfaultforge/planted\nEOF-";
