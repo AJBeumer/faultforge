@@ -28,6 +28,16 @@
               }
             }
           }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": ["change"]
+            },
+            {
+              "required": ["notes"]
+            }
+          ]
         }
       }
     },
@@ -106,6 +116,30 @@
           "type": "string"
         },
         "defectClass": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "lines": {
+          "$ref": "#/$defs/lineRange"
+        },
+        "commit": {
+          "$ref": "#/$defs/sha"
+        },
+        "template": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "change": {
+      "description": "What a control changed, published only after adjudication: the template, the file and lines, and the commit. A control plants no bug, so it has no invariant or defect class.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["templateId", "file", "lines", "commit"],
+      "properties": {
+        "templateId": {
           "type": "string"
         },
         "file": {
@@ -329,6 +363,13 @@
     },
     "status": {
       "enum": ["complete", "incomplete"]
+    },
+    "notes": {
+      "description": "A control's notes from the owner's adjudication, in plain prose.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "$defs": {
