@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -206,5 +207,24 @@ describe("npm run case:review: unfinished reviews, stale comments and how pr.ope
       writeFileSync(fx.auditEventsPath, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
       expect(fx.go(true)).toBe(code);
     }
+  });
+});
+
+describe("npm run case:review refuses a rewritten audit-log history (#224, Qodo on PR 232)", () => {
+  it("exits 2 when a commit in the private repository changed a line of the audit log", () => {
+    const fx = fixture();
+    const root = join(fx.auditEventsPath, "..");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+        encoding: "utf8",
+      });
+    git("init", "--quiet", "-b", "main");
+    git("add", "audit-events.jsonl", "ground-truth.jsonl");
+    git("commit", "--quiet", "-m", "first");
+    const original = readFileSync(fx.auditEventsPath, "utf8");
+    writeFileSync(fx.auditEventsPath, original.replace('"qodo-v9"', '"qodo-v1"'));
+    git("commit", "--quiet", "-am", "rewrite");
+    expect(fx.go(true)).toBe(2);
+    expect(fx.err.join("\n")).toContain("removed or changed a line");
   });
 });

@@ -157,3 +157,13 @@ describe("ledgerProblemsWithHistory: what the case commands check first (#224)",
     expect(ledgerProblemsWithHistory([join(loose, "audit-events.jsonl")])).toEqual([]);
   });
 });
+
+describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)", () => {
+  it("reports a file in a folder inside another repository, rather than skipping its history", () => {
+    const dir = repo();
+    mkdirSync(join(dir, "nested"));
+    writeFileSync(join(dir, "nested", "audit-events.jsonl"), '{"eventId":"e1","type":"x"}\n');
+    const problems = ledgerProblemsWithHistory([join(dir, "nested", "audit-events.jsonl")]);
+    expect(problems.join("\n")).toContain("can't be checked");
+  });
+});

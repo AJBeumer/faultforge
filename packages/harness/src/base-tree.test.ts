@@ -32,3 +32,14 @@ describe("baseTreeTelltales (#224, audit H-4)", () => {
     expect(baseTreeTelltales(dir, head)).toEqual(["README.md: names the lab", "ledger-notes.md: mentions the ledger"]);
   });
 });
+
+describe("baseTreeTelltales: a submodule entry (Qodo on PR 232)", () => {
+  it("reads a submodule's name and doesn't try to read the other repository's commit", () => {
+    const { dir } = repoWith({ "a.ts": "export {};\n" });
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+    const elsewhere = "1".repeat(40);
+    git("update-index", "--add", "--cacheinfo", `160000,${elsewhere},vendor/ledger-lib`);
+    git("commit", "--quiet", "-m", "submodule");
+    expect(baseTreeTelltales(dir, git("rev-parse", "HEAD"))).toEqual(["vendor/ledger-lib: mentions the ledger"]);
+  });
+});

@@ -14,6 +14,7 @@
  * Exit codes: 0 nothing found, or no private storage to check against; 1 a public file names a case or
  * template it may not, listed on stdout; 2 a file could not be read.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,8 +25,8 @@ import { privateDir } from "./templates.ts";
 export interface DocsFacts {
   /** Case ids with a `case.adjudicated` event. */
   adjudicated: Set<string>;
-  /** Each case's template id. */
-  caseTemplates: Map<string, string>;
+  /** Each case's template ids: every answer-key entry for it, so a duplicate can't hide one (Qodo on PR 232). */
+  caseTemplates: Map<string, string[]>;
   /** Template ids in private storage, unreleased. */
   privateTemplates: string[];
   /** Template ids held out of everything public until the final report. */
@@ -36,13 +37,17 @@ const TEXT = /\.(md|txt|json|jsonl|ts|yml|yaml|csv|html)$/i;
 
 /** `file: reason` for every case or template a public file may not name yet, or an empty list. */
 export function docsProblems(files: { path: string; text: string }[], facts: DocsFacts): string[] {
-  const heldOutCases = new Set([...facts.caseTemplates].filter(([, t]) => facts.heldOut.has(t)).map(([c]) => c));
+  const heldOutCases = new Set(
+    [...facts.caseTemplates].filter(([, ts]) => ts.some((t) => facts.heldOut.has(t))).map(([c]) => c),
+  );
   const adjudicatedTemplates = new Set(
-    [...facts.caseTemplates].filter(([c]) => facts.adjudicated.has(c)).map(([, t]) => t),
+    [...facts.caseTemplates].filter(([c]) => facts.adjudicated.has(c)).flatMap(([, ts]) => ts),
   );
   const problems: string[] = [];
   for (const { path, text } of files) {
-    for (const id of new Set(text.match(/\bFF-\d{4}\b/g) ?? [])) {
+    // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.
+    const ids = [...text.matchAll(/\bff[\s_-]?(\d{3,})\b/gi)].map((m) => `FF-${(m[1] as string).padStart(4, "0")}`);
+    for (const id of new Set(ids)) {
       // An id the answer key doesn't hold is an example or a fixture, not a case.
       if (!facts.caseTemplates.has(id)) continue;
       if (heldOutCases.has(id)) problems.push(`${path}: names ${id}, a held-out case`);
@@ -58,7 +63,10 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
   return problems;
 }
 
-/** README.md and every text file under docs/, relative to `root`. */
+/**
+ * README.md and every text file under docs/, relative to `root`: each file's working copy, and its staged copy
+ * when that differs, since a commit records the index, not the working tree (Qodo on PR 232).
+ */
 export function publicFiles(root: string): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string) => {
@@ -71,6 +79,19 @@ export function publicFiles(root: string): { path: string; text: string }[] {
   };
   out.push({ path: "README.md", text: readFileSync(join(root, "README.md"), "utf8") });
   walk(join(root, "docs"));
+  const listed = spawnSync("git", ["-C", root, "ls-files", "-z", "--", "README.md", "docs"], { encoding: "utf8" });
+  if (listed.status === 0) {
+    for (const path of listed.stdout.split("\0").filter((p) => TEXT.test(p))) {
+      const index = spawnSync("git", ["-C", root, "show", `:${path}`], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      if (index.status !== 0) throw new Error(`can't read the staged ${path}: ${(index.stderr ?? "").trim()}`);
+      if (index.stdout !== out.find((f) => f.path === path)?.text) {
+        out.push({ path: `${path} (staged)`, text: index.stdout });
+      }
+    }
+  }
   return out;
 }
 
@@ -79,9 +100,11 @@ export function docsFacts(priv: string): DocsFacts | undefined {
   const groundTruth = join(priv, "ground-truth.jsonl");
   if (!existsSync(groundTruth)) return undefined;
   const entries = readLedger(groundTruth) as { caseId?: string; templateId?: string }[];
-  const caseTemplates = new Map(
-    entries.filter((e) => e.caseId && e.templateId).map((e) => [e.caseId as string, e.templateId as string]),
-  );
+  const caseTemplates = new Map<string, string[]>();
+  for (const e of entries) {
+    if (!e.caseId || !e.templateId) continue;
+    caseTemplates.set(e.caseId, [...(caseTemplates.get(e.caseId) ?? []), e.templateId]);
+  }
   const audit = join(priv, "audit-events.jsonl");
   const events = existsSync(audit) ? (readAuditLog(audit) as { type?: string; caseId?: string }[]) : [];
   const adjudicated = new Set(
