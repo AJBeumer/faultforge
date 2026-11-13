@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
-import type { Finding } from "./review-wait.ts";
+import type { Finding } from "./qodo-review.ts";
 
 /** The parts of a saved `*.review.json` this uses. */
 export interface SavedReview {

@@ -3,19 +3,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
 import {
-  ciOrUnavailable,
   findingsFor,
   findingsShapeProblem,
   openFindings,
-  parseArgs,
   type QodoReview,
   reviewEffort,
   reviewState,
-  saveCommentFeeds,
-  summarizeCi,
-  waitForHead,
-  waitForReview,
-} from "./review-wait.ts";
+} from "./qodo-review.ts";
+import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "./review-feeds.ts";
+import { waitForHead, waitForReview } from "./review-poll.ts";
+import { parseArgs } from "./review-wait.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
