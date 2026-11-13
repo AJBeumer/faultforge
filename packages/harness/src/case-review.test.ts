@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -110,7 +110,7 @@ describe("npm run case:review (#162)", () => {
   it("refuses a save for another pull request than the case's", () => {
     const fx = fixture({ savedPr: 8 });
     expect(fx.go()).toBe(2);
-    expect(fx.err.join("\n")).toContain("names PR 7");
+    expect(fx.err.join("\n")).toContain("on PR 7");
   });
 
   it("refuses to run while the audit log has an amendment problem", () => {
@@ -147,6 +147,46 @@ describe("npm run case:review: unfinished reviews, stale comments and how pr.ope
       url: REVIEW_URL,
       updatedAt: "2026-11-01T00:06:00Z",
     });
+  });
+
+  it("records an unfinished review whose comment feed was never saved", () => {
+    const fx = fixture();
+    const dir = join(fx.auditEventsPath, "..", "raw-artifacts", "reviews", "target-pr7");
+    const save = JSON.parse(readFileSync(join(dir, `${SHORT}.review.json`), "utf8"));
+    writeFileSync(
+      join(dir, `${SHORT}.review.json`),
+      JSON.stringify({ ...save, state: "timed out", recordedAt: "2026-11-01T00:30:00.000Z" }),
+    );
+    rmSync(join(dir, `${SHORT}.comments.latest.raw.json`));
+    expect(fx.go()).toBe(0);
+    const event = JSON.parse(readFileSync(fx.auditEventsPath, "utf8").trim().split("\n").at(-1) as string);
+    expect(event).toMatchObject({ state: "timed out", review: { url: "https://github.com/Owner/target/pull/7" } });
+  });
+
+  it("refuses a complete review whose comment feed was never saved", () => {
+    const fx = fixture();
+    rmSync(
+      join(fx.auditEventsPath, "..", "raw-artifacts", "reviews", "target-pr7", `${SHORT}.comments.latest.raw.json`),
+    );
+    expect(fx.go()).toBe(2);
+  });
+
+  it("ignores a comment from the push's own second that predates it", () => {
+    expect(qodoReviewComment(feeds([QODO_REVIEW]), "2026-11-01T00:06:00.900Z")).toBeUndefined();
+    expect(qodoReviewComment(feeds([QODO_REVIEW]), "2026-11-01T00:06:00.000Z")).toBeDefined();
+  });
+
+  it("uses the case's own PR's save when another PR's save of the same commit is found first", () => {
+    const fx = fixture();
+    const other = join(fx.auditEventsPath, "..", "raw-artifacts", "reviews", "target-pr10");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(
+      join(other, `${SHORT}.review.json`),
+      JSON.stringify({ repo: "Owner/target", pr: 10, headSha: COMMIT, state: "complete", findings: [] }),
+    );
+    expect(fx.go()).toBe(0);
+    const event = JSON.parse(readFileSync(fx.auditEventsPath, "utf8").trim().split("\n").at(-1) as string);
+    expect(event.pr.number).toBe(7);
   });
 
   it("reads the PR from pr.opened as a number, a string or an object, and refuses when it names none", () => {

@@ -18,7 +18,7 @@
  * amendment problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +60,8 @@ export function qodoReviewComment(
   }[];
   const review = comments
     .filter((c) => c.user?.login === REVIEWER && /Code Review by Qodo/.test(c.body ?? ""))
-    .filter((c) => !since || (c.updated_at ?? "") >= since.replace(/\.\d+Z$/, "Z"))
+    // Compared as instants, never as truncated text: a comment from the push's own second may predate it.
+    .filter((c) => !since || Date.parse(c.updated_at ?? "") >= Date.parse(since))
     .pop();
   return review?.html_url && review.updated_at ? { url: review.html_url, updatedAt: review.updated_at } : undefined;
 }
@@ -105,9 +106,18 @@ export function run(caseId: string, options: RunOptions = {}): number {
       return 2;
     }
 
-    const found = findSavedReview(reviewsDir, entry.injectionCommit);
+    // The save must be for the case's own PR: read from pr.opened however it was written, and passed to the
+    // search so another PR's save of the same commit is never picked first (Qodo on PR 214).
+    const casePr = openedPr(opened?.pr);
+    if (casePr === undefined) {
+      error(`case:review: ${caseId}'s pr.opened event names no PR (${JSON.stringify(opened?.pr)})`);
+      return 2;
+    }
+    const found = findSavedReview(reviewsDir, entry.injectionCommit, casePr);
     if (!found) {
-      error(`case:review: no review:wait save for ${entry.injectionCommit} under ${reviewsDir}; run review:wait first`);
+      error(
+        `case:review: no review:wait save for ${entry.injectionCommit} on PR ${casePr} under ${reviewsDir}; run review:wait first`,
+      );
       return 2;
     }
     const save = found.review as unknown as {
@@ -122,18 +132,16 @@ export function run(caseId: string, options: RunOptions = {}): number {
       error(`case:review: ${found.path} reviewed ${save.headSha}, not ${caseId}'s injected commit`);
       return 2;
     }
-    // The save must be for the case's own PR: read from pr.opened however it was written (Qodo on PR 214).
-    const casePr = openedPr(opened?.pr);
-    if (casePr === undefined || casePr !== save.pr) {
-      error(`case:review: the save is for PR ${save.pr}, but ${caseId}'s pr.opened event names PR ${opened?.pr}`);
-      return 2;
-    }
     const short = entry.injectionCommit.slice(0, 7);
     const feedsPath = join(dirname(found.path), `${short}.comments.latest.raw.json`);
-    const comment = qodoReviewComment(readFileSync(feedsPath, "utf8"), save.pushSeenAt);
-    // A review that never finished may have no review comment at all; its stage is still recorded, pointing at
-    // the PR and the time review:wait gave up, so an inconclusive record can be built (Qodo on PR 214).
+    // A review that never finished may have no review comment, or no saved feed at all when every poll of it
+    // failed; its stage is still recorded, pointing at the PR and the time review:wait gave up, so an
+    // inconclusive record can be built (Qodo on PR 214). A complete review must have its feed.
     const unfinished = save.state !== "complete";
+    const comment =
+      unfinished && !existsSync(feedsPath)
+        ? undefined
+        : qodoReviewComment(readFileSync(feedsPath, "utf8"), save.pushSeenAt);
     const prUrl = `https://github.com/${save.repo}/pull/${save.pr}`;
     const where = comment ?? (unfinished && save.recordedAt ? { url: prUrl, updatedAt: save.recordedAt } : undefined);
     if (!where) {

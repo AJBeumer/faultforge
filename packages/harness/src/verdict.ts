@@ -154,6 +154,7 @@ export function toMatchFinding(finding: SavedFinding): MatchFinding {
 export function findSavedReview(
   reviewsDir: string,
   commit: string,
+  pr?: number,
 ): { path: string; text: string; review: SavedReview } | undefined {
   let dirs: string[];
   try {
@@ -176,7 +177,7 @@ export function findSavedReview(
       try {
         const text = readFileSync(path, "utf8");
         const review = JSON.parse(text) as SavedReview;
-        if (review.headSha === commit) return { path, text, review };
+        if (review.headSha === commit && (pr === undefined || review.pr === pr)) return { path, text, review };
       } catch {
         // Malformed or unreadable: not a candidate, but not fatal to the scan either.
       }
