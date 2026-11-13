@@ -47,6 +47,61 @@ describe("inject exit codes (#8: branch derivation)", () => {
   // --validate-only never derives a suffix or asks origin for the branch (#8): with `origin` pointed at a
   // path that doesn't exist, any `git ls-remote` call would fail loudly, so a clean exit 0 here is itself
   // the proof that no such call was made.
+  it("refuses a case id that isn't FF-NNNN before anything else (#193)", () => {
+    for (const bad of ["FF-12", "../x", "ff-0002"]) {
+      const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", root, "--case", bad]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("FF-NNNN");
+    }
+  });
+
+  it.skipIf(!hasRealTarget)(
+    "refuses a detached target, and one whose HEAD isn't origin/main, without changing it (#193)",
+    () => {
+      const dir = scratchTargetCopy();
+      const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+      git("switch", "-q", "main");
+      const state = () => `${git("status", "--porcelain", "--branch")}|${git("rev-parse", "HEAD")}`;
+
+      git("switch", "-q", "--detach", "HEAD");
+      let before = state();
+      let result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--validate-only"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("detached HEAD");
+      expect(state()).toBe(before);
+
+      git("switch", "-q", "main");
+      git("switch", "-q", "-c", "earlier-case-branch");
+      git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "Earlier change",
+      );
+      // A real run, so nothing may reach the owner's private storage or the network, whatever the code does.
+      git("remote", "set-url", "origin", "/nonexistent/origin.git");
+      const savedPrivate = process.env.FAULTFORGE_PRIVATE_DIR;
+      process.env.FAULTFORGE_PRIVATE_DIR = mkdtempSync(join(tmpdir(), "inject-private-"));
+      scratchDirs.push(process.env.FAULTFORGE_PRIVATE_DIR);
+      try {
+        before = state();
+        result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--case", "FF-9999"]);
+      } finally {
+        if (savedPrivate === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+        else process.env.FAULTFORGE_PRIVATE_DIR = savedPrivate;
+      }
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("is not origin/main");
+      expect(state()).toBe(before);
+    },
+    90_000,
+  );
+
   it.skipIf(!hasRealTarget)(
     "--validate-only exits 0 without ever asking origin about the branch",
     () => {
