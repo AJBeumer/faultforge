@@ -48,7 +48,7 @@ import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts
 import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
-import { checkLiveQodoConfig, type Difference, formatDifference, summarizeDifference } from "./qodo-check.ts";
+import { checkLiveQodoConfig, type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -1283,10 +1283,12 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
     const qodo = await deps.qodoCheck(runId);
+    // A summary only, here too: CI prints this log and uploads it from a public repo, and a rule's name
+    // or content can hold text read from private storage. The full state is in the saved Qodo evidence.
     log("qodo-checked", {
       exitCode: qodo.exitCode,
       message: qodo.message,
-      differences: qodo.differences.map(formatDifference),
+      differences: qodo.differences.map(summarizeDifference),
     });
     if (qodo.exitCode !== 0) {
       relabel([LABELS.working, LABELS.ready], [LABELS.help]);
