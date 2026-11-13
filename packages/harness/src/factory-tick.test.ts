@@ -2467,7 +2467,7 @@ describe("acquireLock: the age limit and the release belong to this run (Qodo on
     const taken = acquireLock(dir, () => true, 1 * 3_600_000);
     expect(taken.acquired).toBe(true);
     // The tick logs this note: a holder still alive past every run's limit may be a hung agent (#226).
-    expect(taken.note).toMatch(/still running past the run limit/);
+    expect(taken.note).toMatch(/a process with that pid is still running/);
   });
 
   it("leaves a lock another tick took over when the first one releases", () => {
