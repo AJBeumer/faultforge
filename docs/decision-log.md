@@ -339,3 +339,11 @@ An audit of all three repositories, verified by running code, found places where
 The other fixes from the audit (#186 to #197, #199, #216) are in the merged pull requests #200 to #220; none changes a recorded result.
 
 The README's status table, its controls sentence and its "connected only to the target" sentence are corrected in the same change.
+
+## 13 November: benchmark v1 frozen
+
+Recorded before any new case runs.
+
+- **Decision.** Benchmark v1 is Qodo configuration v9 (the rules that apply to `faultforge-target`, the review skills and the relationships, as recorded in v9), the match rule as it stands (file, overlapping lines, a kind term from the template), template format v2, and the validation rules in force today: a proof counts only a test that ran and failed, and every variant must typecheck (#217). `npm run qodo:check` reported "matches qodo-v9" at 16:37 UTC, before this entry.
+- **What it means.** Every case from here on is reported under benchmark v1 unless one of these changes. Any change to them, including a new Qodo configuration version that touches the target, starts benchmark v2, and results from the two are reported separately. The eight cases already run used configurations v8 and v9, which are identical for target reviews, so they are reported under v1 as well, with the stricter validation rule applied after the fact (all their templates pass it).
+- **Held-out cases.** The charter's held-out cases are written and their contents fixed privately before any of them runs, and are published only with the final report. Nothing about them appears here before then.
