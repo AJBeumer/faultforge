@@ -48,7 +48,8 @@ describe("inject exit codes (#8: branch derivation)", () => {
   // path that doesn't exist, any `git ls-remote` call would fail loudly, so a clean exit 0 here is itself
   // the proof that no such call was made.
   it("refuses a case id that isn't FF-NNNN before anything else (#193)", () => {
-    for (const bad of ["FF-12", "../x", "ff-0002"]) {
+    // A trailing newline is refused too: JavaScript's `$` never matches before one (Qodo on PR 207).
+    for (const bad of ["FF-12", "../x", "ff-0002", "FF-0002\n"]) {
       const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", root, "--case", bad]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("FF-NNNN");
