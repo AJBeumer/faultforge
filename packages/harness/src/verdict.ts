@@ -25,10 +25,15 @@
  * later), the disposition, its reason and the judgements — is appended to `private/audit-events.jsonl`
  * as one `case.adjudicated` line, or printed instead of written with `--dry-run`.
  *
+ * An answer the match rule contradicts (`detected` for a computed miss, `missed` for a computed catch) is
+ * recorded only after the owner confirms it. It is then the owner's judgement on record, but `case:build`
+ * will not publish it while its record's checks require the verdict to agree with the rule.
+ *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
- * there is nobody to ask — the match is printed, nothing is written; 2 the case, its review or its
- * template can't be read, the review doesn't match the injected commit, the event couldn't be appended,
- * or an answer couldn't be parsed after retrying.
+ * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
+ * answer key or audit log has an amendment problem (`ledgerProblems`); the case, its review or its template
+ * can't be read; the review doesn't match the injected commit; an answer couldn't be parsed after retrying;
+ * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
