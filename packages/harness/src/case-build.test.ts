@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -515,5 +515,45 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     });
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("qodo:legacy-1");
+  });
+
+  it("builds an inconclusive record from a save of a review that never finished (#192)", async () => {
+    const fx = fixture();
+    writeFileSync(
+      fx.auditEventsPath,
+      readFileSync(fx.auditEventsPath, "utf8").replace("confirmed_detected", "review_incomplete"),
+    );
+    const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, `${INJECTION_COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 5,
+        headSha: INJECTION_COMMIT,
+        state: "review incomplete",
+        pushSeenAt: null,
+        reviewStartedAt: null,
+        reviewSeenCompleteAt: null,
+        findings: [],
+      }),
+    );
+    const { code, out, err } = await runOn(fx, { challenge: { verdict: "not_run", note: "n" } });
+    expect(err.join("\n")).toBe("");
+    expect(code).toBe(0);
+    const text = out.join("\n");
+    const record = JSON.parse(text.slice(text.indexOf("{")));
+    expect(record).toMatchObject({ human: { disposition: "review_incomplete" }, status: "incomplete" });
+  });
+
+  it("refuses to build while the audit log has an amendment that changes a locked field (#192)", async () => {
+    const fx = fixture();
+    appendFileSync(
+      fx.auditEventsPath,
+      `${JSON.stringify({ kind: "amendment", amends: "e3", change: { at: "x" }, reason: "r", evidence: "e" })}\n`,
+    );
+    const { code, err } = await runOn(fx, { challenge: { verdict: "not_run", note: "n" } });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("changes at");
   });
 });

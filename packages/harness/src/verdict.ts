@@ -25,10 +25,15 @@
  * later), the disposition, its reason and the judgements — is appended to `private/audit-events.jsonl`
  * as one `case.adjudicated` line, or printed instead of written with `--dry-run`.
  *
+ * An answer the match rule contradicts (`detected` for a computed miss, `missed` for a computed catch) is
+ * recorded only after the owner confirms it. It is then the owner's judgement on record, but `case:build`
+ * will not publish it while its record's checks require the verdict to agree with the rule.
+ *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
- * there is nobody to ask — the match is printed, nothing is written; 2 the case, its review or its
- * template can't be read, the review doesn't match the injected commit, the event couldn't be appended,
- * or an answer couldn't be parsed after retrying.
+ * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
+ * answer key or audit log has an amendment problem (`ledgerProblems`); the case, its review or its template
+ * can't be read; the review doesn't match the injected commit; an answer couldn't be parsed after retrying;
+ * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -38,7 +43,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { gh } from "./github.ts";
-import { readLedger } from "./ledger.ts";
+import { ledgerProblemsIn, readLedger } from "./ledger.ts";
 import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
 
@@ -256,6 +261,20 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
   const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
 
+  // A verdict is appended only to an answer key and audit log whose amendments check out (#192). Checked
+  // before anything is read from them: an amendment that changes a case id would hide the case itself.
+  let ledgerIssues: string[];
+  try {
+    ledgerIssues = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+  } catch (e) {
+    error(`verdict: can't read ${groundTruthPath} or ${auditEventsPath}: ${message(e)}`);
+    return 2;
+  }
+  if (ledgerIssues.length) {
+    error(`verdict: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
+    return 2;
+  }
+
   let entries: ReturnType<typeof readLedger>;
   try {
     entries = readLedger(groundTruthPath);
@@ -362,6 +381,18 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   if (!bugAnswer) {
     error("verdict: no valid answer (detected, missed or review incomplete) for the planted bug's verdict");
     return 2;
+  }
+  // An answer the rule contradicts is a permanent line in an append-only log: asked again first (#192).
+  if (bugAnswer !== "review incomplete" && (bugAnswer === "detected") !== result.caught) {
+    const sure = await askOneOf(
+      ask,
+      `The rule says caught = ${result.caught}, but the answer is "${bugAnswer}". Record it anyway? (yes/no): `,
+      ["yes", "no"],
+    );
+    if (sure !== "yes") {
+      error(`verdict: "${bugAnswer}" contradicts the rule (caught = ${result.caught}) and was not confirmed`);
+      return 2;
+    }
   }
   const bugReason = await askNonBlank(ask, "Reason: ");
   if (bugReason === undefined) {
