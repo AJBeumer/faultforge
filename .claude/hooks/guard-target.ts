@@ -211,8 +211,9 @@ function checkCommand(ctx: Context, command: string) {
   // not join into a phrase that neither field holds. A commit is the exception: git joins every `-m` and
   // `-F` into one message, so those are also judged together.
   const pieces = [stripReviewedNames(reviewed, command), ...postedText(command), ...referencedFiles(cwd, command)];
-  const commit = commitStep(command);
-  if (commit !== undefined) pieces.push([...commitMessages(commit), ...referencedFiles(cwd, commit)].join("\n"));
+  for (const commit of commitSteps(command)) {
+    pieces.push([...commitMessages(commit), ...referencedFiles(cwd, commit)].join("\n"));
+  }
   const found = [...new Set(pieces.flatMap((piece) => telltales(piece)))];
   if (found.length) {
     deny(
@@ -287,31 +288,42 @@ function postedText(command: string): string[] {
   const posted = postedArguments(command.replace(HEREDOC, (m) => m.slice(0, m.indexOf("\n") + 1)));
   const heredocs = [...command.matchAll(HEREDOC)].map((m) => m[2] ?? "");
   const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
-  // A heredoc is posted only when the command reads its body from stdin; any other heredoc belongs to
-  // another command, and the whole-command check already reads it as before.
+  // A heredoc is posted only when the command reads a body from stdin; any other heredoc belongs to
+  // another command, and the whole-command check already reads it as before. When stdin has more than
+  // one heredoc to choose from, all of them count: refusing a clean post is the safe mistake.
   if (stdin && heredocs.length) return [...posted, ...heredocs];
-  return stdin || posted.some((p) => /[$`]/.test(p)) ? [blankLocalPaths(command)] : posted;
+  // The flag values are kept beside the whole command: a title next to a piped body is posted too.
+  if (!stdin && !posted.some((p) => /[$`]/.test(p))) return posted;
+  return [blankLocalPaths(command, true), ...posted.map((value) => blankLocalPaths(value, false))];
 }
-
-/** A heredoc: its delimiter line, then its body (group 2), up to the closing delimiter. */
-const HEREDOC = /<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\s*\1\s*(\n|$)/g;
 
 /**
- * The command with the files a body is read from blanked: the path after `cat`, `type`, `Get-Content`
- * (`gc`) or an input redirect `<`. Only those: path-shaped text anywhere else may be the message itself.
+ * A heredoc: its delimiter line, then its body (group 2), up to the closing delimiter. The shell ends
+ * the body only at a line that is the delimiter alone; `<<-` lets tabs, never spaces, come before it.
  */
-function blankLocalPaths(command: string): string {
-  return command.replace(/(\b(?:cat|type|Get-Content|gc)\s+|<\s*)(["']?)[^\s"'`;&|<>()]+\2/gi, "$1 ");
+const HEREDOC = /<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\t*\1(\n|$)/g;
+
+/**
+ * The text with the files a body is read from blanked: the path after `cat`, `type` or `Get-Content`
+ * (`gc`), and in a whole command after an input redirect `<`. Only those: path-shaped text anywhere else
+ * may be the message itself, and inside a quoted value a `<` is just text.
+ */
+function blankLocalPaths(text: string, redirects: boolean): string {
+  const reader = redirects ? /\b(?:cat|type|Get-Content|gc)\s+|<\s*/ : /\b(?:cat|type|Get-Content|gc)\s+/;
+  return text.replace(new RegExp(`(${reader.source})(["']?)[^\\s"'\`;&|<>()]+\\2`, "gi"), "$1 ");
 }
 
-/** The part of a chained command that runs `git commit`, up to the next shell operator, or undefined. */
-function commitStep(command: string): string | undefined {
-  return /\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*/.exec(command)?.[0];
+/** Every part of a chained command that runs `git commit`, each up to the next shell operator. */
+function commitSteps(command: string): string[] {
+  return [...command.matchAll(/\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*/g)].map((m) => m[0]);
 }
 
-/** Every `-m`/`--message` value in one `git commit` step: git joins them into one message. */
+/**
+ * Every message value in one `git commit` step, `-m`, `--message`, or `m` at the end of combined short
+ * flags such as `-am`: git joins them into one message.
+ */
 function commitMessages(step: string): string[] {
-  const pattern = /(?:^|\s)(?:-m|--message)[\s=]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g;
+  const pattern = /(?:^|\s)(?:-[A-Za-z]*m|--message)(?=[\s="']|$)[\s=]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g;
   return [...step.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 

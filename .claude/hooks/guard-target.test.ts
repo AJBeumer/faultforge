@@ -555,6 +555,23 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
     expect(bash(`echo "/FaultForge/planted" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab|says planted/);
   });
 
+  it("reads a heredoc body to its real end: a line with the delimiter after spaces is still body", () => {
+    const body = "Tidy\n  EOF\n../FaultForge/planted\nEOF";
+    expect(bash(`${TO_TARGET} --body-file - <<EOF\n${body}`)).toMatch(/names the lab|says planted/);
+  });
+
+  it("reads the title of a post whose body is piped in, even when it looks like a redirect", () => {
+    const command = `echo Tidy | gh pr create --repo AJBeumer/faultforge-target --body-file - --title "See <faultforge-target/planted"`;
+    expect(bash(command)).toMatch(/says planted/);
+  });
+
+  it("joins the message parts of every commit in a chain, combined short flags included", () => {
+    expect(bash('git commit -m "Tidy" && git commit --allow-empty -m "injected" -m "bug"', TARGET)).toMatch(
+      /says a bug was injected/,
+    );
+    expect(bash('git commit -am "injected" -m "bug"', TARGET)).toMatch(/says a bug was injected/);
+  });
+
   it("joins only the commit's own message parts, not text an earlier command posts", () => {
     const chain = 'gh issue comment 3 --body "Tidy the injected" && git commit -m "bug report"';
     expect(bash(chain, TARGET)).toBeUndefined();
