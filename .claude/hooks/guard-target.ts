@@ -207,8 +207,13 @@ function checkCommand(ctx: Context, command: string) {
     destinations.every((d) => d === repo.github.toLowerCase());
   checkLinks(ctx, command, onlyItself ? reviewed.filter((r) => r !== repo) : reviewed);
 
-  const text = [stripReviewedNames(reviewed, command), ...referencedFiles(cwd, command)].join("\n");
-  const found = telltales(text);
+  // Each piece is judged on its own: a title ending in one word and a body starting with the next must
+  // not join into a phrase that neither field holds. A commit is the exception: git joins every `-m` and
+  // `-F` into one message, so those are also judged together.
+  const pieces = [stripReviewedNames(reviewed, command), ...postedText(command), ...referencedFiles(cwd, command)];
+  const commit = commitStep(command);
+  if (commit !== undefined) pieces.push([...commitMessages(commit), ...referencedFiles(cwd, commit)].join("\n"));
+  const found = [...new Set(pieces.flatMap((piece) => telltales(piece)))];
   if (found.length) {
     deny(
       `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
@@ -232,7 +237,7 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
-  const found = telltales(stripReviewedNames(ctx.reviewed, text));
+  const found = telltales(text);
   if (found.length) {
     deny(
       `This edit would put a hint into ${repo.name} (${found.join(", ")}). Keep its files free of any mention of the lab.`,
@@ -270,6 +275,44 @@ function stripReviewedNames(reviewed: Reviewed[], text: string): string {
   const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
   const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
   return text.replace(/[^\s"'`]*[/\\][^\s"'`]*/g, (token) => (identifies.test(token) ? " " : token));
+}
+
+/**
+ * The text a command would post, as written: flag values and heredoc bodies, or the whole command when
+ * the text is piped in or built from shell variables. Nothing in it identifies a repo to the shell, so no
+ * name is stripped from it: a lab link or `owner/name` in a message is a hint like any other.
+ */
+function postedText(command: string): string[] {
+  // Flags are read outside heredoc bodies: an option-looking line in one is text, not an argument.
+  const posted = postedArguments(command.replace(HEREDOC, (m) => m.slice(0, m.indexOf("\n") + 1)));
+  const heredocs = [...command.matchAll(HEREDOC)].map((m) => m[2] ?? "");
+  const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
+  // A heredoc is posted only when the command reads its body from stdin; any other heredoc belongs to
+  // another command, and the whole-command check already reads it as before.
+  if (stdin && heredocs.length) return [...posted, ...heredocs];
+  return stdin || posted.some((p) => /[$`]/.test(p)) ? [blankLocalPaths(command)] : posted;
+}
+
+/** A heredoc: its delimiter line, then its body (group 2), up to the closing delimiter. */
+const HEREDOC = /<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\s*\1\s*(\n|$)/g;
+
+/**
+ * The command with the files a body is read from blanked: the path after `cat`, `type`, `Get-Content`
+ * (`gc`) or an input redirect `<`. Only those: path-shaped text anywhere else may be the message itself.
+ */
+function blankLocalPaths(command: string): string {
+  return command.replace(/(\b(?:cat|type|Get-Content|gc)\s+|<\s*)(["']?)[^\s"'`;&|<>()]+\2/gi, "$1 ");
+}
+
+/** The part of a chained command that runs `git commit`, up to the next shell operator, or undefined. */
+function commitStep(command: string): string | undefined {
+  return /\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*/.exec(command)?.[0];
+}
+
+/** Every `-m`/`--message` value in one `git commit` step: git joins them into one message. */
+function commitMessages(step: string): string[] {
+  const pattern = /(?:^|\s)(?:-m|--message)[\s=]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g;
+  return [...step.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 
 /**
