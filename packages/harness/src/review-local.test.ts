@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { LocalReviewPayload } from "./local-findings.ts";
+import { type ReviewLocalDeps, runReviewLocal } from "./local-review-run.ts";
 import type { OperationState, ResultChunkPage, StartParams } from "./local-review-wire.ts";
-import { parseArgs, type ReviewLocalDeps, removeWorktree, runReviewLocal } from "./review-local.ts";
+import { parseArgs, removeWorktree } from "./review-local.ts";
 
 describe("parseArgs", () => {
   it("reads the repo key, --isolated and --timeout", () => {
