@@ -286,7 +286,7 @@ function stripReviewedNames(reviewed: Reviewed[], text: string): string {
 function postedText(command: string): string[] {
   // Flags are read outside heredoc bodies: an option-looking line in one is text, not an argument.
   const posted = postedArguments(command.replace(HEREDOC, (m) => m.slice(0, m.indexOf("\n") + 1)));
-  const heredocs = [...command.matchAll(HEREDOC)].map((m) => m[2] ?? "");
+  const heredocs = [...command.matchAll(HEREDOC)].map((m) => m[3] ?? "");
   const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
   // A heredoc is posted only when the command reads a body from stdin; any other heredoc belongs to
   // another command, and the whole-command check already reads it as before. When stdin has more than
@@ -298,10 +298,11 @@ function postedText(command: string): string[] {
 }
 
 /**
- * A heredoc: its delimiter line, then its body (group 2), up to the closing delimiter. The shell ends
+ * A heredoc: its delimiter line, then its body (group 3), up to the closing delimiter. The shell ends
  * the body only at a line that is the delimiter alone; `<<-` lets tabs, never spaces, come before it.
+ * The delimiter is every character up to a blank, a quote or a shell operator: `EOF-` is not `EOF`.
  */
-const HEREDOC = /<<-?\s*['"]?(\w+)['"]?[^\n]*\n([\s\S]*?)\n\t*\1(\n|$)/g;
+const HEREDOC = /<<-?\s*(['"]?)([^\s'"<>|;&()]+)\1[^\n]*\n([\s\S]*?)\n\t*\2(?=\n|$)/g;
 
 /**
  * The text with the files a body is read from blanked: the path after `cat`, `type` or `Get-Content`

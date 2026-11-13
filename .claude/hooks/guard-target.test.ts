@@ -558,6 +558,9 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
   it("reads a heredoc body to its real end: a line with the delimiter after spaces is still body", () => {
     const body = "Tidy\n  EOF\n../FaultForge/planted\nEOF";
     expect(bash(`${TO_TARGET} --body-file - <<EOF\n${body}`)).toMatch(/names the lab|says planted/);
+    // The delimiter is the whole word: `EOF` alone doesn't end a body opened with `<<EOF-`.
+    const dashed = "Tidy\nEOF\n../FaultForge/planted\nEOF-";
+    expect(bash(`${TO_TARGET} --body-file - <<EOF-\n${dashed}`)).toMatch(/names the lab|says planted/);
   });
 
   it("reads the title of a post whose body is piped in, even when it looks like a redirect", () => {
