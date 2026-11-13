@@ -437,3 +437,89 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["FF-0001", "--review"])).toBeNull();
   });
 });
+
+describe("npm run verdict: a control case, whose template declares no match terms (#162)", () => {
+  // A control template as template.v2.json requires it: no invariantId, defectClass, proofTest or match.
+  const CONTROL_TEMPLATE = {
+    schemaVersion: 2,
+    id: "example-control-v1",
+    kind: "control",
+    summary: "An ordinary, harmless change, used as a control case.",
+    file: "src/bookings/create.ts",
+    find: "a",
+    replace: "b",
+    publish: { branch: "b", commitMessage: "m" },
+    ticket: { title: "t", what: "w", criteria: ["c"] },
+  };
+  const CONTROL_ENTRY = {
+    caseId: "FF-0002",
+    kind: "control",
+    templateId: CONTROL_TEMPLATE.id,
+    injectedFile: "src/bookings/create.ts",
+    injectedLines: [33, 33],
+    injectionCommit: GROUND_TRUTH_ENTRY.injectionCommit,
+  };
+
+  function controlFixture(opts: { findings?: unknown[]; state?: string } = {}) {
+    const root = fixture({ entries: [CONTROL_ENTRY], findings: opts.findings ?? [], state: opts.state });
+    mkdirSync(join(root, "templates", CONTROL_TEMPLATE.id), { recursive: true });
+    writeFileSync(join(root, "templates", CONTROL_TEMPLATE.id, "template.json"), JSON.stringify(CONTROL_TEMPLATE));
+    return root;
+  }
+
+  it("records a control Qodo raised nothing on as confirmed_clean, without reading match terms", async () => {
+    const { ask, questions } = fakeAsk(["clean", "Qodo reviewed the change and raised nothing"]);
+    const { code, err, appended } = await runOn("FF-0002", controlFixture(), { ask });
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(questions[0]).toBe("Verdict on the control (clean/review incomplete): ");
+    expect(appended[0]).toMatchObject({ disposition: "confirmed_clean", judgements: [] });
+  });
+
+  it("refuses a false alarm while a finding is left open (Qodo on PR 214)", async () => {
+    const { ask } = fakeAsk(["false alarm", "harmless change", ""]);
+    const { code, err, appended } = await runOn("FF-0002", controlFixture({ findings: [OTHER_FINDING] }), { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("left open");
+    expect(appended).toEqual([]);
+  });
+
+  it("records a control with a finding as a false alarm, with every finding judged", async () => {
+    const { ask, questions } = fakeAsk(["false alarm", "harmless change", "false alarm", "nothing changed there"]);
+    const { code, out, appended } = await runOn("FF-0002", controlFixture({ findings: [MATCHING_FINDING] }), { ask });
+    expect(code).toBe(0);
+    expect(questions[0]).toBe("Verdict on the control (false alarm/review incomplete): ");
+    expect(out).not.toMatch(/caught:|matched:/);
+    expect(appended[0]).toMatchObject({
+      disposition: "confirmed_false_alarm",
+      judgements: [{ id: "qodo:1", verdict: "false alarm", reason: "nothing changed there" }],
+    });
+  });
+
+  it("refuses to record a control whose finding the owner judges real: it wasn't clean", async () => {
+    const { ask } = fakeAsk(["false alarm", "r", "real", "it is a real problem"]);
+    const { code, err, appended } = await runOn("FF-0002", controlFixture({ findings: [OTHER_FINDING] }), { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("judged real");
+    expect(appended).toEqual([]);
+  });
+
+  it("refuses detected or missed for a control, and clean when Qodo raised something", async () => {
+    const words = await runOn("FF-0002", controlFixture(), { ask: fakeAsk(["detected", "missed", "detected"]).ask });
+    expect(words.code).toBe(2);
+    expect(words.err).toContain("no valid answer (clean or review incomplete)");
+    const clean = await runOn("FF-0002", controlFixture({ findings: [OTHER_FINDING] }), {
+      ask: fakeAsk(["clean", "clean", "clean"]).ask,
+    });
+    expect(clean.code).toBe(2);
+    expect(clean.appended).toEqual([]);
+  });
+
+  it("offers a control only review incomplete when the saved review didn't finish", async () => {
+    const root = controlFixture({ state: "skipped by Qodo" });
+    expect((await runOn("FF-0002", root, { ask: fakeAsk(["clean", "clean", "clean"]).ask })).code).toBe(2);
+    const { code, appended } = await runOn("FF-0002", root, { ask: fakeAsk(["review incomplete", "skipped"]).ask });
+    expect(code).toBe(0);
+    expect(appended[0]).toMatchObject({ disposition: "review_incomplete" });
+  });
+});

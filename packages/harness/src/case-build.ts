@@ -16,7 +16,7 @@
  *    `.adjudicatedBy` from `by`, `.adjudicatedAt` from `at`). `reviewedCommit` must equal the ground
  *    truth's injected commit, and `case.adjudicated`'s `commit`, when the event carries one, must equal
  *    it too; a case whose events disagree on which commit was reviewed is refused.
- *  - `private/cases/<caseId>.overlay.json`: prose no event or saved review holds —
+ *  - `private/cases/<caseId>.overlay.json`, when there is any: prose no event or saved review holds —
  *    `detection.notes`, `collateral`, `otherReviewers`, `challenge`, `review.linkedRepositories`. The
  *    overlay itself opts a case into the legacy path by setting `legacyFindingsPath` (a raw findings
  *    file, read in Qodo's API shape and converted with `findingsFor` from `review-wait.ts`) — a case
@@ -27,7 +27,8 @@
  *    may also set two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
  *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`/`summary`, which a
  *    legacy raw findings file doesn't carry). The command refuses any other field, or shape, naming it,
- *    and prints which fields it took from the overlay.
+ *    and prints which fields it took from the overlay. With no overlay file, the record says its
+ *    challenge has not run (#162).
  *  - for an ordinary case, the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`,
  *    matched by `reviewedCommit`, via `findSavedReview` from `verdict.ts`) for `findings`, cross-checked
  *    against `review.recorded`'s `pr` so a saved file for the right commit but the wrong PR is refused,
@@ -37,23 +38,28 @@
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
  * per finding) and (for a legacy review only) re-worded by `matchDetailOverrides`.
  *
+ * A control (#162) reads no match terms and has no `detection`. Its record is version 1 when the version-1
+ * schema can hold its outcome (`confirmed_clean`), and version 2 otherwise (`confirmed_false_alarm`,
+ * `review_incomplete`): the lowest version that fits, so every existing record keeps its bytes.
+ *
  * `--write` also appends a `case.published` audit event (the written record's `sha256` and `path`).
  * Writing the same case twice with unchanged content is a no-op the second time (the file is
  * rewritten, but no duplicate event is appended) rather than a new event every run.
  *
  * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
- * listed); 2 an input (ledger, events, template, saved review or overlay) is missing, unreadable, or
- * inconsistent (a missing stage, disagreeing commits, or a saved review for the wrong PR), named in
- * the message.
+ * listed); 2 nothing was built, because an input is missing or unreadable (the answer key, the events, a
+ * bug case's template, the saved review, or an overlay file that exists), the answer key or audit log has an
+ * amendment problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
+ * wrong PR). The message names which.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { findLeaks, validateCaseRecord } from "./case-record.ts";
+import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
@@ -61,7 +67,10 @@ import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
-const SCHEMA_REF = "../schemas/case-record.v1.json";
+/** Where a record names its schema, by version (#162: version 2 adds two outcomes a control can have). */
+const schemaRef = (version: number) => `../schemas/case-record.v${version}.json`;
+/** A record whose overlay says nothing about a challenge says it hasn't run (#162: a control needs no overlay). */
+const NOT_CHALLENGED = { verdict: "not_run", note: "Not challenged yet." };
 /** This repo, where adjudicated templates are published, for `injection.template`. */
 const TEMPLATE_REPO = "AJBeumer/faultforge";
 
@@ -176,8 +185,8 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   });
 
   const record: Record<string, unknown> = {
-    $schema: SCHEMA_REF,
-    schemaVersion: 1,
+    $schema: schemaRef(recordVersionFor(kind, disposition)),
+    schemaVersion: recordVersionFor(kind, disposition),
     caseId,
     kind,
     target: { repo: repoSlug(entry.targetRepo as string), baseCommit: entry.targetCommit },
@@ -241,7 +250,7 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
 
   if (overlay.collateral) record.collateral = overlay.collateral;
   if (overlay.otherReviewers) record.otherReviewers = overlay.otherReviewers;
-  if (overlay.challenge) record.challenge = overlay.challenge;
+  record.challenge = overlay.challenge ?? NOT_CHALLENGED;
 
   record.human = { disposition, adjudicatedBy, adjudicatedAt };
   record.status = disposition === "review_incomplete" ? "incomplete" : "complete";
@@ -451,9 +460,10 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
 
+  // The overlay holds prose no event or saved review has; a case with none to add needs no file (#162).
   let overlay: Overlay = {};
   try {
-    overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    if (existsSync(overlayPath)) overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
   } catch (e) {
     error(`case:build: can't read ${overlayPath}: ${message(e)}`);
     return 2;
@@ -528,7 +538,9 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const templateId = entry.templateId as string | undefined;
   let kindTerms: string[] = [];
   let templateUrl: string | undefined;
-  if (templateId) {
+  // A control's template declares no match terms (the schema forbids them), and its record has no
+  // injection or detection, so there is nothing to read the template for (#162).
+  if (templateId && entry.kind !== "control") {
     const dir = templateDir(templateId, env);
     if (!dir) {
       error(`case:build: template ${templateId} not found in private/templates or templates/seed`);

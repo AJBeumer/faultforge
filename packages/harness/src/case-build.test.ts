@@ -557,3 +557,136 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     expect(err.join("\n")).toContain("changes at");
   });
 });
+
+describe("run: a control case (#162)", () => {
+  const CASE_ID = "FF-9002";
+  const COMMIT = "e".repeat(40);
+  const CONTROL_TEMPLATE = {
+    schemaVersion: 2,
+    id: "c1",
+    kind: "control",
+    summary: "An ordinary, harmless change, used as a control case.",
+    file: "src/x.ts",
+    find: "a",
+    replace: "b",
+    publish: { branch: "tidy-x", commitMessage: "Tidy x" },
+    ticket: { title: "Tidy x", what: "Tidy it.", criteria: ["Tests still pass."] },
+  };
+
+  /** Private storage for one control case, as inject, case:review and verdict leave it: no overlay. */
+  function fixture(disposition: string | null, findings: unknown[] = []) {
+    const root = mkdtempSync(join(tmpdir(), "case-build-control-"));
+    const groundTruthPath = join(root, "ground-truth.jsonl");
+    const auditEventsPath = join(root, "audit-events.jsonl");
+    mkdirSync(join(root, "templates", "c1"), { recursive: true });
+    writeFileSync(join(root, "templates", "c1", "template.json"), JSON.stringify(CONTROL_TEMPLATE));
+    const entry = {
+      caseId: CASE_ID,
+      kind: "control",
+      templateId: "c1",
+      targetRepo: "https://github.com/Owner/target.git",
+      targetCommit: "a".repeat(40),
+      injectionCommit: COMMIT,
+      injectedFile: "src/x.ts",
+      injectedLines: [1, 2],
+    };
+    writeFileSync(groundTruthPath, `${JSON.stringify(entry)}\n`);
+    const events: Record<string, unknown>[] = [
+      { eventId: "e1", type: "control.injected", caseId: CASE_ID, at: "2026-11-01T00:00:00.000Z" },
+      {
+        eventId: "e2",
+        type: "review.recorded",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:05:00.000Z",
+        pr: { repo: "Owner/target", number: 6, url: "https://github.com/Owner/target/pull/6" },
+        review: {
+          reviewer: "qodo-code-review[bot]",
+          path: "pr-comments",
+          configVersion: "v1",
+          reviewedCommit: COMMIT,
+          reviewedAt: "2026-11-01T00:05:00.000Z",
+          url: "https://github.com/Owner/target/pull/6#issuecomment-1",
+        },
+      },
+    ];
+    if (disposition) {
+      events.push({
+        eventId: "e3",
+        type: "case.adjudicated",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:10:00.000Z",
+        disposition,
+        by: "Owner",
+      });
+    }
+    writeFileSync(auditEventsPath, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
+    const reviewDir = join(root, "raw-artifacts", "reviews", "target-pr6");
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, `${COMMIT.slice(0, 7)}.review.json`),
+      JSON.stringify({
+        repo: "Owner/target",
+        pr: 6,
+        headSha: COMMIT,
+        state: "complete",
+        reviewSeenCompleteAt: null,
+        findings,
+      }),
+    );
+    return { root, groundTruthPath, auditEventsPath };
+  }
+
+  async function build(fx: ReturnType<typeof fixture>) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await run(CASE_ID, {
+      env: { FAULTFORGE_PRIVATE_DIR: fx.root },
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+      groundTruthPath: fx.groundTruthPath,
+      auditEventsPath: fx.auditEventsPath,
+      reviewsDir: join(fx.root, "raw-artifacts", "reviews"),
+      overlayPath: join(fx.root, "no-overlay.json"),
+      examplesDir: join(fx.root, "examples"),
+    });
+    const text = out.join("\n");
+    return { code, err: err.join("\n"), record: code === 0 ? JSON.parse(text.slice(text.indexOf("{"))) : null };
+  }
+
+  it("builds a clean control with no overlay as a version 1 record", async () => {
+    const { code, err, record } = await build(fixture("confirmed_clean"));
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(record).toMatchObject({ schemaVersion: 1, kind: "control", human: { disposition: "confirmed_clean" } });
+    expect(record).not.toHaveProperty("detection");
+    expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it.each([
+    ["confirmed_false_alarm", "complete"],
+    ["review_incomplete", "incomplete"],
+  ])("builds a %s control as a version 2 record", async (disposition, status) => {
+    const finding = { id: "f1", file: "src/x.ts", lines: [1, 1], category: "Bug", title: "t", description: "d" };
+    const { code, err, record } = await build(fixture(disposition, [finding]));
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(record).toMatchObject({ schemaVersion: 2, human: { disposition }, status });
+    expect(record.$schema).toBe("../schemas/case-record.v2.json");
+    expect(validateCaseRecord(record)).toEqual([]);
+  });
+
+  it("refuses a control with no review event, naming the stage (Qodo on PR 214)", async () => {
+    const fx = fixture("confirmed_clean");
+    const lines = readFileSync(fx.auditEventsPath, "utf8").trim().split("\n");
+    writeFileSync(fx.auditEventsPath, `${lines.filter((l) => !l.includes("review.recorded")).join("\n")}\n`);
+    const { code, err } = await build(fx);
+    expect(code).toBe(2);
+    expect(err).toContain("the review stage is missing");
+  });
+
+  it("refuses a control with no adjudication, naming the stage", async () => {
+    const { code, err } = await build(fixture(null));
+    expect(code).toBe(2);
+    expect(err).toContain("the adjudication stage is missing");
+  });
+});

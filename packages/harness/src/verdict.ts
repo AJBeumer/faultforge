@@ -39,13 +39,21 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { gh } from "./github.ts";
 import { ledgerProblemsIn, readLedger } from "./ledger.ts";
 import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
+import {
+  type AskFn,
+  askJudgement,
+  askNonBlank,
+  askOneOf,
+  defaultAsk,
+  printControlFindings,
+  printReport,
+} from "./verdict-ask.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
@@ -91,8 +99,6 @@ export interface AdjudicationEvent {
   judgements: Judgement[];
 }
 
-export type AskFn = (question: string) => Promise<string>;
-
 export interface RunOptions {
   env?: NodeJS.ProcessEnv;
   log?: (line: string) => void;
@@ -117,8 +123,15 @@ const BUG_VERDICTS: Record<string, string> = {
   "review incomplete": "review_incomplete",
 };
 
-const FINDING_VERDICTS = new Set(["real", "false alarm", "open"]);
-const MAX_ATTEMPTS = 3;
+/**
+ * A control has no planted bug to catch (#162): `clean` when Qodo raised nothing, `false alarm` when it
+ * raised something on a harmless change, `review incomplete` when the review never finished.
+ */
+const CONTROL_VERDICTS: Record<string, string> = {
+  clean: "confirmed_clean",
+  "false alarm": "confirmed_false_alarm",
+  "review incomplete": "review_incomplete",
+};
 
 /** A saved finding, in the shape the match rule and the report read. */
 export function toMatchFinding(finding: SavedFinding): MatchFinding {
@@ -141,6 +154,7 @@ export function toMatchFinding(finding: SavedFinding): MatchFinding {
 export function findSavedReview(
   reviewsDir: string,
   commit: string,
+  pr?: number,
 ): { path: string; text: string; review: SavedReview } | undefined {
   let dirs: string[];
   try {
@@ -163,45 +177,13 @@ export function findSavedReview(
       try {
         const text = readFileSync(path, "utf8");
         const review = JSON.parse(text) as SavedReview;
-        if (review.headSha === commit) return { path, text, review };
+        if (review.headSha === commit && (pr === undefined || review.pr === pr)) return { path, text, review };
       } catch {
         // Malformed or unreadable: not a candidate, but not fatal to the scan either.
       }
     }
   }
   return undefined;
-}
-
-function formatCriterion(name: string, criterion: { pass: boolean; detail: string }): string {
-  return `  ${name}: ${criterion.pass ? "PASS" : "FAIL"} - ${criterion.detail}`;
-}
-
-/** Prints every finding's match against the rule, then the overall catch. */
-export function printReport(log: (line: string) => void, findings: MatchFinding[], result: MatchRuleResult): void {
-  for (const finding of result.findings) {
-    const source = findings.find((f) => f.id === finding.id);
-    log(`${finding.id} ${source?.title ? `"${source.title}"` : ""}`.trim());
-    log(formatCriterion("file", finding.file));
-    log(formatCriterion("lines", finding.lines));
-    log(formatCriterion("kind", finding.kind));
-    const width =
-      finding.lineWidth === null ? "no lines" : `${finding.lineWidth} line${finding.lineWidth === 1 ? "" : "s"}`;
-    const range = source?.lines ? `lines ${source.lines[0]}-${source.lines[1]}` : "lines (none)";
-    log(`  ${range}, ${width}`);
-    log(`  category: ${source?.category ?? "(none)"}`);
-    log(`  summary: ${source?.summary ?? "(none)"}`);
-  }
-  log(`caught: ${result.caught}`);
-  log(`matched: ${result.matchedFindingIds.join(", ") || "none"}`);
-}
-
-async function defaultAsk(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await rl.question(question);
-  } finally {
-    rl.close();
-  }
 }
 
 function defaultOwnerLogin(): string {
@@ -214,40 +196,6 @@ function defaultAppend(path: string, value: object): void {
 
 function sha256(data: string): string {
   return createHash("sha256").update(data).digest("hex");
-}
-
-/** Asks until the answer (trimmed, lower-cased) is one of `valid`, or gives up after a few tries. */
-async function askOneOf(ask: AskFn, question: string, valid: string[]): Promise<string | undefined> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const answer = (await ask(question)).trim().toLowerCase();
-    if (valid.includes(answer)) return answer;
-  }
-  return undefined;
-}
-
-/** Asks until the answer (trimmed) is nonblank, or gives up after a few tries. */
-async function askNonBlank(ask: AskFn, question: string): Promise<string | undefined> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const answer = (await ask(question)).trim();
-    if (answer !== "") return answer;
-  }
-  return undefined;
-}
-
-/**
- * A finding judgement: blank stays "open" at once, unjudged, and is never asked for a reason. Anything
- * else must be real, false alarm or open, and `explicit` tells the caller to require a reason for it.
- */
-async function askJudgement(
-  ask: AskFn,
-  question: string,
-): Promise<{ verdict: Judgement["verdict"]; explicit: boolean } | undefined> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const answer = (await ask(question)).trim().toLowerCase();
-    if (answer === "") return { verdict: "open", explicit: false };
-    if (FINDING_VERDICTS.has(answer)) return { verdict: answer as Judgement["verdict"], explicit: true };
-  }
-  return undefined;
 }
 
 export async function run(caseId: string, options: RunOptions = {}): Promise<number> {
@@ -334,19 +282,24 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error(`verdict: template ${templateId} not found in private/templates or templates/seed`);
     return 2;
   }
+  // A control's template declares no match terms (the schema forbids them): there is no bug to match (#162).
+  const isControl = entry.kind === "control";
   let templateText: string;
-  let kindTerms: string[];
+  let kindTerms: string[] = [];
   try {
     templateText = readFileSync(join(dir, "template.json"), "utf8");
-    kindTerms = kindTermsOf(JSON.parse(templateText), `${dir}/template.json`);
+    if (!isControl) kindTerms = kindTermsOf(JSON.parse(templateText), `${dir}/template.json`);
   } catch (e) {
     error(`verdict: can't use ${dir}/template.json: ${message(e)}`);
     return 2;
   }
 
   const findings = (review.findings ?? []).map(toMatchFinding);
-  const result = applyMatchRule({ file: injectedFile, lines: injectedLines as [number, number] }, findings, kindTerms);
-  printReport(log, findings, result);
+  const result = isControl
+    ? undefined
+    : applyMatchRule({ file: injectedFile, lines: injectedLines as [number, number] }, findings, kindTerms);
+  if (result) printReport(log, findings, result);
+  else printControlFindings(log, findings);
 
   // "complete" only when review:wait finished reviewing this exact commit; anything else (skipped,
   // timed out, head moved) means a clean result proves nothing, so only "review incomplete" is offered.
@@ -372,18 +325,22 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const ask = options.ask ?? defaultAsk;
-  const allowedBugWords = reviewIncomplete ? ["review incomplete"] : Object.keys(BUG_VERDICTS);
-  const bugAnswer = await askOneOf(
-    ask,
-    "Verdict on the planted bug (detected/missed/review incomplete): ",
-    allowedBugWords,
-  );
+  // A control offers `clean` only when Qodo raised nothing, and `false alarm` only when it raised something.
+  const verdicts = isControl ? CONTROL_VERDICTS : BUG_VERDICTS;
+  const offered = isControl
+    ? [findings.length ? "false alarm" : "clean", "review incomplete"]
+    : ["detected", "missed", "review incomplete"];
+  const allowedBugWords = reviewIncomplete ? ["review incomplete"] : offered;
+  const subject = isControl ? "the control" : "the planted bug";
+  const bugAnswer = await askOneOf(ask, `Verdict on ${subject} (${offered.join("/")}): `, allowedBugWords);
   if (!bugAnswer) {
-    error("verdict: no valid answer (detected, missed or review incomplete) for the planted bug's verdict");
+    error(
+      `verdict: no valid answer (${offered.slice(0, -1).join(", ")} or ${offered.at(-1)}) for ${subject}'s verdict`,
+    );
     return 2;
   }
   // An answer the rule contradicts is a permanent line in an append-only log: asked again first (#192).
-  if (bugAnswer !== "review incomplete" && (bugAnswer === "detected") !== result.caught) {
+  if (result && bugAnswer !== "review incomplete" && (bugAnswer === "detected") !== result.caught) {
     const sure = await askOneOf(
       ask,
       `The rule says caught = ${result.caught}, but the answer is "${bugAnswer}". Record it anyway? (yes/no): `,
@@ -396,13 +353,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
   const bugReason = await askNonBlank(ask, "Reason: ");
   if (bugReason === undefined) {
-    error("verdict: no reason given for the planted bug's verdict");
+    error(`verdict: no reason given for ${subject}'s verdict`);
     return 2;
   }
 
   const judgements: Judgement[] = [];
-  for (const finding of result.findings) {
-    if (result.matchedFindingIds.includes(finding.id)) continue;
+  // On a control every finding is judged: none can be a catch.
+  for (const finding of result?.findings ?? findings) {
+    if (result?.matchedFindingIds.includes(finding.id)) continue;
     const source = findings.find((f) => f.id === finding.id);
     const judged = await askJudgement(
       ask,
@@ -424,6 +382,20 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     judgements.push({ id: finding.id, verdict: judged.verdict, reason });
   }
 
+  // A control with a finding the owner judges real wasn't clean, so it is neither clean nor a false alarm
+  // (owner's decision, 13 November): the template or the case needs a look before any verdict is recorded.
+  if (isControl && bugAnswer !== "review incomplete" && judgements.some((j) => j.verdict === "real")) {
+    error(
+      "verdict: a finding on this control is judged real, so the control was not clean; nothing recorded. Check the template, or record review incomplete with the reason",
+    );
+    return 2;
+  }
+  // A false alarm is a judgement on every finding: one left open isn't judged yet (Qodo on PR 214).
+  if (isControl && bugAnswer === "false alarm" && judgements.some((j) => j.verdict === "open")) {
+    error("verdict: a false alarm needs every finding judged a false alarm; one was left open, so nothing recorded");
+    return 2;
+  }
+
   const event: AdjudicationEvent = {
     eventId: randomUUID(),
     type: "case.adjudicated",
@@ -434,7 +406,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     tool: TOOL,
     environment: `${platform()}-${arch()}-node${process.versions.node}`,
     inputHash: sha256(`${JSON.stringify(entry)}\n${templateText}\n${reviewText}`),
-    disposition: BUG_VERDICTS[bugAnswer] as string,
+    disposition: verdicts[bugAnswer] as string,
     reason: bugReason,
     judgements,
   };
@@ -492,3 +464,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     },
   );
 }
+
+// Kept importable from here, where callers found them before the split.
+export { type AskFn, printReport } from "./verdict-ask.ts";
