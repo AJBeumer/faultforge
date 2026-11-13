@@ -218,15 +218,27 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   // An attempt is marked before the call: if `gh` times out after GitHub created the issue, nothing else
   // would show it exists, and a rerun would post a second one on the repo the reviewer reads (#216).
+  // Created exclusively ("wx"), so of two runs started together only one gets past this point.
   const attempt = join(evidenceDir, "gh-issue-create.attempt.txt");
-  if (existsSync(attempt)) {
+  mkdirSync(evidenceDir, { recursive: true });
+  try {
+    writeFileSync(
+      attempt,
+      `${now()} gh issue create --repo ${target.github} --title ${JSON.stringify(ticket.title)}\n`,
+      {
+        flag: "wx",
+      },
+    );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+      error(`case:ticket: can't write the attempt marker ${attempt}, so gh was not called: ${message(e)}`);
+      return 2;
+    }
     error(
       `case:ticket: refused, an earlier run tried to create this ticket (${attempt}) and recorded no case.ticket-created event. Check ${target.github}'s issues; record the event by hand if it exists, or delete the marker if it doesn't`,
     );
     return 2;
   }
-  mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(attempt, `${now()} gh issue create --repo ${target.github} --title ${JSON.stringify(ticket.title)}\n`);
 
   let url: string;
   try {
