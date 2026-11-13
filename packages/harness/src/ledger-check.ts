@@ -11,11 +11,11 @@
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
  */
-import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ledgerProblems } from "./ledger.ts";
+import { ledgerProblems, ledgerProblemsIn } from "./ledger.ts";
 import { privateDir } from "./templates.ts";
 
 const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
@@ -109,6 +109,35 @@ export function ledgerCheckProblems(privateRoot: string): string[] {
   for (const file of FILES) {
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
+  }
+  return problems;
+}
+
+/**
+ * What `verdict`, `case:review`, `case:build` and `inject` check before they read or write the files: unsound
+ * amendments, and for a file at the root of its own git repository (the private repository holds both there),
+ * any commit or uncommitted change that removed or changed a line (#224). A file elsewhere, such as a test's
+ * scratch copy, has no history of its own to check. Never throws: what it can't check is a problem too.
+ */
+export function ledgerProblemsWithHistory(paths: string[]): string[] {
+  let problems: string[];
+  try {
+    problems = ledgerProblemsIn(paths);
+  } catch (e) {
+    return [`the files can't be read: ${e instanceof Error ? e.message : String(e)}`];
+  }
+  for (const path of paths.filter((p) => existsSync(p))) {
+    const root = dirname(resolve(path));
+    // Only "not a git repository" means there is no history to check. Anything else (git missing or failing,
+    // a folder inside another repository instead of at its own root) is a problem, never a silent skip, as
+    // `npm run ledger:check` would refuse it too (Qodo on PR 232).
+    const probe = spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+    if (probe.status !== 0 && /not a git repository/i.test(probe.stderr ?? "")) continue;
+    try {
+      problems.push(...appendOnlyProblems(root, basename(path)).map((p) => `${path}: ${p}`));
+    } catch (e) {
+      problems.push(`${path}: its history can't be checked: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   return problems;
 }

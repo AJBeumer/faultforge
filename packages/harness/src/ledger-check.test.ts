@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendOnlyProblems, ledgerCheckProblems } from "./ledger-check.ts";
+import { appendOnlyProblems, ledgerCheckProblems, ledgerProblemsWithHistory } from "./ledger-check.ts";
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-check-"));
@@ -135,5 +135,35 @@ describe("ledgerCheckProblems: both files together", () => {
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
     commit(dir, "audit-events.jsonl", '{"eventId":"evt-1"}\n', "first event");
     expect(ledgerCheckProblems(dir)).toEqual([]);
+  });
+});
+
+describe("ledgerProblemsWithHistory: what the case commands check first (#224)", () => {
+  it("finds a rewritten line in the committed history of a file at its repository's root", () => {
+    const dir = repo();
+    commit(dir, "audit-events.jsonl", '{"eventId":"e1","type":"x"}\n', "first");
+    commit(dir, "audit-events.jsonl", '{"eventId":"e1","type":"y"}\n', "rewrite");
+    const problems = ledgerProblemsWithHistory([join(dir, "audit-events.jsonl")]);
+    expect(problems.join("\n")).toContain("removed or changed a line");
+  });
+
+  it("is empty for an append-only history, and checks no history for a file outside a repository", () => {
+    const dir = repo();
+    commit(dir, "audit-events.jsonl", '{"eventId":"e1","type":"x"}\n', "first");
+    commit(dir, "audit-events.jsonl", '{"eventId":"e1","type":"x"}\n{"eventId":"e2","type":"x"}\n', "second");
+    expect(ledgerProblemsWithHistory([join(dir, "audit-events.jsonl"), join(dir, "missing.jsonl")])).toEqual([]);
+    const loose = mkdtempSync(join(tmpdir(), "not-a-repo-"));
+    writeFileSync(join(loose, "audit-events.jsonl"), '{"eventId":"e1","type":"x"}\n');
+    expect(ledgerProblemsWithHistory([join(loose, "audit-events.jsonl")])).toEqual([]);
+  });
+});
+
+describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)", () => {
+  it("reports a file in a folder inside another repository, rather than skipping its history", () => {
+    const dir = repo();
+    mkdirSync(join(dir, "nested"));
+    writeFileSync(join(dir, "nested", "audit-events.jsonl"), '{"eventId":"e1","type":"x"}\n');
+    const problems = ledgerProblemsWithHistory([join(dir, "nested", "audit-events.jsonl")]);
+    expect(problems.join("\n")).toContain("can't be checked");
   });
 });

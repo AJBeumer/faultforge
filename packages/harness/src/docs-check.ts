@@ -1,0 +1,149 @@
+/**
+ * Refuses public text that names a case before its verdict, or names a held-out case at all (#224, audit
+ * M-24). The decision log's rules 1 and 2, checked instead of remembered: on 12 November a configuration
+ * entry named an upcoming case while it was under review.
+ *
+ *   npm run docs:check
+ *
+ * Reads `README.md` and every text file under `docs/`, and from private storage the answer key, the audit
+ * log, the unreleased templates and `templates/HELD-OUT.md`. A case id (`FF-NNNN`) the answer key holds, or an
+ * unreleased template id, is allowed only once its case has a `case.adjudicated` event, and never when it is
+ * held out. An id the answer key doesn't hold is an example (a test fixture's `FF-0099`), not a case.
+ * Without private storage (CI) there is nothing to check against, so it says so and passes.
+ *
+ * Exit codes: 0 nothing found, or no private storage to check against; 1 a public file names a case or
+ * template it may not, listed on stdout; 2 a file could not be read.
+ */
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readAuditLog, readLedger } from "./ledger.ts";
+import { ROOT } from "./paths.ts";
+import { privateDir } from "./templates.ts";
+
+export interface DocsFacts {
+  /** Case ids with a `case.adjudicated` event. */
+  adjudicated: Set<string>;
+  /** Each case's template ids: every answer-key entry for it, so a duplicate can't hide one (Qodo on PR 232). */
+  caseTemplates: Map<string, string[]>;
+  /** Template ids in private storage, unreleased. */
+  privateTemplates: string[];
+  /** Template ids held out of everything public until the final report. */
+  heldOut: Set<string>;
+}
+
+const TEXT = /\.(md|txt|json|jsonl|ts|yml|yaml|csv|html)$/i;
+
+/** `file: reason` for every case or template a public file may not name yet, or an empty list. */
+export function docsProblems(files: { path: string; text: string }[], facts: DocsFacts): string[] {
+  const heldOutCases = new Set(
+    [...facts.caseTemplates].filter(([, ts]) => ts.some((t) => facts.heldOut.has(t))).map(([c]) => c),
+  );
+  const adjudicatedTemplates = new Set(
+    [...facts.caseTemplates].filter(([c]) => facts.adjudicated.has(c)).flatMap(([, ts]) => ts),
+  );
+  const problems: string[] = [];
+  for (const { path, text } of files) {
+    // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.
+    const ids = [...text.matchAll(/\bff[\s_-]?(\d{3,})\b/gi)].map((m) => `FF-${(m[1] as string).padStart(4, "0")}`);
+    for (const id of new Set(ids)) {
+      // An id the answer key doesn't hold is an example or a fixture, not a case.
+      if (!facts.caseTemplates.has(id)) continue;
+      if (heldOutCases.has(id)) problems.push(`${path}: names ${id}, a held-out case`);
+      else if (!facts.adjudicated.has(id)) problems.push(`${path}: names ${id}, which has no verdict yet`);
+    }
+    for (const template of facts.privateTemplates) {
+      if (!text.includes(template)) continue;
+      if (facts.heldOut.has(template)) problems.push(`${path}: names ${template}, a held-out template`);
+      else if (!adjudicatedTemplates.has(template))
+        problems.push(`${path}: names ${template}, whose case has no verdict yet`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * README.md and every text file under docs/, relative to `root`: each file's working copy, and its staged copy
+ * when that differs, since a commit records the index, not the working tree (Qodo on PR 232).
+ */
+export function publicFiles(root: string): { path: string; text: string }[] {
+  const out: { path: string; text: string }[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (TEXT.test(name))
+        out.push({ path: relative(root, full).replace(/\\/g, "/"), text: readFileSync(full, "utf8") });
+    }
+  };
+  out.push({ path: "README.md", text: readFileSync(join(root, "README.md"), "utf8") });
+  walk(join(root, "docs"));
+  const listed = spawnSync("git", ["-C", root, "ls-files", "-z", "--", "README.md", "docs"], { encoding: "utf8" });
+  if (listed.status === 0) {
+    for (const path of listed.stdout.split("\0").filter((p) => TEXT.test(p))) {
+      const index = spawnSync("git", ["-C", root, "show", `:${path}`], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      if (index.status !== 0) throw new Error(`can't read the staged ${path}: ${(index.stderr ?? "").trim()}`);
+      if (index.stdout !== out.find((f) => f.path === path)?.text) {
+        out.push({ path: `${path} (staged)`, text: index.stdout });
+      }
+    }
+  }
+  return out;
+}
+
+/** What private storage says, or undefined when there is no private storage to read. */
+export function docsFacts(priv: string): DocsFacts | undefined {
+  const groundTruth = join(priv, "ground-truth.jsonl");
+  if (!existsSync(groundTruth)) return undefined;
+  const entries = readLedger(groundTruth) as { caseId?: string; templateId?: string }[];
+  const caseTemplates = new Map<string, string[]>();
+  for (const e of entries) {
+    if (!e.caseId || !e.templateId) continue;
+    caseTemplates.set(e.caseId, [...(caseTemplates.get(e.caseId) ?? []), e.templateId]);
+  }
+  const audit = join(priv, "audit-events.jsonl");
+  const events = existsSync(audit) ? (readAuditLog(audit) as { type?: string; caseId?: string }[]) : [];
+  const adjudicated = new Set(
+    events.filter((e) => e.type === "case.adjudicated" && e.caseId).map((e) => e.caseId as string),
+  );
+  const templatesDir = join(priv, "templates");
+  const privateTemplates = existsSync(templatesDir)
+    ? readdirSync(templatesDir).filter((d) => existsSync(join(templatesDir, d, "template.json")))
+    : [];
+  const heldOutFile = join(templatesDir, "HELD-OUT.md");
+  const heldOut = new Set(
+    existsSync(heldOutFile)
+      ? [...readFileSync(heldOutFile, "utf8").matchAll(/^[0-9a-f]{64}\s+([^/\s]+)\//gm)].map((m) => m[1] as string)
+      : [],
+  );
+  return { adjudicated, caseTemplates, privateTemplates, heldOut };
+}
+
+function main(): number {
+  let facts: DocsFacts | undefined;
+  let files: { path: string; text: string }[];
+  try {
+    facts = docsFacts(privateDir());
+    files = publicFiles(ROOT);
+  } catch (e) {
+    console.error(`docs:check: ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
+  if (!facts) {
+    console.log("docs:check: no private storage here, so nothing to check public text against (skipped)");
+    return 0;
+  }
+  const problems = docsProblems(files, facts);
+  if (problems.length) {
+    console.log(`docs:check: public text names what it may not yet:\n${problems.map((p) => `- ${p}`).join("\n")}`);
+    return 1;
+  }
+  console.log(`docs:check: ${files.length} public files name no case or template before its time`);
+  return 0;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) process.exit(main());

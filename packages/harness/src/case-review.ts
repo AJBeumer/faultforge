@@ -22,7 +22,8 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
+import { readAuditLog, readLedger } from "./ledger.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
 import { privateDir } from "./templates.ts";
 import { findSavedReview } from "./verdict.ts";
@@ -84,7 +85,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
   const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
 
   try {
-    const problems = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+    const problems = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
     if (problems.length) {
       error(`case:review: the answer key or audit log has problems:\n${problems.map((p) => `- ${p}`).join("\n")}`);
       return 2;
