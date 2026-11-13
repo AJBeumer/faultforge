@@ -5,12 +5,13 @@
  *
  * The mutation is committed on its own branch in the target repository (not pushed). It counts as
  * validated only if the proof test of the template's `invariantId`, and of every `alsoBreaks` entry,
- * passes on the base commit and fails on the variant, and the variant still typechecks. Ledger entry,
+ * passes on the base commit and fails on the variant with a test that ran and failed (a proof that
+ * fails to load proves nothing), and the variant still typechecks. Ledger entry,
  * audit event and raw artefacts go to private storage, which never enters the target repository.
  *
  *   npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --validate-only
  *
- * `--validate-only` checks the template against the schema and runs the same proofs, without planting
+ * `--validate-only` checks the template against the schema and runs the same proofs and typecheck, without planting
  * anything: the target checkout ends exactly as it started (same HEAD, same branch, clean tree), and
  * nothing is written to private storage. No `--case` is needed or used.
  *
@@ -36,7 +37,7 @@ import { parseArgs } from "node:util";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
-import { type Outcome, outcomeOf, stepLogText } from "./run-outcome.ts";
+import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, kindTermsOf, privateDir, templateProblems } from "./templates.ts";
 
 interface AlsoBreaks {
@@ -173,7 +174,9 @@ log(`base ${baseBranch} @ ${baseCommit.slice(0, 7)}`);
 const proofsOnBase: Outcome[] = proofs.map((proof, i) => runProof("base", proof, i));
 const notRunOnBase = proofs.filter((_, i) => proofsOnBase[i] === "not_run").map((p) => p.invariantId);
 if (notRunOnBase.length) {
-  fail(`proof test did not finish on the base commit, so it cannot prove anything: ${notRunOnBase.join(", ")}`);
+  fail(
+    `proof test did not finish, or ran no test, on the base commit, so it cannot prove anything: ${notRunOnBase.join(", ")}`,
+  );
 }
 const failingOnBase = proofs.filter((_, i) => proofsOnBase[i] === "fail").map((p) => p.invariantId);
 if (failingOnBase.length) {
@@ -192,13 +195,14 @@ try {
   injectedLines = applyMutation();
   if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), git("diff"));
 
+  // The typecheck runs in --validate-only too: a variant that doesn't compile proves nothing (#217).
+  typecheck = runStep("typecheck", process.execPath, [
+    join(targetDir, "node_modules/typescript/bin/tsc"),
+    "-p",
+    "tsconfig.json",
+    "--noEmit",
+  ]);
   if (!validateOnly) {
-    typecheck = runStep("typecheck", process.execPath, [
-      join(targetDir, "node_modules/typescript/bin/tsc"),
-      "-p",
-      "tsconfig.json",
-      "--noEmit",
-    ]);
     publicTests = runStep("public-tests", process.execPath, [join(targetDir, "node_modules/vitest/vitest.mjs"), "run"]);
   }
   proofsOnVariant = proofs.map((proof, i) => runProof("variant", proof, i));
@@ -206,12 +210,12 @@ try {
   const notRunOnVariant = proofs.filter((_, i) => proofsOnVariant[i] === "not_run").map((p) => p.invariantId);
   const stillPassing = proofs.filter((_, i) => proofsOnVariant[i] === "pass").map((p) => p.invariantId);
   if (notRunOnVariant.length) {
-    failure = `proof test did not finish on the variant, so the mutation is not validated: ${notRunOnVariant.join(", ")}`;
+    failure = `proof test did not finish, failed only to load, or ran no test on the variant, so the mutation is not validated: ${notRunOnVariant.join(", ")}`;
   } else if (stillPassing.length) {
     failure = `proof test still passes on the variant, so the mutation is not validated: ${stillPassing.join(", ")}`;
-  } else if (!validateOnly && typecheck === "not_run") {
+  } else if (typecheck === "not_run") {
     failure = "typecheck did not finish, so the mutation is not validated";
-  } else if (!validateOnly && typecheck === "fail") {
+  } else if (typecheck === "fail") {
     failure = "variant does not typecheck";
   } else if (!validateOnly && publicTests === "not_run") {
     // Missing for either kind: a bug case with no evidence on its public tests is as unvalidated as
@@ -338,6 +342,9 @@ function runProof(stage: "base" | "variant", proof: Proof, index: number): Outco
     const dest = join(scratch, proof.proofTest);
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(templateDir, proof.proofTest), dest);
+    // The JSON report says whether a test ran and failed; an exit code alone can't tell that from a
+    // proof that failed to load (#217).
+    const report = join(scratch, "proof-report.json");
     const outcome = runStep(
       // Numbered: two proofs may share an invariant id, and each keeps its own log (#193).
       `proof-${stage}-${index + 1}-${proof.invariantId}`,
@@ -349,9 +356,13 @@ function runProof(stage: "base" | "variant", proof: Proof, index: number): Outco
         scratch,
         "--config",
         join(ROOT, "vitest.proof.config.ts"),
+        "--reporter=default",
+        "--reporter=json",
+        `--outputFile.json=${report}`,
       ],
       ROOT,
       { FAULTFORGE_TARGET_DIR: targetDir },
+      (result) => proofOutcomeOf(result, readVitestReport(report)),
     );
     log(`proof ${proof.invariantId} on ${stage}: ${outcome}`);
     return outcome;
@@ -371,9 +382,10 @@ function runStep(
   cmdArgs: string[],
   cwd = targetDir,
   env: Record<string, string> = {},
+  judge: (result: ReturnType<typeof run>) => Outcome = outcomeOf,
 ): Outcome {
   const result = run(cmd, cmdArgs, cwd, env);
-  const outcome = outcomeOf(result);
+  const outcome = judge(result);
   writeFileSync(join(artefactDir, `${name}.log`), stepLogText(cmdArgs, result, outcome));
   return outcome;
 }

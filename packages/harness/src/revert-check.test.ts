@@ -8,7 +8,6 @@ import {
   dependencySectionsChanged,
   filesProblem,
   parseNameStatus,
-  parseVitestReport,
   revertCheck,
   runnableTests,
   runVitest,
@@ -45,28 +44,6 @@ describe("splitting a PR's files", () => {
   });
 });
 
-describe("reading vitest's JSON report", () => {
-  it("lists failed tests, and a file that failed before any test ran", () => {
-    const result = parseVitestReport({
-      testResults: [
-        {
-          name: "/x/a.test.ts",
-          status: "failed",
-          assertionResults: [
-            { fullName: "list filters by status", status: "failed" },
-            { fullName: "list returns all", status: "passed" },
-          ],
-        },
-        { name: "/x/b.test.ts", status: "failed", message: "TypeError: listBookings is not a function\n  at ..." },
-      ],
-    });
-    expect(result).toEqual({
-      failed: ["list filters by status", "/x/b.test.ts: TypeError: listBookings is not a function"],
-      passed: 1,
-    });
-  });
-});
-
 describe("the verdict", () => {
   const files = { tests: ["test/a.test.ts"], code: [{ status: "M", path: "src/a.ts" }] };
   const run = (failed: string[]): TestRun => ({ ran: true, failed, passed: 3 });
@@ -91,6 +68,26 @@ describe("the verdict", () => {
 
   it("can't judge (2) tests that fail even with the change: they prove nothing", () => {
     expect(verdict(files, run(["broken"]), run(["broken"]))).toMatchObject({ exit: 2 });
+  });
+
+  it("can't judge (2) tests that only fail to load without the change: that shows an import, not a test (#217)", () => {
+    const loadOnly: TestRun = { ran: true, failed: [], loadFailed: ["/x/b.test.ts: SyntaxError"], passed: 0 };
+    const outcome = verdict(files, run([]), loadOnly);
+    expect(outcome.exit).toBe(2);
+    expect(outcome.message).toContain("/x/b.test.ts: SyntaxError");
+  });
+
+  it("is caught (0) when a test ran and failed, even if another file also failed to load", () => {
+    const both: TestRun = { ran: true, failed: ["filters by status"], loadFailed: ["/x/b.test.ts: E"], passed: 0 };
+    const outcome = verdict(files, run([]), both);
+    expect(outcome).toMatchObject({ exit: 0, failedWithoutChange: ["filters by status"] });
+    // The record keeps the names, not just a count (Qodo on PR 219).
+    expect(outcome.message).toContain("/x/b.test.ts: E");
+  });
+
+  it("can't judge (2) a test file that fails to load even with the change", () => {
+    const loadWith: TestRun = { ran: true, failed: [], loadFailed: ["/x/b.test.ts: E"], passed: 1 };
+    expect(verdict(files, loadWith, run(["x"]))).toMatchObject({ exit: 2 });
   });
 
   it("can't judge (2) when the copy couldn't run its tests", () => {
@@ -172,6 +169,19 @@ describe("revertCheck on a real git repository", () => {
     expect(seen[0]).toMatchObject({ list: "export const filter = 'status';\n", added: true, modules: true });
     // Without the change: the modified file is back at base, the added one is gone.
     expect(seen[1]).toMatchObject({ list: "export const filter = 'all';\n", added: false });
+  });
+
+  it("stops after the first run when a test file fails to load even with the change (Qodo on PR 219)", () => {
+    const { repo, base, head } = repoWithPr("test\n");
+    let runs = 0;
+    const loadsBadly = (): TestRun => {
+      runs++;
+      return { ran: true, failed: [], loadFailed: ["/x/b.test.ts: SyntaxError"], passed: 1 };
+    };
+    const outcome = revertCheck({ repo, base, head, tests: TESTS, runTests: loadsBadly, temp: root });
+    expect(outcome.exit).toBe(2);
+    expect(outcome.message).toContain("fail even with its change");
+    expect(runs).toBe(1);
   });
 
   it("checks the base version out the same way as the head, line endings included", () => {

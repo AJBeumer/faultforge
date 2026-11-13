@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { outcomeOf, stepLogText } from "./run-outcome.ts";
+import { outcomeOf, parseVitestReport, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 
 describe("outcomeOf", () => {
   it("passes on a clean exit", () => {
@@ -58,5 +61,71 @@ describe("stepLogText", () => {
   it("never prints a bare exit null with no outcome", () => {
     const text = stepLogText(["vitest", "run"], { ...base, status: null, signal: "SIGTERM" }, "not_run");
     expect(text).not.toMatch(/exit null\n\n/);
+  });
+});
+
+describe("reading vitest's JSON report", () => {
+  it("lists failed tests, and keeps a file that failed before any test ran apart (#217)", () => {
+    const result = parseVitestReport({
+      testResults: [
+        {
+          name: "/x/a.test.ts",
+          status: "failed",
+          assertionResults: [
+            { fullName: "list filters by status", status: "failed" },
+            { fullName: "list returns all", status: "passed" },
+          ],
+        },
+        { name: "/x/b.test.ts", status: "failed", message: "TypeError: listBookings is not a function\n  at ..." },
+      ],
+    });
+    expect(result).toEqual({
+      failed: ["list filters by status"],
+      loadFailed: ["/x/b.test.ts: TypeError: listBookings is not a function"],
+      passed: 1,
+    });
+  });
+});
+
+describe("a proof's outcome (#217)", () => {
+  const ran = (status: "passed" | "failed") => ({
+    testResults: [{ name: "/p.test.ts", status, assertionResults: [{ fullName: "invariant holds", status }] }],
+  });
+  const loadError = { testResults: [{ name: "/p.test.ts", status: "failed", message: "Error: Cannot find module" }] };
+
+  it("fails only when a test ran and failed", () => {
+    expect(proofOutcomeOf({ status: 1 }, ran("failed"))).toBe("fail");
+  });
+
+  it("passes when every test ran and passed and the run exited 0", () => {
+    expect(proofOutcomeOf({ status: 0 }, ran("passed"))).toBe("pass");
+  });
+
+  it("is not_run, never fail, for a proof that failed to load", () => {
+    expect(proofOutcomeOf({ status: 1 }, loadError)).toBe("not_run");
+  });
+
+  it("is not_run for no tests, no report, a non-zero exit with no failed test, or a run that never finished", () => {
+    expect(proofOutcomeOf({ status: 1 }, { testResults: [] })).toBe("not_run");
+    expect(proofOutcomeOf({ status: 1 })).toBe("not_run");
+    expect(proofOutcomeOf({ status: 1 }, ran("passed"))).toBe("not_run");
+    expect(proofOutcomeOf({ status: null }, ran("failed"))).toBe("not_run");
+  });
+});
+
+describe("readVitestReport (Qodo on PR 219)", () => {
+  it("reads a report, and gives undefined for a missing or truncated one, so the proof is not_run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-"));
+    try {
+      const path = join(dir, "r.json");
+      expect(readVitestReport(path)).toBeUndefined();
+      writeFileSync(path, '{"testResults":[{"name":"/p.test.ts","status":"failed","assertionRes');
+      expect(readVitestReport(path)).toBeUndefined();
+      expect(proofOutcomeOf({ status: 1 }, readVitestReport(path))).toBe("not_run");
+      writeFileSync(path, JSON.stringify({ testResults: [] }));
+      expect(readVitestReport(path)).toEqual({ testResults: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

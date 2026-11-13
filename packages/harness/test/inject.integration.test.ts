@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -124,5 +124,69 @@ describe("inject exit codes (#8: branch derivation)", () => {
       expect(gitStatus()).toBe(before);
     },
     90_000,
+  );
+});
+
+describe("a proof counts only a test that ran and failed, and --validate-only typechecks (#217)", () => {
+  const seed = join(root, "templates", "seed", "idempotency-guard-bypass-v1");
+
+  /** A scratch private folder holding one template built from the seed, with its own replace text and proof. */
+  function scratchTemplate(id: string, replace: string, proof: string): void {
+    const priv = mkdtempSync(join(tmpdir(), "inject-private-"));
+    scratchDirs.push(priv);
+    const dir = join(priv, "templates", id);
+    mkdirSync(dir, { recursive: true });
+    const template = JSON.parse(readFileSync(join(seed, "template.json"), "utf8"));
+    delete template.$schema;
+    template.alsoBreaks = [];
+    Object.assign(template, { id, replace, proofTest: "proof.test.ts" });
+    template.publish.branch = `tidy-lookup-${id.split("-")[2]}`;
+    writeFileSync(join(dir, "template.json"), JSON.stringify(template, null, 2));
+    writeFileSync(join(dir, "proof.test.ts"), proof);
+    process.env.FAULTFORGE_PRIVATE_DIR = priv;
+  }
+
+  const savedPrivate = process.env.FAULTFORGE_PRIVATE_DIR;
+  afterEach(() => {
+    if (savedPrivate === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+    else process.env.FAULTFORGE_PRIVATE_DIR = savedPrivate;
+  });
+
+  it.skipIf(!hasRealTarget)(
+    "--validate-only refuses a variant that breaks the proof but doesn't typecheck",
+    () => {
+      scratchTemplate(
+        "lookup-tidy-typed-v1",
+        '    const original = deps.store.getBooking(idempotencyKey);\n    const unused: number = "not a number";\n',
+        readFileSync(join(seed, "proof.test.ts"), "utf8"),
+      );
+      const dir = scratchTargetCopy();
+      const result = runInject(["--template", "lookup-tidy-typed-v1", "--target", dir, "--validate-only"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("does not typecheck");
+    },
+    120_000,
+  );
+
+  it.skipIf(!hasRealTarget)(
+    "a proof that only fails to load on the variant doesn't validate it",
+    () => {
+      // Passes on the base; on the variant it throws while loading, before any test runs.
+      const proof = [
+        'import { readFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        'import { expect, it } from "vitest";',
+        'const source = readFileSync(join(process.env.FAULTFORGE_TARGET_DIR ?? "", "src/bookings/create.ts"), "utf8");',
+        'if (source.includes("getBooking(idempotencyKey)")) throw new Error("load-time failure");',
+        'it("holds", () => expect(1).toBe(1));',
+        "",
+      ].join("\n");
+      scratchTemplate("lookup-tidy-load-v1", "    const original = deps.store.getBooking(idempotencyKey);\n", proof);
+      const dir = scratchTargetCopy();
+      const result = runInject(["--template", "lookup-tidy-load-v1", "--target", dir, "--validate-only"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("failed only to load");
+    },
+    120_000,
   );
 });
