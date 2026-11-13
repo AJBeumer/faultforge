@@ -145,6 +145,20 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(3);
   });
 
+  it("is exit 3, never 0, when the result omits its finding inventory, not just when it says false (#188)", async () => {
+    const { finding_state: _omitted, ...withoutState } = completePayload();
+    const withoutFlag = completePayload({
+      finding_state: { introduced: [], still_open: [], resolved: [], dismissed: [] } as never,
+    });
+    for (const payload of [withoutState as LocalReviewPayload, withoutFlag]) {
+      const result = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(payload) }), {
+        timeoutMs: 1000,
+      });
+      expect(result.exitCode).toBe(3);
+      expect(result.message).toMatch(/finding inventory/);
+    }
+  });
+
   it("is exit 3, never 0, when the result omits coverage entirely, not just when it says false", async () => {
     const payload = completePayload({ meta: { run: { effort: { effective: "standard" } } } });
     const result = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(payload) }), {

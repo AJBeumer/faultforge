@@ -76,3 +76,19 @@ describe("templateTelltales (#105)", () => {
     ).toEqual(["ticket.criteria[0]: contains a case id"]);
   });
 });
+
+describe("telltales: one row per pattern, so none can be removed unnoticed (#188)", () => {
+  it.each([
+    ["Undo the sabotage", "says sabotage"],
+    ["a saboteur's change", "says sabotage"],
+    ["compare with the ground truth", "mentions ground truth"],
+    ["read ground-truth.jsonl", "mentions ground truth"],
+    ["after the Devil's Advocate pass", "names the challenger"],
+    ["devils advocate notes", "names the challenger"],
+    ["an inserted defect", "says a bug was injected"],
+    ["fault injection run", "says a bug was injected"],
+    ["the hidden tests", "mentions the hidden proof test"],
+  ])("flags %s", (text, reason) => {
+    expect(telltales(text)).toContain(reason);
+  });
+});
