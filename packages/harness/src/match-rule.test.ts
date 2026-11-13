@@ -5,6 +5,7 @@ import {
   applyMatchRule,
   type FindingMatch,
   type Injection,
+  isRange,
   type MatchFinding,
   type MatchRuleResult,
   overlaps,
@@ -174,5 +175,61 @@ describe("applyMatchRule: ranges that aren't ranges (Qodo on PR 128)", () => {
     expect(overlaps([20, 10], [5, 25])).toBe(false);
     expect(overlaps([5, 25], [20, 10])).toBe(false);
     expect(overlaps([5, 25], [10, 20])).toBe(true);
+  });
+});
+
+describe("applyMatchRule: behaviour pinned after the 13 November audit (#188)", () => {
+  const finding = (overrides: Partial<MatchFinding> = {}): MatchFinding => ({
+    id: "qodo:1",
+    file: "src/bookings/create.ts",
+    lines: [33, 33],
+    title: "Booking replays expose another user's data",
+    summary: "A repeat request creates a second booking.",
+    category: "Security",
+    ...overrides,
+  });
+
+  it("does not catch a finding on the right file and lines that describes another kind of problem", () => {
+    const wrongKind = finding({ title: "Off by one", summary: "Loop runs one too many times", category: "Bug" });
+    const result = applyMatchRule(injection, [wrongKind], kindTerms);
+    expect(only(result)).toMatchObject({ file: { pass: true }, lines: { pass: true }, kind: { pass: false } });
+    expect(only(result).matched).toBe(false);
+    expect(result.caught).toBe(false);
+    expect(result.matchedFindingIds).toEqual([]);
+  });
+
+  it("does not catch a finding of the right file and kind whose valid range misses the changed lines", () => {
+    const result = applyMatchRule(injection, [finding({ lines: [40, 45] })], kindTerms);
+    expect(only(result).lines.pass).toBe(false);
+    expect(result.caught).toBe(false);
+  });
+
+  it("compares kind terms without regard to case, on the template's side too", () => {
+    const result = applyMatchRule(
+      injection,
+      [finding({ title: "a replay creates a duplicate booking", summary: "", category: "" })],
+      ["Replay"],
+    );
+    expect(only(result).kind).toEqual({ pass: true, detail: '"Replay" found in title' });
+    expect(result.caught).toBe(true);
+  });
+
+  it("reads a file path with either separator, on both sides", () => {
+    expect(only(applyMatchRule(injection, [finding({ file: "src\\bookings\\create.ts" })], kindTerms)).file.pass).toBe(
+      true,
+    );
+    const backslashKey: Injection = { file: ".\\src\\bookings\\create.ts", lines: [33, 33] };
+    expect(only(applyMatchRule(backslashKey, [finding()], kindTerms)).file.pass).toBe(true);
+  });
+
+  it("counts lines from 1: a range starting at line 0 is no range and overlaps nothing", () => {
+    expect(isRange([0, 3])).toBe(false);
+    expect(isRange([0, 0])).toBe(false);
+    expect(isRange([1, 1])).toBe(true);
+    expect(overlaps([0, 2], [1, 5])).toBe(false);
+    const result = applyMatchRule({ file: injection.file, lines: [1, 5] }, [finding({ lines: [0, 2] })], kindTerms);
+    expect(only(result).lines.pass).toBe(false);
+    expect(only(result).lineWidth).toBeNull();
+    expect(result.caught).toBe(false);
   });
 });
