@@ -36,7 +36,13 @@ export function withDeadline<T>(ms: number, fn: () => T): T {
   const outer = active;
   active = { end: Date.now() + ms, ms };
   try {
-    return fn();
+    const result = fn();
+    // Git calls check the deadline as they start; a slow scan between them (a large posted file) can only
+    // be caught here, at the end. A decision that finished late is refused, never allowed (Qodo on PR 233).
+    if (Date.now() > (active?.end ?? Number.POSITIVE_INFINITY)) {
+      throw new Uninspectable(`the guard's ${ms} ms for this decision ran out before it finished`);
+    }
+    return result;
   } finally {
     active = outer;
   }

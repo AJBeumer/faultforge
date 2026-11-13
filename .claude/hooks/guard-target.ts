@@ -18,7 +18,7 @@
  * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
  * a deny decision as JSON, nothing to allow, or exit 2 with one line on stderr when it couldn't check.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import {
@@ -66,6 +66,18 @@ class Denied extends Error {}
  * folder) is a blocking error, never an allow, because Claude Code treats a hook that crashes as a
  * non-blocking error and runs the tool anyway. `env` supplies `FAULTFORGE_CONFIG`.
  */
+/**
+ * The decision's time budget. `FAULTFORGE_GUARD_BUDGET_MS` may shorten it, for tests, never lengthen it past the
+ * default, which keeps clear of the hook's 15 s (Qodo on PR 233).
+ */
+export function guardBudget(env: NodeJS.ProcessEnv): number {
+  const asked = Number(env.FAULTFORGE_GUARD_BUDGET_MS);
+  return Number.isFinite(asked) && asked !== 0 ? Math.min(asked, DEFAULT_BUDGET_MS) : DEFAULT_BUDGET_MS;
+}
+
+/** The most a posted file may hold: read in well under the hook's time limit (Qodo on PR 233). */
+const MAX_POSTED_BYTES = 1024 * 1024;
+
 export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Decision {
   try {
     const input = JSON.parse(stdin);
@@ -76,8 +88,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       reviewed: reviewedRepos(env.FAULTFORGE_CONFIG),
     };
     // One deadline for the whole decision, every scan in it included (audit N-4).
-    const budget = Number(env.FAULTFORGE_GUARD_BUDGET_MS) || DEFAULT_BUDGET_MS;
-    withDeadline(budget, () => {
+    withDeadline(guardBudget(env), () => {
       if (tool === "Bash" || tool === "PowerShell") {
         checkCommand(ctx, String(args.command ?? ""));
       } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
@@ -352,6 +363,12 @@ function referencedFiles(cwd: string, command: string): string[] {
     }
     const path = isAbsolute(file) ? file : resolve(cwd, file);
     if (existsSync(path)) {
+      // A file too large to read well inside the hook's time limit is refused, never half-checked (Qodo on PR 233).
+      if (statSync(path).size > MAX_POSTED_BYTES) {
+        deny(
+          `This command would post ${file}, which is over ${MAX_POSTED_BYTES} bytes, more than the guard reads. Post less.`,
+        );
+      }
       files.push(readFileSync(path, "utf8"));
       continue;
     }

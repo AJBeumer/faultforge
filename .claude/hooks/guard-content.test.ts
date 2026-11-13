@@ -143,3 +143,17 @@ describe("withDeadline (audit N-4)", () => {
     expect(pendingCommit(dir, false).reasons).toEqual([]);
   });
 });
+
+describe("withDeadline: a decision that finished late (Qodo on PR 233)", () => {
+  it("refuses work that ran past the deadline even when no git call came after it", () => {
+    const slow = () => {
+      const until = Date.now() + 30;
+      while (Date.now() < until) {
+        // a long scan of posted text, with no git call to notice the time
+      }
+      return "allow";
+    };
+    expect(() => withDeadline(5, slow)).toThrow(/ran out before it finished/);
+    expect(withDeadline(5000, slow)).toBe("allow");
+  });
+});
