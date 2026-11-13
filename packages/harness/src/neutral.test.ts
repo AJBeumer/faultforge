@@ -48,8 +48,10 @@ describe("templateTelltales (#105)", () => {
       "replace: says planted",
     ]);
     expect(templateTelltales({ ...template, find: "// FaultForge marker\n" })).toEqual(["find: names the lab"]);
-    // The proof test stays private, so its name is not one of the checked fields (it isn't even in the type).
-    expect(templateTelltales({ ...template, publish: { ...template.publish, branch: "ff-0002" } })).toEqual([]);
+    // A case id in a branch name is caught in lower case too, as branch names are written (#190).
+    expect(templateTelltales({ ...template, publish: { ...template.publish, branch: "ff-0002" } })).toEqual([
+      "branch: contains a case id",
+    ]);
     expect(
       templateTelltales({ ...template, publish: { branch: "FF-0002-fix", commitMessage: "Fix planted bug" } }),
     ).toEqual(["branch: contains a case id", "commitMessage: says planted"]);
@@ -74,6 +76,53 @@ describe("templateTelltales (#105)", () => {
     expect(
       templateTelltales({ ...withTicket, ticket: { ...withTicket.ticket, criteria: ["Closes FF-0002"] } }),
     ).toEqual(["ticket.criteria[0]: contains a case id"]);
+  });
+});
+
+describe("telltales: hyphenated, underscored and lower-case forms, as branch names write them (#190)", () => {
+  it.each([
+    ["ff-0002", "contains a case id"],
+    ["FF_0002", "contains a case id"],
+    ["ff0002", "contains a case id"],
+    ["proof-test", "mentions the hidden proof test"],
+    ["hidden_tests", "mentions the hidden proof test"],
+    ["bug-injection", "says a bug was injected"],
+    ["injected-bug", "says a bug was injected"],
+    ["sabotaging the lookup", "says sabotage"],
+    ["sabotages", "says sabotage"],
+    ["mutant build", "says mutation"],
+    ["plant a bug", "says planted"],
+    ["planting-the-defect", "says planted"],
+    ["answer_key", "mentions the answer key"],
+  ])("flags %s", (text, reason) => {
+    expect(telltales(text)).toContain(reason);
+  });
+
+  it.each([
+    "Plant watering schedule",
+    "buffer 1024 bytes",
+    "tidy-replay-lookup",
+    "faultforge-target",
+    "affect 2000 rows",
+  ])("still lets ordinary text through: %s", (text) => {
+    expect(telltales(text)).toEqual([]);
+  });
+
+  it("refuses a template's own id or invariant id in a field the reviewer sees", () => {
+    const named = {
+      id: "replay-guard-v1",
+      invariantId: "INV-IDEMP-001",
+      find: "    const original = deps.store.getBooking(previous.bookingId);\n",
+      replace: "    const original = deps.store.getBooking(idempotencyKey);\n",
+      publish: { branch: "tidy-replay-lookup", commitMessage: "Simplify replay lookup in createBooking" },
+    };
+    expect(templateTelltales({ ...named, publish: { ...named.publish, branch: "replay-guard-v1" } })).toEqual([
+      "branch: names replay-guard-v1",
+    ]);
+    expect(templateTelltales({ ...named, replace: "  // see inv-idemp-001\n" })).toEqual([
+      "replace: names INV-IDEMP-001",
+    ]);
+    expect(templateTelltales(named)).toEqual([]);
   });
 });
 

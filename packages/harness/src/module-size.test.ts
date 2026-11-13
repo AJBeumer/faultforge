@@ -52,7 +52,6 @@ describe("CLAUDE.md's module size rule", () => {
       "review-wait.ts": 524,
       "verdict.ts": 463,
       "review-local.ts": 446,
-      "revert-check.ts": 413,
       "inject.ts": 410,
     };
     const sizes = new Map(sourceModules().map((path) => [basename(path), lineCount(path)]));

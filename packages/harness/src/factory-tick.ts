@@ -45,6 +45,8 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
+import { reviewerRuleGates } from "./factory-gates.ts";
+import { lockIsStale, pidAlive, recoverStranded } from "./factory-recovery.ts";
 import { CALL_TIMEOUT_MS, ExternalCallError, gh, ghAll, ghApiJson, ghJson, runExternal } from "./github.ts";
 import { telltales } from "./neutral.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
@@ -160,6 +162,8 @@ export interface Verification {
   /** Where `revert:check`'s saved record was read back from, for the run log; null when the check
    * never ran (an earlier problem, such as an incomplete review, stopped verification first). */
   revertCheckRecord?: string | null;
+  /** Why the PR waits for the owner whatever the agent reported, such as a change to the reviewer's rules (#215). */
+  ownerGates?: string[];
 }
 
 export interface Finish {
@@ -301,7 +305,7 @@ export function settle(
       pr: null,
     };
   }
-  const { problems } = verify(number);
+  const { problems, ownerGates = [] } = verify(number);
   if (problems.length) {
     return {
       label: LABELS.help,
@@ -309,12 +313,13 @@ export function settle(
       pr: result.pr,
     };
   }
+  // The runner's own gates hold a PR the agent called ready (#215).
+  const waits = [...(result.outcome === "ready" ? [] : [result.reason]), ...ownerGates];
   return {
     label: LABELS.done,
-    reason:
-      result.outcome === "ready"
-        ? "the pull request is ready for the owner to merge"
-        : `waiting for the owner: ${result.reason}`,
+    reason: waits.length
+      ? `waiting for the owner: ${waits.join("; ")}`
+      : "the pull request is ready for the owner to merge",
     pr: result.pr,
   };
 }
@@ -371,6 +376,8 @@ export interface Provenance {
   commentEditors?: string[];
   /** Parts that couldn't be read completely, such as a comment with more edits than one page. */
   incomplete?: string[];
+  /** Everyone who changed the title. */
+  renamers?: string[];
 }
 
 /**
@@ -382,6 +389,8 @@ export function provenanceProblems(p: Provenance, owner: string): string[] {
   const problems: string[] = [];
   if (others([p.author]).length) problems.push(`written by ${p.author}`);
   if (others(p.editors).length) problems.push(`edited by ${others(p.editors).join(", ")}`);
+  // The title reaches the agent's instructions too, and a rename isn't a body edit (#215).
+  if (others(p.renamers ?? []).length) problems.push(`renamed by ${others(p.renamers ?? []).join(", ")}`);
   if (others(p.commenters).length) problems.push(`commented on by ${others(p.commenters).join(", ")}`);
   const commentEditors = others(p.commentEditors ?? []);
   if (commentEditors.length) problems.push(`a comment edited by ${commentEditors.join(", ")}`);
@@ -890,6 +899,7 @@ export function verifyPrWith(
 
   const problems: string[] = [];
   let revertCheckRecord: string | null = null;
+  let ownerGates: string[] = [];
   try {
     // --commit: it waits until GitHub shows the pushed commit, then for that commit's review.
     const review = io.npm(trustedLab, [
@@ -941,6 +951,12 @@ export function verifyPrWith(
       "state,headRefOid,statusCheckRollup",
     );
     problems.push(...prViewProblems(view, pushed));
+    // Read from GitHub by the runner, never taken from the agent's report (#215).
+    try {
+      ownerGates = reviewerRuleGates(io.ghJson("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/files`));
+    } catch {
+      ownerGates = reviewerRuleGates(null);
+    }
     // A complete review can still have findings open: only none action-required counts as ready.
     if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
     else {
@@ -989,7 +1005,7 @@ export function verifyPrWith(
     const leftover = removeTrustedCheckout(verifyRoot);
     if (leftover) console.error(leftover);
   }
-  return { problems, revertCheckRecord };
+  return { problems, revertCheckRecord, ownerGates };
 }
 
 export interface WindowActivity {
@@ -1198,6 +1214,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   };
   try {
     if (lock.note) log("lock", { note: lock.note });
+    const recovery = recoverStranded(Object.values(factory.repos), deps);
+    if (recovery.recovered.length || recovery.failed.length) log("recovered", recovery);
     const candidates: Candidate[] = [];
     for (const [repoKey, repo] of Object.entries(factory.repos)) {
       for (const issue of deps.labelled(repo.github, LABELS.ready)) {
@@ -1277,7 +1295,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     }
 
     claimed = pick;
-    relabel([LABELS.ready], [LABELS.working]);
+    // An earlier run's result label goes too: a ticket carries one state at a time (#197).
+    relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
     say(
       `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
@@ -1410,7 +1429,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       }
       // The run folder is only kept when even the blocked-branch push failed: that's the one case
       // left where it's the owner's sole copy (Qodo on PR 141).
-      if (saved.savedAt) deps.cleanup(ws);
+      // A run that needs help keeps its worktrees, as its log says: they may hold its only copy (#197).
+      if (saved.savedAt && finish.label === LABELS.done) deps.cleanup(ws);
       return "needs-help";
     }
     if (finish.label === LABELS.done) deps.cleanup(ws);
@@ -1477,13 +1497,11 @@ type SnapshotComment = {
 /** One GraphQL answer for the issue: its title, body and author, plus the one paged field asked for. */
 export type IssuePage = { title: string; body: string | null; author: Who; [field: string]: unknown };
 /** Fetches one page of `field` (`userContentEdits` or `comments`) after `cursor`, or the first page. */
-export type FetchIssuePage = (field: "userContentEdits" | "comments", cursor: string | null) => IssuePage;
+export type SnapshotField = "userContentEdits" | "comments" | "timelineItems";
+export type FetchIssuePage = (field: SnapshotField, cursor: string | null) => IssuePage;
 
 /** Every node of a paged field, following GitHub's cursors until it says there is no next page. */
-export function allPages<T>(
-  field: "userContentEdits" | "comments",
-  fetch: FetchIssuePage,
-): { issue: IssuePage; nodes: T[] } {
+export function allPages<T>(field: SnapshotField, fetch: FetchIssuePage): { issue: IssuePage; nodes: T[] } {
   const nodes: T[] = [];
   let cursor: string | null = null;
   let issue: IssuePage;
@@ -1511,6 +1529,7 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   const login = (who: Who) => who?.login ?? "(deleted user)";
   const edits = allPages<{ editor: Who }>("userContentEdits", fetch);
   const comments = allPages<SnapshotComment>("comments", fetch).nodes;
+  const renamers = allPages<{ actor?: Who }>("timelineItems", fetch).nodes.map((n) => login(n.actor ?? null));
   const { issue } = edits;
   const text = [
     `# ${issue.title}`,
@@ -1521,6 +1540,7 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   const history = JSON.stringify({
     body: edits.nodes.map((n) => login(n.editor)),
     comments: comments.map((c) => ({ at: c.createdAt, edits: c.userContentEdits.totalCount })),
+    renames: renamers.length,
   });
   return {
     text,
@@ -1533,6 +1553,7 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
       incomplete: comments
         .filter((c) => c.userContentEdits.totalCount > c.userContentEdits.nodes.length)
         .map((c) => `the edits of a comment from ${c.createdAt}`),
+      renamers,
     },
   };
 }
@@ -1631,15 +1652,6 @@ export function npm(
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The tick's lock file in `dir`. Taking it fresh is a single atomic `wx` write, so two ticks racing for
  * an unheld lock can never both get it.
@@ -1663,11 +1675,20 @@ function pidAlive(pid: number): boolean {
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
+  maxAgeMs = 3 * 60 * 60_000,
 ): { acquired: boolean; release(): void; note?: string } {
   const file = join(dir, "factory.lock");
+  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const take = () =>
-    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
-  const release = () => rmSync(file, { force: true });
+    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token }), { flag: "wx" });
+  // Releases only a lock that is still this tick's: one taken over meanwhile belongs to the tick that took it.
+  const release = () => {
+    try {
+      if (JSON.parse(readFileSync(file, "utf8")).token === token) rmSync(file, { force: true });
+    } catch {
+      // gone already, or unreadable: nothing of ours to remove
+    }
+  };
   try {
     take();
     return { acquired: true, release };
@@ -1682,7 +1703,9 @@ export function acquireLock(
   } catch {
     // An unreadable lock is treated as stale below; heldText stays "" and won't match anything real.
   }
-  if (held.pid && isAlive(held.pid))
+  // A live holder keeps it, unless the lock is older than any run can last: after a restart its pid may
+  // belong to another program (#197).
+  if (!lockIsStale(held, isAlive, Date.now(), maxAgeMs))
     return { acquired: false, release: () => {}, note: `pid ${held.pid} since ${held.at}` };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${Math.random().toString(36).slice(2)}`);
   try {
@@ -1828,7 +1851,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    lock: () => acquireLock(runs),
+    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
+    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
     labelled: (github, label) =>
       ghAll<{ number: number; title: string; pull_request?: unknown }>(
         `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
@@ -1841,6 +1865,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       const parts = {
         userContentEdits: `userContentEdits(first: 100, after: $after) { ${pageInfo} nodes { editor { login } } }`,
         comments: `comments(first: 100, after: $after) { ${pageInfo} nodes { author { login } body createdAt userContentEdits(first: 100) { totalCount nodes { editor { login } } } } }`,
+        timelineItems: `timelineItems(itemTypes: [RENAMED_TITLE_EVENT], first: 100, after: $after) { ${pageInfo} nodes { ... on RenamedTitleEvent { actor { login } } } }`,
       };
       return buildSnapshot((field, cursor) => {
         const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) {

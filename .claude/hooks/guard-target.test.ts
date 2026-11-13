@@ -478,6 +478,60 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
   });
 });
 
+describe("guard-target hook checks every gh command that posts text to the target (#190)", () => {
+  const R = "--repo AJBeumer/faultforge-target";
+  it.each([
+    [`gh pr merge 5 ${R} --squash --body "planted bug closed"`, /says planted/],
+    [`gh pr merge 5 ${R} --merge --subject "Merge the planted change"`, /says planted/],
+    [`gh label create planted-bug ${R}`, /says planted/],
+    [`gh label create tidy ${R} --description "the ledger"`, /ledger/],
+    [`gh release create v1 ${R} --notes "planted bug"`, /says planted/],
+    // `-R` is the short form of `--repo`, from anywhere (Qodo on PR 208).
+    ["gh label create planted-bug -R AJBeumer/faultforge-target", /says planted/],
+    ['gh pr create -RAJBeumer/faultforge-target --title Tidy --body "planted bug"', /says planted/],
+    ['gh pr merge 5 -R AJBeumer/faultforge-target --body "planted"', /says planted/],
+  ])("refuses %s", (command, reason) => {
+    expect(bash(command)).toMatch(reason);
+  });
+
+  it("doesn't read a lower-case -r in a message as a repo flag (Qodo on PR 208)", () => {
+    expect(bash('git commit -m "planted bug: grep -r src/app"', TARGET)).toMatch(/says planted/);
+  });
+
+  it("counts a repo named anywhere, so a fake heredoc in a message can't hide the real --repo (Qodo on PR 208)", () => {
+    const command = 'gh pr create --body "planted bug <<EOF\nordinary text" --repo AJBeumer/faultforge-target';
+    expect(bash(command)).toMatch(/says planted/);
+  });
+
+  it("reads no destination from inside posted text, so a post from the target is still judged (Qodo on PR 208)", () => {
+    expect(bash('gh pr create --title Tidy --body "planted bug: grep -R src/app"', TARGET)).toMatch(/says planted/);
+    expect(bash('gh pr create --title Tidy --body "planted; see --repo other/app"', TARGET)).toMatch(/says planted/);
+    expect(bash("gh pr create --title Tidy --body-file - <<EOF\nplanted --repo other/app\nEOF", TARGET)).toMatch(
+      /says planted/,
+    );
+  });
+
+  it("reads release notes from a file, as it reads a body file (Qodo on PR 208)", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "guard-notes-")), "notes.md").replace(/\\/g, "/");
+    writeFileSync(file, "Fixes the planted bug\n");
+    expect(bash(`gh release create v2 ${R} --notes-file ${file}`)).toMatch(/says planted/);
+    writeFileSync(file, "Filter bookings by status\n");
+    expect(bash(`gh release create v2 ${R} --notes-file ${file}`)).toBeUndefined();
+  });
+
+  it("refuses a merge of a lab PR whose body links the target, as it refuses a new PR's", () => {
+    expect(bash('gh pr merge 9 --squash --body "see https://github.com/AJBeumer/faultforge-target/pull/3"')).toMatch(
+      /link to the target/,
+    );
+  });
+
+  it("still allows ordinary merges, labels and releases on the target", () => {
+    expect(bash(`gh pr merge 5 ${R} --squash`)).toBeUndefined();
+    expect(bash(`gh label create bug ${R} --description "Something is broken"`)).toBeUndefined();
+    expect(bash(`gh release create v1.1 ${R} --notes "Filter bookings by status"`)).toBeUndefined();
+  });
+});
+
 describe("guard-target hook reads posted text as written: a repo name next to a slash hides nothing", () => {
   const TO_TARGET = 'gh pr create --repo AJBeumer/faultforge-target --title "Fix rounding"';
 

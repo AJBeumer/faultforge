@@ -22,7 +22,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { blankQuoted, chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
-import { commitMessages, commitSteps, postedArguments, postedText, STDIN_BODY } from "./guard-posted.ts";
+import {
+  commitMessages,
+  commitSteps,
+  outsidePostedText,
+  postedArguments,
+  postedText,
+  STDIN_BODY,
+} from "./guard-posted.ts";
 import {
   entersCheckout,
   esc,
@@ -88,6 +95,9 @@ function failed(error: unknown): Decision {
 function explicitDestinations(command: string): string[] {
   const patterns = [
     /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
+    // gh's short form, `-R`, only in capitals (`-r` is another flag, such as grep's) and with or without a
+    // space before its value: `-RAJBeumer/x` works too (Qodo on PR 208).
+    /(?<=\s)-R[\s=]*["']?([\w.-]+\/[\w.-]+)/g,
     /\brepos\/([\w.-]+\/[\w.-]+)\//gi,
     /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
     /\bgit\b[^|;&\n]*\b(?:push|pull|fetch|clone|remote)\b[^|;&\n]*github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
@@ -146,19 +156,24 @@ function checkCommand(ctx: Context, command: string) {
   const { cwd, reviewed } = ctx;
   const writes =
     /\bgit\b[^|;&\n]*\b(commit|push|tag)\b/.test(command) ||
-    /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen)\b/.test(command) ||
+    /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge)\b/.test(command) ||
+    // Labels and releases post text to the repo too: a label's name and description, a release's notes (#190).
+    /\bgh\s+(label|release)\s+(create|edit)\b/.test(command) ||
     (/\bgh\s+api\b/.test(command) && /(-X\s*(POST|PATCH|PUT)|\s-[fF]\s|--field|--raw-field|--input)/.test(command));
 
-  // Every reviewed repo the command touches, by any part of it: a named destination, or a move into its
-  // checkout. The folder the command runs in only counts when it names no destination at all (say,
-  // `git commit` inside a checkout), so a post from there to another repo is judged by where it goes.
+  // Every reviewed repo the command touches, by any part of it: a named destination anywhere in the text,
+  // or a move into its checkout. The folder the command runs in counts unless the command really names
+  // another destination (say, a post from there to another repo, judged by where it goes). "Really" means
+  // outside its posted text: `-R` or `--repo` inside a message names nothing. Both readings are used, the
+  // strict one for what is touched, so text that confuses one can't hide a repo from both (Qodo on PR 208).
   const destinations = explicitDestinations(command);
+  const realDestinations = explicitDestinations(outsidePostedText(command));
   const runsIn = (r: Reviewed) => inCheckout(cwd, r) || entersCheckout(command, r);
   const touched = reviewed.filter(
     (r) =>
       destinations.includes(r.github.toLowerCase()) ||
       entersCheckout(command, r) ||
-      (!destinations.length && inCheckout(cwd, r)),
+      (!realDestinations.length && inCheckout(cwd, r)),
   );
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves
@@ -313,7 +328,7 @@ function referencedFiles(cwd: string, command: string): string[] {
   const ghApi = /\bgh\s+api\b/.test(command);
   // A bare file name ends at whitespace, a quote or a shell separator: `-F msg.txt; echo` names msg.txt.
   for (const match of command.matchAll(
-    /(\s-F|--file|--body-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/g,
+    /(\s-F|--file|--body-file|--notes-file|--input)[\s=]+(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/g,
   )) {
     let file = match[2] ?? match[3] ?? match[4];
     if (!file || file === "-") continue;

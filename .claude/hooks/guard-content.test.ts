@@ -2,7 +2,7 @@ import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { canSymlink, tempRepo } from "./fixtures.ts";
-import { chainProblem, pendingCommit, pendingPush, Uninspectable } from "./guard-content.ts";
+import { chainProblem, pendingCommit, pendingIndex, pendingPush, Uninspectable } from "./guard-content.ts";
 
 describe("chainProblem: the steps a git chain may contain inside a reviewed checkout", () => {
   it.each([
@@ -111,5 +111,17 @@ describe("pendingPush: what a push would take", () => {
     expect(pendingPush(dir).reasons).toContain("says planted");
     git("reset", "-q", "--hard", "origin/main");
     expect(pendingPush(dir).reasons).toEqual([]);
+  });
+});
+
+describe("pendingIndex: what the next commit records (#191)", () => {
+  it("reads a staged submodule entry by its name only, not as file content (Qodo on PR 213)", () => {
+    const { git } = tempRepo();
+    // A gitlink to a commit this repository doesn't have: reading it as a file would fail.
+    git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/lib`);
+    expect(pendingIndex(git("rev-parse", "--show-toplevel").trim())).toEqual({
+      reasons: [],
+      where: "the staged changes",
+    });
   });
 });

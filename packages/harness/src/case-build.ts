@@ -16,7 +16,7 @@
  *    `.adjudicatedBy` from `by`, `.adjudicatedAt` from `at`). `reviewedCommit` must equal the ground
  *    truth's injected commit, and `case.adjudicated`'s `commit`, when the event carries one, must equal
  *    it too; a case whose events disagree on which commit was reviewed is refused.
- *  - `private/cases/<caseId>.overlay.json`: prose no event or saved review holds —
+ *  - `private/cases/<caseId>.overlay.json`, when there is any: prose no event or saved review holds —
  *    `detection.notes`, `collateral`, `otherReviewers`, `challenge`, `review.linkedRepositories`. The
  *    overlay itself opts a case into the legacy path by setting `legacyFindingsPath` (a raw findings
  *    file, read in Qodo's API shape and converted with `findingsFor` from `review-wait.ts`) — a case
@@ -27,7 +27,8 @@
  *    may also set two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
  *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`/`summary`, which a
  *    legacy raw findings file doesn't carry). The command refuses any other field, or shape, naming it,
- *    and prints which fields it took from the overlay.
+ *    and prints which fields it took from the overlay. With no overlay file, the record says its
+ *    challenge has not run (#162).
  *  - for an ordinary case, the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`,
  *    matched by `reviewedCommit`, via `findSavedReview` from `verdict.ts`) for `findings`, cross-checked
  *    against `review.recorded`'s `pr` so a saved file for the right commit but the wrong PR is refused,
@@ -37,35 +38,45 @@
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
  * per finding) and (for a legacy review only) re-worded by `matchDetailOverrides`.
  *
+ * A control (#162) reads no match terms and has no `detection`. Its record has a `change` block from the
+ * answer key (template, file, lines, commit) and the overlay's `notes`, which only version 2 holds, so a
+ * control's record is always version 2. A bug case's record stays version 1 and keeps its bytes.
+ *
  * `--write` also appends a `case.published` audit event (the written record's `sha256` and `path`).
  * Writing the same case twice with unchanged content is a no-op the second time (the file is
  * rewritten, but no duplicate event is appended) rather than a new event every run.
  *
  * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
- * listed); 2 an input (ledger, events, template, saved review or overlay) is missing, unreadable, or
- * inconsistent (a missing stage, disagreeing commits, or a saved review for the wrong PR), named in
- * the message.
+ * listed); 2 nothing was built, because an input is missing or unreadable (the answer key, the events, a
+ * bug case's template, the saved review, or an overlay file that exists), the answer key or audit log has an
+ * amendment problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
+ * wrong PR). The message names which.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { findLeaks, validateCaseRecord } from "./case-record.ts";
-import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.ts";
+import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
-import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
+import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import { findSavedReview, toMatchFinding } from "./verdict.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
-const SCHEMA_REF = "../schemas/case-record.v1.json";
+/** Where a record names its schema, by version (#162: version 2 adds two outcomes a control can have). */
+const schemaRef = (version: number) => `../schemas/case-record.v${version}.json`;
+/** A record whose overlay says nothing about a challenge says it hasn't run (#162: a control needs no overlay). */
+const NOT_CHALLENGED = { verdict: "not_run", note: "Not challenged yet." };
 /** This repo, where adjudicated templates are published, for `injection.template`. */
 const TEMPLATE_REPO = "AJBeumer/faultforge";
 
 export interface Overlay {
+  /** A control's notes; a bug case's go in `detection.notes`. */
+  notes?: string[];
   detection?: {
     notes?: string[];
     /** Replaces a criterion's `detail` text for a review that predates match-rule.ts's current wording. */
@@ -176,8 +187,8 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   });
 
   const record: Record<string, unknown> = {
-    $schema: SCHEMA_REF,
-    schemaVersion: 1,
+    $schema: schemaRef(recordVersionFor(kind, disposition)),
+    schemaVersion: recordVersionFor(kind, disposition),
     caseId,
     kind,
     target: { repo: repoSlug(entry.targetRepo as string), baseCommit: entry.targetCommit },
@@ -191,6 +202,15 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
       defectClass: entry.defectClass,
       file: entry.injectedFile,
       lines: injectionLines,
+      commit: entry.injectionCommit,
+      ...(templateUrl ? { template: templateUrl } : {}),
+    };
+  } else {
+    // What a control changed, from the answer key: no invariant or defect class, since it plants no bug.
+    record.change = {
+      templateId: entry.templateId,
+      file: entry.injectedFile,
+      lines: entry.injectedLines,
       commit: entry.injectionCommit,
       ...(templateUrl ? { template: templateUrl } : {}),
     };
@@ -239,9 +259,11 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
     };
   }
 
+  if (overlay.notes && kind !== "control") throw new Error("overlay sets notes, which only a control may use");
+  if (overlay.notes) record.notes = overlay.notes;
   if (overlay.collateral) record.collateral = overlay.collateral;
   if (overlay.otherReviewers) record.otherReviewers = overlay.otherReviewers;
-  if (overlay.challenge) record.challenge = overlay.challenge;
+  record.challenge = overlay.challenge ?? NOT_CHALLENGED;
 
   record.human = { disposition, adjudicatedBy, adjudicatedAt };
   record.status = disposition === "review_incomplete" ? "incomplete" : "complete";
@@ -249,7 +271,7 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   return record;
 }
 
-const OVERLAY_TOP_LEVEL = ["detection", "collateral", "otherReviewers", "challenge", "review"];
+const OVERLAY_TOP_LEVEL = ["detection", "collateral", "otherReviewers", "challenge", "review", "notes"];
 /** Only a case whose review predates `review:wait` (no saved review file) may use these. */
 const LEGACY_ONLY_TOP_LEVEL = ["findings", "legacyFindingsPath"];
 
@@ -289,6 +311,9 @@ export function overlayProblems(raw: Record<string, unknown>, isLegacy = false):
       if (key !== "linkedRepositories") problems.push(`overlay sets review.${key}, which is not allowed`);
     }
   }
+  if (raw.notes !== undefined && (!Array.isArray(raw.notes) || raw.notes.some((n) => typeof n !== "string"))) {
+    problems.push("overlay sets notes, which must be a list of strings");
+  }
   if (raw.findings !== undefined && isLegacy) {
     if (!Array.isArray(raw.findings)) {
       problems.push("overlay sets findings, which must be an array");
@@ -315,6 +340,7 @@ export function overlayFieldsTaken(raw: Record<string, unknown>): string[] {
   const detection = isPlainObject(raw.detection) ? raw.detection : undefined;
   if (detection?.notes) taken.push("detection.notes");
   if (detection?.matchDetailOverrides) taken.push("detection.matchDetailOverrides");
+  if (raw.notes) taken.push("notes");
   if (raw.collateral) taken.push("collateral");
   if (raw.otherReviewers) taken.push("otherReviewers");
   if (raw.challenge) taken.push("challenge");
@@ -365,15 +391,13 @@ function sha256(data: string): string {
 }
 
 /**
- * `pushSeenAt` and `reviewStartedAt` can genuinely be `null` even in a real `review:wait` save (no
- * check suite found, no `started_at` reported), so they can't tell a real save from a hand-backfilled
- * one apart. `reviewSeenCompleteAt` can't: `review:wait` sets it to a real timestamp the moment it
- * sees the review finished, for every state it ever saves (`complete` or `skipped` — a `timeout` is
- * never saved as a case's review). A backfilled file, written before that convention existed, has
- * none of these fields at all.
+ * True for a file `review:wait` wrote. Every save it writes carries the `reviewSeenCompleteAt` field: a
+ * time when it saw the review finish, or `null` when it never did (timed out, or the head moved). A file
+ * backfilled by hand, as FF-0001's was, has no such field. The value can't be the test: a save of a review
+ * that never finished is a real save too, and the one an inconclusive record is built from (#192).
  */
 function isReviewWaitSave(review: Record<string, unknown>): boolean {
-  return typeof review.reviewSeenCompleteAt === "string";
+  return Object.hasOwn(review, "reviewSeenCompleteAt");
 }
 
 const LINE_WIDTH = 120;
@@ -435,6 +459,13 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   let entry: LedgerEntry | undefined;
   let events: LedgerEntry[];
   try {
+    // A record is built only from an answer key and audit log whose amendments check out (#192), checked
+    // before anything is read from them: an amendment that changes a case id would hide the case itself.
+    const ledgerIssues = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+    if (ledgerIssues.length) {
+      error(`case:build: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
+      return 2;
+    }
     entry = readLedger(groundTruthPath).find((e) => e.caseId === caseId);
     events = readAuditLog(auditEventsPath).filter((e) => e.caseId === caseId);
   } catch (e) {
@@ -446,9 +477,10 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
 
+  // The overlay holds prose no event or saved review has; a case with none to add needs no file (#162).
   let overlay: Overlay = {};
   try {
-    overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
+    if (existsSync(overlayPath)) overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
   } catch (e) {
     error(`case:build: can't read ${overlayPath}: ${message(e)}`);
     return 2;
@@ -523,7 +555,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const templateId = entry.templateId as string | undefined;
   let kindTerms: string[] = [];
   let templateUrl: string | undefined;
-  if (templateId) {
+  // A control's template declares no match terms (the schema forbids them): it is looked up only for the
+  // published template's URL (#162).
+  if (templateId && entry.kind === "control") {
+    const dir = templateDir(templateId, env);
+    if (dir && isPublishedTemplate(dir)) {
+      templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
+    }
+  } else if (templateId) {
     const dir = templateDir(templateId, env);
     if (!dir) {
       error(`case:build: template ${templateId} not found in private/templates or templates/seed`);
@@ -535,7 +574,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       error(`case:build: can't use ${dir}/template.json: ${message(e)}`);
       return 2;
     }
-    if (resolve(dir).startsWith(resolve(ROOT, "templates", "seed"))) {
+    if (isPublishedTemplate(dir)) {
       templateUrl = `https://github.com/${TEMPLATE_REPO}/tree/main/templates/seed/${templateId}`;
     }
   }

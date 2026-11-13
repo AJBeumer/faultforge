@@ -1,0 +1,409 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AJBeumer/faultforge/blob/main/schemas/case-record.v2.json",
+  "title": "FaultForge public case record, version 2",
+  "description": "An adjudicated case, published so anyone can check the result against public evidence. Private fields (proof tests, template text, private paths) are left out. Version 2 is version 1 plus two outcomes a control can have: a false alarm (Qodo raised findings on a harmless change) and an inconclusive review. A record version 1 can hold is still written as version 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "caseId", "kind", "target", "pr", "review", "findings", "challenge", "human", "status"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "sabotage"
+          }
+        }
+      },
+      "then": {
+        "required": ["injection", "detection"],
+        "properties": {
+          "human": {
+            "type": "object",
+            "properties": {
+              "disposition": {
+                "not": {
+                  "enum": ["confirmed_clean", "confirmed_false_alarm"]
+                }
+              }
+            }
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": ["change"]
+            },
+            {
+              "required": ["notes"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "control"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": ["injection"]
+            },
+            {
+              "required": ["detection"]
+            },
+            {
+              "required": ["collateral"]
+            }
+          ]
+        },
+        "properties": {
+          "human": {
+            "type": "object",
+            "properties": {
+              "disposition": {
+                "enum": ["confirmed_clean", "confirmed_false_alarm", "review_incomplete"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "caseId": {
+      "type": "string",
+      "pattern": "^FF-\\d{4}$"
+    },
+    "kind": {
+      "enum": ["sabotage", "control"]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "baseCommit"],
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "baseCommit": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "injection": {
+      "description": "What was planted, published only after adjudication.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["templateId", "invariantId", "defectClass", "file", "lines", "commit"],
+      "properties": {
+        "templateId": {
+          "type": "string"
+        },
+        "invariantId": {
+          "type": "string"
+        },
+        "defectClass": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "lines": {
+          "$ref": "#/$defs/lineRange"
+        },
+        "commit": {
+          "$ref": "#/$defs/sha"
+        },
+        "template": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "change": {
+      "description": "What a control changed, published only after adjudication: the template, the file and lines, and the commit. A control plants no bug, so it has no invariant or defect class.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["templateId", "file", "lines", "commit"],
+      "properties": {
+        "templateId": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "lines": {
+          "$ref": "#/$defs/lineRange"
+        },
+        "commit": {
+          "$ref": "#/$defs/sha"
+        },
+        "template": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "number", "url"],
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "path", "configVersion", "reviewedCommit", "reviewedAt", "url"],
+      "properties": {
+        "reviewer": {
+          "type": "string"
+        },
+        "path": {
+          "enum": ["pr-comments", "cli", "replay"]
+        },
+        "configVersion": {
+          "type": "string"
+        },
+        "reviewedCommit": {
+          "$ref": "#/$defs/sha"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "linkedRepositories": {
+          "type": "string"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "file", "lines", "category", "severity", "summary"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "file": {
+            "type": ["string", "null"]
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/lineRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commentLines": {
+            "$ref": "#/$defs/lineRange"
+          },
+          "category": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caught", "matchedFindingIds", "match"],
+      "properties": {
+        "caught": {
+          "type": "boolean"
+        },
+        "matchedFindingIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "match": {
+          "description": "The fixed match rule, one entry per criterion.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "lines", "kind"],
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/criterion"
+            },
+            "lines": {
+              "$ref": "#/$defs/criterion"
+            },
+            "kind": {
+              "$ref": "#/$defs/criterion"
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "collateral": {
+      "description": "Other rules the change broke that the review also found.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["invariantId", "reproduced", "evidence"],
+        "properties": {
+          "invariantId": {
+            "type": "string"
+          },
+          "reproduced": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "otherReviewers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewer", "countsForDetection", "note"],
+        "properties": {
+          "reviewer": {
+            "type": "string"
+          },
+          "countsForDetection": {
+            "const": false
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "challenge": {
+      "description": "Devil's Advocate's test of the finding. Separate from detection: whether Qodo caught the bug is in `detection` and `human`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "note"],
+      "properties": {
+        "verdict": {
+          "enum": ["supported", "disproven", "inconclusive", "not_run"]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "human": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "adjudicatedBy", "adjudicatedAt"],
+      "properties": {
+        "disposition": {
+          "enum": [
+            "confirmed_detected",
+            "confirmed_missed",
+            "review_incomplete",
+            "confirmed_clean",
+            "confirmed_false_alarm"
+          ]
+        },
+        "adjudicatedBy": {
+          "type": "string"
+        },
+        "adjudicatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "status": {
+      "enum": ["complete", "incomplete"]
+    },
+    "notes": {
+      "description": "A control's notes from the owner's adjudication, in plain prose.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "lineRange": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "integer",
+          "minimum": 1
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "detail"],
+      "properties": {
+        "pass": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

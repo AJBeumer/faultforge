@@ -28,7 +28,8 @@
  * incomplete, the case id isn't a plain token, or this case already has a ticket; 2 could not run —
  * the template wasn't found or unreadable, the audit log couldn't be read, `gh` failed to create the
  * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
- * check GitHub before retrying rather than risk a duplicate issue).
+ * check GitHub before retrying rather than risk a duplicate issue), or an earlier run's attempt left its
+ * marker without the event: it may have created the issue, so this refuses until a human has checked.
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -215,11 +216,37 @@ export async function run(templateId: string, caseId: string, options: RunOption
     return 0;
   }
 
+  // An attempt is marked before the call: if `gh` times out after GitHub created the issue, nothing else
+  // would show it exists, and a rerun would post a second one on the repo the reviewer reads (#216).
+  // Created exclusively ("wx"), so of two runs started together only one gets past this point.
+  const attempt = join(evidenceDir, "gh-issue-create.attempt.txt");
+  mkdirSync(evidenceDir, { recursive: true });
+  try {
+    writeFileSync(
+      attempt,
+      `${now()} gh issue create --repo ${target.github} --title ${JSON.stringify(ticket.title)}\n`,
+      {
+        flag: "wx",
+      },
+    );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+      error(`case:ticket: can't write the attempt marker ${attempt}, so gh was not called: ${message(e)}`);
+      return 2;
+    }
+    error(
+      `case:ticket: refused, an earlier run tried to create this ticket (${attempt}) and recorded no case.ticket-created event. Check ${target.github}'s issues; record the event by hand if it exists, or delete the marker if it doesn't`,
+    );
+    return 2;
+  }
+
   let url: string;
   try {
     url = gh(["issue", "create", "--repo", target.github, "--title", ticket.title, "--body", body]).trim();
   } catch (e) {
-    error(`case:ticket: gh issue create failed: ${message(e)}`);
+    error(
+      `case:ticket: gh issue create failed (check GitHub before retrying; marker kept at ${attempt}): ${message(e)}`,
+    );
     return 2;
   }
   // Saved before anything else is parsed or written: if gh already created the issue, this is the
