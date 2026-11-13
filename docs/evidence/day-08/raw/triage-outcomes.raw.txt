@@ -1,6 +1,6 @@
 Run by the owner on 2026-11-12 before the commit, PowerShell, using the args files in the session scratchpad (local126-implemented.args.json and local126-dismiss.args.json). Local review id b016ab11-6bc6-46bc-abdb-67f3a5311bc0. Output as pasted.
 
-PS D:\Projects\FaultForge> & $q pr-review-session mark-implemented --args-file "$s\local126-implemented.args.json"
+PS <repo>> & $q pr-review-session mark-implemented --args-file "$s\local126-implemented.args.json"
 {
   "results": {
     "09f12a3c-089f-42da-98be-7948378b9a0e": {
@@ -14,9 +14,9 @@ PS D:\Projects\FaultForge> & $q pr-review-session mark-implemented --args-file "
     }
   }
 }
-  trace dc66b3587dccad025160a5e1b374933f
+  trace <removed>
 
-PS D:\Projects\FaultForge> & $q pr-review-session dismiss --args-file "$s\local126-dismiss.args.json" --idempotency-key local126-9fd82c03
+PS <repo>> & $q pr-review-session dismiss --args-file "$s\local126-dismiss.args.json" --idempotency-key local126-9fd82c03
 {
   "results": {
     "9fd82c03-f705-4f0c-b127-2d2255133a9f": {
@@ -30,4 +30,4 @@ PS D:\Projects\FaultForge> & $q pr-review-session dismiss --args-file "$s\local1
     }
   }
 }
-  trace 41817c7e86dacfd814560ba667bea1ea
+  trace <removed>

@@ -40,9 +40,10 @@ like independent agreement when it is the same finding repeated. This surfaced o
 batch of local reviews run one after another from one checkout carried a finding from an earlier case
 onto later, unrelated ones.
 
-`--isolated` reviews the same staged, unstaged and untracked changes from a fresh temporary git
-worktree instead of the current one, and removes the worktree once the review is done. A fresh
-worktree has never been reviewed before, so it cannot carry an earlier run's open finding forward.
+`--isolated` reviews the same staged, unstaged and untracked changes, read from the current checkout as
+always, under a review stream Qodo has never seen: a fresh temporary git worktree is made only for its path,
+which names the stream, and removed once the review is done. A stream with no history cannot carry an
+earlier run's open finding forward.
 Use it whenever a result needs to stand on its own — comparing a local review against a known answer,
 reviewing several unrelated changes in a row from the same checkout, or any other case where an
 earlier finding quietly carrying over would make the comparison meaningless. For an ordinary
