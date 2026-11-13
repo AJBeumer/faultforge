@@ -22,9 +22,11 @@ const hasRealTarget = existsSync(join(realTarget, "package.json"));
 const REPO = "AJBeumer/faultforge-target";
 
 const scratch: string[] = [];
+// Each scratch target holds a full node_modules. Deleting them takes longer than Vitest's 10 s hook default on
+// a Windows runner, and Windows can briefly hold a file open, so retry and allow two minutes.
 afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
-});
+  for (const dir of scratch) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}, 120_000);
 const tempDir = (prefix: string) => {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   scratch.push(dir);
