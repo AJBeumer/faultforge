@@ -2112,6 +2112,7 @@ describe("acquireLock (#107)", () => {
     const b = acquireLock(dir, () => false);
     expect(b.acquired).toBe(true);
     expect(b.note).toMatch(/took over a stale lock/);
+    expect(b.note).not.toMatch(/still running/);
   });
 
   it("the second of two ticks that both try to take over the same stale lock reports busy, never both wins (Qodo on PR 123)", () => {
@@ -2466,7 +2467,10 @@ describe("acquireLock: the age limit and the release belong to this run (Qodo on
     const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
     writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: twoHoursAgo }));
     expect(acquireLock(dir, () => true, 3 * 3_600_000).acquired).toBe(false);
-    expect(acquireLock(dir, () => true, 1 * 3_600_000).acquired).toBe(true);
+    const taken = acquireLock(dir, () => true, 1 * 3_600_000);
+    expect(taken.acquired).toBe(true);
+    // The tick logs this note: a holder still alive past every run's limit may be a hung agent (#226).
+    expect(taken.note).toMatch(/a process with that pid is still running/);
   });
 
   it("leaves a lock another tick took over when the first one releases", () => {

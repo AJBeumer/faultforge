@@ -24,8 +24,11 @@ describe("factory workflow", () => {
     expect(workflow).not.toMatch(/github\.event_name != /);
   });
 
-  it("runs one at a time without cancelling a run in progress", () => {
-    expect(workflow).toMatch(/concurrency:\s*\n\s*group: factory\s*\n\s*cancel-in-progress: false/);
+  it("runs one tick at a time without cancelling one in progress, queued on the job, not the workflow (audit N-5)", () => {
+    const top = workflow.slice(0, workflow.indexOf("\njobs:"));
+    expect(top).not.toMatch(/^concurrency:/m);
+    const tick = workflow.slice(workflow.indexOf("name: Factory tick"));
+    expect(tick).toMatch(/\n {4}concurrency:\s*\n\s*group: factory-tick\s*\n\s*cancel-in-progress: false/);
   });
 
   it("runs the tick in CI mode with a time limit inside the job's own", () => {
