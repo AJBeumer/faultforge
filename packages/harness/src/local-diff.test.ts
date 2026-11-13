@@ -6,40 +6,43 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildLocalDiff,
   countDiffHeaders,
-  parseGitStatus,
+  parseGitStatusZ,
   readWorkingTreeSplit,
   splitDiffSections,
   streamId,
 } from "./local-diff.ts";
 
-describe("parseGitStatus", () => {
-  it("splits staged, unstaged and untracked paths from git status --porcelain", () => {
-    const porcelain = ["M  staged.txt", " M unstaged.txt", "?? untracked.txt", "MM both.txt", "D  removed.txt"].join(
-      "\n",
-    );
-    expect(parseGitStatus(porcelain)).toEqual({
+/** NUL-terminated entries, as `git status --porcelain -z` prints them. */
+const z = (...entries: string[]) => entries.map((e) => `${e}\0`).join("");
+
+describe("parseGitStatusZ", () => {
+  it("splits staged, unstaged and untracked paths from git status --porcelain -z", () => {
+    const porcelain = z("M  staged.txt", " M unstaged.txt", "?? untracked.txt", "MM both.txt", "D  removed.txt");
+    expect(parseGitStatusZ(porcelain)).toEqual({
       staged: ["staged.txt", "both.txt", "removed.txt"],
       unstaged: ["unstaged.txt", "both.txt"],
       untracked: ["untracked.txt"],
     });
   });
 
-  it("takes a rename's new path, not the old one", () => {
-    expect(parseGitStatus("R  old.txt -> new.txt")).toEqual({ staged: ["new.txt"], unstaged: [], untracked: [] });
+  it("takes a rename's new path and skips the old one, which -z prints as its own entry", () => {
+    expect(parseGitStatusZ(z("R  new.txt", "old.txt", "?? other.txt"))).toEqual({
+      staged: ["new.txt"],
+      unstaged: [],
+      untracked: ["other.txt"],
+    });
   });
 
-  it('leaves an untracked file\'s own name alone, even if it contains " -> "', () => {
-    // Only a rename record (status R) ever means " -> " is a separator; an untracked file (status ??)
-    // whose literal name contains that sequence must not be split as if it were one.
-    expect(parseGitStatus("?? old.txt -> new.txt")).toEqual({
+  it("reads names as written: spaces, quotes and arrows are part of the name", () => {
+    expect(parseGitStatusZ(z('?? my "notes".txt', "?? old.txt -> new.txt"))).toEqual({
       staged: [],
       unstaged: [],
-      untracked: ["old.txt -> new.txt"],
+      untracked: ['my "notes".txt', "old.txt -> new.txt"],
     });
   });
 
   it("is empty for a clean tree", () => {
-    expect(parseGitStatus("")).toEqual({ staged: [], unstaged: [], untracked: [] });
+    expect(parseGitStatusZ("")).toEqual({ staged: [], unstaged: [], untracked: [] });
   });
 });
 
@@ -123,7 +126,7 @@ describe("buildLocalDiff on a real git repository", () => {
     writeFileSync(join(repo, "tracked.txt"), "line1\nline2 staged\nline3 unstaged\n");
     writeFileSync(join(repo, "new-file.txt"), "hello\nworld\n");
 
-    const split = parseGitStatus(status(repo));
+    const split = readWorkingTreeSplit(repo);
     const result = buildLocalDiff(repo, base, split);
 
     expect(result.complete).toBe(true);
@@ -162,7 +165,7 @@ describe("buildLocalDiff on a real git repository", () => {
     writeFileSync(join(repo, "tracked.txt"), "line1\nline2\n");
     writeFileSync(join(repo, "image.bin"), Buffer.from([0, 1, 2, 0, 3, 4]));
 
-    const split = parseGitStatus(status(repo));
+    const split = readWorkingTreeSplit(repo);
     const result = buildLocalDiff(repo, base, split);
 
     expect(result.complete).toBe(false);
@@ -184,7 +187,7 @@ describe("buildLocalDiff on a real git repository", () => {
     // The file whose diff lands last matters most: an earlier bug dropped its trailing newline.
     writeFileSync(join(repo, "last-untracked.txt"), "c\nd\n");
 
-    const split = parseGitStatus(status(repo));
+    const split = readWorkingTreeSplit(repo);
     const result = buildLocalDiff(repo, base, split);
     expect(result.complete).toBe(true);
 
@@ -203,10 +206,10 @@ describe("buildLocalDiff on a real git repository", () => {
     writeFileSync(join(repo, "newdir", "a.txt"), "a\n");
     writeFileSync(join(repo, "newdir", "b.txt"), "b\n");
 
-    const defaultSplit = parseGitStatus(status(repo));
+    const defaultSplit = parseGitStatusZ(status(repo, "-z"));
     expect(defaultSplit.untracked).toEqual(["newdir/"]);
 
-    const allSplit = parseGitStatus(status(repo, "--untracked-files=all"));
+    const allSplit = parseGitStatusZ(status(repo, "-z", "--untracked-files=all"));
     expect(allSplit.untracked.sort()).toEqual(["newdir/a.txt", "newdir/b.txt"]);
 
     const base = sh(repo, "rev-parse", "HEAD");
@@ -296,6 +299,68 @@ describe("buildLocalDiff on a real git repository", () => {
     const result = buildLocalDiff(repo, base, readWorkingTreeSplit(repo));
     expect(result.complete).toBe(true);
     expect(result.diff.length).toBeGreaterThan(2_000_000);
+  });
+
+  it("sends an untracked file whose name has a space, and calls the snapshot complete only then (#189)", () => {
+    const repo = initRepo();
+    sh(repo, "commit", "-qm", "base", "--allow-empty");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "my notes.txt"), "a note\n");
+    writeFileSync(join(repo, "plain.txt"), "plain\n");
+
+    const split = readWorkingTreeSplit(repo);
+    expect(split.untracked.sort()).toEqual(["my notes.txt", "plain.txt"]);
+    const result = buildLocalDiff(repo, base, split);
+    expect(result.diff).toContain("my notes.txt");
+    expect(result.diff).toContain("plain.txt");
+    expect(result.excludedFiles).toEqual([]);
+    expect(result.complete).toBe(true);
+  });
+
+  it("diffs a tracked file whose name has a space, never calling it unchanged (#189)", () => {
+    const repo = initRepo();
+    writeFileSync(join(repo, "tracked file.txt"), "1\n");
+    sh(repo, "add", ".");
+    sh(repo, "commit", "-qm", "base");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "tracked file.txt"), "2\n");
+
+    const result = buildLocalDiff(repo, base, readWorkingTreeSplit(repo));
+    expect(result.noNetChangeFiles).toEqual([]);
+    expect(result.diff).toContain("tracked file.txt");
+    expect(result.complete).toBe(true);
+  });
+
+  it("lists an untracked file git can't open as excluded, and the snapshot as incomplete (#189)", () => {
+    const repo = initRepo();
+    sh(repo, "commit", "-qm", "base", "--allow-empty");
+    const base = sh(repo, "rev-parse", "HEAD");
+    // The status named it, then it vanished before the diff: the window a real run can hit.
+    const result = buildLocalDiff(repo, base, { staged: [], unstaged: [], untracked: ["gone.txt"] });
+    expect(result.complete).toBe(false);
+    expect(result.excludedFiles).toEqual(["gone.txt"]);
+    expect(result.diff).toBe("");
+  });
+
+  it("diffs an untracked file larger than a default child-process buffer (#189)", () => {
+    const repo = initRepo();
+    sh(repo, "commit", "-qm", "base", "--allow-empty");
+    const base = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "big-new.txt"), `${"x".repeat(79)}\n`.repeat(20_000));
+
+    const result = buildLocalDiff(repo, base, readWorkingTreeSplit(repo));
+    expect(result.excludedFiles).toEqual([]);
+    expect(result.complete).toBe(true);
+    expect(result.diff.length).toBeGreaterThan(1_500_000);
+  });
+
+  it("reads a rename from the NUL-separated status without taking the old path as an entry (#189)", () => {
+    const repo = initRepo();
+    writeFileSync(join(repo, "old name.txt"), "1\n");
+    sh(repo, "add", ".");
+    sh(repo, "commit", "-qm", "base");
+    sh(repo, "mv", "old name.txt", "new name.txt");
+    expect(readWorkingTreeSplit(repo)).toEqual({ staged: ["new name.txt"], unstaged: [], untracked: [] });
   });
 
   it("treats a staged edit that an unstaged edit undid as no net change, listed and not a gap", () => {

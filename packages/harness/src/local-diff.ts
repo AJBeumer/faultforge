@@ -13,21 +13,22 @@ export interface WorkingTreeSplit {
 }
 
 /**
- * The working tree's split from `git status --porcelain` (v1, no `-z`): staged is every path whose
- * index column (X) isn't blank, unstaged every path whose worktree column (Y) isn't blank — so a path
- * modified both ways (`MM`) appears in both — and untracked every `??` path. A rename's path (status
- * `R`, the only status that ever contains " -> ") is read after it; an untracked file whose own name
- * happens to contain that sequence is left alone, never mistaken for a rename record.
+ * The working tree's split from `git status --porcelain -z`. Staged is every path whose index column (X)
+ * isn't blank, unstaged every path whose worktree column (Y) isn't blank (a path modified both ways is in
+ * both), untracked every `??` path. Entries end in NUL and are never quoted, so a name with a space or
+ * a quote is read as written. A rename or copy entry (`R` or `C` in either column) is followed by its old
+ * path as a separate entry, which is skipped.
  */
-export function parseGitStatus(porcelain: string): WorkingTreeSplit {
+export function parseGitStatusZ(porcelain: string): WorkingTreeSplit {
   const split: WorkingTreeSplit = { staged: [], unstaged: [], untracked: [] };
-  for (const line of porcelain.split("\n")) {
-    if (!line) continue;
-    const x = line.charAt(0);
-    const y = line.charAt(1);
-    const rest = line.slice(3);
-    const isRename = x === "R" || y === "R";
-    const path = isRename && rest.includes(" -> ") ? (rest.split(" -> ").pop() as string) : rest;
+  const entries = porcelain.split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i] ?? "";
+    if (!entry) continue;
+    const x = entry.charAt(0);
+    const y = entry.charAt(1);
+    const path = entry.slice(3);
+    if (/[RC]/.test(x) || /[RC]/.test(y)) i++;
     if (x === "?" && y === "?") {
       split.untracked.push(path);
       continue;
@@ -39,13 +40,12 @@ export function parseGitStatus(porcelain: string): WorkingTreeSplit {
 }
 
 /**
- * The working tree's split, read the way the diff is: with `core.quotePath=false`, so a name with
- * non-ASCII characters is spelled the same in both and matches its diff section.
+ * The working tree's split, read the way the diff is: NUL-separated, so no name is ever quoted (a quoted
+ * name names no file, and git would then diff nothing for it), with `--untracked-files=all` so a new
+ * folder's files are listed one by one.
  */
 export function readWorkingTreeSplit(repoRoot: string): WorkingTreeSplit {
-  return parseGitStatus(
-    git(repoRoot, ["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"]),
-  );
+  return parseGitStatusZ(git(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=all"]));
 }
 
 export interface SkippedFile {
@@ -99,9 +99,10 @@ export function splitDiffSections(diffText: string): { file: string; body: strin
 }
 
 /** `git diff --no-index` exits 1 when the two sides differ (every call here: one side is `/dev/null`),
- * and 0 would mean the file matched `/dev/null`, which can't happen for a real file — so either exit
- * code is success, never a thrown error. Only a higher exit code, or a binary result (no reviewable
- * text), is reported as a failure here. */
+ * and 0 would mean the file matched `/dev/null`, which can't happen for a real file. But git also exits
+ * 1, with no patch at all, when it can't open the path (a file that vanished after the status was read).
+ * So the patch must hold a diff header: a new file, even an empty one, always prints one. A higher exit
+ * code, no header, or a binary result (no reviewable text) is reported as a failure here. */
 function diffUntrackedFile(repoRoot: string, path: string): { ok: true; patch: string } | { ok: false; why: string } {
   const result = spawnSync(
     "git",
@@ -118,13 +119,14 @@ function diffUntrackedFile(repoRoot: string, path: string): { ok: true; patch: s
       "/dev/null",
       path,
     ],
-    { encoding: "utf8" },
+    // Far above the 1 MiB default, as for every other git call here: a large new file must be read whole.
+    { encoding: "utf8", maxBuffer: GIT_MAX_BUFFER },
   );
-  if (result.status !== 0 && result.status !== 1) {
+  if ((result.status !== 0 && result.status !== 1) || countDiffHeaders(result.stdout ?? "") === 0) {
     const why = (result.stderr || result.error?.message || `git diff --no-index exited ${result.status}`)
       .trim()
       .split("\n")[0];
-    return { ok: false, why: (why ?? "").slice(0, 200) };
+    return { ok: false, why: (why || "git diff --no-index printed no patch").slice(0, 200) };
   }
   if (BINARY_MARKER.test(result.stdout)) return { ok: false, why: "binary file (no reviewable text content)" };
   return { ok: true, patch: result.stdout };
