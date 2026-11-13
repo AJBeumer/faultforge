@@ -44,7 +44,7 @@ export interface LocalFinding {
   /** "new": introduced by this run's `finding_state`. "carried over": anything else — including a
    * finding already resolved or dismissed, which is still worth seeing, just not acted on again. */
   label: "new" | "carried over";
-  /** In `finding_state.introduced` or `still_open`: not yet resolved or dismissed. */
+  /** Not listed in `finding_state.resolved` or `dismissed`: a finding no list names counts as open. */
   open: boolean;
 }
 
@@ -52,12 +52,24 @@ function idsOf(list: RawFinding[] | undefined): Set<string> {
   return new Set((list ?? []).map((f) => f.id));
 }
 
+/** True when every entry of every `finding_state` list is a finding with a string id, the shape the
+ * labels are read from. Anything else (bare ids, say) means the labels can't be trusted (#196). */
+export function stateListsReadable(payload: LocalReviewPayload): boolean {
+  const state = payload.finding_state ?? {};
+  return [state.introduced, state.still_open, state.resolved, state.dismissed].every(
+    (list) =>
+      list === undefined ||
+      (Array.isArray(list) &&
+        list.every((f) => typeof f === "object" && f !== null && typeof (f as { id?: unknown }).id === "string")),
+  );
+}
+
 /** Every finding Qodo returned, labelled from the review's own `finding_state` — never guessed from
  * whether a finding happens to repeat one seen in an earlier, unrelated run. */
 export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
   const state = payload.finding_state ?? {};
   const introduced = idsOf(state.introduced);
-  const stillOpen = idsOf(state.still_open);
+  const closed = new Set([...idsOf(state.resolved), ...idsOf(state.dismissed)]);
   // The top-level list first, then any open finding only `finding_state` carries: a complete result
   // that names an open action-required finding there must never read as clean.
   const all = new Map<string, RawFinding>();
@@ -76,7 +88,8 @@ export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
       title: f.title ?? null,
       description: f.description ?? null,
       label: introduced.has(f.id) ? "new" : "carried over",
-      open: introduced.has(f.id) || stillOpen.has(f.id),
+      // Open unless Qodo says it was resolved or dismissed: a finding no list names is not closed (#196).
+      open: !closed.has(f.id),
     };
   });
 }

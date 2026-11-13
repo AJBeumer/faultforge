@@ -333,7 +333,14 @@ function main(): number {
   const { records, problems } = readReviewRecords(evidence);
 
   const what = args.commit !== null ? `the tree of ${args.commit}` : "the staged tree";
-  const result = checkTree(tree, records, { repo: config.github, hasCommit: (sha) => commitExists(repoRoot, sha) });
+  // One git call per distinct base commit, not one per saved review: the evidence folder only grows, and
+  // the hook that runs this has ten seconds (#196).
+  const known = new Map<string, boolean>();
+  const hasCommit = (sha: string) => {
+    if (!known.has(sha)) known.set(sha, commitExists(repoRoot, sha));
+    return known.get(sha) as boolean;
+  };
+  const result = checkTree(tree, records, { repo: config.github, hasCommit });
   const now = Date.now();
   if (result.covered && result.by) {
     console.log(`Covered: ${what} (${tree}) was reviewed, ${describeAge(result.by.at, now)}, in ${result.by.source}.`);

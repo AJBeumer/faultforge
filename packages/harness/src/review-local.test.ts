@@ -145,6 +145,93 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(3);
   });
 
+  it("retries a poll that fails once and finishes the review (#196)", async () => {
+    let polls = 0;
+    const result = await runReviewLocal(
+      makeDeps({
+        submit: async () => baseOperation(),
+        poll: async () => {
+          polls++;
+          if (polls === 1) throw new Error("HTTP 502");
+          return completedOperation();
+        },
+      }),
+      { timeoutMs: 600_000 },
+    );
+    expect(polls).toBe(2);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("waits a bounded interval when Qodo gives none or zero, so it never loops hot or forever (#196)", async () => {
+    for (const interval of [undefined, 0, -3, 1_000]) {
+      let now = 0;
+      const waits: number[] = [];
+      let cancelled = false;
+      const result = await runReviewLocal(
+        makeDeps({
+          submit: async () => baseOperation({ poll_interval_seconds: interval as never }),
+          poll: async () => baseOperation({ poll_interval_seconds: interval as never }),
+          sleep: async (ms) => {
+            waits.push(ms);
+            now += ms;
+          },
+          now: () => now,
+          cancel: async () => {
+            cancelled = true;
+          },
+        }),
+        { timeoutMs: 120_000 },
+      );
+      expect(result.exitCode).toBe(2);
+      expect(waits.every((ms) => ms >= 1_000 && ms <= 60_000)).toBe(true);
+      expect(waits.length).toBeLessThanOrEqual(120);
+      expect(cancelled).toBe(true);
+    }
+  });
+
+  it("cancels the operation when every poll fails until the deadline, naming the last error (#196)", async () => {
+    let now = 0;
+    let cancelled = false;
+    const result = await runReviewLocal(
+      makeDeps({
+        submit: async () => baseOperation({ poll_interval_seconds: 5 }),
+        poll: async () => {
+          throw new Error("fetch timed out");
+        },
+        sleep: async (ms) => {
+          now += ms;
+        },
+        now: () => now,
+        cancel: async () => {
+          cancelled = true;
+        },
+      }),
+      { timeoutMs: 30_000 },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain("fetch timed out");
+    expect(cancelled).toBe(true);
+  });
+
+  it("counts a finding no state list names as open, and is exit 3 when a list holds bare ids (#196)", async () => {
+    const finding = { id: "f9", action_level: "action_required", title: "Unlisted" };
+    const unlisted = completePayload({ findings: [finding] as never });
+    const listed = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(unlisted) }), {
+      timeoutMs: 1000,
+    });
+    expect(listed.exitCode).toBe(1);
+    expect(listed.findings[0]).toMatchObject({ id: "f9", open: true });
+
+    const bareIds = completePayload({
+      findings: [finding] as never,
+      finding_state: { complete: true, introduced: ["f9"], still_open: [], resolved: [], dismissed: [] } as never,
+    });
+    const shape = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(bareIds) }), {
+      timeoutMs: 1000,
+    });
+    expect(shape.exitCode).toBe(3);
+  });
+
   it("is exit 3, never 0, when the result omits its finding inventory, not just when it says false (#188)", async () => {
     const { finding_state: _omitted, ...withoutState } = completePayload();
     const withoutFlag = completePayload({

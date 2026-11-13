@@ -5,6 +5,7 @@ import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } f
 import {
   ciOrUnavailable,
   findingsFor,
+  findingsShapeProblem,
   openFindings,
   parseArgs,
   type QodoReview,
@@ -730,5 +731,22 @@ describe("reviewState: a skip belongs to one commit (#188)", () => {
       ],
     } as QodoReview;
     expect(reviewState(review, HEAD)).toBe("skipped");
+  });
+});
+
+describe("findingsShapeProblem: a complete review must hold a readable findings list (#196)", () => {
+  it("accepts the saved fixture as it is", () => {
+    expect(findingsShapeProblem(pr1)).toBeUndefined();
+  });
+
+  it("refuses a review with no findings list, rather than read it as zero findings", () => {
+    const { findings: _gone, ...rest } = pr1;
+    expect(findingsShapeProblem(rest)).toMatch(/no findings list/);
+    expect(findingsShapeProblem({ ...pr1, findings: { renamed: [] } as never })).toMatch(/no findings list/);
+  });
+
+  it("refuses a review whose count disagrees with its list", () => {
+    expect(findingsShapeProblem({ ...pr1, finding_count: (pr1.findings?.length ?? 0) + 1 })).toMatch(/counts \d+/);
+    expect(findingsShapeProblem({ ...pr1, finding_count: pr1.findings?.length ?? 0 })).toBeUndefined();
   });
 });
