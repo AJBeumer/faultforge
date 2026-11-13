@@ -45,9 +45,12 @@ jobs:
         run: |
           ready=0
           for repo in $(node -e 'for (const r of Object.values(require("./factory.json").repos)) console.log(r.github)'); do
-            n=$(gh api "repos/$repo/issues?state=open&labels=ready-for-agent&per_page=100" --jq '[.[] | select(.pull_request | not)] | length')
-            echo "$repo: $n labelled"
-            ready=$((ready + n))
+            # agent-working too: a tick is what recovers a ticket an interrupted run left behind (#197).
+            for label in ready-for-agent agent-working; do
+              n=$(gh api "repos/$repo/issues?state=open&labels=$label&per_page=100" --jq '[.[] | select(.pull_request | not)] | length')
+              echo "$repo: $n labelled $label"
+              ready=$((ready + n))
+            done
           done
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
 

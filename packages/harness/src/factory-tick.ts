@@ -1662,9 +1662,17 @@ export function acquireLock(
   maxAgeMs = 3 * 60 * 60_000,
 ): { acquired: boolean; release(): void; note?: string } {
   const file = join(dir, "factory.lock");
+  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const take = () =>
-    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
-  const release = () => rmSync(file, { force: true });
+    writeFileSync(file, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token }), { flag: "wx" });
+  // Releases only a lock that is still this tick's: one taken over meanwhile belongs to the tick that took it.
+  const release = () => {
+    try {
+      if (JSON.parse(readFileSync(file, "utf8")).token === token) rmSync(file, { force: true });
+    } catch {
+      // gone already, or unreadable: nothing of ours to remove
+    }
+  };
   try {
     take();
     return { acquired: true, release };
@@ -1827,7 +1835,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    lock: () => acquireLock(runs),
+    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
+    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
     labelled: (github, label) =>
       ghAll<{ number: number; title: string; pull_request?: unknown }>(
         `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,

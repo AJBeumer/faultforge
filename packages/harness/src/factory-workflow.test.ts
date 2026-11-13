@@ -35,6 +35,10 @@ describe("factory workflow", () => {
     expect(job).toBeGreaterThanOrEqual(minutes + 45);
   });
 
+  it("starts a tick when a ticket is left agent-working, so an interrupted run is recovered (#197)", () => {
+    expect(workflow).toMatch(/for label in ready-for-agent agent-working; do/);
+  });
+
   it("checks every repo out in the owner's folder layout", () => {
     const factory = loadFactory();
     for (const repo of Object.values(factory.repos)) {

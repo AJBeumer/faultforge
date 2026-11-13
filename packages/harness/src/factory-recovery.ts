@@ -19,7 +19,12 @@ const HELP = "agent-needs-help";
 
 export interface RecoveryDeps {
   labelled(github: string, label: string): { number: number; title: string }[];
-  relabel(github: string, number: number, remove: string[], add: string[]): { addFailed: unknown };
+  relabel(
+    github: string,
+    number: number,
+    remove: string[],
+    add: string[],
+  ): { removeFailed: unknown; addFailed: unknown };
   comment(github: string, number: number, body: string): void;
 }
 
@@ -29,8 +34,13 @@ export const STRANDED_COMMENT =
 
 /**
  * Moves every `agent-working` ticket in `repos` to `agent-needs-help` with a comment. Returns what it did, for
- * the run log. A ticket whose relabel or comment fails is reported and left for the next tick; it never
- * stops this one.
+ * the run log. A ticket whose step fails is reported and left for the next tick; it never stops this one.
+ *
+ * The steps run in the order that leaves a ticket findable after any one of them fails (Qodo on PR 211):
+ * the comment first, then `agent-needs-help` is added, and only then is `agent-working` removed. A failure
+ * before the removal leaves `agent-working` on, so the next tick tries again. A ticket that already carries
+ * `agent-needs-help` was commented on before and only lost its removal, so only the removal is retried and
+ * no second comment is posted.
  */
 export function recoverStranded(
   repos: { github: string }[],
@@ -40,18 +50,24 @@ export function recoverStranded(
   const failed: string[] = [];
   for (const { github } of repos) {
     let stranded: { number: number }[];
+    let helped: Set<number>;
     try {
       stranded = deps.labelled(github, WORKING);
+      helped = new Set(stranded.length ? deps.labelled(github, HELP).map((t) => t.number) : []);
     } catch (error) {
-      failed.push(`${github}: couldn't list ${WORKING} tickets (${(error as Error).message})`);
+      failed.push(`${github}: couldn't list its tickets (${(error as Error).message})`);
       continue;
     }
     for (const { number } of stranded) {
       const ref = `${github}#${number}`;
       try {
-        const result = deps.relabel(github, number, [WORKING, READY], [HELP]);
-        if (result.addFailed) throw new Error(`couldn't add ${HELP}: ${String(result.addFailed)}`);
-        deps.comment(github, number, STRANDED_COMMENT);
+        if (!helped.has(number)) {
+          deps.comment(github, number, STRANDED_COMMENT);
+          const added = deps.relabel(github, number, [], [HELP]);
+          if (added.addFailed) throw new Error(`couldn't add ${HELP}: ${String(added.addFailed)}`);
+        }
+        const removed = deps.relabel(github, number, [WORKING, READY], []);
+        if (removed.removeFailed) throw new Error(`couldn't remove ${WORKING}: ${String(removed.removeFailed)}`);
         recovered.push(ref);
       } catch (error) {
         failed.push(`${ref}: ${(error as Error).message}`);

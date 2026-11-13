@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
-import { lockIsStale, pidAlive, STRANDED_COMMENT } from "./factory-recovery.ts";
+import { lockIsStale, pidAlive, type RecoveryDeps, recoverStranded, STRANDED_COMMENT } from "./factory-recovery.ts";
 import {
   type AgentRun,
   acquireLock,
@@ -2322,7 +2322,11 @@ describe("tick: recovering from an interrupted run (#197)", () => {
   it("moves a ticket left agent-working to needs-help with a comment before it picks anything", async () => {
     const f = fake({ "owner/target#7": { title: "Old", events: [], labels: [LABELS.working] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("idle");
-    expect(f.calls).toContain(`relabel owner/target#7 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    // Comment, then add the help label, then remove the working label: a failure leaves it findable.
+    expect(f.calls.slice(0, 2)).toEqual([
+      `relabel owner/target#7 - +${LABELS.help}`,
+      `relabel owner/target#7 -${LABELS.working},${LABELS.ready} +`,
+    ]);
     expect(f.comments).toEqual([{ github: "owner/target", number: 7, body: STRANDED_COMMENT }]);
     expect(f.events.find((e) => e.event === "recovered")).toBeUndefined();
     expect(f.printed.join("\n")).toMatch(/recovered .*owner\/target#7/);
@@ -2370,5 +2374,74 @@ describe("acquireLock and pidAlive after a restart (#197)", () => {
     expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, Date.now(), 60_000)).toBe(true);
     expect(pidAlive(process.pid)).toBe(true);
     expect(pidAlive(2_147_483_646)).toBe(false);
+  });
+});
+
+describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 211)", () => {
+  type Call = string;
+  function world(opts: { help?: number[]; addFails?: boolean; removeFails?: boolean; commentFails?: boolean }) {
+    const calls: Call[] = [];
+    const deps: RecoveryDeps = {
+      labelled: (_github, label) =>
+        label === LABELS.working
+          ? [{ number: 7, title: "t" }]
+          : (opts.help ?? []).map((number) => ({ number, title: "t" })),
+      relabel: (_github, number, remove, add) => {
+        calls.push(`relabel #${number} -${remove.join(",")} +${add.join(",")}`);
+        return {
+          removeFailed: remove.length && opts.removeFails ? "403" : null,
+          addFailed: add.length && opts.addFails ? "403" : null,
+        };
+      },
+      comment: (_github, number) => {
+        if (opts.commentFails) throw new Error("502");
+        calls.push(`comment #${number}`);
+      },
+    };
+    return { deps, calls, run: () => recoverStranded([{ github: "o/t" }], deps) };
+  }
+
+  it("keeps agent-working when the help label can't be added, so the next tick tries again", () => {
+    const w = world({ addFails: true });
+    expect(w.run()).toMatchObject({ recovered: [], failed: [expect.stringContaining("couldn't add")] });
+    expect(w.calls.some((c) => c.startsWith("relabel #7 -agent-working"))).toBe(false);
+  });
+
+  it("changes no label when the comment fails, so the notice is retried", () => {
+    const w = world({ commentFails: true });
+    expect(w.run().failed).toHaveLength(1);
+    expect(w.calls).toEqual([]);
+  });
+
+  it("retries only the removal for a ticket that already has the help label: no second comment", () => {
+    const w = world({ help: [7] });
+    expect(w.run().recovered).toEqual(["o/t#7"]);
+    expect(w.calls).toEqual([`relabel #7 -${LABELS.working},${LABELS.ready} +`]);
+  });
+
+  it("reports a failed removal, so it isn't counted as recovered", () => {
+    const w = world({ removeFails: true });
+    expect(w.run()).toMatchObject({ recovered: [], failed: [expect.stringContaining("couldn't remove")] });
+  });
+});
+
+describe("acquireLock: the age limit and the release belong to this run (Qodo on PR 211)", () => {
+  it("keeps a live lock younger than the age it is given, and takes over an older one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-lock-age-"));
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: twoHoursAgo }));
+    expect(acquireLock(dir, () => true, 3 * 3_600_000).acquired).toBe(false);
+    expect(acquireLock(dir, () => true, 1 * 3_600_000).acquired).toBe(true);
+  });
+
+  it("leaves a lock another tick took over when the first one releases", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-lock-own-"));
+    const first = acquireLock(dir);
+    const second = acquireLock(dir, () => false);
+    expect(second.acquired).toBe(true);
+    first.release();
+    expect(existsSync(join(dir, "factory.lock"))).toBe(true);
+    second.release();
+    expect(existsSync(join(dir, "factory.lock"))).toBe(false);
   });
 });
