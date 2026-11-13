@@ -433,4 +433,19 @@ describe("run", () => {
     expect(code).toBe(2);
     expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
   });
+
+  it("refuses a rerun after a call that may have created the issue, and never calls gh again (#216)", async () => {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    let calls = 0;
+    const timesOut = () => {
+      calls++;
+      throw new Error("ETIMEDOUT");
+    };
+    const options = { env, auditEventsPath, evidenceDir, factory: FACTORY, log: () => {}, gh: timesOut };
+    expect(await run("a-template", "FF-0009", { ...options, error: () => {} })).toBe(2);
+    const errors: string[] = [];
+    expect(await run("a-template", "FF-0009", { ...options, error: (l) => errors.push(l) })).toBe(2);
+    expect(calls).toBe(1);
+    expect(errors.join("\n")).toContain("an earlier run tried to create this ticket");
+  });
 });
