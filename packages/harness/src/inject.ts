@@ -34,7 +34,9 @@ import {
 import { arch, platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { baseTreeTelltales } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
 import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
@@ -132,8 +134,11 @@ const artefactDir = validateOnly
 if (validateOnly) process.on("exit", () => rmSync(artefactDir, { recursive: true, force: true }));
 const ledgerPath = join(PRIVATE_DIR, "ground-truth.jsonl");
 
-if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) {
-  fail(`${caseId} is already in the ledger`);
+if (!validateOnly) {
+  // History too: an entry is only appended to a file whose history is still append-only (#224).
+  const ledgerIssues = ledgerProblemsWithHistory([ledgerPath, join(PRIVATE_DIR, "audit-events.jsonl")]);
+  if (ledgerIssues.length) fail(`the answer key or audit log has problems: ${ledgerIssues.join("; ")}`);
+  if (readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) fail(`${caseId} is already in the ledger`);
 }
 if (git("status", "--porcelain")) fail(`target has uncommitted changes: ${targetDir}`);
 const baseBranch = git("rev-parse", "--abbrev-ref", "HEAD");
@@ -141,6 +146,9 @@ const baseCommit = git("rev-parse", "HEAD");
 // The checkout is put back on this branch at the end, so it must be one (#193): from a detached HEAD the
 // switch back would fail after the commit, leaving a planted commit with no answer-key line.
 if (baseBranch === "HEAD") fail(`target is on a detached HEAD: switch to main first (${targetDir})`);
+// The reviewer reads the whole tree, not only the diff (#224, audit H-4).
+const baseGiveaways = baseTreeTelltales(targetDir, baseCommit);
+if (baseGiveaways.length) fail(`the target's base commit gives the lab away: ${baseGiveaways.join("; ")}`);
 // A case is planted on the published main, never on top of an earlier case branch (#193). Read from the
 // local copy of origin/main: no network, so fetch first if main moved.
 if (!validateOnly) {

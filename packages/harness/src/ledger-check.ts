@@ -12,10 +12,10 @@
  * repo's git history could not be read.
  */
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ledgerProblems } from "./ledger.ts";
+import { ledgerProblems, ledgerProblemsIn } from "./ledger.ts";
 import { privateDir } from "./templates.ts";
 
 const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
@@ -109,6 +109,26 @@ export function ledgerCheckProblems(privateRoot: string): string[] {
   for (const file of FILES) {
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
+  }
+  return problems;
+}
+
+/**
+ * What `verdict`, `case:review`, `case:build` and `inject` check before they read or write the files: unsound
+ * amendments, and for a file at the root of its own git repository (the private repository holds both there),
+ * any commit or uncommitted change that removed or changed a line (#224). A file elsewhere, such as a test's
+ * scratch copy, has no history of its own to check. Throws when git can't answer for a file that has one.
+ */
+export function ledgerProblemsWithHistory(paths: string[]): string[] {
+  const problems = ledgerProblemsIn(paths);
+  for (const path of paths.filter((p) => existsSync(p))) {
+    const root = dirname(resolve(path));
+    try {
+      ownRepoRoot(root);
+    } catch {
+      continue;
+    }
+    problems.push(...appendOnlyProblems(root, basename(path)).map((p) => `${path}: ${p}`));
   }
   return problems;
 }

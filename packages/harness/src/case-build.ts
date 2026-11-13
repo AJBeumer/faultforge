@@ -60,7 +60,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { findLeaks, recordVersionFor, validateCaseRecord } from "./case-record.ts";
-import { type LedgerEntry, ledgerProblemsIn, readAuditLog, readLedger } from "./ledger.ts";
+import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { applyMatchRule, type Criterion, isRange, type MatchFinding } from "./match-rule.ts";
 import { type Finding, findingsFor, type QodoReview } from "./review-wait.ts";
 import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
@@ -461,7 +462,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   try {
     // A record is built only from an answer key and audit log whose amendments check out (#192), checked
     // before anything is read from them: an amendment that changes a case id would hide the case itself.
-    const ledgerIssues = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+    const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
     if (ledgerIssues.length) {
       error(`case:build: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
       return 2;

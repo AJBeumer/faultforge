@@ -190,3 +190,24 @@ describe("a proof counts only a test that ran and failed, and --validate-only ty
     120_000,
   );
 });
+
+describe("a base that gives the lab away is refused (#224, audit H-4)", () => {
+  it.skipIf(!hasRealTarget)(
+    "refuses a target whose base commit names the lab, before changing anything",
+    () => {
+      const dir = scratchTargetCopy();
+      const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+      git("switch", "-q", "main");
+      writeFileSync(join(dir, "NOTES.md"), "Reviewed as part of FaultForge.\n");
+      git("add", "NOTES.md");
+      // --no-verify: the copy carries the checkout's own git guard, which would refuse this commit, as it should.
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--no-verify", "-m", "Notes");
+      const before = `${git("status", "--porcelain", "--branch")}|${git("rev-parse", "HEAD")}`;
+      const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--validate-only"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("NOTES.md: names the lab");
+      expect(`${git("status", "--porcelain", "--branch")}|${git("rev-parse", "HEAD")}`).toBe(before);
+    },
+    90_000,
+  );
+});

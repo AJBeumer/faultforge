@@ -42,7 +42,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { gh } from "./github.ts";
-import { ledgerProblemsIn, readLedger } from "./ledger.ts";
+import { readLedger } from "./ledger.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { applyMatchRule, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import {
@@ -213,7 +214,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   // before anything is read from them: an amendment that changes a case id would hide the case itself.
   let ledgerIssues: string[];
   try {
-    ledgerIssues = ledgerProblemsIn([groundTruthPath, auditEventsPath]);
+    ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
   } catch (e) {
     error(`verdict: can't read ${groundTruthPath} or ${auditEventsPath}: ${message(e)}`);
     return 2;
