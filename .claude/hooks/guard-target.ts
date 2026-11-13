@@ -285,8 +285,11 @@ function stripReviewedNames(reviewed: Reviewed[], text: string): string {
  */
 function postedText(command: string): string[] {
   // Flags are read outside heredoc bodies: an option-looking line in one is text, not an argument.
-  const posted = postedArguments(command.replace(HEREDOC, (m) => m.slice(0, m.indexOf("\n") + 1)));
-  const heredocs = [...command.matchAll(HEREDOC)].map((m) => m[3] ?? "");
+  const spans = heredocSpans(command);
+  let outside = command;
+  for (const span of [...spans].reverse()) outside = outside.slice(0, span.start) + outside.slice(span.end);
+  const posted = postedArguments(outside);
+  const heredocs = spans.map((span) => command.slice(span.start, span.end));
   const stdin = /(\s-F|--file|--body-file|--input)[\s=]+-(\s|$)/.test(command);
   // A heredoc is posted only when the command reads a body from stdin; any other heredoc belongs to
   // another command, and the whole-command check already reads it as before. When stdin has more than
@@ -298,11 +301,40 @@ function postedText(command: string): string[] {
 }
 
 /**
- * A heredoc: its delimiter line, then its body (group 3), up to the closing delimiter. The shell ends
- * the body only at a line that is the delimiter alone; `<<-` lets tabs, never spaces, come before it.
- * The delimiter is every character up to a blank, a quote or a shell operator: `EOF-` is not `EOF`.
+ * Where each heredoc body sits in the command, as the shell reads it. The delimiter is the word after
+ * `<<` (or `<<-`) with its quoting removed: quote marks and backslashes quote, so `'EOF'`, `\EOF` and
+ * `E\OF` all mean `EOF`, and `EOF-` is not `EOF`. The body starts on the next line and ends before the
+ * first line that is the delimiter alone; `<<-` lets tabs, never spaces, come before it. A body with no
+ * such line runs to the end of the command.
  */
-const HEREDOC = /<<-?\s*(['"]?)([^\s'"<>|;&()]+)\1[^\n]*\n([\s\S]*?)\n\t*\2(?=\n|$)/g;
+function heredocSpans(command: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  const opener = /<<(-?)[ \t]*((?:\\.|[^\s<>|;&()])+)/g;
+  let match: RegExpExecArray | null = opener.exec(command);
+  while (match) {
+    const tabs = match[1] === "-";
+    const delimiter = (match[2] ?? "").replace(/\\(.)/g, "$1").replace(/["']/g, "");
+    const lineEnd = command.indexOf("\n", match.index);
+    if (lineEnd < 0 || !delimiter) break;
+    const start = lineEnd + 1;
+    let at = start;
+    let end = command.length;
+    while (at <= command.length) {
+      const next = command.indexOf("\n", at);
+      const line = command.slice(at, next < 0 ? command.length : next);
+      if ((tabs ? line.replace(/^\t+/, "") : line) === delimiter) {
+        end = at;
+        break;
+      }
+      if (next < 0) break;
+      at = next + 1;
+    }
+    spans.push({ start, end });
+    opener.lastIndex = end;
+    match = opener.exec(command);
+  }
+  return spans;
+}
 
 /**
  * The text with the files a body is read from blanked: the path after `cat`, `type` or `Get-Content`

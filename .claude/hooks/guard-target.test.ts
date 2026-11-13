@@ -561,6 +561,10 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
     // The delimiter is the whole word: `EOF` alone doesn't end a body opened with `<<EOF-`.
     const dashed = "Tidy\nEOF\n../FaultForge/planted\nEOF-";
     expect(bash(`${TO_TARGET} --body-file - <<EOF-\n${dashed}`)).toMatch(/names the lab|says planted/);
+    // Quoting inside the delimiter is removed, as the shell does: `EO\F-` means `EOF-`, so a body line
+    // spelled `EO\F-` is text, not the end.
+    const escaped = "Tidy\nEO\\F-\nfaultforge/planted\nEOF-";
+    expect(bash(`${TO_TARGET} --body-file - <<EO\\F-\n${escaped}`)).toMatch(/names the lab|says planted/);
   });
 
   it("reads the title of a post whose body is piped in, even when it looks like a redirect", () => {
