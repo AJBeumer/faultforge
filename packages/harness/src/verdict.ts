@@ -76,6 +76,7 @@ import {
   CONTROL_VERDICTS,
   type Judgement,
   latestVerdict,
+  normalReason,
   reasonsOfOtherCases,
 } from "./verdict-event.ts";
 import { loadVerdictInputs } from "./verdict-inputs.ts";
@@ -134,6 +135,10 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
 
   // A second verdict silently winning would change the record (AUD-H4): it must name the one it supersedes.
   const earlier = latestVerdict(loaded.caseEvents);
+  if (earlier && typeof earlier.eventId !== "string") {
+    error(`verdict: ${caseId}'s verdict has no event id, so nothing can name it to supersede; ask the owner`);
+    return 2;
+  }
   if (earlier && options.supersede !== earlier.eventId) {
     error(
       options.supersede
@@ -259,12 +264,16 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
   // The verdict rests on the matched findings' judgements, so it must agree with them (Qodo on PR 267):
-  // detected needs one judged real; missed can't have one judged real.
-  const matchedReal = judgements.some((j) => result?.matchedFindingIds.includes(j.id) && j.verdict === "real");
-  if ((bugAnswer === "detected" && !matchedReal) || (bugAnswer === "missed" && matchedReal)) {
+  // detected needs one judged real (a matched one when the rule matched any; any one when the owner overruled
+  // a computed miss); missed can't have a matched one judged real.
+  const matched = result?.matchedFindingIds ?? [];
+  const realAmong = (ids: string[] | undefined) =>
+    judgements.some((j) => j.verdict === "real" && (ids === undefined || ids.includes(j.id)));
+  const detectedHolds = realAmong(matched.length ? matched : undefined);
+  if ((bugAnswer === "detected" && !detectedHolds) || (bugAnswer === "missed" && realAmong(matched))) {
     error(
       bugAnswer === "detected"
-        ? "verdict: detected, but no finding the rule matched is judged real; nothing recorded"
+        ? "verdict: detected, but no finding that could be the catch is judged real; nothing recorded"
         : "verdict: missed, but a finding the rule matched is judged real; nothing recorded",
     );
     return 2;
@@ -296,9 +305,15 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
   try {
     // Read again just before writing: another run may have recorded a verdict while the owner answered.
-    const now = latestVerdict(readAuditLog(auditEventsPath).filter((e) => e.caseId === caseId));
+    const fresh = readAuditLog(auditEventsPath);
+    const now = latestVerdict(fresh.filter((e) => e.caseId === caseId));
     if (now?.eventId !== earlier?.eventId) {
       error(`verdict: another verdict for ${caseId} (${String(now?.eventId)}) was recorded meanwhile; nothing written`);
+      return 2;
+    }
+    // And another case may have taken this reason meanwhile.
+    if (reasonsOfOtherCases(fresh, caseId).has(normalReason(bugReason))) {
+      error("verdict: another case's verdict was given the same reason meanwhile; nothing written");
       return 2;
     }
     (options.append ?? defaultAppend)(auditEventsPath, event);

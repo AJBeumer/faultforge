@@ -75,8 +75,13 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
   }
   const caseEvents = events.filter((e) => e.caseId === caseId);
   const verdict = latestVerdict(caseEvents);
-  if (!verdict || typeof verdict.eventId !== "string") {
+  if (!verdict) {
     error(`verdict:amend: ${caseId} has no verdict to add a reason to`);
+    return 2;
+  }
+  // An amendment names its target by id; a case id would name all the case's events at once.
+  if (typeof verdict.eventId !== "string") {
+    error(`verdict:amend: ${caseId}'s verdict has no event id, so no amendment can name it; ask the owner`);
     return 2;
   }
   // The evidence is what the verdict judged: the file it names, else its PR's save, else (a legacy case with
@@ -144,8 +149,10 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
   }
   try {
     // Read again just before writing: another run may have amended or replaced the verdict meanwhile.
-    const again = latestVerdict(readAuditLog(auditEventsPath).filter((e) => e.caseId === caseId));
-    if (again?.eventId !== verdict.eventId || again.amendedReason !== undefined) {
+    const fresh = readAuditLog(auditEventsPath);
+    const again = latestVerdict(fresh.filter((e) => e.caseId === caseId));
+    const takenNow = reasonsOfOtherCases(fresh, caseId).has(normalReason(reason));
+    if (again?.eventId !== verdict.eventId || again.amendedReason !== undefined || takenNow) {
       error(`verdict:amend: ${caseId}'s verdict changed while you answered; nothing written`);
       return 1;
     }

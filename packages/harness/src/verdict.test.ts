@@ -677,7 +677,7 @@ describe("npm run verdict: what Qodo found on PR 267", () => {
   it("refuses detected when no matched finding is judged real, and missed when one is", async () => {
     const detected = await runOn("FF-0001", fixture(), { ask: fakeAsk(["detected", "found", "false alarm", "r"]).ask });
     expect(detected.code).toBe(2);
-    expect(detected.err).toContain("no finding the rule matched is judged real");
+    expect(detected.err).toContain("no finding that could be the catch is judged real");
     const missed = await runOn("FF-0001", fixture(), { ask: fakeAsk(["missed", "yes", "nope", "real", "r"]).ask });
     expect(missed.code).toBe(2);
     expect(missed.err).toContain("a finding the rule matched is judged real");
@@ -723,5 +723,44 @@ describe("npm run verdict: what Qodo found on PR 267", () => {
       },
     ];
     expect(reasonsOfOtherCases(events, "FF-0001")).toEqual(new Set(["a", "second", "first"]));
+  });
+});
+
+describe("npm run verdict: round two on PR 267", () => {
+  it("lets the owner overrule a computed miss, with an unmatched finding judged real", async () => {
+    const root = fixture({ findings: [{ ...OTHER_FINDING }] });
+    const { code, appended } = await runOn("FF-0001", root, {
+      ask: fakeAsk(["detected", "yes", "Qodo described it on the wrong line", "real", "that is the bug"]).ask,
+    });
+    expect(code).toBe(0);
+    expect(appended[0]).toMatchObject({ disposition: "confirmed_detected" });
+  });
+
+  it("refuses to supersede a verdict that has no event id", async () => {
+    const root = fixture();
+    appendFileSync(
+      join(root, "audit-events.jsonl"),
+      `${JSON.stringify({ type: "case.adjudicated", caseId: "FF-0001", at: "2026-11-10T11:50:00.000Z", disposition: "x" })}\n`,
+    );
+    const { code, err } = await runOn("FF-0001", root, { ask: fakeAsk([]).ask });
+    expect(code).toBe(2);
+    expect(err).toContain("has no event id");
+  });
+
+  it("writes nothing when another case took the same reason while the owner answered", async () => {
+    const root = fixture();
+    let n = 0;
+    const ask = async () => {
+      if (n === 3) {
+        appendFileSync(
+          join(root, "audit-events.jsonl"),
+          `${JSON.stringify({ eventId: "o", type: "case.adjudicated", caseId: "FF-0002", at: "2026-11-10T11:59:00.000Z", reason: "found it" })}\n`,
+        );
+      }
+      return ["detected", "found it", "real", "r"][n++] ?? "";
+    };
+    const { code, err } = await runOn("FF-0001", root, { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("same reason meanwhile");
   });
 });
