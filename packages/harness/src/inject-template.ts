@@ -2,10 +2,10 @@
  * A template as `inject` reads it: loading it, the checks that refuse it before anything is planted, the
  * proofs its variant must break, and the mutation itself.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { benchmarkOf, benchmarkProblems, changedLines } from "./benchmark-rules.ts";
-import { templateTelltales } from "./neutral.ts";
+import { telltales, templateTelltales } from "./neutral.ts";
 import type { Outcome } from "./run-outcome.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
 
@@ -30,7 +30,20 @@ export interface Template {
   alsoBreaks?: AlsoBreaks[];
   /** The benchmark version whose rules it follows (`benchmark-rules.ts`); 1 when absent. */
   benchmark?: number;
+  /** A second change in the same commit: a test for what the ticket asks, so an added test is never a tell. */
+  testChange?: TestChange;
 }
+
+/** A test file the change edits (`find` once, `replace`) or creates (`content`). */
+export interface TestChange {
+  file: string;
+  find?: string;
+  replace?: string;
+  content?: string;
+}
+
+/** The old layout, a test change in its own file beside `template.json`: refused, never silently ignored. */
+export const LOOSE_TEST_CHANGE = "test-change.json";
 
 export interface Proof {
   invariantId: string;
@@ -57,8 +70,18 @@ export function templateRefusal(
   }
   // Everything the template would put in front of the reviewer must read as an ordinary change: the branch
   // name and commit message, the code it looks for and writes, and its target ticket.
-  const giveaways = templateTelltales(template);
+  const giveaways = [...templateTelltales(template), ...testChangeTelltales(template)];
   if (giveaways.length) return `the template gives the case away (${giveaways.join("; ")})`;
+
+  // One place for the whole change: a test change kept in a file of its own would be missed by the input
+  // hash, which reads template.json.
+  if (existsSync(join(templateDir, LOOSE_TEST_CHANGE))) {
+    return `template ${templateId} keeps its test change in ${LOOSE_TEST_CHANGE}: move it into template.json as testChange`;
+  }
+  // The recorded lines are the main change's: a test change in the same file would move them.
+  if (template.testChange && template.testChange.file === template.file) {
+    return `template ${templateId}'s testChange must change another file than ${template.file}`;
+  }
 
   // The terms the match rule's third criterion looks for, declared here before any case runs the template.
   // Only a bug template carries one: a control has no injected problem to describe.
@@ -73,6 +96,50 @@ export function templateRefusal(
   const ruleProblems = benchmarkProblems(template, others);
   if (ruleProblems.length) return `template ${templateId} breaks the benchmark v2 rules: ${ruleProblems.join("; ")}`;
   return undefined;
+}
+
+/** What in a template's test change would give the case away: a giveaway word, or a name only the lab uses. */
+function testChangeTelltales(template: Template): string[] {
+  const change = template.testChange;
+  if (!change) return [];
+  const ownNames = [template.id, template.invariantId].filter((name): name is string => Boolean(name));
+  const fields: [string, string | undefined][] = [
+    ["testChange.file", change.file],
+    ["testChange.find", change.find],
+    ["testChange.replace", change.replace],
+    ["testChange.content", change.content],
+  ];
+  return fields.flatMap(([field, text]) =>
+    text === undefined
+      ? []
+      : [
+          ...telltales(text),
+          ...ownNames.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map((n) => `names ${n}`),
+        ].map((reason) => `${field}: ${reason}`),
+  );
+}
+
+/**
+ * Applies a template's test change: creates its file (`content`), which must not exist yet, or replaces its
+ * `find` text, which must occur exactly once. Returns true when it created a file, which git must then be told
+ * about so the diff and the commit hold it.
+ */
+export function applyTestChange(targetDir: string, change: TestChange): boolean {
+  const path = join(targetDir, change.file);
+  if (change.content !== undefined) {
+    if (existsSync(path)) throw new Error(`testChange would create ${change.file}, which already exists`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, change.content);
+    return true;
+  }
+  const source = readFileSync(path, "utf8");
+  const find = change.find ?? "";
+  const at = source.indexOf(find);
+  if (!find || at === -1 || source.indexOf(find, at + 1) !== -1) {
+    throw new Error(`testChange's find text must occur exactly once in ${change.file}`);
+  }
+  writeFileSync(path, source.slice(0, at) + (change.replace ?? "") + source.slice(at + find.length));
+  return false;
 }
 
 /** Every proof the variant must break: the template's own invariant, plus whatever it breaks as collateral. */

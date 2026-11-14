@@ -145,3 +145,38 @@ describe("benchmarkProblems and changedLines: round two on PR 274", () => {
     expect(changedLines("a\nb\n", "a\nb")).toEqual([2, 2]);
   });
 });
+
+describe("benchmarkProblems: kind terms as word starts, over the whole ticket", () => {
+  const stem: RuleTemplate = {
+    id: "x-stem-v1",
+    kind: "bug",
+    benchmark: 2,
+    invariantId: "INV-X-009",
+    match: { kindTerms: ["disclos", "race"] },
+    ticket: { title: "Tidy the list", what: "Make it shorter.", criteria: ["Existing tests pass."] },
+  };
+  const others = [control("c1", ["Something else."])];
+
+  it("finds a stem at the start of a longer word, as the match rule would", () => {
+    const t = { ...stem, ticket: { ...stem.ticket, criteria: ["Nothing is disclosed to another user."] } };
+    expect(benchmarkProblems(t, others)).toEqual(["ticket.criteria[0] restates what the change breaks (disclos)"]);
+  });
+
+  it("still never finds a term inside a word: race is not in trace", () => {
+    const t = { ...stem, ticket: { ...stem.ticket, criteria: ["The trace keeps every step."] } };
+    expect(benchmarkProblems(t, others)).toEqual([]);
+  });
+
+  it("reads the ticket's title and description too", () => {
+    const t = { ...stem, ticket: { ...stem.ticket, title: "Stop a race on save", what: "Nothing disclosed." } };
+    expect(benchmarkProblems(t, others)).toEqual([
+      "ticket.title restates what the change breaks (race)",
+      "ticket.what restates what the change breaks (disclos)",
+    ]);
+  });
+
+  it("leaves a v1 template's ticket alone", () => {
+    const t = { ...stem, benchmark: 1, ticket: { ...stem.ticket, title: "Stop a race" } };
+    expect(benchmarkProblems(t, others)).toEqual([]);
+  });
+});
