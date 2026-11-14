@@ -205,6 +205,8 @@ export function runAgent(
     evidence: factory.evidence,
     evidenceRoot: resolve(ws.lab, factory.evidence),
   });
+  // Built now, before the agent starts: building it at the first request would stop the runner for minutes.
+  broker.prepare();
   // Only what the agent's own tools need: no Qodo key, no private-repo token (factory-agent-env.ts).
   const agent = agentEnv(process.env, {
     FAULTFORGE_FACTORY_RUN: runId,

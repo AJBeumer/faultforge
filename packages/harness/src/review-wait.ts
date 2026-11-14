@@ -327,7 +327,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     try {
       const { askRunner } = await import("./factory-review-broker.ts");
       const answer = await askRunner(broker, process.argv.slice(2));
-      process.stdout.write(answer.output);
+      // Exit once the output is written: a pipe would otherwise lose the end of the findings (Qodo on PR 270).
+      await new Promise<void>((written) => process.stdout.write(answer.output, () => written()));
       process.exit(answer.exitCode);
     } catch (e) {
       console.error(`review:wait could not ask the runner: ${message(e)}`);

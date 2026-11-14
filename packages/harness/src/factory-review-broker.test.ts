@@ -112,6 +112,7 @@ describe("the review broker: review:wait without the Qodo key in the agent (AUD-
         return { exitCode: 0, output: "complete\n" };
       },
     });
+    broker.prepare();
     mkdirSync(broker.dir, { recursive: true });
     for (const id of ["one", "two"]) {
       writeFileSync(join(broker.dir, `${id}.request.json`), JSON.stringify({ argv: ["target", "9"] }));
@@ -122,5 +123,78 @@ describe("the review broker: review:wait without the Qodo key in the agent (AUD-
     expect(existsSync(join(evidenceRoot, "reviews", "target-pr9", "abc1234.review.json"))).toBe(true);
     broker.close();
     expect(existsSync(trustedRoot)).toBe(false);
+  });
+});
+
+describe("the review broker: nothing the agent sends can stall or stop the runner (Qodo on PR 270)", () => {
+  const root = () => mkdtempSync(join(tmpdir(), "ff-broker2-"));
+  const broker = (dir: string, run: (argv: string[], cwd: string) => Promise<{ exitCode: number; output: string }>) => {
+    const b = reviewBroker({
+      dir: join(dir, "requests"),
+      trustedRoot: join(dir, "trusted"),
+      labDirName: "lab",
+      remoteUrl: "https://github.com/owner/lab.git",
+      evidence: "private/raw-artifacts",
+      evidenceRoot: join(dir, "kept"),
+      build: (verifyRoot, name) => {
+        const lab = join(verifyRoot, name);
+        mkdirSync(lab, { recursive: true });
+        return lab;
+      },
+      run,
+    });
+    b.prepare();
+    mkdirSync(b.dir, { recursive: true });
+    return b;
+  };
+
+  it("refuses a wait longer than a round, such as 1e308 minutes", () => {
+    expect(cleanArgs(["target", "9", "--timeout", "1e308"])).toBeNull();
+    expect(cleanArgs(["target", "9", "--timeout", "31"])).toBeNull();
+    expect(cleanArgs(["target", "9", "--timeout", "9"])).not.toBeNull();
+  });
+
+  it("a request folder that is a file, or a failing run, never throws or rejects", async () => {
+    const dir = root();
+    writeFileSync(join(dir, "not-a-folder"), "x");
+    expect(serveReviewRequests(join(dir, "not-a-folder"), async () => ({ exitCode: 0, output: "" }))).toEqual([]);
+    mkdirSync(join(dir, "r"));
+    writeFileSync(join(dir, "r", "a.request.json"), JSON.stringify({ argv: ["target", "9"] }));
+    mkdirSync(join(dir, "r", "a.answer.json"));
+    await expect(
+      Promise.all(
+        serveReviewRequests(join(dir, "r"), async () => {
+          throw new Error("boom");
+        }),
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("a zero exit with no saved review is no success: the round would have no evidence", async () => {
+    const dir = root();
+    const b = broker(dir, async () => ({ exitCode: 0, output: "complete\n" }));
+    writeFileSync(join(b.dir, "x.request.json"), JSON.stringify({ argv: ["target", "9"] }));
+    await Promise.all(b.serve());
+    const answer = JSON.parse(readFileSync(join(b.dir, "x.answer.json"), "utf8"));
+    expect(answer.exitCode).toBe(2);
+    expect(answer.output).toMatch(/no evidence/);
+  });
+
+  it("puts the run's earlier saves in front of review:wait, so its write-once rules see them", async () => {
+    const dir = root();
+    const kept = join(dir, "kept", "reviews", "target-pr9");
+    mkdirSync(kept, { recursive: true });
+    writeFileSync(join(kept, "abc1234.review.json"), '{"state":"complete"}');
+    let seen = "";
+    const b = broker(dir, async (_argv, cwd) => {
+      seen = readFileSync(
+        join(cwd, "private", "raw-artifacts", "reviews", "target-pr9", "abc1234.review.json"),
+        "utf8",
+      );
+      return { exitCode: 0, output: "" };
+    });
+    writeFileSync(join(b.dir, "y.request.json"), JSON.stringify({ argv: ["target", "9"] }));
+    await Promise.all(b.serve());
+    expect(seen).toBe('{"state":"complete"}');
   });
 });

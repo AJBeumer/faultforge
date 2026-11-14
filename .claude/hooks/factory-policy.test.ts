@@ -601,3 +601,30 @@ describe("factory policy: decides in linear time (AUD-M4, lead's follow-up to PR
     expect(commandViolations("x".repeat(100_001))).toContainEqual(expect.stringMatching(/can't be checked/));
   });
 });
+
+describe("factory policy: quoted separators, extra calls, Python imports (Qodo on PR 270)", () => {
+  it.each([
+    'gh api -X POST "repos/o/r/issues/1/comments;x" -f body=hi',
+    'gh issue edit 5 --title "a & b" --add-label x',
+    'git push "origin|x" --force',
+    'git commit -m "a; b" && git push origin "main"',
+    "$(git push origin main)",
+  ])("still sees the step through a quoted separator: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    "node -e \"fetch('http://localhost:1');fetch(atob('aHR0cHM6Ly9ldmlsLmNvbQ=='))\"",
+    "python3 -c 'from requests import get; get(\"https://x.example\")'",
+    "python3 -c 'from socket import create_connection as c; c((\"x.example\", 443))'",
+    "python3 -c 'from urllib.request import urlopen; urlopen(u)'",
+  ])("refuses a network call no local URL vouches for: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/only reach the app on localhost/));
+  });
+
+  it("still allows one local call per local URL", () => {
+    expect(
+      commandViolations("node -e \"fetch('http://localhost:3000/a').then(() => fetch('http://127.0.0.1:3000/b'))\""),
+    ).toEqual([]);
+  });
+});

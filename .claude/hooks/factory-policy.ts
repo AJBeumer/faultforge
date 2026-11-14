@@ -26,7 +26,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
-import { gitSteps, MAX_COMMAND_CHARS, segments } from "./shell-scan.ts";
+import { joinedWords, MAX_COMMAND_CHARS, quotedMask } from "./shell-scan.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
   [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
@@ -84,7 +84,7 @@ const HTTP_TOOLS = /\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMet
  * modules, Python's `urllib`, `requests` and `socket`, a browser-style request or socket.
  */
 const NETWORK_CODE =
-  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket)\b|\bsocket\s*\.\s*(socket|create_connection)\b|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
+  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket|httpx|aiohttp)\b|\bfrom\s+(requests|socket|httpx|aiohttp|urllib[\w.]*|http\.client)\s+import\b|\bsocket\s*\.\s*(socket|create_connection)\b|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
 
 /**
  * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
@@ -100,46 +100,69 @@ export function commandViolations(raw: string, ticket?: string): string[] {
 }
 
 /**
+ * The command's steps: its text between `|`, `;`, `&` and new lines that are not inside quotes or a heredoc
+ * (a quoted separator is part of an argument, and splitting there would cut a flag off from its command:
+ * Qodo on PR 270). One pass over a mask `shell-scan.ts` builds in one pass.
+ */
+function steps(command: string): string[] {
+  const quoted = quotedMask(command);
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < command.length; i++) {
+    if (quoted[i] || !"|;&\n".includes(command[i] ?? "")) continue;
+    if (i > start) parts.push(command.slice(start, i));
+    start = i + 1;
+  }
+  if (start < command.length) parts.push(command.slice(start));
+  return parts;
+}
+
+/**
  * The rules that look for one word and then another in the same step (`gh issue edit` then `--add-label`,
- * `git ... push` then `--force` or `main`). As one pattern over the whole command they backtracked once for
- * every first word, so a crafted command could keep the hook past its time limit. Here the command is cut
- * into steps (`segments`, one pass) and each step's words are read one by one: linear in the command.
+ * `git ... push` then `--force` or `main`, `gh api` then a write). As one pattern over the whole command they
+ * backtracked once for every first word, so a crafted command could keep the hook past its time limit. Here
+ * the command is cut into steps and each step's words are read in order, quote marks removed as the shell
+ * removes them: linear in the command.
  */
 function stepViolations(command: string): string[] {
-  const reasons: string[] = [];
-  const words = (text: string) => text.split(/\s+/).filter(Boolean);
-  for (const step of segments(command)) {
-    const ghAt = step.text.search(/\bgh\s+issue\s+edit\b/i);
-    if (ghAt >= 0 && /--(add|remove)-label\b/i.test(step.text.slice(ghAt)))
-      reasons.push("the runner sets the ticket's labels");
-    const apiAt = step.text.search(/\bgh\s+api\b/i);
-    if (apiAt >= 0) {
-      const rest = words(step.text.slice(apiAt));
+  const reasons = new Set<string>();
+  const words = (text: string) => joinedWords(text).split(/\s+/).filter(Boolean);
+  for (const step of steps(command)) {
+    const all = words(step);
+    const at = (first: RegExp, second: RegExp) => {
+      for (let i = 0; i + 1 < all.length; i++)
+        if (first.test(all[i] ?? "") && second.test(all[i + 1] ?? "")) return i + 2;
+      return -1;
+    };
+    const edit = all.findIndex(
+      (w, i) => /^[$({`]*gh$/i.test(w) && /^issue$/i.test(all[i + 1] ?? "") && /^edit$/i.test(all[i + 2] ?? ""),
+    );
+    if (edit >= 0 && all.slice(edit).some((w) => /^--(add|remove)-label(=|$)/i.test(w)))
+      reasons.add("the runner sets the ticket's labels");
+    const api = at(/^[$({`]*gh$/i, /^api$/i);
+    if (api >= 0) {
+      const rest = all.slice(api);
       // A field or an input is a write; so is any method but GET, written `-X POST`, `-XPOST` or `--method=POST`.
-      const method = (w: string, next: string) => {
-        const m = /^(?:-X|--method)(?:=|(?=.))?(.*)$/.exec(w);
-        if (!m) return null;
-        return (m[1] || next).replace(/["']/g, "");
-      };
       const writes = rest.some((w, i) => {
         if (/^(-f|-F|--field|--raw-field|--input)(=|$)/.test(w)) return true;
-        const verb = method(w, rest[i + 1] ?? "");
-        return verb !== null && !/^GET$/i.test(verb);
+        const m = /^(?:-X|--method)=?(.*)$/.exec(w);
+        if (!m) return false;
+        return !/^GET$/i.test(m[1] || rest[i + 1] || "");
       });
-      if (writes) reasons.push("gh api is read-only here");
+      if (writes) reasons.add("gh api is read-only here");
+    }
+    const git = all.findIndex((w) => /^[$({`]*git$/i.test(w));
+    const push = git < 0 ? -1 : all.findIndex((w, i) => i > git && /^push$/i.test(w));
+    if (push >= 0) {
+      const after = all.slice(push + 1);
+      const force = /^(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)(=|$)/i;
+      if (after.some((w) => force.test(w) || /^\+\S/.test(w) || /^:\S/.test(w)))
+        reasons.add("no force push or remote delete");
+      // The branch may be quoted, and may end the step with a closing bracket right after it (#194).
+      if (after.some((w) => /^([^:]*:)?(refs\/heads\/)?(main|master)\)*$/i.test(w))) reasons.add("never push to main");
     }
   }
-  for (const step of gitSteps(command, /\bpush\b/i)) {
-    const all = words(step.text);
-    const after = all.slice(all.findIndex((w) => /^push\b/i.test(w)) + 1);
-    const force = /^(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)(\b|=|$)/i;
-    if (after.some((w) => force.test(w) || /^\+\S/.test(w) || /^:\S/.test(w)))
-      reasons.push("no force push or remote delete");
-    // The branch may be quoted, and may end the step with a closing bracket right after it (#194).
-    if (after.some((w) => /^([^:]*:)?["']?(refs\/heads\/)?(main|master)["']?\)*$/i.test(w)))
-      reasons.push("never push to main");
-  }
-  return reasons;
+  return [...reasons];
 }
 
 /** The reasons found in one reading of the command. */
@@ -156,7 +179,10 @@ function violationsIn(command: string, ticket?: string): string[] {
     const hosts = [...command.matchAll(/\b(?:https?|ftp|wss?):\/\/([^/\s:'"`]+|\[[^\]]+\])/gi)].map((m) =>
       (m[1] ?? "").toLowerCase(),
     );
-    if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h))) {
+    // Each call from code needs a local URL of its own: one localhost URL beside a second call whose address
+    // is built at run time doesn't vouch for that one (Qodo on PR 270).
+    const calls = [...command.matchAll(new RegExp(NETWORK_CODE.source, "g"))].length;
+    if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h)) || calls > hosts.length) {
       reasons.push("HTTP tools and network calls may only reach the app on localhost; GitHub goes through gh");
     }
   }
