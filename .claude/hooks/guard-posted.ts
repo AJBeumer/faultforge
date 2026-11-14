@@ -110,3 +110,11 @@ export function postedRanges(command: string): [number, number][] {
     return value ? [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), value[1] + 1] as [number, number]] : [];
   });
 }
+
+/** Every string in a tool input, keys and values, however deeply nested. */
+export function stringsIn(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsIn);
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => [k, ...stringsIn(v)]);
+  return value === undefined || value === null ? [] : [String(value)];
+}

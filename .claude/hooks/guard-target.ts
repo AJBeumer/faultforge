@@ -23,8 +23,7 @@
  *
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
-import { existsSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames } from "./guard-content.ts";
 import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
@@ -36,6 +35,7 @@ import {
   postedArguments,
   postedText,
   STDIN_BODY,
+  stringsIn,
 } from "./guard-posted.ts";
 import {
   onlyPrivateRepo,
@@ -56,6 +56,7 @@ import {
 import {
   entersCheckout,
   esc,
+  existingFolder,
   inCheckout,
   linkPattern,
   locate,
@@ -65,6 +66,7 @@ import {
   navigationTargets,
   type Reviewed,
   reviewedRepos,
+  stripReviewedNames,
   within,
 } from "./guard-repos.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
@@ -301,17 +303,6 @@ function checkCommand(ctx: Context, command: string) {
   if (pending) deny(pending);
 }
 
-/** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
-function existingFolder(path: string): string {
-  let dir = path;
-  while (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    const parent = dirname(dir);
-    if (parent === dir) return dir;
-    dir = parent;
-  }
-  return dir;
-}
-
 function checkFileEdit(ctx: Context, args: ToolInput) {
   const path = resolve(ctx.cwd, String(args.file_path ?? args.notebook_path ?? ""));
   const text = [
@@ -340,7 +331,9 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
  * input may name a private template, and when one names a reviewed repo nothing in it may give the lab away.
  */
 function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
-  const text = JSON.stringify(args ?? {});
+  // The input's own text, every string value on its own line: JSON escapes would hide a word after a line
+  // break (`\nplanted`) from the word checks (Qodo on PR 265).
+  const text = stringsIn(args).join("\n");
   if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const repo = ctx.reviewed.find((r) => new RegExp(`${esc(r.github)}|\\b${esc(r.name)}\\b`, "i").test(text));
   if (!repo) return;
@@ -374,17 +367,6 @@ function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
       `This would link to the target (${linked.name}) from here, and it would show that on its timeline. Name the work as plain text instead, like "target 3".`,
     );
   }
-}
-
-/**
- * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
- * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
- */
-function stripReviewedNames(reviewed: Reviewed[], text: string): string {
-  const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
-  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
-  // Whole tokens first, then the slash test: one pattern for both backtracks on every long token (AUD-M4).
-  return text.replace(/[^\s"'`]+/g, (token) => (/[/\\]/.test(token) && identifies.test(token) ? " " : token));
 }
 
 /** Ends the check with a deny; `decide()` turns it into the decision. */

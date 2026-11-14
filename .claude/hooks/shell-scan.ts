@@ -75,7 +75,7 @@ export function quotedSpans(command: string): Span[] {
         });
       }
       // `at` is the closing delimiter's line end (its newline is kept as a command separator), or the next line.
-      i = at > i + 1 ? at : i + 1;
+      i = Math.max(at, i + 1);
       wordStart = true;
       continue;
     }

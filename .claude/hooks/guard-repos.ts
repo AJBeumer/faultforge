@@ -3,7 +3,7 @@
  * always, plus every repo marked reviewed in `factory.json`. Used by guard-target.ts.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -27,6 +27,10 @@ const TARGET: Reviewed = {
   folder: "faultforge-target",
   checkout: resolve(LAB_ROOT, "../faultforge-target"),
 };
+
+/** Git's global options that may stand before `-C` (`--no-pager`, `-c key=value`): skipped, so `-C` is still seen (Qodo on PR 265). */
+// Case matters here even inside a case-blind pattern: `-c` sets config, `-C` moves.
+const GIT_OPTIONS = String.raw`(?:(?-i:-c\s+\S+|(?!-C)--?[\w-]+(?:=\S+)?)\s+)*`;
 
 /** A string as a literal inside a regular expression. */
 export const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -85,7 +89,7 @@ function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
   const lead = atSegmentStart ? "(?:^|[;&|\\n]\\s*)" : "\\b";
   // `GIT_DIR=` and `GIT_WORK_TREE=` (or PowerShell's `$env:GIT_DIR =`) point git at a checkout too (AUD-M3).
   const envLead = atSegmentStart ? lead : "(?:\\$env:|\\b)";
-  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+-C\\s*|${lead}git\\s+--(?:work-tree|git-dir)[=\\s]\\s*|${envLead}GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;
+  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+${GIT_OPTIONS}-C\\s*|${lead}git\\s+${GIT_OPTIONS}--(?:work-tree|git-dir)[=\\s]\\s*|${envLead}GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;
   return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
 }
 
@@ -182,9 +186,26 @@ function gitRemotes(gitDir: string): string[] {
   });
 }
 
+/** The path with its nearest existing folder resolved through links; the rest as written. */
+function real(path: string): string {
+  let head = resolve(path);
+  let tail = "";
+  for (;;) {
+    try {
+      return join(realpathSync.native(head), tail);
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(path);
+      tail = join(basename(head), tail);
+      head = parent;
+    }
+  }
+}
+
 /** True when `path` is `folder` or inside it, compared case-blind on Windows. */
 export function within(path: string, folder: string): boolean {
-  const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  // Through symlinks and junctions to where the path really is, so a link can't lead out (Qodo on PR 265).
+  const fold = (p: string) => (process.platform === "win32" ? real(p).toLowerCase() : real(p));
   const rel = relative(fold(folder), fold(path));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
@@ -206,8 +227,10 @@ export function locate(path: string, reviewed: Reviewed[]): Reviewed | undefined
 /** The most folder moves the guard follows in one command; each one costs a walk up the file system. */
 export const MAX_MOVES = 32;
 
-const MOVE =
-  /(?:\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+-C\s*|--(?:work-tree|git-dir)[=\s]\s*|\bGIT_(?:DIR|WORK_TREE)\s*=\s*)(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/gi;
+const MOVE = new RegExp(
+  String.raw`(?:\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+${GIT_OPTIONS}-C\s*|--(?:work-tree|git-dir)[=\s]\s*|\bGIT_(?:DIR|WORK_TREE)\s*=\s*)(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`,
+  "gi",
+);
 
 /** How many folder moves the command makes; the guard refuses one with more than `MAX_MOVES`. */
 export function moveCount(command: string): number {
@@ -244,4 +267,26 @@ export function navigationTargets(command: string, cwd: string): string[] {
     }
   }
   return targets;
+}
+
+/** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
+export function existingFolder(path: string): string {
+  let dir = path;
+  while (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    dir = parent;
+  }
+  return dir;
+}
+
+/**
+ * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
+ * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
+ */
+export function stripReviewedNames(reviewed: Reviewed[], text: string): string {
+  const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
+  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
+  // Whole tokens first, then the slash test: one pattern for both backtracks on every long token (AUD-M4).
+  return text.replace(/[^\s"'`]+/g, (token) => (/[/\\]/.test(token) && identifies.test(token) ? " " : token));
 }

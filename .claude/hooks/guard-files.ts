@@ -109,15 +109,22 @@ export function referencedFiles(cwd: string, command: string): string[] {
 export function stdinFiles(cwd: string, command: string): string[] {
   if (!STDIN_BODY.test(command)) return [];
   const value = String.raw`(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`;
-  const sources = new RegExp(
-    String.raw`(?:(?<![<\d])<(?!<)\s*|\b(?:cat|type|Get-Content|gc)\s+(?:-(?:Raw|Path|LiteralPath)\s+)*)${value}`,
-    "gi",
-  );
+  // An input redirect names one file; a reader names every file it is given, all posted (Qodo on PR 265).
+  const redirect = new RegExp(String.raw`(?<![<\d])<(?!<)\s*${value}`, "g");
+  const reader = /\b(?:cat|type|Get-Content|gc)\s+([^|;&\n<>()]*)/gi;
   const quoted = quotedMask(command);
-  const texts: string[] = [];
-  for (const m of command.matchAll(sources)) {
+  const named: string[] = [];
+  for (const m of command.matchAll(redirect)) if (!quoted[m.index]) named.push(m[1] ?? m[2] ?? m[3] ?? "");
+  for (const m of command.matchAll(reader)) {
     if (quoted[m.index]) continue;
-    const file = m[1] ?? m[2] ?? m[3] ?? "";
+    const words = [...(m[1] ?? "").matchAll(new RegExp(value, "g"))].map((w) => w[1] ?? w[2] ?? w[3] ?? "");
+    for (let i = 0; i < words.length; i++) {
+      if (/^-Encoding$/i.test(words[i] ?? "")) i++;
+      else named.push(words[i] ?? "");
+    }
+  }
+  const texts: string[] = [];
+  for (const file of named) {
     if (!file || file.startsWith("-") || /^\d*>/.test(file)) continue;
     const read = /[$`%]/.test(file) ? [] : readPosted(cwd, command, file);
     if (!read.length) {
