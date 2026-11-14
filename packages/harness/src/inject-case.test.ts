@@ -155,6 +155,23 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(notRun.errors.join("\n")).toContain("did not finish, or ran no test, on the base commit");
   });
 
+  it("refuses to plant, or validate, next to an answer key or audit log with problems, and touches nothing (#224)", () => {
+    for (const validateOnly of [false, true]) {
+      const w = world();
+      const checked: string[][] = [];
+      w.deps.ledgerProblems = (paths) => {
+        checked.push(paths);
+        return ["amendment amending FF-9500: changes injectedLines"];
+      };
+      expect(w.inject(validateOnly ? { validateOnly, caseId: undefined } : {})).toBe(1);
+      expect(checked).toEqual([[join(w.priv, "ground-truth.jsonl"), join(w.priv, "audit-events.jsonl")]]);
+      expect(w.errors.join("\n")).toContain("the answer key or audit log has problems: amendment amending FF-9500");
+      expect(w.gitCalls).toEqual([]);
+      expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
+      expect(auditFile(w)).toEqual([]);
+    }
+  });
+
   it("refuses a case id already in the answer key (I06), and a malformed one", () => {
     const w = world();
     expect(w.inject({ caseId: "FF-9500" })).toBe(1);

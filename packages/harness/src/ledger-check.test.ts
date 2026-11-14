@@ -315,3 +315,27 @@ describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N
     expect(scanner.result()).toBe("removed");
   });
 });
+
+describe("AppendOnlyScanner: a last line without a line break, appended after (Qodo on PR 286)", () => {
+  const NO_BREAK = "\\ No newline at end of file";
+
+  it("reads the last line shown as removed and added back unchanged as an append", () => {
+    expect(appendOnlyBreak(`@@ -1,2 +1,3 @@\n a\n-b\n${NO_BREAK}\n+b\n+c\n`)).toBeUndefined();
+  });
+
+  it("still reads that line coming back changed, or not at all, as a removal", () => {
+    expect(appendOnlyBreak(`@@ -1,2 +1,3 @@\n a\n-b\n${NO_BREAK}\n+B\n+c\n`)).toBe("removed");
+    expect(appendOnlyBreak(`@@ -1,2 +1,1 @@\n a\n-b\n${NO_BREAK}\n`)).toBe("removed");
+    // Without the marker, a removed line added back is still a change of place, never let through.
+    expect(appendOnlyBreak("@@ -1,2 +1,3 @@\n a\n-b\n+b\n+c\n")).toBe("removed");
+  });
+
+  it("passes such an append in a real history, committed and uncommitted", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-9001"}', "first line, no line break");
+    writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-9001"}\n{"caseId":"FF-9002"}\n');
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+    sh(dir, "commit", "--quiet", "-am", "append");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+  });
+});

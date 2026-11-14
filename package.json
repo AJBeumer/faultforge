@@ -22,6 +22,7 @@
     "rules:evidence": "tsx packages/harness/src/rules-evidence.ts",
     "rules:propose": "tsx packages/harness/src/rules-propose.ts",
     "revert:check": "tsx packages/harness/src/revert-check.ts",
+    "ledger:anchor": "tsx packages/harness/src/ledger-anchor-cli.ts",
     "ledger:check": "tsx packages/harness/src/ledger-check-cli.ts",
     "qodo:check": "tsx packages/harness/src/qodo-check.ts",
     "verdict": "tsx packages/harness/src/verdict-cli.ts",
