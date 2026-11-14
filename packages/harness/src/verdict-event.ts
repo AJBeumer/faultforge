@@ -30,7 +30,12 @@ export interface AdjudicationEvent {
 
 /** A reason as compared across cases: case, spacing and a closing full stop don't make it another reason. */
 export function normalReason(reason: string): string {
-  return reason.trim().toLowerCase().replace(/\s+/g, " ").replace(/\.$/, "");
+  // Closing full stops and the spaces around them go first, then spacing inside (Qodo on PR 267).
+  return reason
+    .toLowerCase()
+    .replace(/[\s.]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -78,7 +83,10 @@ export function latestVerdict<T extends Record<string, unknown>>(caseEvents: T[]
   let latest: T | undefined;
   for (const e of caseEvents) {
     if (e.type !== "case.adjudicated") continue;
-    if (!latest || Date.parse(String(e.at)) >= Date.parse(String(latest.at))) latest = e;
+    const at = Date.parse(String(e.at));
+    // An unreadable time is refused, as case:build refuses it, never silently ranked (Qodo on PR 267).
+    if (Number.isNaN(at)) throw new Error(`verdict ${String(e.eventId)} has no readable time`);
+    if (!latest || at >= Date.parse(String(latest.at))) latest = e;
   }
   return latest;
 }

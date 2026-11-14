@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { applyMatchRule } from "./match-rule.ts";
 import { findSavedReview, type SavedFinding, toMatchFinding } from "./saved-review.ts";
 import { type AskFn, parseCliArgs, printReport, type RunOptions, run } from "./verdict.ts";
-import { reasonsOfOtherCases } from "./verdict-event.ts";
+import { latestVerdict, normalReason, reasonsOfOtherCases } from "./verdict-event.ts";
 
 const TEMPLATE = {
   id: "idempotency-guard-bypass-v1",
@@ -762,5 +762,21 @@ describe("npm run verdict: round two on PR 267", () => {
     const { code, err } = await runOn("FF-0001", root, { ask });
     expect(code).toBe(2);
     expect(err).toContain("same reason meanwhile");
+  });
+});
+
+describe("npm run verdict: round three on PR 267", () => {
+  it("reads a reason the same whatever spacing or full stops close it", () => {
+    for (const r of ["Same reason .", "same reason..", "  SAME   reason  "])
+      expect(normalReason(r)).toBe("same reason");
+  });
+
+  it("refuses a save with two findings of one id, and a verdict with no readable time", async () => {
+    const dup = await runOn("FF-0001", fixture({ findings: [MATCHING_FINDING, MATCHING_FINDING] }), {
+      ask: fakeAsk([]).ask,
+    });
+    expect(dup.code).toBe(2);
+    expect(dup.err).toContain("two findings with the same id");
+    expect(() => latestVerdict([{ type: "case.adjudicated", eventId: "a", at: "soon" }])).toThrow(/no readable time/);
   });
 });
