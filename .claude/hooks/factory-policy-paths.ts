@@ -1,30 +1,21 @@
 /**
  * The factory policy's rules about files (AUD-H2, re-grade after round 4): what a run may not read (the
- * process files under `/proc`, the answer key, and in a target ticket's run the private checkouts), which files
+ * process files under `/proc`, the answer key, and the private checkouts: factory-policy-private.ts), which files
  * a shell command may not write (the guardrails: `.claude/` and the giveaway word list), and which scripts it
  * may not run (one this run wrote or changed, which no text rule can read before it runs). Split from
  * factory-policy.ts, which may not pass 400 lines.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import { ANSWER_FILES, globBase, inside, privateReadViolation, real } from "./factory-policy-private.ts";
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
 import { quotedMask } from "./shell-scan.ts";
 
-/** The runner's list of private checkouts a target ticket's run must not read, as the agent's environment holds it. */
-export const PRIVATE_CHECKOUTS_ENV = "FAULTFORGE_PRIVATE_CHECKOUTS";
+export { PRIVATE_CHECKOUTS_ENV, privateCheckouts, privateCommandViolation } from "./factory-policy-private.ts";
 
 /** The commits each of the run's repos started from, comma-separated: a script that runs must match one. */
 export const RUN_BASES_ENV = "FAULTFORGE_RUN_BASES";
-
-/** The private repo's own files by name: the answer key, the audit log, the backlog and the templates. */
-const PRIVATE_NAMES = /ground[-_]?truth|audit[-_]events|BACKLOG\.md|private[/\\]+(templates|config|cases)\b/i;
-
-/**
- * The private files no run reads, a lab ticket's included, by their path in the private checkout: the answer
- * key, the audit log and the unreleased templates. A lab ticket's agent saves evidence there, never reads these.
- */
-const ANSWER_FILES = /private[/\\]+(ground-truth\.jsonl|audit-events\.jsonl|templates\b|cases\b)/i;
 
 /** Anything under `/proc`: a process's environment, memory and files, its own (`self`) or another's. */
 const PROC = /(^|[^\w.-])\/proc(\/|$)/i;
@@ -50,48 +41,20 @@ const SHELL_WRITE = new RegExp(
   "i",
 );
 
-/** True when `path` is `folder` or inside it, compared as the file system does on this platform. */
-function inside(path: string, folder: string): boolean {
-  const rel = relative(resolve(folder), resolve(path));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-/** The real path of `path`, through links, or its plain resolved form when it doesn't exist. */
-function real(path: string): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return resolve(path);
-  }
-}
-
-/** The private checkouts named in the run's environment: none in a lab ticket's run. */
-export function privateCheckouts(env: NodeJS.ProcessEnv): string[] {
-  return (env[PRIVATE_CHECKOUTS_ENV] ?? "")
-    .split(delimiter)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => resolve(p));
-}
-
-/** A path's spellings as a command could write it: native, forward slashes, lower case, `/d/…`. */
-function spellings(path: string): string[] {
-  const forward = path.replace(/\\/g, "/").toLowerCase();
-  return [...new Set([forward, forward.replace(/^([a-z]):/, "/$1")])];
-}
-
 /** A text as forward-slashed, collapsed path text, so `/proc/./self` and `/proc//self` read `/proc/self`. */
 const asPath = (text: string) => posix.normalize(text.replace(/\\/g, "/"));
 
-/** The fixed folder a glob pattern starts from: everything before its first wildcard. */
-const globBase = (pattern: string) => pattern.split(/[*?[{]/)[0]?.replace(/[^/\\]*$/, "") ?? "";
-
 /**
  * Why a read tool (Read, Grep, Glob) may not read what it names, or undefined: anything under `/proc` and the
- * answer key in any run, and in a target ticket's run a private checkout, a folder that holds one, or a
- * private file by name (#284). The run's own folder is its own, even inside a folder the runner names.
+ * answer key in any run, and a private checkout the runner names, a folder that holds one, or a private file by
+ * name (#284; every run since #299: factory-policy-private.ts).
  */
-export function readViolation(args: Record<string, unknown>, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
+export function readViolation(
+  args: Record<string, unknown>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  tool = "Read",
+): string | undefined {
   const text = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : "");
   const texts = ["file_path", "path", "pattern", "glob", "notebook_path"].map(text).filter(Boolean);
   const named = ["file_path", "path", "notebook_path"].map(text).filter(Boolean);
@@ -107,47 +70,9 @@ export function readViolation(args: Record<string, unknown>, cwd: string, env: N
     return "no reading process files under /proc";
   if ([...texts, ...resolved].some((t) => ANSWER_FILES.test(t)))
     return "no run reads the answer key, the audit log or the templates";
-  const checkouts = privateCheckouts(env);
-  if (!checkouts.length) return undefined;
-  if (texts.some((t) => PRIVATE_NAMES.test(t))) return "a target ticket's run doesn't read the private repo";
-  const own = env.FAULTFORGE_RUN_ROOT ? resolve(env.FAULTFORGE_RUN_ROOT) : undefined;
-  for (const path of resolved) {
-    if (own && inside(path, own)) continue;
-    // In a checkout, or a folder that holds one (a search from a parent reads it too; Qodo on PR 288).
-    if (checkouts.some((c) => inside(path, c) || inside(path, real(c)) || inside(c, path)))
-      return "a target ticket's run doesn't read the private repo";
-  }
-  return undefined;
-}
-
-/** Why a shell command may not run because it names the private repo's files or checkouts, or undefined. */
-export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv, cwd?: string): string | undefined {
-  const readings = [command, spokenWords(command)];
-  if (readings.some((r) => ANSWER_FILES.test(r))) return "no run reads the answer key, the audit log or the templates";
-  const checkouts = privateCheckouts(env);
-  if (!checkouts.length) return undefined;
-  // The run's own folder may sit inside one the runner names (its runs folder): it is set aside first.
-  const own = env.FAULTFORGE_RUN_ROOT ? spellings(resolve(env.FAULTFORGE_RUN_ROOT)) : [];
-  const named = (text: string) => {
-    let lower = text.toLowerCase().replace(/\\/g, "/");
-    for (const s of own) lower = lower.split(s).join(" ");
-    return checkouts.some((c) => spellings(c).some((s) => lower.includes(s)));
-  };
-  if (readings.some((r) => PRIVATE_NAMES.test(r) || named(r)))
-    return "a target ticket's run doesn't read or change the private repo";
-  // Paths as the shell would resolve them (Qodo on PR 288): one that climbs out of the run's folder with `..`,
-  // or whose fixed start (before a wildcard) is a private checkout or a folder that holds one.
-  const root = env.FAULTFORGE_RUN_ROOT ? resolve(env.FAULTFORGE_RUN_ROOT) : undefined;
-  for (const word of spokenWords(command).split(/[\s;&|<>()=]+/)) {
-    if (!/[/\\]/.test(word) && !/^\.\.?$/.test(word)) continue;
-    const base = resolve(cwd ?? root ?? ".", globBase(word) || word);
-    if (root && /(^|[/\\])\.\.([/\\]|$)/.test(word) && !inside(base, root))
-      return "a target ticket's run stays in its own folder: no `..` out of it";
-    if (root && inside(base, root)) continue;
-    if (checkouts.some((c) => inside(base, c) || (inside(c, base) && /[/\\]/.test(word))))
-      return "a target ticket's run doesn't read or change the private repo";
-  }
-  return undefined;
+  // A Grep pattern is what it looks for in a file, not a path: searching code for a name reads no private file.
+  const pathTexts = tool === "Grep" ? texts.filter((t) => t !== pattern) : texts;
+  return privateReadViolation(tool, pathTexts, resolved, env);
 }
 
 /**

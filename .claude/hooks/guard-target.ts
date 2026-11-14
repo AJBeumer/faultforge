@@ -14,6 +14,9 @@
  * recognised by its folder name or by a remote that points at the repo (guard-repos.ts).
  * Everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo, and every post,
  * to any repo but private storage, that names a template still held in private storage (guard-private.ts).
+ * Everywhere, it blocks code it can't read before it runs (shell-exec.ts): text built at run time run as a
+ * shell (`… | base64 -d | bash`, `bash -c "$(…)"`, `eval`), and inline interpreter code that makes a network
+ * call (`node -e "fetch(…)"`), which could post without gh.
  *
  * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
  * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
@@ -72,6 +75,7 @@ import {
   type ToolInput,
 } from "./guard-tools.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
+import { builtCodeProblem, inlineNetworkProblem, interpreterPipelines } from "./shell-exec.ts";
 import { blankQuoted, joinedWords, MAX_COMMAND_CHARS } from "./shell-scan.ts";
 
 /**
@@ -195,6 +199,14 @@ const UNREADABLE_VARIABLE =
 function checkShell(ctx: Context, command: string) {
   const alias = aliasProblem(command);
   if (alias) deny(alias);
+  // Code no rule can read before it runs, wherever the command runs (#299): built text run as a shell, and
+  // inline interpreter code that reaches the network, which can post without gh.
+  const unread = builtCodeProblem(command, ctx.backticks) ?? inlineNetworkProblem(command, ctx.backticks);
+  if (unread) deny(unread);
+  // A private id in inline code is checked too: the code could post it any way it likes (#299).
+  const names = ctx.names;
+  if (names && interpreterPipelines(command, ctx.backticks).some((code) => names(code) || names(joinedWords(code))))
+    deny(PRIVATE_ID_REASON);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
   const read = shellReading(command);
   const readAlias = aliasProblem(read);

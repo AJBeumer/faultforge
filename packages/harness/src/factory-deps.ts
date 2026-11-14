@@ -9,12 +9,12 @@ import { auditRun } from "./factory-audit.ts";
 import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
-import { git, gitLong, npm, retried } from "./factory-exec.ts";
+import { git, gitLong, npm } from "./factory-exec.ts";
 import { type HooksReport, requireHooks, withCleanupFailure } from "./factory-hooks.ts";
 import { acquireLock, type Lock } from "./factory-lock.ts";
 import { copyEvidence, isReviewedTicket, privateAccess, privateUrl } from "./factory-private.ts";
 import { processStartId } from "./factory-process.ts";
-import { claimModeFrom, pidAlive } from "./factory-recovery.ts";
+import { githubRecoveryReads, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
 import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
@@ -46,30 +46,23 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     mode,
     // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
     unguarded: () => unguardedCheckouts(factory, LAB_ROOT),
-    // GitHub reads get three tries: one transient failure must not cost the tick (AUD-N10).
-    claimMode: (github, number) =>
-      claimModeFrom(
-        retried(() =>
-          ghAll<{ body?: string; user?: { login?: string } }>(`repos/${github}/issues/${number}/comments?per_page=100`),
-        ),
-        github.split("/")[0] ?? "",
-      ),
+    // GitHub reads get three tries in `github.ts` itself: one transient failure must not cost the tick (AUD-N10).
+    // The same reads the recovery dry run makes (`factory-recover.ts`).
+    claimMode: githubRecoveryReads.claimMode,
     // Every open PR, however many: gh pages through them up to the limit (Qodo on PR 268).
     openPrs: (github, number) =>
       earlierPrs(
-        retried(() =>
-          ghJson<OpenPr[]>(
-            "pr",
-            "list",
-            "--repo",
-            github,
-            "--state",
-            "open",
-            "--limit",
-            "5000",
-            "--json",
-            "url,body,author,isCrossRepository",
-          ),
+        ghJson<OpenPr[]>(
+          "pr",
+          "list",
+          "--repo",
+          github,
+          "--state",
+          "open",
+          "--limit",
+          "5000",
+          "--json",
+          "url,body,author,isCrossRepository",
         ),
         number,
         github.split("/")[0] ?? "",
@@ -80,16 +73,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       held = acquireLock(runs, pidAlive);
       return held;
     },
-    labelled: (github, label) =>
-      retried(() =>
-        ghAll<{ number: number; title: string; pull_request?: unknown }>(
-          `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
-        ),
-      ).filter((i) => !i.pull_request),
-    events: (github, number) =>
-      retried(() => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`)),
+    labelled: githubRecoveryReads.labelled,
+    events: (github, number) => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
-    snapshot: (github, number) => retried(() => ghSnapshot(github, number)),
+    snapshot: (github, number) => ghSnapshot(github, number),
     writeTicket(ws, text) {
       const file = join(ws.root, "ticket.md");
       writeFileSync(file, `${text}\n`);

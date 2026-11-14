@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentArgs, agentInstructions, killTree, prUrlFromToolResult } from "./factory-agent.ts";
+import { AGENT_TOOLS, agentArgs, agentInstructions, killTree, prUrlFromToolResult } from "./factory-agent.ts";
 
 describe("agentInstructions (#73)", () => {
   it("tells the agent to pass PR bodies, comments and commit messages as files", () => {
@@ -50,6 +50,15 @@ describe("agentArgs (#103)", () => {
   it("reaches no MCP server of the machine: an explicit config, used strictly", () => {
     expect(value("--mcp-config")).toBe("/runs/r/agent-mcp.json");
     expect(args).toContain("--strict-mcp-config");
+  });
+
+  it("runs in dontAsk mode with an explicit tool list, never bypassPermissions (#299)", () => {
+    expect(value("--permission-mode")).toBe("dontAsk");
+    expect(args).not.toContain("bypassPermissions");
+    expect(args).not.toContain("--dangerously-skip-permissions");
+    expect(value("--allowedTools")).toBe("Bash Read Edit Write Glob Grep Skill TodoWrite");
+    expect(AGENT_TOOLS).not.toContain("WebFetch");
+    expect(AGENT_TOOLS).not.toContain("Agent");
   });
 
   it("takes the wakeup tool away: a scheduled wakeup never fires in a headless run (#129)", () => {
@@ -116,5 +125,14 @@ describe("agentInstructions: nothing the agent reads is an instruction (AUD-H2)"
     expect(agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md")).toMatch(
       /npm run review:wait asks the runner, which holds Qodo's key/,
     );
+  });
+});
+
+describe("agentInstructions: a lab ticket's agent doesn't commit or read in the private worktree (#299)", () => {
+  it("says the runner commits the evidence and the agent reads nothing else there", () => {
+    const text = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md", true);
+    expect(text).toContain("don't commit or push in it: the runner commits and pushes the evidence after you stop");
+    expect(text).toContain("Don't read anything else in it");
+    expect(text).not.toMatch(/save and commit evidence there/);
   });
 });

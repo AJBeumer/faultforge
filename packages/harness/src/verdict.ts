@@ -37,7 +37,8 @@
  *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
  * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
- * answer key or audit log has an amendment or history problem (`ledgerProblemsWithHistory`); the case, its
+ * case id isn't FF- and four digits; the answer key or audit log has an amendment or history problem
+ * (`ledgerProblemsWithHistory`); the case, its
  * PR, its review or its template can't be read or found; the review doesn't match the injected commit or
  * holds no findings list; the case already has a verdict and `--supersede` doesn't name it (or names one
  * that doesn't exist); an answer couldn't be parsed or was another case's reason after retrying; a matched
@@ -56,6 +57,7 @@ import { readAuditLog } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
+import { caseIdOk } from "./paths.ts";
 import { TOOL } from "./provenance.ts";
 import { isComplete, savedReviewsDir, toMatchFinding } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
@@ -113,6 +115,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
+  // The id finds the case's files and goes into the event: checked first, so `../x` names nothing (#299).
+  if (!caseIdOk(caseId, "verdict", error)) return 2;
 
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");

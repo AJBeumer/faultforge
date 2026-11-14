@@ -50,3 +50,13 @@ export function evidenceKindDir(evidence: string, kind: PrEvidenceKind): string 
 export function prEvidenceDir(evidence: string, kind: PrEvidenceKind, repoKey: string, pr: number | string): string {
   return join(evidenceKindDir(evidence, kind), `${repoKey}-pr${pr}`);
 }
+
+/** A case's id: `FF-` and four digits. Checked before it names a file (`<id>.json`), so `../x` can name none. */
+export const CASE_ID = /^FF-\d{4}$/;
+
+/** True when `id` is a case id; otherwise says why on `error`, as `tool`, and is false (#299). */
+export function caseIdOk(id: string, tool: string, error: (line: string) => void): boolean {
+  if (CASE_ID.test(id)) return true;
+  error(`${tool}: a case id is FF- and four digits, not ${JSON.stringify(id.slice(0, 40))}`);
+  return false;
+}

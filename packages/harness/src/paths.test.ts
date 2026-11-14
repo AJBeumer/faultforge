@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
-import { evidenceDir, evidenceKindDir, prEvidenceDir, privateDir, ROOT, runsDir } from "./paths.ts";
+import { caseIdOk, evidenceDir, evidenceKindDir, prEvidenceDir, privateDir, ROOT, runsDir } from "./paths.ts";
 
 const factory = (evidence: string): FactoryConfig => ({ evidence, repos: {} });
 
@@ -110,5 +110,14 @@ describe("the harness sources", () => {
       .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "paths.ts")
       .flatMap((f) => handBuiltEvidencePaths(f, readFileSync(join(dir, f), "utf8")));
     expect(found).toEqual([]);
+  });
+});
+
+describe("caseIdOk (#299)", () => {
+  it("takes FF- and four digits, and says why anything else is refused", () => {
+    const errors: string[] = [];
+    expect(caseIdOk("FF-0001", "t", (l) => errors.push(l))).toBe(true);
+    expect(caseIdOk("../FF-0001", "t", (l) => errors.push(l))).toBe(false);
+    expect(errors).toEqual(['t: a case id is FF- and four digits, not "../FF-0001"']);
   });
 });

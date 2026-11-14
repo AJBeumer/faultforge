@@ -63,14 +63,13 @@
  *
  * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed, saved or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
- * listed); 2 nothing was built or saved, because an input is missing or unreadable (the answer key, the
- * events, a bug case's template, the saved review, or an overlay file that exists), the answer key or
- * audit log has an amendment or history problem, the inputs disagree (a missing stage, disagreeing
- * commits, an unfinished review with a final verdict, inputs changed since the verdict, a verdict judged
- * under another match rule version, or a legacy findings file that can't be read as a review), or a saved
- * record with other content is already there. The message names which.
- *
- * An unexpected error, even while loading, is 2 too: `npm run case:build` runs `case-build-cli.ts`.
+ * listed); 2 nothing was built or saved, because the case id isn't FF- and four digits, an input is missing or
+ * unreadable (the answer key, the events, a bug case's template, the saved review, or an overlay file that
+ * exists), the answer key or audit log has an amendment or history problem, the inputs disagree (a missing
+ * stage, disagreeing commits, an unfinished review with a final verdict, inputs changed since the verdict, a
+ * verdict judged under another match rule version, or a legacy findings file that can't be read as a review),
+ * or a saved record with other content is already there. The message names which. An unexpected error, even
+ * while loading, is 2 too: `npm run case:build` runs `case-build-cli.ts`.
  */
 
 import { randomUUID } from "node:crypto";
@@ -88,7 +87,7 @@ import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { isToolWritten, verdictHashProblem } from "./ledger-hashes.ts";
 import { RULE_VERSION } from "./match-rule.ts";
-import { ROOT } from "./paths.ts";
+import { caseIdOk, ROOT } from "./paths.ts";
 import { sha256 } from "./provenance.ts";
 import {
   type Finding,
@@ -163,7 +162,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-
+  // The id names files (`cases/<id>.json`, `examples/<id>.json`): checked first, so `../x` names none (#299).
+  if (!caseIdOk(caseId, "case:build", error)) return 2;
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");

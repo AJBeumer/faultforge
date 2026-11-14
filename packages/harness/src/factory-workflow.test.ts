@@ -11,6 +11,14 @@ import { loadFactory } from "./factory-config.ts";
 const root = join(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(root, ".github/workflows/factory.yml"), "utf8");
 
+/** A step's text without its comment lines, which the next step's own comments follow in the split. */
+function withoutComments(step: string): string {
+  return step
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+}
+
 describe("factory workflow", () => {
   it("starts on the label, a schedule, and by hand", () => {
     expect(workflow).toMatch(/issues:\s*\n\s*types: \[labeled\]/);
@@ -154,6 +162,49 @@ describe("factory workflow", () => {
     const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
     expect(tick).toContain("FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}");
+  });
+
+  it("shows a failed tick (3) or one that couldn't set up (2) on the run page: an error and a summary line naming the run", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.find((step) => step.startsWith("name: Run one tick")) ?? "";
+    const script = withoutComments(tick.slice(tick.indexOf("run: |")));
+    // The tick's code is kept, not lost to the shell's -e, and is the step's own exit code.
+    expect(script).toContain("npm run -s factory:tick -- --ci --minutes 120 --budget 25 || code=$?");
+    expect(script).toMatch(/\n\s*exit "\$code"\s*$/);
+    // Exits 2 and 3 have their own words, and only they give an error annotation.
+    expect(script).toMatch(/\n\s*2\) outcome="could not set up[^"]*" ;;/);
+    expect(script).toMatch(/\n\s*3\) outcome="failed[^"]*" ;;/);
+    expect(script).toContain(
+      'if [ "$code" = 2 ] || [ "$code" = 3 ]; then echo "::error title=Factory tick::$line"; fi',
+    );
+    // The line names the run and the outcome, and goes into the job summary for every outcome.
+    expect(script).toContain(
+      'line="Factory tick, run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT: $outcome (exit $code)"',
+    );
+    expect(script).toContain('echo "- $line" >> "$GITHUB_STEP_SUMMARY"');
+    // Nothing the tick printed and no path reaches the page: every echoed line is built from fixed words, the
+    // run's number and the exit code alone.
+    const echoed = [...script.matchAll(/(?:outcome|line)="([^"]*)"/g)].map((m) => m[1] ?? "");
+    expect(echoed.length).toBeGreaterThanOrEqual(6);
+    for (const text of echoed) {
+      for (const variable of text.match(/\$\w+/g) ?? [])
+        expect(["$GITHUB_RUN_ID", "$GITHUB_RUN_ATTEMPT", "$outcome", "$code"]).toContain(variable);
+      expect(text).not.toMatch(/private|[/\\]|\$\(|\$\{/);
+    }
+  });
+
+  it("reports a tick step that was cancelled or ran out of time, which never reached its own report", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
+    const report = steps.findIndex((step) => step.startsWith("name: Report a tick that stopped without reporting"));
+    expect(steps[tick]).toContain("\n        id: tick\n");
+    expect(steps[tick]).toContain('echo "reported=true" >> "$GITHUB_OUTPUT"');
+    expect(report).toBeGreaterThan(tick);
+    const step = withoutComments(steps[report] ?? "");
+    expect(step).toContain("if: always() && steps.tick.outcome != 'skipped' && steps.tick.outputs.reported != 'true'");
+    expect(step).toContain('echo "::error title=Factory tick::$line"');
+    expect(step).toContain('echo "- $line" >> "$GITHUB_STEP_SUMMARY"');
+    expect(step).not.toMatch(/secrets\.|private/);
   });
 
   it("pins every action to a full commit", () => {
