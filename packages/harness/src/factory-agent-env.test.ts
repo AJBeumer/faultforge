@@ -30,6 +30,12 @@ describe("agentEnv: the agent gets an allow-list, not the runner's environment (
     expect(env.FAULTFORGE_RUN_ROOT).toBe("/runs/r1");
   });
 
+  it("turns Glob's --no-ignore off, so a Glob from the checkout skips the git-ignored private worktree (#299)", () => {
+    expect(agentEnv({ ...RUNNER, CLAUDE_CODE_GLOB_NO_IGNORE: "true" }, RUN).env.CLAUDE_CODE_GLOB_NO_IGNORE).toBe(
+      "false",
+    );
+  });
+
   it("passes only the listed FAULTFORGE_* variables, never the runner's own by prefix (AUD-H2, re-grade)", () => {
     const runner = {
       ...RUNNER,

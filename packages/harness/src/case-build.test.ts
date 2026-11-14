@@ -1079,3 +1079,23 @@ describe("run: the findings come from the file the verdict judged (Qodo on PR 26
     expect(err.join("\n")).toContain("the verdict judged");
   });
 });
+
+describe("case:build: the case id is checked before it names a file (#299)", () => {
+  it.each(["../x", "FF-12", "ff-0002", "FF-0002/../../x"])("refuses %s with exit 2 and writes nothing", async (id) => {
+    const dir = mkdtempSync(join(tmpdir(), "case-build-id-"));
+    const errors: string[] = [];
+    const code = await run(id, {
+      groundTruthPath: join(dir, "gt.jsonl"),
+      auditEventsPath: join(dir, "audit.jsonl"),
+      casesDir: join(dir, "cases"),
+      examplesDir: join(dir, "examples"),
+      save: true,
+      write: true,
+      error: (line) => errors.push(line),
+      log: () => {},
+    });
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toMatch(/a case id is FF- and four digits/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -788,3 +788,21 @@ describe("npm run verdict: round three on PR 267", () => {
     expect(() => latestVerdict([{ type: "case.adjudicated", eventId: "a", at: "soon" }])).toThrow(/no readable time/);
   });
 });
+
+describe("verdict: the case id is checked before it names a file (#299)", () => {
+  it.each(["../x", "FF-12", "ff-0002", "FF-0002/../../x", "FF-00020"])(
+    "refuses %s with exit 2 and reads nothing",
+    async (id) => {
+      const dir = mkdtempSync(join(tmpdir(), "verdict-id-"));
+      const errors: string[] = [];
+      const code = await run(id, {
+        auditEventsPath: join(dir, "missing-audit.jsonl"),
+        groundTruthPath: join(dir, "missing-gt.jsonl"),
+        error: (line) => errors.push(line),
+        log: () => {},
+      });
+      expect(code).toBe(2);
+      expect(errors.join("\n")).toMatch(/a case id is FF- and four digits/);
+    },
+  );
+});
