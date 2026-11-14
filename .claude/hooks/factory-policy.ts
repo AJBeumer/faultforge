@@ -16,6 +16,8 @@
  *    `ssh`) or by code (`fetch(`, `http.request`)
  *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
  *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
+ *  - text built at run time run as shell code: `… | base64 -d | bash`, `bash -c "$(…)"`, `eval`, `$(…)` as
+ *    the command (shell-exec.ts, #299)
  *  - reading `/proc`, the answer key, the audit log and the templates with any tool, and in a target ticket's
  *    run the private checkouts the runner names in `FAULTFORGE_PRIVATE_CHECKOUTS` (#284; a lab ticket's too, #299)
  *
@@ -41,6 +43,7 @@ import {
   scriptViolation,
 } from "./factory-policy-paths.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
+import { builtCodeProblem } from "./shell-exec.ts";
 import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
 
 /** The tools that only read files; Claude Code's settings route them to this hook too (#284). */
@@ -184,6 +187,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       // Only a command short enough to read is looked at further; the length rule above already refuses it.
       if (command.length <= MAX_COMMAND_CHARS) {
         for (const reason of [
+          builtCodeProblem(command, tool !== "PowerShell")?.replace(/\.$/, ""),
           guardrailWriteViolation(command, cwd),
           privateCommandViolation(command, env, cwd),
           scriptViolation(command, cwd, env),
