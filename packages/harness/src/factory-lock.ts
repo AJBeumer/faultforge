@@ -3,7 +3,8 @@
  */
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isTickProcess, lockIsStale, pidAlive } from "./factory-recovery.ts";
+import { ownStartMs, sameProcess } from "./factory-process.ts";
+import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 export interface Lock {
   acquired: boolean;
@@ -47,8 +48,9 @@ export function lastBeat(dir: string, token: string | undefined): string | undef
  * created only if nothing is there yet, and it appears with its content, so a tick reading it at that
  * instant never sees an empty file (AUD-N10) and two ticks racing for an unheld lock can never both get it.
  *
- * A lock is taken over only when its holder is gone: its pid is dead, or the pid now runs a program that
- * isn't Node, so the system handed it on after a crash or restart (`lockIsStale`). A live tick keeps its lock
+ * A lock is taken over only when its holder is gone: its pid is dead, or the live pid is another process
+ * that started later, so the system handed it on after a crash or restart (`lockIsStale`; the lock records
+ * when its holder started, `factory-process.ts`). The holder itself keeps its lock
  * however old it is and however long one of its steps takes (AUD-M19): neither the lock's age nor the
  * heartbeat's frees it (Qodo on PR 262: a heartbeat limit let a slow but live tick lose its lock). The
  * machine's uptime is no guide either: a clock correction moves a boot time computed from it, and Windows
@@ -63,16 +65,17 @@ export function lastBeat(dir: string, token: string | undefined): string | undef
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
-  options: { heartbeatMs?: number; isHolder?: (pid: number) => boolean } = {},
+  options: { heartbeatMs?: number; isSame?: (pid: number, started: number | undefined) => boolean } = {},
 ): Lock {
-  const { heartbeatMs = HEARTBEAT_MS, isHolder = isTickProcess } = options;
+  const { heartbeatMs = HEARTBEAT_MS, isSame = (pid, started) => sameProcess(pid, started) } = options;
   const file = join(dir, "factory.lock");
   const token = `${process.pid}-${random()}`;
   const since = new Date().toISOString();
   const beat = beatFile(dir, token);
   const take = () => {
     const tmp = join(dir, `factory.lock.${token}.${random()}.tmp`);
-    writeFileSync(tmp, JSON.stringify({ pid: process.pid, since, at: since, token }), { flag: "wx" });
+    const lock = { pid: process.pid, started: ownStartMs(), since, at: since, token };
+    writeFileSync(tmp, JSON.stringify(lock), { flag: "wx" });
     try {
       linkSync(tmp, file);
     } finally {
@@ -98,7 +101,11 @@ export function acquireLock(
     } catch {
       // gone already, or unreadable: nothing of ours to remove
     }
-    rmSync(beat, { force: true });
+    try {
+      rmSync(beat, { force: true });
+    } catch {
+      // A heartbeat file left behind belongs to no lock: harmless, and never worth failing a tick over.
+    }
   };
   const won = (note?: string): Lock => {
     refresh();
@@ -113,7 +120,7 @@ export function acquireLock(
     // Fallen through: something is already at `file`, live or stale.
   }
   let heldText = "";
-  let held: { pid?: number; at?: string; since?: string; token?: string } = {};
+  let held: { pid?: number; started?: number; at?: string; since?: string; token?: string } = {};
   try {
     heldText = readFileSync(file, "utf8");
     held = JSON.parse(heldText);
@@ -121,7 +128,7 @@ export function acquireLock(
     // An unreadable lock has no pid, so it is stale below; heldText stays "" and won't match anything real.
   }
   const at = lastBeat(dir, held.token) ?? held.at;
-  if (!lockIsStale(held, isAlive, isHolder))
+  if (!lockIsStale(held, isAlive, isSame))
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${at}` };
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${random()}`);
@@ -152,6 +159,6 @@ export function acquireLock(
   } catch {
     return lost;
   }
-  const why = held.pid && isAlive(held.pid) ? "that pid now runs another program" : "its pid is gone";
+  const why = held.pid && isAlive(held.pid) ? "that pid is now another process" : "its pid is gone";
   return won(`took over a stale lock from pid ${held.pid ?? "?"} (${at ?? "unknown time"}): ${why}`);
 }

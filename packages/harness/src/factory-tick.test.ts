@@ -466,7 +466,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
     expect(f.calls.indexOf("save with workspace")).toBeLessThan(f.calls.indexOf(relabels[1] ?? ""));
-    expect(f.comments.at(-1)?.body).toMatch(/evidence couldn't be saved[\s\S]*push rejected/);
+    expect(f.comments.at(-1)?.body).toMatch(/evidence couldn't be saved[\s\S]*the run log has the error/);
     expect(f.events.find((e) => e.event === "finished")).toMatchObject({ label: LABELS.help });
     expect(f.calls).not.toContain("cleanup");
   });
@@ -567,7 +567,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(addAttempts).toBe(2);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
     expect(f.events.map((e) => e.event)).toContain("evidence-blocked");
     // Nothing was added, so agent-working stays on and recovery finds the ticket on the next tick.
     expect(f.calls).not.toContain("cleanup");
@@ -673,7 +673,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("does not report the run as finished when the finish step's own label add fails (Qodo on PR 123)", async () => {
@@ -694,7 +694,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("needs help when a gh/git call during the audit times out, names the call, and still relabels (#107)", async () => {
@@ -708,7 +708,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(git ls-remote timed out\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("needs help when a gh/git call during verify times out, names the call, and still relabels (#107)", async () => {
@@ -722,7 +722,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(npm review:wait timed out\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("reports the opened pull request on the ticket when the time limit is hit after the agent opened one (#107)", async () => {
@@ -765,6 +765,8 @@ describe("tick: stop paths", () => {
     expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
     // The last copy holds the cleanup failure.
     expect(copies.at(-1)?.at(-1)).toBe("error");
+    // Through the run's own worktree, never a fresh one that would clash with its branch (Qodo on PR 262).
+    expect(f.calls.filter((c) => c.startsWith("save"))).toEqual(Array(3).fill("save with workspace"));
     expect(f.events.find((e) => e.event === "error")).toMatchObject({
       message: expect.stringMatching(/worktree busy/),
     });
@@ -831,7 +833,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments[1]?.body).toMatch(/runner failed \(npm ci failed\)/);
+    expect(f.comments[1]?.body).toMatch(/runner failed; the run log has the error/);
     expect(f.released()).toBe(true);
   });
 
@@ -1574,5 +1576,34 @@ describe("tick: the outcome is logged and copied even when a later step fails (Q
       },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+  });
+});
+
+describe("tick: errors stay in the run log, never on a ticket (Qodo on PR 262, round 4)", () => {
+  it("a runner failure naming a private path keeps it out of the comment, and in the log", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("git -C private/templates/x-secret-v1 failed");
+        },
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/x-secret-v1/);
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({ message: expect.stringMatching(/x-secret-v1/) });
+  });
+
+  it("a failed evidence save names no error on the ticket", async () => {
+    const f = fake(
+      { "owner/lab#5": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: () => {
+          throw new Error("fatal: https://github.com/owner/private-repo.git rejected templates/x-secret-v1");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/x-secret-v1|private-repo/);
   });
 });

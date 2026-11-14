@@ -56,6 +56,7 @@ import {
   oldest,
   parseAgentResult,
   QODO_CHECK_COMMENT,
+  RunnerStop,
   redact,
   runIdFor,
   safeText,
@@ -334,7 +335,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     // The agent works from this exact text, taken after the claim, so nothing added later can steer it.
     const snapshot = deps.snapshot(pick.github, pick.number);
     const late = provenanceProblems(snapshot.provenance, owner);
-    if (late.length) throw new Error(`the ticket changed before the run started: ${late.join("; ")}`);
+    if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
     const ticketFile = deps.writeTicket(ws, snapshot.text);
     log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
 
@@ -426,7 +427,14 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         deps.comment(
           claimed.github,
           claimed.number,
-          safeText(`Agent run \`${runId}\` stopped and needs help: the runner failed (${message}).`, reviewed),
+          // Only the runner's own words reach the ticket; any other error stays in the run log, since it can
+          // name private paths or URLs (Qodo on PR 262).
+          safeText(
+            error instanceof RunnerStop
+              ? `Agent run \`${runId}\` stopped and needs help: ${message}.`
+              : `Agent run \`${runId}\` stopped and needs help: the runner failed; the run log has the error.`,
+            reviewed,
+          ),
         );
       } catch (inner) {
         log("error", { message: `couldn't report on the ticket: ${inner instanceof Error ? inner.message : inner}` });

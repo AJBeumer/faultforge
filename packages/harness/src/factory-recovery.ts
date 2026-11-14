@@ -11,7 +11,6 @@
  * be switched on at a time: they don't share a lock, and this would take the other's live ticket for a
  * stranded one.
  */
-import { spawnSync } from "node:child_process";
 
 /** The labels the runner uses, repeated here so this module needs nothing from the runner. */
 const WORKING = "agent-working";
@@ -79,38 +78,17 @@ export function recoverStranded(
 }
 
 /**
- * True when a lock file's holder can't be the tick that wrote it: no pid, its process is gone, or the pid now
- * runs another program (`isHolder` says no: after a crash or restart, the system can hand the pid on). A
- * live tick keeps its lock however old it is and however long a step takes (AUD-M19): neither the lock's age
- * nor its heartbeat's ever frees it, so two ticks can never run at once.
+ * True when a lock file's holder is gone: no pid, its process is gone, or the live pid is now another
+ * process (`isSame` says it didn't start when the lock recorded: after a crash or restart the system hands
+ * pids on). The holder itself keeps its lock however old it is and however long one of its steps takes
+ * (AUD-M19): neither the lock's age nor its heartbeat's ever frees it, so two ticks never run at once.
  */
 export function lockIsStale(
-  held: { pid?: number },
+  held: { pid?: number; started?: number },
   isAlive: (pid: number) => boolean,
-  isHolder: (pid: number) => boolean,
+  isSame: (pid: number, started: number | undefined) => boolean,
 ): boolean {
-  return !held.pid || !isAlive(held.pid) || !isHolder(held.pid);
-}
-
-/** The name of the program running as `pid`, or null when there is none or it can't be read. */
-export function processName(pid: number): string | null {
-  const result =
-    process.platform === "win32"
-      ? spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", timeout: 15_000 })
-      : spawnSync("ps", ["-p", String(pid), "-o", "comm="], { encoding: "utf8", timeout: 15_000 });
-  if (result.status !== 0) return null;
-  const out = (result.stdout ?? "").trim();
-  if (process.platform === "win32") return out.match(/^"([^"]+)"/)?.[1] ?? null;
-  return out || null;
-}
-
-/**
- * True when `pid` runs Node, as every tick does (`tsx` starts Node). A name that can't be read counts as
- * Node: a lock is only ever freed on evidence that its holder is gone, never on a failed look.
- */
-export function isTickProcess(pid: number, name: (pid: number) => string | null = processName): boolean {
-  const found = name(pid);
-  return found === null || /(^|[/\\])node(\.exe)?$/i.test(found);
+  return !held.pid || !isAlive(held.pid) || !isSame(held.pid, held.started);
 }
 
 /**

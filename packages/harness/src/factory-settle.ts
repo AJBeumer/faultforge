@@ -200,3 +200,6 @@ export function exitCodeFor(outcome: TickOutcome): number {
  */
 export const QODO_CHECK_COMMENT =
   "Stopped before any work started: the reviewer's configuration could not be confirmed to match the recorded snapshot. The run log has the details.";
+
+/** A stop the runner itself words, with nothing in it but its own text: safe to repeat on a ticket. */
+export class RunnerStop extends Error {}

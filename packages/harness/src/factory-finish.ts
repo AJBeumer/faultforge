@@ -42,12 +42,12 @@ const message = (error: unknown): string =>
 export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.help {
   const { deps, runId, ws, finish, log } = c;
   let saved: ReturnType<TickDeps["saveEvidence"]> | null = null;
-  let saveError = "";
   try {
     saved = deps.saveEvidence(runId, ws);
   } catch (error) {
-    saveError = message(error);
-    log("error", { message: `couldn't save the run's evidence: ${saveError}` });
+    // The error stays in the run log: a git error about the private repo can name its paths and URL, and
+    // the comment below can be on a public ticket (Qodo on PR 262).
+    log("error", { message: `couldn't save the run's evidence: ${message(error)}` });
   }
   let label: typeof LABELS.done | typeof LABELS.help = finish.label;
   let reason = finish.reason;
@@ -64,7 +64,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
     note = `\n\nThe run changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
   } else if (!saved?.pushed) {
     label = LABELS.help;
-    reason = `${finish.reason}; but the run's evidence couldn't be saved to the private repository (${saveError || "the push failed"}), so its folder is kept`;
+    reason = `${finish.reason}; but the run's evidence couldn't be saved to the private repository (the run log has the error), so its folder is kept`;
   }
   c.relabel([LABELS.working, LABELS.ready], [label]);
   c.labelled(label);
@@ -104,10 +104,12 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
     log("cleanup", { root: ws.root });
   } catch (error) {
     // Not the run's failure, so the outcome stands; but the saved log must say it, so it gets one more copy
-    // (Qodo on PR 262), from a fresh worktree, since the run's own may be half removed.
+    // (Qodo on PR 262), through the run's own private worktree when it is still there (the cleanup removes it
+    // first; a copy that can't be made is logged). Never through a fresh one: that would clash with the run's
+    // branch and remove the run folder the cleanup couldn't.
     log("error", { message: `couldn't clean up the run's worktrees: ${message(error)}` });
     try {
-      const copy = deps.saveEvidence(runId, null);
+      const copy = deps.saveEvidence(runId, ws);
       if (copy.pushed || copy.savedAt) log("saved", { evidence: evidenceFile(c.factory, runId) });
     } catch (inner) {
       log("error", { message: `couldn't save the log once more: ${message(inner)}` });

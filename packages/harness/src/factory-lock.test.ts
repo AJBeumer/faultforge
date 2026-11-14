@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireLock, beatFile, lastBeat } from "./factory-lock.ts";
-import { isTickProcess, lockIsStale, pidAlive } from "./factory-recovery.ts";
+import { ownStartMs, processStartMs, sameProcess } from "./factory-process.ts";
+import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 describe("acquireLock (#107)", () => {
   const tmp = () => mkdtempSync(join(tmpdir(), "ff-lock-"));
@@ -20,7 +21,7 @@ describe("acquireLock (#107)", () => {
   it("is busy when a live process holds the lock", () => {
     const dir = tmp();
     expect(acquireLock(dir).acquired).toBe(true);
-    const b = acquireLock(dir, () => true, { isHolder: () => true });
+    const b = acquireLock(dir, () => true, { isSame: () => true });
     expect(b.acquired).toBe(false);
     expect(b.note).toMatch(/pid \d+ since/);
   });
@@ -79,7 +80,7 @@ describe("acquireLock (#107)", () => {
 describe("acquireLock: a live tick keeps its lock however old; only a gone holder frees it (AUD-M19)", () => {
   const dir = () => mkdtempSync(join(tmpdir(), "ff-lock-live-"));
   const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
-  const holder = { isHolder: () => true };
+  const holder = { isSame: () => true };
 
   it("never takes over a live tick's lock taken days ago, even with its heartbeat days old too", () => {
     const d = dir();
@@ -95,16 +96,16 @@ describe("acquireLock: a live tick keeps its lock however old; only a gone holde
     expect(result.note).toMatch(/pid 12345 since .*last heartbeat/);
   });
 
-  it("takes over a lock whose pid now runs another program: the system handed it on", () => {
+  it("takes over a lock whose live pid is another process now: the system handed it on", () => {
     const d = dir();
     writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, since: daysAgo(1), token: "t" }));
-    const taken = acquireLock(d, () => true, { isHolder: () => false });
+    const taken = acquireLock(d, () => true, { isSame: () => false });
     expect(taken.acquired).toBe(true);
-    expect(taken.note).toMatch(/that pid now runs another program/);
+    expect(taken.note).toMatch(/that pid is now another process/);
     taken.release();
   });
 
-  it("decides staleness from the pid alone: dead, or another program's", () => {
+  it("decides staleness from the pid alone: dead, or another process now", () => {
     expect(
       lockIsStale(
         { pid: 1 },
@@ -135,15 +136,28 @@ describe("acquireLock: a live tick keeps its lock however old; only a gone holde
     ).toBe(true);
   });
 
-  it("knows a tick's process by its program, and keeps the lock when the name can't be read", () => {
-    expect(isTickProcess(1, () => "node.exe")).toBe(true);
-    expect(isTickProcess(1, () => "node")).toBe(true);
-    expect(isTickProcess(1, () => "/usr/bin/node")).toBe(true);
-    expect(isTickProcess(1, () => null)).toBe(true);
-    expect(isTickProcess(1, () => "svchost.exe")).toBe(false);
-    expect(isTickProcess(1, () => "nodemon")).toBe(false);
-    // This test's own process is a Node process.
-    expect(isTickProcess(process.pid)).toBe(true);
+  it("knows the holder by when it started, and keeps the lock when that can't be read", () => {
+    const started = Date.parse("2026-11-14T01:00:00.000Z");
+    expect(sameProcess(1, started, () => started + 1200)).toBe(true);
+    expect(sameProcess(1, started, () => started + 3_600_000)).toBe(false);
+    expect(sameProcess(1, started, () => null)).toBe(true);
+    // A lock written before the start was recorded.
+    expect(sameProcess(1, undefined, () => started)).toBe(true);
+  });
+
+  it("reads a real process's start: this test's own process is itself, and not one started an hour earlier", () => {
+    const started = ownStartMs();
+    expect(processStartMs(process.pid)).not.toBeNull();
+    expect(sameProcess(process.pid, started)).toBe(true);
+    expect(sameProcess(process.pid, started - 3_600_000)).toBe(false);
+  });
+
+  it("records when its holder started, so a later tick can tell", () => {
+    const d = dir();
+    const lock = acquireLock(d);
+    const held = JSON.parse(readFileSync(join(d, "factory.lock"), "utf8"));
+    expect(Math.abs(held.started - ownStartMs())).toBeLessThan(2000);
+    lock.release();
   });
 
   it("reads a permission error as a live process, and only 'no such process' as gone", () => {
@@ -196,7 +210,7 @@ describe("acquireLock: the heartbeat (AUD-M19)", () => {
   it("a running tick refreshes it on a timer, and stops when it releases", async () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-timer-"));
     const file = join(d, "factory.lock");
-    const lock = acquireLock(d, () => true, { heartbeatMs: 20, isHolder: () => true });
+    const lock = acquireLock(d, () => true, { heartbeatMs: 20, isSame: () => true });
     const token = tokenIn(d);
     const first = beatIn(d);
     // Waits for a beat, up to two seconds: a busy machine can delay a 20 ms timer, never skip it.
@@ -213,7 +227,7 @@ describe("acquireLock: the heartbeat (AUD-M19)", () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-fresh-"));
     writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-01T00:00:00Z", token: "t1" }));
     writeFileSync(beatFile(d, "t1"), JSON.stringify({ at: new Date().toISOString() }));
-    expect(acquireLock(d, () => true, { isHolder: () => true }).acquired).toBe(false);
+    expect(acquireLock(d, () => true, { isSame: () => true }).acquired).toBe(false);
   });
 
   it("never leaves a lock file without content: it appears whole or not at all", () => {
