@@ -126,6 +126,7 @@ jobs:
         working-directory: FaultForge
         run: npm run -s guard:install
       - name: Run one tick
+        id: tick
         working-directory: FaultForge
         # Ten minutes inside the job's own limit: a tick stopped here still leaves the job time to keep its logs.
         timeout-minutes: 155
@@ -139,7 +140,31 @@ jobs:
           FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}
           FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
           FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private
-        run: npm run -s factory:tick -- --ci --minutes 120 --budget 25
+        # The outcome is shown on the run's page, not only in its log: an error annotation when the tick failed
+        # (exit 3) or couldn't set up (exit 2), and one summary line for every outcome. Fixed words and the run's
+        # own number only: nothing the tick printed, so no path or ticket text reaches the page.
+        run: |
+          code=0
+          npm run -s factory:tick -- --ci --minutes 120 --budget 25 || code=$?
+          case "$code" in
+            0) outcome="ended: a run delivered, or there was nothing to take" ;;
+            1) outcome="needs help: the ticket it took is labelled agent-needs-help" ;;
+            2) outcome="could not set up: the command line or the environment was wrong, so no tick ran" ;;
+            3) outcome="failed: the tick itself stopped with an error" ;;
+            *) outcome="stopped with an unexpected exit code" ;;
+          esac
+          line="Factory tick, run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT: $outcome (exit $code)"
+          if [ "$code" = 2 ] || [ "$code" = 3 ]; then echo "::error title=Factory tick::$line"; fi
+          echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+          echo "reported=true" >> "$GITHUB_OUTPUT"
+          exit "$code"
+      # A tick step that was cancelled or hit its time limit never reached its own report above.
+      - name: Report a tick that stopped without reporting
+        if: always() && steps.tick.outcome != 'skipped' && steps.tick.outputs.reported != 'true'
+        run: |
+          line="Factory tick, run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT: stopped without reporting (cancelled or out of time)"
+          echo "::error title=Factory tick::$line"
+          echo "- $line" >> "$GITHUB_STEP_SUMMARY"
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
       # Only after the tick, when no agent runs any more: the keep step below writes through this checkout.

@@ -15,6 +15,7 @@
  */
 import { claimModeOf } from "./factory-comments.ts";
 import type { RunMode } from "./factory-workspace.ts";
+import { ghAll } from "./github.ts";
 
 /** The labels the runner uses, repeated here so this module needs nothing from the runner. */
 const WORKING = "agent-working";
@@ -41,6 +42,15 @@ export interface RecoveryDeps {
 export const STRANDED_COMMENT =
   "The scheduled agent run working on this ticket stopped without reporting: its job was cancelled or timed out, or the machine restarted. Nothing is running on it now, so it is marked as needing help. Look at the run's log before adding `ready-for-agent` again.";
 
+/** What a recovery did, or in a dry run would do, for the run log or the owner. */
+export type RecoveryReport = {
+  recovered: string[];
+  failed: string[];
+  otherMode?: string[];
+  /** A dry run only: each ticket it would change, and how. */
+  planned?: string[];
+};
+
 /**
  * Moves every `agent-working` ticket in `repos` to `agent-needs-help` with a comment. Returns what it did, for
  * the run log. A ticket whose step fails is reported and left for the next tick; it never stops this one.
@@ -51,14 +61,19 @@ export const STRANDED_COMMENT =
  * `agent-needs-help` was commented on before and only lost its removal, so only the removal is retried and
  * no second comment is posted. Neither is one that already carries `agent-done`: its run finished and was
  * labelled (the new label goes on before the old comes off), and only lost its removal (Qodo on PR 262).
+ *
+ * With `dryRun`, it reads exactly what a real recovery reads and reports each change it would make under
+ * `planned`, and never calls `comment` or `relabel`: safe to run against the real repos at any time.
  */
 export function recoverStranded(
   repos: { github: string }[],
   deps: RecoveryDeps,
-): { recovered: string[]; failed: string[]; otherMode?: string[] } {
+  options: { dryRun?: boolean } = {},
+): RecoveryReport {
   const recovered: string[] = [];
   const failed: string[] = [];
   const otherMode: string[] = [];
+  const planned: string[] = [];
   for (const { github } of repos) {
     let stranded: { number: number }[];
     let helped: Set<number>;
@@ -82,6 +97,14 @@ export function recoverStranded(
           otherMode.push(`${ref} (claimed by a ${claimedBy} run)`);
           continue;
         }
+        if (options.dryRun) {
+          planned.push(
+            helped.has(number)
+              ? `${ref}: would remove ${WORKING} and ${READY}; it already shows a result, so no comment`
+              : `${ref}: would comment, add ${HELP}, then remove ${WORKING} and ${READY}`,
+          );
+          continue;
+        }
         if (!helped.has(number)) {
           deps.comment(github, number, STRANDED_COMMENT);
           const added = deps.relabel(github, number, [], [HELP]);
@@ -95,7 +118,12 @@ export function recoverStranded(
       }
     }
   }
-  return { recovered, failed, ...(otherMode.length ? { otherMode } : {}) };
+  return {
+    recovered,
+    failed,
+    ...(otherMode.length ? { otherMode } : {}),
+    ...(options.dryRun ? { planned } : {}),
+  };
 }
 
 /** Reads the claim mode from the comments the repo owner posted (the runner's token is the owner's). */
@@ -104,6 +132,23 @@ export function claimModeFrom(comments: { body?: string | null; user?: { login?:
     comments.filter((c) => c.user?.login?.toLowerCase() === owner.toLowerCase()).map((c) => c.body ?? ""),
   );
 }
+
+/**
+ * The reads recovery makes on GitHub, in one place for the tick (`factory-deps.ts`) and the dry run
+ * (`factory-recover.ts`), so the dry run sees exactly what a tick would. Reads only; `github.ts` retries
+ * a transient failure.
+ */
+export const githubRecoveryReads: Pick<RecoveryDeps, "labelled" | "claimMode"> = {
+  labelled: (github, label) =>
+    ghAll<{ number: number; title: string; pull_request?: unknown }>(
+      `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+    ).filter((i) => !i.pull_request),
+  claimMode: (github, number) =>
+    claimModeFrom(
+      ghAll<{ body?: string; user?: { login?: string } }>(`repos/${github}/issues/${number}/comments?per_page=100`),
+      github.split("/")[0] ?? "",
+    ),
+};
 
 /**
  * True when a lock file's holder is gone: no pid, its process is gone, or the live pid is now another

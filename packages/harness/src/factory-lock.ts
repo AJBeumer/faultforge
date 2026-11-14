@@ -36,7 +36,10 @@ export function lastBeat(dir: string, token: string | undefined): string | undef
 }
 
 /** The holder's heartbeat file: its last beat, and its agent's pid and start while one runs. */
-function readBeat(dir: string, token: string | undefined): { at?: string; agentPid?: number; agentStarted?: string } {
+export function readBeat(
+  dir: string,
+  token: string | undefined,
+): { at?: string; agentPid?: number; agentStarted?: string } {
   if (!token) return {};
   try {
     const beat = JSON.parse(readFileSync(beatFile(dir, token), "utf8"));

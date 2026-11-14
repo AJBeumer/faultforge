@@ -170,3 +170,44 @@ describe("recoverStranded: a finished ticket of the other mode still loses agent
     expect(w.calls.filter((c) => c.startsWith("comment"))).toEqual([]);
   });
 });
+
+describe("recoverStranded with dryRun: reports what it would change, and writes nothing", () => {
+  it("plans each kind of change a real run makes, and makes none of them", () => {
+    const w = world({
+      "o/t#1": [WORKING],
+      "o/t#2": [WORKING, HELP],
+      "o/t#3": [WORKING, "agent-done"],
+      "o/t#4": [READY],
+    });
+    const result = recoverStranded([{ github: "o/t" }], w.deps, { dryRun: true });
+    expect(result.planned).toEqual([
+      `o/t#1: would comment, add ${HELP}, then remove ${WORKING} and ${READY}`,
+      `o/t#2: would remove ${WORKING} and ${READY}; it already shows a result, so no comment`,
+      `o/t#3: would remove ${WORKING} and ${READY}; it already shows a result, so no comment`,
+    ]);
+    expect(result.recovered).toEqual([]);
+    expect(w.calls).toEqual([]);
+    expect(w.on("o/t#1")).toEqual([WORKING]);
+  });
+
+  it("plans the same tickets a real run then changes", () => {
+    const tickets = { "o/t#1": [WORKING], "o/t#2": [WORKING, HELP], "o/t#5": [] };
+    const planned = recoverStranded([{ github: "o/t" }], world(tickets).deps, { dryRun: true }).planned ?? [];
+    const real = recoverStranded([{ github: "o/t" }], world(tickets).deps).recovered;
+    expect(planned.map((line) => line.split(":")[0])).toEqual(real);
+  });
+
+  it("still leaves the other mode's claims alone and reports what it couldn't read", () => {
+    const w = world({ "o/a#1": [WORKING], "o/a#2": [WORKING], "o/b#3": [WORKING] }, { listFails: "o/b" });
+    const deps: RecoveryDeps = { ...w.deps, mode: "ci", claimMode: (_g, n) => (n === 1 ? "local" : "ci") };
+    const result = recoverStranded([{ github: "o/a" }, { github: "o/b" }], deps, { dryRun: true });
+    expect(result.otherMode).toEqual(["o/a#1 (claimed by a local run)"]);
+    expect(result.planned).toEqual([`o/a#2: would comment, add ${HELP}, then remove ${WORKING} and ${READY}`]);
+    expect(result.failed).toEqual([expect.stringMatching(/^o\/b: couldn't list its tickets/)]);
+    expect(w.calls).toEqual([]);
+  });
+
+  it("gives a real run's report no planned list", () => {
+    expect(world({}).run()).toEqual({ recovered: [], failed: [] });
+  });
+});
