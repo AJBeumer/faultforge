@@ -40,21 +40,17 @@ export function isReviewedTicket(factory: FactoryConfig, repoKey: string): boole
 }
 
 /**
- * The private checkouts a target ticket's agent must not read, for its policy hook: the owner's (or the
- * workflow's) `<lab>/private`, the private folder the runner's environment names, and the runner's own clone in
- * the runs folder. None for a lab ticket, whose agent works in `<lab>/private`.
+ * The private checkouts an agent must not read, for its policy hook: the owner's (or the workflow's)
+ * `<lab>/private`, the private folder the runner's environment names, the runner's own clone in the runs folder,
+ * and in a lab ticket's run its own private worktree (`ownPrivate`), whose evidence the runner writes and
+ * commits (#299). Every run gets them, a lab ticket's included: none of its agents reads the answer key.
  */
-export function privateCheckoutsFor(
-  factory: FactoryConfig,
-  repoKey: string,
-  runs: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  if (!isReviewedTicket(factory, repoKey)) return [];
+export function privateCheckoutsFor(runs: string, env: NodeJS.ProcessEnv = process.env, ownPrivate?: string): string[] {
   // The whole runs folder: the runner's clone, a Qodo-state worktree kept after a failed push, and other runs'
   // leftovers all sit there (Qodo on PR 288). The run's own folder inside it stays its own.
   const paths = [join(LAB_ROOT, "private"), runs];
   if (env.FAULTFORGE_PRIVATE_DIR) paths.push(resolve(env.FAULTFORGE_PRIVATE_DIR));
+  if (ownPrivate) paths.push(resolve(ownPrivate));
   return [...new Set(paths)];
 }
 

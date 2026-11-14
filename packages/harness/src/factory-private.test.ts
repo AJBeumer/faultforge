@@ -44,11 +44,12 @@ describe("factory-private: a target ticket's run and the private repo (AUD-H2, #
     expect(isReviewedTicket(FACTORY, "lab")).toBe(false);
   });
 
-  it("names the private checkouts a target ticket's agent is kept out of, and none for a lab ticket", () => {
+  it("names the private checkouts every agent is kept out of, a lab ticket's own private worktree included (#299)", () => {
     const runs = join(dir, "runs");
-    const paths = privateCheckoutsFor(FACTORY, "target", runs, { FAULTFORGE_PRIVATE_DIR: join(dir, "elsewhere") });
+    const paths = privateCheckoutsFor(runs, { FAULTFORGE_PRIVATE_DIR: join(dir, "elsewhere") });
     expect(paths).toEqual([join(LAB_ROOT, "private"), runs, join(dir, "elsewhere")]);
-    expect(privateCheckoutsFor(FACTORY, "lab", runs, {})).toEqual([]);
+    const own = join(runs, "r1", "lab", "private");
+    expect(privateCheckoutsFor(runs, {}, own)).toEqual([join(LAB_ROOT, "private"), runs, own]);
   });
 
   it("in CI finds every private checkout still on disk: its own clone, the lab's folder, a Qodo-state worktree", () => {
