@@ -90,6 +90,14 @@ function postedFlagValue(): RegExp {
 }
 
 /**
+ * The posted values the shell expands: double-quoted or bare, not single-quoted, where `$NAME` is literal
+ * text. A variable left in one of these is text the guard can't read (#285).
+ */
+export function expandedArguments(command: string): string[] {
+  return [...command.matchAll(postedFlagValue())].flatMap((m) => (m[2] === undefined ? [m[1] ?? m[3] ?? ""] : []));
+}
+
+/**
  * The command with its posted text taken out: flag values and heredoc bodies. What is left is what the shell
  * acts on, so a destination is read from there: `--repo` or `-R` written inside a message names no repo
  * (Qodo on PR 208).

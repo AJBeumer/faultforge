@@ -158,14 +158,22 @@ function fileRead(inner: string): string | undefined {
  * body comes from stdin, that only reads a file is read and returned, so the file's text is checked like
  * the command's own. With `strict` (a post to a reviewed repo), any other substitution, and a body piped in
  * from anything but `cat`, `type`, `Get-Content`, `echo` or `printf`, throws `BuiltText`: what a program
- * prints can't be checked before it runs. A file that can't be read throws `Unreadable`.
+ * prints can't be checked before it runs. A file that can't be read throws `Unreadable`. With `everywhere`
+ * false (a lab post, read strictly while private templates exist: #285), only substitutions in posted values
+ * and a body from stdin are held to that.
  */
-export function builtText(cwd: string, command: string, strict: boolean, backticks: boolean): string[] {
+export function builtText(
+  cwd: string,
+  command: string,
+  strict: boolean,
+  backticks: boolean,
+  everywhere = strict,
+): string[] {
   const stdin = STDIN_BODY.test(command);
   const ranges = postedRanges(command);
   // In a post to a reviewed repo every substitution counts, wherever it sits: a label's name or a homepage is
   // posted text too (Qodo on PR 266). Elsewhere only those in posted values are read.
-  const posted = (at: number) => strict || stdin || ranges.some(([start, end]) => at >= start && at < end);
+  const posted = (at: number) => everywhere || stdin || ranges.some(([start, end]) => at >= start && at < end);
   const texts: string[] = [];
   // A substitution inside another posts its output too, so each nested one is looked at (Qodo on PR 266).
   const nested = (outer: { start: number; inner: string }[]): { start: number; inner: string }[] =>
@@ -195,7 +203,7 @@ export function builtText(cwd: string, command: string, strict: boolean, backtic
   }
   // A process substitution runs a program as a file, and a PowerShell `(…)` or `@(…)` argument runs one too.
   const blank = blankQuoted(command);
-  if (strict && (/[<>]\(/.test(blank) || (!backticks && /(?:^|\s)@?\(/.test(blank)))) {
+  if (everywhere && (/[<>]\(/.test(blank) || (!backticks && /(?:^|\s)@?\(/.test(blank)))) {
     throw new BuiltText(
       "This post's text may come from a program the guard can't check before it runs. Write the text to a file and pass it with --body-file.",
     );
@@ -204,7 +212,12 @@ export function builtText(cwd: string, command: string, strict: boolean, backtic
     const producer = pipedInto(command);
     // A reader must name its files: a bare `cat` passes on whatever is piped into it (Qodo on PR 266).
     const reads = /^(?:cat|type|Get-Content|gc)\s+\S/i.test(producer ?? "");
-    if (producer !== undefined && !reads && !/^(?:echo|printf|Write-Output)\b/i.test(producer)) {
+    // printf with a format (`%s`) or an escape, and `echo -e`, build text the guard would have to run (#285).
+    // The producer is read with its quoted text blanked, so its format is looked for in the command itself.
+    const plain =
+      /^(?:echo|Write-Output)\b(?!\s+-\w*e)/i.test(producer ?? "") ||
+      (/^printf\b/.test(producer ?? "") && !/\bprintf\b[^|]*(%|\\(x|u|[0-7]))/.test(command));
+    if (producer !== undefined && !reads && !plain) {
       throw new BuiltText(
         `This post's body is piped in from "${producer.slice(0, 40)}", which the guard can't check before it runs. Write the text to a file and pass it with --body-file.`,
       );

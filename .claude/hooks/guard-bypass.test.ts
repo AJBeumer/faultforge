@@ -153,7 +153,11 @@ describe("the hook fails closed outside decide() (AUD-M4)", () => {
   });
 
   it("exits 2 for a hook that runs past its budget", () => {
-    const hang = module("hang.mjs", "setTimeout(() => {}, 60_000);\n");
+    // Shaped like a hook, so the wrapper's file check passes and the budget is what stops it.
+    const hang = module(
+      "hang.mjs",
+      `export function decide() {}\nconst isEntry = () => true;\nconst main = () => setTimeout(() => {}, 60_000);\n// ${"x".repeat(2000)}\nif (isEntry(import.meta.url)) main();\n`,
+    );
     const result = run([hang], () => Buffer.from("{}"), 300);
     expect(result.code).toBe(2);
     expect(result.stderr).toMatch(/no answer within/);
@@ -453,7 +457,8 @@ describe("holes Qodo found in the third version (PR 265, fixed here)", () => {
     execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-private.git"]);
     const command =
       'GH_REPO=AJBeumer/faultforge-private gh issue create --repo "$PUBLIC" --title x --body "x-secret-v1"';
-    expect(bash(command, LAB, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private/);
+    // Refused either way: the repo is a variable the command doesn't set (#285), or the id is private.
+    expect(bash(command, LAB, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private|shell variable/);
   });
 
   it("follows a link inside private storage to where it really leads", () => {
