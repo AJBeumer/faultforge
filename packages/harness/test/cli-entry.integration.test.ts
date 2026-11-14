@@ -19,7 +19,12 @@ afterAll(() => {
 });
 
 const tsx = (script: string, args: string[] = [], cwd = ROOT) => {
-  const result = spawnSync(process.execPath, [TSX, script, ...args], { cwd, encoding: "utf8", timeout: 60_000 });
+  const result = spawnSync(process.execPath, [TSX, script, ...args], {
+    cwd,
+    encoding: "utf8",
+    timeout: 60_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   return { code: result.status, out: result.stdout, err: result.stderr };
 };
 
@@ -32,9 +37,9 @@ function fixture(body: Record<string, string>) {
   writeFileSync(
     join(dir, "x-cli.ts"),
     [
-      'import { runEntry } from "./cli-entry.ts";',
+      'import { exitWhenWritten, runEntry } from "./cli-entry.ts";',
       "try {",
-      '  process.exit(await runEntry("x", async () => (await import("./x.ts")).main, process.argv.slice(2), 3));',
+      '  await exitWhenWritten(await runEntry("x", async () => (await import("./x.ts")).main, process.argv.slice(2), 3));',
       "} catch {",
       "  process.exit(3);",
       "}",
@@ -66,6 +71,24 @@ describe("entries on cli-entry.ts, in a real process (AUD-N3)", () => {
 
   it("keep the body's own code when it returns one", () => {
     expect(fixture({ "x.ts": "export const main = () => 1;\n" }).code).toBe(1);
+  });
+
+  it("end with the entry's code, the name and the stack when main throws or rejects", () => {
+    const thrown = fixture({ "x.ts": 'export const main = () => {\n  throw new Error("in main");\n};\n' });
+    expect(thrown.err).toMatch(/x stopped on an unexpected error: Error: in main\s+at /);
+    expect(thrown.code).toBe(3);
+    const rejected = fixture({ "x.ts": 'export const main = async () => {\n  throw new Error("later");\n};\n' });
+    expect(rejected.err).toContain("x stopped on an unexpected error: Error: later");
+    expect(rejected.code).toBe(3);
+  });
+
+  it("deliver a long output in full before exiting (Qodo on PR 277)", () => {
+    const line = `${"x".repeat(99)}\n`;
+    const { code, out } = fixture({
+      "x.ts": `export const main = () => {\n  for (let i = 0; i < 40000; i++) process.stdout.write(${JSON.stringify(line)});\n  return 0;\n};\n`,
+    });
+    expect(code).toBe(0);
+    expect(out.length).toBe(line.length * 40000);
   });
 
   it("reach the moved scripts' bodies, which keep their usage codes", () => {

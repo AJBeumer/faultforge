@@ -5,10 +5,10 @@
  * Exit codes: those of `ticket-ready.ts` (see its header); 2 also for an unexpected error, at load time or later,
  * printed with its stack on stderr.
  */
-import { runEntry } from "./cli-entry.ts";
+import { exitWhenWritten, runEntry } from "./cli-entry.ts";
 
 try {
-  process.exit(
+  await exitWhenWritten(
     await runEntry("ticket:ready", async () => (await import("./ticket-ready.ts")).main, process.argv.slice(2), 2),
   );
 } catch {

@@ -5,10 +5,10 @@
  * Exit codes: those of `factory-timeline.ts` (see its header); 2 also for an unexpected error, at load time or later,
  * printed with its stack on stderr.
  */
-import { runEntry } from "./cli-entry.ts";
+import { exitWhenWritten, runEntry } from "./cli-entry.ts";
 
 try {
-  process.exit(
+  await exitWhenWritten(
     await runEntry(
       "factory:timeline",
       async () => (await import("./factory-timeline.ts")).main,

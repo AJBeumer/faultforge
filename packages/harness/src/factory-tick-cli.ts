@@ -5,10 +5,10 @@
  * Exit codes: those of `factory-tick.ts` (see its header); 3 also for an unexpected error, at load time or later,
  * printed with its stack on stderr.
  */
-import { runEntry } from "./cli-entry.ts";
+import { exitWhenWritten, runEntry } from "./cli-entry.ts";
 
 try {
-  process.exit(
+  await exitWhenWritten(
     await runEntry("factory:tick", async () => (await import("./factory-tick.ts")).main, process.argv.slice(2), 3),
   );
 } catch {
