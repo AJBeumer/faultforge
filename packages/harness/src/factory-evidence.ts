@@ -77,8 +77,9 @@ export function commitAndPublish(
   base?: string,
 ): EvidencePush {
   runLong(priv, "fetch", "--quiet", "origin", "main");
-  // The run's own changes only: from the commit it started on, never from `origin/main` as fetched now,
-  // which would count anyone else's push during the run as the run's change and report its paths (AUD-M2).
+  // The run's own changes only: from where its branch left `origin/main` (the commit it started on, or the last
+  // one its evidence was rebased onto after a push), never from `origin/main` as fetched now, which would count
+  // anyone else's push during the run as the run's change and report its paths (AUD-M2). `base` is for tests.
   const from = base ?? run(priv, "merge-base", "origin/main", "HEAD");
   const blocked = blockedEvidencePaths(changedAgainst(priv, run, from), evidenceRoot);
   run(priv, "add", "-A");

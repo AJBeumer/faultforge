@@ -15,8 +15,26 @@ export function runnerComment(body: string): string {
 
 /** True when a comment was posted by the runner (it starts with the runner's mark). */
 export function isRunnerComment(body: string | null | undefined): boolean {
-  return (body ?? "").trimStart().startsWith(RUNNER_MARKER);
+  const text = (body ?? "").trimStart();
+  // The mark on a line of its own, as `runnerComment` writes it: an owner's comment that only quotes it
+  // (`> <!-- scheduled-run -->`, or the mark followed by words) stays the owner's (Qodo on PR 272).
+  if (text.split(/\r?\n/, 1)[0]?.trim() === RUNNER_MARKER) return true;
+  return LEGACY_OPENINGS.some((opening) => text.startsWith(opening));
 }
+
+/**
+ * How the runner's comments began before they carried the mark: a ticket an earlier run stopped still has
+ * them, and they can quote an agent's reason or a finding's title (AUD-M21, Qodo on PR 272).
+ */
+const LEGACY_OPENINGS = [
+  "Picked up by scheduled agent run `",
+  "Agent run `",
+  "Not started. The `ready-for-agent` label was added by ",
+  "Not started. An agent run follows this ticket's text",
+  "Not started: this ticket isn't ready yet.",
+  "The scheduled agent run working on this ticket stopped without reporting",
+  "Stopped before any work started: the reviewer's configuration",
+];
 
 /** Ends the claim comment: which way of running the factory (Actions or the owner's PC) claimed the ticket. */
 export function claimMarker(mode: RunMode): string {

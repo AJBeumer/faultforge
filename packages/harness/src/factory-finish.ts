@@ -14,7 +14,7 @@
 
 import type { FactoryConfig } from "./factory-config.ts";
 import { evidenceFile } from "./factory-evidence.ts";
-import { type Finish, LABELS, safeText } from "./factory-settle.ts";
+import { type Finish, LABELS } from "./factory-settle.ts";
 import type { Logger, TickDeps, Workspace } from "./factory-tick.ts";
 
 export interface FinishContext {

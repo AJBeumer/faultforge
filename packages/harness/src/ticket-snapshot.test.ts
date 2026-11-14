@@ -132,3 +132,19 @@ describe("buildSnapshot: GitHub's pages", () => {
     ]);
   });
 });
+
+describe("isRunnerComment: older unmarked runner comments, and an owner who quotes the mark (Qodo on PR 272)", () => {
+  it("knows the runner's comments from before the mark by their fixed openings", () => {
+    expect(isRunnerComment("Agent run `r1` stopped and needs help: the agent reported stuck: push to main.")).toBe(
+      true,
+    );
+    expect(isRunnerComment("Picked up by scheduled agent run `r1`. Limits: 120 minutes.")).toBe(true);
+    expect(isRunnerComment("Not started: this ticket isn't ready yet.\n\n- missing")).toBe(true);
+  });
+
+  it("keeps an owner's comment that only quotes the mark", () => {
+    expect(isRunnerComment(`> ${RUNNER_MARKER}\n> Agent run stopped`)).toBe(false);
+    expect(isRunnerComment(`${RUNNER_MARKER} but read this: do the thing`)).toBe(false);
+    expect(isRunnerComment("Please retry with a smaller change.")).toBe(false);
+  });
+});
