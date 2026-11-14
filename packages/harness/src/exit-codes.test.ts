@@ -14,20 +14,6 @@ const SOURCES = [join(ROOT, "packages/harness/src"), join(ROOT, ".claude/hooks")
 // hook-io answers Claude Code's hook protocol for every hook; each hook's own header says what its codes mean.
 const LIBRARIES = new Set(["hook-io.ts"]);
 
-/**
- * Scripts npm runs whose uncaught errors still end as Node's default exit 1, which their headers use for
- * something else. Known on 14 November (AUD-N3); this list may only shrink, and a script leaves it once its entry catches. The fix is the one in
- * `rules-propose.ts`: catch around the entry, exit with the "could not run" code.
- */
-const UNHANDLED_KNOWN = new Set([
-  "case-build.ts",
-  "case-review.ts",
-  "case-ticket.ts",
-  "ledger-check.ts",
-  "match.ts",
-  "verdict.ts",
-]);
-
 /** The file's first doc comment, wherever it starts: its header. */
 const header = (text: string) => text.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
 
@@ -87,8 +73,7 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
   it("turns an unexpected error into a documented code, in every script npm runs", () => {
     const unhandled = npmScripts()
       .filter(({ text }) => !handlesUnexpectedErrors(text))
-      .map(({ file }) => file)
-      .filter((file) => !UNHANDLED_KNOWN.has(file));
+      .map(({ file }) => file);
     expect(unhandled).toEqual([]);
   });
 
@@ -111,7 +96,22 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
     }
     // The scripts moved behind cli-entry.ts for AUD-N3 stay there, and each body's header says where its
     // could-not-run code comes from, so a reader of either file finds it.
-    const moved = { "docs-check": 2, "factory-tick": 3, "factory-timeline": 2, "guard-install": 2, "ticket-ready": 2 };
+    const moved = {
+      "case-build": 2,
+      "case-pr": 2,
+      "case-rerun": 2,
+      "case-review": 2,
+      "case-ticket": 2,
+      "docs-check": 2,
+      "factory-tick": 3,
+      "factory-timeline": 2,
+      "guard-install": 2,
+      "ledger-check": 2,
+      match: 2,
+      "ticket-ready": 2,
+      verdict: 2,
+      "verdict-amend": 2,
+    };
     for (const [name, code] of Object.entries(moved)) {
       const cli = entries.find(({ file }) => file === `${name}-cli.ts`);
       if (!cli) problems.push(`npm doesn't run ${name}-cli.ts`);

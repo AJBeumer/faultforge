@@ -30,13 +30,14 @@
  * checked); 2 couldn't run or couldn't finish: the answer key or audit log has a problem, an earlier attempt
  * left its marker, `gh` failed, its output isn't a PR URL, or the opened PR's head isn't the injected commit
  * (check GitHub before retrying).
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:pr` runs `case-pr-cli.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { ISSUE_OR_PR_LINK } from "./case-ticket.ts";
 import { errorText as message } from "./error-text.ts";
@@ -284,18 +285,14 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const parsed = parseCliArgs(process.argv.slice(2));
+/** The command: `case-pr-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): Promise<number> | number {
+  const parsed = parseCliArgs(argv);
   if (!parsed) {
     console.error(
       'usage: npm run case:pr -- --case FF-NNNN --body "<sentence>" --relationships "<text>" [--benchmark v1] [--dry-run] [--existing <pr>]',
     );
-    process.exit(1);
+    return 1;
   }
-  run(parsed)
-    .then((code) => process.exit(code))
-    .catch((e: unknown) => {
-      console.error(`case:pr: ${message(e)}`);
-      process.exit(2);
-    });
+  return run(parsed);
 }

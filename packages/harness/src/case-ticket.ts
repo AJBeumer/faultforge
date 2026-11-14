@@ -33,12 +33,13 @@
  * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
  * check GitHub before retrying rather than risk a duplicate issue), or an earlier run's attempt left its
  * marker without the event: it may have created the issue, so this refuses until a human has checked.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:ticket` runs `case-ticket-cli.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
@@ -317,21 +318,17 @@ function usage(): never {
   process.exit(2);
 }
 
-// Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const { values } = parseArgs({
-    options: {
-      template: { type: "string" },
-      case: { type: "string" },
-      "dry-run": { type: "boolean" },
-    },
-  });
+/** The command: `case-ticket-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): Promise<number> {
+  let values: { template?: string; case?: string; "dry-run"?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      options: { template: { type: "string" }, case: { type: "string" }, "dry-run": { type: "boolean" } },
+    }));
+  } catch {
+    usage();
+  }
   if (!values.template || !values.case) usage();
-  run(values.template, values.case, { dryRun: values["dry-run"] ?? false }).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`case:ticket: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(2);
-    },
-  );
+  return run(values.template, values.case, { dryRun: values["dry-run"] ?? false });
 }

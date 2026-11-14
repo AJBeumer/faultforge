@@ -112,6 +112,13 @@ describe("buildTable", () => {
     expect(table.rows.map((r) => [r.id, r.openAtLastReview])).toEqual([["f-late", true]]);
   });
 
+  it("reads a save with no state as unfinished, as the verdict does: never citable, never closing a finding", () => {
+    const { state: _, ...noState } = review({ findings: [finding("f-x")], openFindings: [] });
+    const table = buildTable([{ key: "faultforge", review: noState }], nothingExcluded);
+    expect(table.prs).toEqual([]);
+    expect(table.rows.map((r) => [r.id, r.openAtLastReview])).toEqual([["f-x", true]]);
+  });
+
   it("does not list a PR as citable on a skipped or timed-out review alone", () => {
     const skipped = review({ pr: 90, state: "skipped by Qodo", findings: [], openFindings: [] });
     const table = buildTable([{ key: "faultforge", review: skipped }], nothingExcluded);

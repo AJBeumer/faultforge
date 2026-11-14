@@ -43,12 +43,12 @@
  * that doesn't exist); an answer couldn't be parsed or was another case's reason after retrying; a matched
  * finding was left unjudged; an answer the rule contradicts wasn't confirmed; or the event couldn't be
  * appended.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run verdict` runs `verdict-cli.ts`.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, relative } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
@@ -56,7 +56,6 @@ import { readAuditLog } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
-import { ROOT } from "./paths.ts";
 import { TOOL } from "./provenance.ts";
 import { isComplete, savedReviewsDir, toMatchFinding } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
@@ -351,19 +350,14 @@ export function parseCliArgs(argv: string[]): CliArgs | null {
   return { caseId, dryRun: values["dry-run"] ?? false, reviewPath: values.review, supersede: values.supersede };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const parsed = parseCliArgs(process.argv.slice(2));
+/** The command: `verdict-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): Promise<number> | number {
+  const parsed = parseCliArgs(argv);
   if (!parsed) {
     console.error("usage: npm run verdict -- <caseId> [--dry-run] [--review <path>] [--supersede <eventId>]");
-    process.exit(2);
+    return 2;
   }
-  run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath, supersede: parsed.supersede }).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`verdict: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(2);
-    },
-  );
+  return run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath, supersede: parsed.supersede });
 }
 
 // Kept importable from here, where callers found them before the split.

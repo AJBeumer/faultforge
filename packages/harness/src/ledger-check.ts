@@ -12,11 +12,13 @@
  *
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run ledger:check` runs `ledger-check-cli.ts`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { eachGitLine } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
 import { readEventProblems } from "./ledger-append.ts";
 import { hashProblems } from "./ledger-hashes.ts";
@@ -92,25 +94,31 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
   }
 
   if (headExists) {
-    let log: string;
-    try {
-      log = execFileSync("git", ["-C", repoRoot, "log", "--no-color", "--follow", "-p", "-m", "--", relPath], {
-        encoding: "utf8",
-        timeout: 60_000,
-        maxBuffer: 64 * 1024 * 1024,
-      });
-    } catch (error) {
-      throw new Error(`git log failed for ${relPath}: ${(error as Error).message}`);
-    }
     // `-m` shows a merge once per parent. A merge of two branches that each appended puts one side's lines
     // before the other's against one parent, but is a plain append against the other: two appends meeting,
     // not an insertion. So a commit is an insertion only when it inserts against every parent it is shown
     // against; a removal against any parent is always a problem (Qodo on PR 269).
+    // Read as a stream, one commit's diff at a time: the whole history is never held, so it has no size or
+    // time ceiling to outgrow (AUD-N6).
     const byCommit = new Map<string, ("removed" | "inserted" | undefined)[]>();
-    for (const commitDiff of log.split(/^commit /m).slice(1)) {
-      const sha = (commitDiff.match(/^([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
-      byCommit.set(sha, [...(byCommit.get(sha) ?? []), appendOnlyBreak(commitDiff)]);
+    let current: string[] | null = null;
+    const finish = () => {
+      if (!current) return;
+      const sha = (current[0]?.match(/^commit ([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
+      byCommit.set(sha, [...(byCommit.get(sha) ?? []), appendOnlyBreak(current.join("\n"))]);
+    };
+    try {
+      eachGitLine(repoRoot, ["log", "--no-color", "--follow", "-p", "-m", "--", relPath], (line) => {
+        if (line.startsWith("commit ")) {
+          finish();
+          current = [];
+        }
+        current?.push(line);
+      });
+    } catch (error) {
+      throw new Error(`git log failed for ${relPath}: ${(error as Error).message}`);
     }
+    finish();
     for (const [sha, breaks] of byCommit) {
       const broken = breaks.includes("removed")
         ? "removed"
@@ -120,16 +128,13 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
       if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
     }
 
-    let uncommitted: string;
+    const uncommitted: string[] = [];
     try {
-      uncommitted = execFileSync("git", ["-C", repoRoot, "diff", "--no-color", "HEAD", "--", relPath], {
-        encoding: "utf8",
-        timeout: 60_000,
-      });
+      eachGitLine(repoRoot, ["diff", "--no-color", "HEAD", "--", relPath], (line) => uncommitted.push(line));
     } catch (error) {
       throw new Error(`git diff failed for ${relPath}: ${(error as Error).message}`);
     }
-    const broken = appendOnlyBreak(uncommitted);
+    const broken = appendOnlyBreak(uncommitted.join("\n"));
     if (broken) problems.push(`${relPath}: uncommitted changes ${BREAK_WORDS[broken]}`);
   }
 
@@ -197,22 +202,20 @@ export function ledgerProblemsWithHistory(paths: string[]): string[] {
   return problems;
 }
 
-function main() {
+/** The command: `ledger-check-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(): number {
   const root = privateDir();
   let problems: string[];
   try {
     problems = ledgerCheckProblems(root);
   } catch (error) {
     console.error(`[ledger:check] could not read a file or the private repo's history: ${(error as Error).message}`);
-    process.exit(2);
+    return 2;
   }
   if (problems.length) {
     console.log(`[ledger:check] problems found:\n${problems.map((p) => `- ${p}`).join("\n")}`);
-    process.exit(1);
+    return 1;
   }
   console.log("[ledger:check] both files are sound: amendments check out, history is append-only");
-  process.exit(0);
+  return 0;
 }
-
-// Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();

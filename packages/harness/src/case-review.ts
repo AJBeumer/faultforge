@@ -16,17 +16,17 @@
  * `review.recorded` event, so nothing was written (the log is append-only; correct one with an amendment);
  * 2 nothing was written, because an input is missing or unreadable, the answer key or audit log has an
  * amendment or history problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:review` runs `case-review-cli.ts`.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { errorText as message } from "./error-text.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { ROOT } from "./paths.ts";
 import { TOOL } from "./provenance.ts";
 import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
 
@@ -177,12 +177,12 @@ export function run(caseId: string, options: RunOptions = {}): number {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const args = process.argv.slice(2);
+/** The command: `case-review-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(args: string[]): number {
   const caseId = args.find((a) => !a.startsWith("--"));
   if (!caseId || !/^FF-\d{4}$/.test(caseId)) {
     console.error("usage: npm run case:review -- <FF-NNNN> [--dry-run]");
-    process.exit(2);
+    return 2;
   }
-  process.exit(run(caseId, { dryRun: args.includes("--dry-run") }));
+  return run(caseId, { dryRun: args.includes("--dry-run") });
 }

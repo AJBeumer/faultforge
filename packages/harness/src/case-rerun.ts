@@ -21,11 +21,12 @@
  * missing or isn't a bug case, the templates or the trees differ, or the marks would chain or are already
  * there; 2 couldn't run: the answer key or audit log has a problem, git couldn't read a commit, or the line
  * couldn't be appended.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:rerun` runs `case-rerun-cli.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
@@ -190,16 +191,12 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const parsed = parseCliArgs(process.argv.slice(2));
+/** The command: `case-rerun-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): number {
+  const parsed = parseCliArgs(argv);
   if (!parsed) {
     console.error("usage: npm run case:rerun -- <FF-NNNN> --of <FF-NNNN> [--dry-run] [--target <checkout>]");
-    process.exit(1);
+    return 1;
   }
-  try {
-    process.exit(run(parsed));
-  } catch (e) {
-    console.error(`case:rerun: ${message(e)}`);
-    process.exit(2);
-  }
+  return run(parsed);
 }
