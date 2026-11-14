@@ -399,3 +399,14 @@ A second, wider audit re-scored every case from the raw evidence and agreed with
 ## 14 November: the after-commit review note is retired
 
 - **Decision.** The note that ran after every commit here, saying whether a finished local review covered it (Day 8, last), is removed ([PR #261](https://github.com/AJBeumer/faultforge/pull/261)). It had never once reported a covered commit. Qodo marks a local review's finding list complete only when it keeps a checkpoint, and every `review:local` run so far ended without one (`checkpoint_unavailable`), so the note fired on every commit and told nobody anything. `npm run review:gate` stays as a command and now says why a review doesn't cover a commit, quoting Qodo's own reason. PR review by Qodo is unchanged and remains the review that counts.
+
+## 14 November: benchmark v2 method, decided before any v2 case
+
+The owner delegated these choices; they were fixed and committed before any v2 case ran. Nothing here names a v2 template or says how many there are.
+
+- **Tickets don't carry the oracle.** A v2 bug ticket asks for a real change and never states the behaviour the bug breaks. `benchmark-rules.ts` refuses a v2 template whose ticket repeats its kind terms. Bug and control tickets share one closing line.
+- **Controls look like work.** v2 controls change behaviour correctly, not just names. Every v2 case PR, bug or control, carries the test an ordinary PR for its ticket would add. No v2 case runs until `inject` can plant that test; if it can't, all of them run without one and the report says so.
+- **Rules versus no rules.** The invariants that exist only in private records are not added to the target's `INVARIANTS.md`: that would give the reviewer more oracles and need a new Qodo configuration. A v2 bug whose invariant no target rule states, in whole or in part, is reported as an "undocumented behaviour" case. One that a rule covers even partly counts as documented. Every v2 rate is split this way and by Qodo's source label.
+- **Held-out cases.** Chosen by a rule fixed before the templates' hashes were computed, with their file hashes committed in private storage. That commit is anchored in [`ledger-anchors.txt`](ledger-anchors.txt) by this change, so the choice is dated publicly. They run last and are published with the final report.
+- **Ranges and order.** v2 records only the changed lines as the injected range. Development cases run in a shuffled order with an ordinary PR shape and no fixed cadence.
+- **Correction to the 14 November corrections.** That entry says the batch's accurate verdict reasons "will be appended". The owner appended them with `npm run verdict:amend` between 08:36 and 08:37 UTC on 14 November, one per detection, each marked as written later. `ledger:check` passes, and every published record still builds byte for byte.
