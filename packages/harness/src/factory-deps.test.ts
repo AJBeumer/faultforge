@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // realDeps' wiring, on fakes: no real gh, git, npm or claude process runs in this file. Each module realDeps
 // calls out to keeps its real exports except the ones that would reach the outside world.
@@ -46,6 +46,19 @@ vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
 }));
+// The lab root realDeps sees, so a test can stand in for a checkout with no private folder beside it. On the
+// owner's machine `<lab>/private` exists, and in CI it doesn't; a test that depends on which made the local
+// check red while CI stayed green (re-grade of 14 November). Unset, it is the real root.
+const labRoot = vi.hoisted(() => ({ override: undefined as string | undefined }));
+vi.mock("./paths.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./paths.ts")>();
+  return {
+    ...real,
+    get ROOT() {
+      return labRoot.override ?? real.ROOT;
+    },
+  };
+});
 
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
@@ -518,6 +531,12 @@ describe("realDeps in CI: no private checkout where a target ticket's agent runs
 
   it("clones the private repo for the runner's own steps from its name, and removes the clone after", async () => {
     vi.mocked(git).mockImplementation(() => "abc\trefs/heads/main");
+    // A lab root with no private checkout beside it, as on a CI runner, whatever this machine has.
+    labRoot.override = mkdtempSync(join(tmpdir(), "lab-no-private-"));
+    onTestFinished(() => {
+      rmSync(labRoot.override ?? "", { recursive: true, force: true });
+      labRoot.override = undefined;
+    });
     const deps = realDeps(FACTORY, OPTIONS, "ci");
     vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
       if (args[0] === "clone") mkdirSync(join(args[3] ?? "", ".git"), { recursive: true });
