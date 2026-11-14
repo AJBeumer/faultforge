@@ -53,6 +53,8 @@ describe("describeLock: what a tick would do with the run lock, read only", () =
   it("treats an unreadable lock as one a tick would take over", () => {
     writeFileSync(join(dir, "factory.lock"), "{not json");
     expect(describeLock(dir, alive([]))).toMatch(/can't be read.*take it over/);
+    writeFileSync(join(dir, "factory.lock"), "null");
+    expect(describeLock(dir, alive([]))).toMatch(/can't be read.*take it over/);
   });
 });
 
@@ -94,7 +96,13 @@ describe("dryRun: the report, and never a write", () => {
     const d = deps({});
     expect(dryRun("ci", d)).toBe(0);
     expect(d.lines).toContain("would change: nothing, no ticket of this mode is left agent-working");
-    expect(d.lines).toContain("run lock: no tick holds the run lock: a tick would take it");
+    // In ci mode the lock line says it is only this machine's: an Actions tick keeps its lock on the runner.
+    expect(d.lines).toContain(
+      "run lock (this machine's lock only; an Actions tick keeps its own on the runner): no tick holds the run lock: a tick would take it",
+    );
+    const local = deps({});
+    dryRun("local", local);
+    expect(local.lines).toContain("run lock: no tick holds the run lock: a tick would take it");
   });
 
   it("exits 1 when a repo couldn't be read, so an incomplete report is never taken for a clean one", () => {

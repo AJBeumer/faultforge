@@ -106,6 +106,9 @@ describe("isReadCall: only a call that can't change anything is retried", () => 
       false,
     );
     expect(isReadCall(["api", "graphql"])).toBe(false);
+    // A document with a query first and a mutation after: operationName may run the mutation.
+    const mixed = "query=query A { viewer { login } } mutation B { addStar(input: {}) { clientMutationId } }";
+    expect(isReadCall(["api", "graphql", "-f", mixed, "-f", "operationName=B"])).toBe(false);
   });
 });
 

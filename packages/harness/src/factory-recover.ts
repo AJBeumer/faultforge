@@ -52,6 +52,7 @@ export function describeLock(dir: string, processes: ProcessView = realProcesses
   let held: { pid?: number; started?: string; since?: string; at?: string; token?: string };
   try {
     held = JSON.parse(readFileSync(file, "utf8"));
+    if (!held || typeof held !== "object") throw new Error("not a lock");
   } catch {
     return "the run lock can't be read, so it names no holder: a tick would take it over";
   }
@@ -90,7 +91,9 @@ export function dryRun(mode: RunMode, deps: DryRunDeps): number {
   const out = deps.print;
   out(`[factory:recover] dry run at ${deps.now().toISOString()}, as a ${mode} tick would see it; nothing is written`);
   out(`repos: ${deps.repos.map((r) => r.github).join(", ")}`);
-  out(`run lock: ${describeLock(deps.lockDir, deps.processes)}`);
+  // The lock lives with the runner: an Actions tick's is on its own machine, never in this one's folder.
+  const where = mode === "ci" ? " (this machine's lock only; an Actions tick keeps its own on the runner)" : "";
+  out(`run lock${where}: ${describeLock(deps.lockDir, deps.processes)}`);
   const planned = report.planned ?? [];
   out(planned.length ? "would change:" : "would change: nothing, no ticket of this mode is left agent-working");
   for (const line of planned) out(`- ${line}`);

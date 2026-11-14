@@ -93,7 +93,9 @@ export function isReadCall(args: readonly string[]): boolean {
     if (field.startsWith("query=")) query = field.slice("query=".length);
   }
   if (args.includes("graphql")) {
-    return (method ?? "POST") === "POST" && query !== undefined && /^\s*(query\b|\{)/.test(query);
+    // A document holding a mutation anywhere may run it (`operationName` picks one), so it is a write.
+    if (query === undefined || /\bmutation\b/.test(query)) return false;
+    return (method ?? "POST") === "POST" && /^\s*(query\b|\{)/.test(query);
   }
   return (method ?? "GET") === "GET" && !body;
 }
