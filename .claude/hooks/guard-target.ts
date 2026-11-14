@@ -270,8 +270,10 @@ function checkCommand(ctx: Context, command: string) {
   // Inside a reviewed checkout, a chain that mentions git may hold only steps that can't change the
   // checkout's content behind the guard's back (it looks before the command runs): no copies, redirects,
   // scripts or shell functions in the same command as a commit or push. Those run first, on their own.
-  if (isChained(command) && /\bgit\b/.test(joinedWords(command))) {
-    const step = chainProblem(command);
+  // A post counts too: an earlier step could rewrite the file it reads after the guard looked (Qodo on PR 266).
+  const git = /\bgit\b/.test(joinedWords(command));
+  if (isChained(command) && (writes || git)) {
+    const step = chainProblem(command, !git);
     if (step !== undefined) {
       deny(
         `In ${repo.name}, a command that writes files or hides a command ("${step.slice(0, 60)}") must run on its own, and the commit or push in a separate command: the guard checks the checkout's content before a command runs, and can't see what an earlier part of the same command would write.`,

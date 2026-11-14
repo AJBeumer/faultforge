@@ -28,6 +28,16 @@ export function explicitDestinations(command: string): string[] {
     /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
   ];
   const named = patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
+  // `gh repo <verb>` takes its repo as a plain argument anywhere among its flags, in any quoting (Qodo on PR 266).
+  const repoArgs = segments(joinedWords(command)).flatMap((part) =>
+    /\bgh\s+repo\s/.test(part.text)
+      ? part.text
+          .split(/\s+/)
+          .filter((word) => /^[\w.-]+\/[\w.-]+$/.test(word))
+          .map((word) => word.toLowerCase())
+      : [],
+  );
+  named.push(...repoArgs);
   // A URL given to git, one git step at a time so the cost stays linear (AUD-M4).
   const remote = new RegExp(String.raw`github\.com[/:]${REPO}`, "gi");
   const urls = gitSteps(command, /\b(?:push|pull|fetch|clone|remote|send-pack)\b/).flatMap((step) =>
@@ -56,7 +66,8 @@ export function urlDestinations(outside: string): string[] {
  */
 export function graphqlMutation(command: string): boolean {
   // A query read from a file (`--input f`, `-F query=@f`) may be a mutation the command text doesn't show.
-  const fromFile = /--input\b|\s-F\s*\w+=@/.test(command);
+  // Any spelling: `--field query=@f`, a quoted `-F "query=@f"` (Qodo on PR 266).
+  const fromFile = /--input\b|=@/.test(joinedWords(command));
   if (/\bgh\s+api\s+graphql\b/i.test(command) && (fromFile || /\bmutation\b/i.test(command))) return true;
   return rawApiWrite(command) && /api\.github\.com\/graphql\b/i.test(joinedWords(command));
 }

@@ -112,6 +112,14 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
     }
   });
 
+  it("reads a relative script path from the checkout, as git does (Qodo on PR 266)", () => {
+    const { dir, git } = repo();
+    installHooks(dir, script);
+    writeFileSync(join(dir, "git-guard.ts"), readFileSync(script, "utf8"));
+    git("config", "--local", CONFIG_KEY, "git-guard.ts");
+    expect(guardProblem(dir)).toBeUndefined();
+  });
+
   it("is missing for a folder git can't read", () => {
     expect(guardProblem(join(tmpdir(), "no-such-checkout-for-guard"))).toBeDefined();
   });

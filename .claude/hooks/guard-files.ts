@@ -63,7 +63,8 @@ export function referencedFiles(cwd: string, command: string): string[] {
   // A bare file name ends at whitespace, a quote or a shell separator: `-F msg.txt; echo` names msg.txt.
   const value = String.raw`(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`;
   const flags = new RegExp(
-    String.raw`(\s-F|--file|--body-file|--notes-file|--input${template})(?:[\s=]+|(?<=-F)(?=[^\s=-]))${value}`,
+    // `--field` is `-F`'s long form, whose `name=@file` gh reads (Qodo on PR 266).
+    String.raw`(\s-F|--field|--file|--body-file|--notes-file|--input${template})(?:[\s=]+|(?<=-F)(?=[^\s=-]))${value}`,
     "dg",
   );
   // `-t` is a commit's template only inside a commit step; to gh it is a title.
@@ -166,8 +167,15 @@ export function builtText(cwd: string, command: string, strict: boolean, backtic
   // posted text too (Qodo on PR 266). Elsewhere only those in posted values are read.
   const posted = (at: number) => strict || stdin || ranges.some(([start, end]) => at >= start && at < end);
   const texts: string[] = [];
-  for (const sub of substitutions(command, backticks)) {
+  // A substitution inside another posts its output too, so each nested one is looked at (Qodo on PR 266).
+  const nested = (outer: { start: number; inner: string }[]): { start: number; inner: string }[] =>
+    outer.flatMap((sub) => [
+      sub,
+      ...nested(substitutions(sub.inner, backticks)).map((s) => ({ ...s, start: sub.start })),
+    ]);
+  for (const sub of nested(substitutions(command, backticks))) {
     if (!posted(sub.start)) continue;
+    if (!strict && fileRead(sub.inner) === undefined) continue;
     const file = fileRead(sub.inner);
     if (file === undefined) {
       if (strict) {

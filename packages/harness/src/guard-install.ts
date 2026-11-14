@@ -97,7 +97,9 @@ export function guardProblem(checkout: string): string | undefined {
       // Git skips a hook it can't run, without a word (Qodo on PR 266).
       if (process.platform !== "win32" && !(statSync(file).mode & 0o111)) return `${file} is not executable`;
     }
-    const script = setting(CONFIG_KEY);
+    // Git runs the hook from the checkout, so a relative script path is read from there (Qodo on PR 266).
+    const configured = setting(CONFIG_KEY);
+    const script = configured && resolve(checkout, configured);
     if (!script || !existsSync(script)) return `${checkout}'s guard hooks name no script that exists (${CONFIG_KEY})`;
     // The script must be the guard itself, not any file that happens to exist (Qodo on PR 266).
     const guard =

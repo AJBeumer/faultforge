@@ -54,7 +54,7 @@ describe("text built from a file is read and checked (#242)", () => {
 
   it("refuses a body built by a program, as a substitution or a pipe", () => {
     expect(bash(`gh pr create ${R} --title Tidy --body "$(node -e "console.log('hi')")"`)).toMatch(/can't check/);
-    expect(bash(`node gen.js | gh pr create ${R} --title Tidy --body-file -`)).toMatch(/piped in/);
+    expect(bash(`node gen.js | gh pr create ${R} --title Tidy --body-file -`)).toMatch(/piped in|must run on its own/);
   });
 
   it("refuses a program's output wherever it sits in a post to a reviewed repo (Qodo on PR 266)", () => {
@@ -63,8 +63,8 @@ describe("text built from a file is read and checked (#242)", () => {
     );
     expect(bash(`gh label create "$(node -e 'x')" ${R}`)).toMatch(/can't check/);
     expect(bash(`gh pr create ${R} --title Tidy --body="Notes"$(cat ${giveaway})`)).toMatch(/says planted|can't check/);
-    expect(bash(`node gen.js | cat | gh pr comment 1 ${R} --body-file -`)).toMatch(/piped in/);
-    expect(bash(`cat <(node gen.js) | gh pr comment 1 ${R} --body-file -`)).toMatch(/program/);
+    expect(bash(`node gen.js | cat | gh pr comment 1 ${R} --body-file -`)).toMatch(/piped in|must run on its own/);
+    expect(bash(`cat <(node gen.js) | gh pr comment 1 ${R} --body-file -`)).toMatch(/program|must run on its own/);
     expect(powershell(`gh pr comment 1 ${R} --body (node -e "x")`)).toMatch(/program/);
   });
 
@@ -135,5 +135,38 @@ describe("git's own guard can't be switched off in a reviewed checkout (#242)", 
   it("allows -n inside a message, and --no-verify outside a reviewed checkout", () => {
     expect(bash('git commit -m "Handle the -n option"', TARGET)).toBeUndefined();
     expect(bash('git commit --no-verify -m "Tidy"', LAB)).toBeUndefined();
+  });
+});
+
+describe("holes found in the second review of PR 266", () => {
+  it("counts a GraphQL query read from a file, in any spelling, as a mutation", () => {
+    // Named relative to the folder it runs in, so only the file's text can be what is refused.
+    const query = file('mutation { addComment(input: {body: "the planted bug"}) { x } }');
+    const dir = join(query, "..");
+    expect(bash("gh api graphql --field query=@notes.txt", dir)).toMatch(/says planted/);
+    expect(bash('gh api graphql -F "query=@notes.txt"', dir)).toMatch(/says planted/);
+  });
+
+  it("finds the repo of gh repo edit after its flags, and in a quote-split gh", () => {
+    expect(bash('gh repo edit --description "planted bug" AJBeumer/faultforge-target')).toMatch(/says planted/);
+    expect(bash("g''h repo edit AJBeumer/faultforge-target --description 'planted bug'")).toMatch(/says planted/);
+  });
+
+  it("reads a file behind a nested substitution in a lab post", () => {
+    const link = file("see https://github.com/AJBeumer/faultforge-target/issues/3\n");
+    expect(bash(`gh issue create --title x --body "$(echo $(cat ${link}))"`)).toMatch(/link to the target/);
+  });
+
+  it("refuses a post chained after a step that could rewrite the file it reads", () => {
+    const notes = file("Small cleanup.\n");
+    expect(bash(`node gen.js > ${notes}; gh pr comment 1 ${R} --body "$(cat ${notes})"`)).toMatch(
+      /must run on its own/,
+    );
+  });
+
+  it("decides a long run of git options that never reaches -C in well under a second", () => {
+    const started = performance.now();
+    bash(`git ${"--a ".repeat(200)}log`);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
