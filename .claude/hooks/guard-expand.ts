@@ -32,31 +32,49 @@ const POWERSHELL_ASSIGN = /^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'(
 export function expandVariables(command: string): string {
   const quoted = quotedMask(command);
   const assigned = new Map<string, string>();
+  // A variable changed in a way this reading doesn't follow (`M+=x`, `read M`, an assignment that may not run:
+  // `false && M=x`, `M=x | true`, `M=x &`) is never taken: its uses stay unreadable (Qodo on PR 291).
+  const untaken = new Set<string>();
+  for (const m of command.matchAll(/\b([A-Za-z_]\w*)\+=|\bread\s+(?:-\w+\s+)*([A-Za-z_]\w*)/g))
+    untaken.add(m[1] ?? m[2] ?? "");
   let out = "";
   let start = 0;
-  const statement = (end: number) => {
+  let before = "";
+  const statement = (end: number, after: string) => {
     const text = command.slice(start, end);
     const powershell = POWERSHELL_ASSIGN.exec(text);
+    // Only a statement that surely runs, in this shell: after `;` or a new line, and not piped or backgrounded.
+    const runs = !/[&|]/.test(before) && !/[&|]/.test(after);
     if (ASSIGNS_ONLY.test(text)) {
-      for (const m of text.matchAll(ASSIGNMENT)) assigned.set(m[1] ?? "", m[2] ?? m[3] ?? m[4] ?? "");
+      for (const m of text.matchAll(ASSIGNMENT)) {
+        const name = m[1] ?? "";
+        if (runs && !untaken.has(name)) assigned.set(name, m[2] ?? m[3] ?? m[4] ?? "");
+        else assigned.delete(name);
+      }
       out += text;
     } else if (powershell) {
-      assigned.set(powershell[1] ?? "", powershell[2] ?? powershell[3] ?? "");
+      const name = powershell[1] ?? "";
+      if (runs && !untaken.has(name)) assigned.set(name, powershell[2] ?? powershell[3] ?? "");
+      else assigned.delete(name);
       out += text;
     } else {
       let read = text;
-      for (const [name, value] of assigned)
-        read = read.replace(new RegExp(String.raw`\$\{${name}\}|\$(?:env:)?${name}(?!\w)`, "gi"), () => value);
+      // Names as bash spells them, case and all; PowerShell's `$env:NAME` ignores case.
+      for (const [name, value] of assigned) {
+        read = read.replace(new RegExp(String.raw`\$\{${name}\}|\$${name}(?!\w)`, "g"), () => value);
+        read = read.replace(new RegExp(String.raw`\$env:${name}(?!\w)`, "gi"), () => value);
+      }
       out += read;
     }
   };
   for (let i = 0; i < command.length; i++) {
     if (quoted[i] || !/[;&|\n]/.test(command[i] ?? "")) continue;
-    statement(i);
+    statement(i, command[i] ?? "");
     out += command[i];
+    before = command[i] ?? "";
     start = i + 1;
   }
-  statement(command.length);
+  statement(command.length, "");
   return out;
 }
 

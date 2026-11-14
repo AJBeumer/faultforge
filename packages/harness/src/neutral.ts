@@ -110,7 +110,9 @@ const LEET: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "
  */
 export function leetReadings(text: string): string[] {
   const base = text.replace(/[03457@$]/g, (ch) => LEET[ch] ?? ch);
-  return [...new Set([base.replace(/1/g, "i"), base.replace(/1/g, "l")])];
+  // A third, mixed reading for words that use `1` both ways (`p1ant1ng`): before a vowel it reads `l`, else `i`.
+  const mixed = base.replace(/1(?=[aeiouy])/gi, "l").replace(/1/g, "i");
+  return [...new Set([base.replace(/1/g, "i"), base.replace(/1/g, "l"), mixed])];
 }
 
 /**

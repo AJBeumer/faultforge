@@ -119,6 +119,23 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
     );
   });
 
+  it("closes the third round's spellings (Qodo on PR 291)", () => {
+    // A value changed in a way the reading doesn't follow is never taken.
+    expect(verdict(`M=pla; M+=nted; gh issue comment 3 --repo ${T} -b "$M"`, LAB, NO_PRIVATE)).toBeDefined();
+    expect(expandVariables('M=pla; M+=nted; echo "$M"')).toBe('M=pla; M+=nted; echo "$M"');
+    expect(expandVariables('false && M=x; echo "$M"')).toBe('false && M=x; echo "$M"');
+    expect(expandVariables('M=x | true; echo "$M"')).toBe('M=x | true; echo "$M"');
+    expect(expandVariables('read M; echo "$M"')).toBe('read M; echo "$M"');
+    // Bash's names are case-sensitive.
+    expect(expandVariables('msg=ok; echo "$MSG"')).toBe('msg=ok; echo "$MSG"');
+    // A word that uses 1 both ways.
+    expect(telltales("p1ant1ng a bug")).toContain("says planted");
+    // A redefined cat, and a shell option that makes echo decode escapes.
+    const heredoc = `cat(){ printf x-secret-v1; }; gh pr create --title T --body "$(cat <<'EOF'\nhi\nEOF\n)"`;
+    expect(verdict(heredoc)).toBeDefined();
+    expect(verdict("shopt -s xpg_echo; echo 'x-sec\\0162et-v1' | gh pr create --title T --body-file -")).toBeDefined();
+  });
+
   it("refuses a write whose repo is a variable the command doesn't set", () => {
     expect(verdict(`gh issue comment 3 --repo "$R" --body "ok"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
   });

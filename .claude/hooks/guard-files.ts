@@ -195,10 +195,12 @@ export function builtText(
       sub,
       ...nested(substitutions(sub.inner, backticks)).map((s) => ({ ...s, start: sub.start })),
     ]);
+  // A command that redefines cat, or the path it is found on, could print anything in its place (Qodo on PR 291).
+  const catIsCat = !/\bcat\s*\(\s*\)|\bfunction\s+cat\b|\balias\s+cat\b|\bPATH\s*[+]?=|\$env:PATH\b/i.test(command);
   for (const sub of nested(substitutions(command, backticks))) {
     if (!posted(sub.start)) continue;
     // `$(cat <<'EOF' … EOF)` posts a heredoc written in the command, already read with it (Qodo on PR 291).
-    if (literalHeredoc(sub.inner)) continue;
+    if (catIsCat && literalHeredoc(sub.inner)) continue;
     if (!strict && fileRead(sub.inner) === undefined) continue;
     const file = fileRead(sub.inner);
     if (file === undefined) {
@@ -232,7 +234,10 @@ export function builtText(
     // The producer is read with its quoted text blanked, so its format is looked for in the command itself.
     const plain =
       // Any `-e` among echo's flags, and printf's formats and escapes anywhere in the command (Qodo on PR 291).
-      (/^(?:echo|Write-Output)\b/i.test(producer ?? "") && !/\s-[a-zA-Z]*e\b/.test(producer ?? "")) ||
+      // A shell option can make a bare echo decode escapes too: xpg_echo, posix (Qodo on PR 291).
+      (/^(?:echo|Write-Output)\b/i.test(producer ?? "") &&
+        !/\s-[a-zA-Z]*e\b/.test(producer ?? "") &&
+        !/\bxpg_echo\b|\bposix\b/.test(command)) ||
       (/^printf\b/.test(producer ?? "") && !/\bprintf\b[\s\S]*(%|\\(x|u|U|[0-7]))/.test(command));
     if (producer !== undefined && !reads && !plain) {
       throw new BuiltText(
