@@ -4,7 +4,6 @@
  * Split from factory-tick.ts (#227).
  */
 import type { FactoryConfig } from "./factory-config.ts";
-import { git } from "./factory-exec.ts";
 import type { Candidate, IssueEvent, Workspace } from "./factory-tick.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode } from "./factory-workspace.ts";
 import { gh, ghAll, ghApiJson } from "./github.ts";
@@ -65,13 +64,15 @@ export function pullsSince<P extends { updated_at: string }>(cutoffMs: number, f
 /** What actually changed while the agent ran (`TickDeps.audit`): anything here is a stop for the owner. */
 export function auditRun(
   factory: FactoryConfig,
-  privateRepo: string,
+  /** The owner's private checkout, and the private repo's `main` on GitHub now (in CI no checkout may exist). */
+  priv: { checkout: string; main: () => string },
   mode: RunMode,
   ws: Workspace,
   ticket: Candidate,
   from: string,
   to: string,
 ): string[] {
+  const privateRepo = priv.checkout;
   const problems: string[] = [];
   for (const [key, repo] of Object.entries(factory.repos)) {
     const now = gh("api", `repos/${repo.github}/commits/main`, "--jq", ".sha").trim();
@@ -79,7 +80,7 @@ export function auditRun(
     if (now !== before) problems.push(`main of ${key} moved (${before.slice(0, 7)} → ${now.slice(0, 7)})`);
   }
   // The agent may commit evidence to its private branch, but only the runner pushes it, after this audit.
-  const privateNow = git(privateRepo, "ls-remote", "origin", "refs/heads/main").split(/\s/)[0] ?? "";
+  const privateNow = priv.main();
   const privateBefore = ws.mainAtStart[PRIVATE_KEY] ?? "";
   if (privateNow !== privateBefore)
     problems.push(`main of the private repo moved (${privateBefore.slice(0, 7)} → ${privateNow.slice(0, 7)})`);

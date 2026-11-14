@@ -38,6 +38,17 @@
             "statusMessage": "Checking the unattended-run policy"
           }
         ]
+      },
+      {
+        "matcher": "Read|Grep|Glob|NotebookRead",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts\" factory-policy.ts",
+            "timeout": 15,
+            "statusMessage": "Checking the unattended-run policy"
+          }
+        ]
       }
     ]
   }

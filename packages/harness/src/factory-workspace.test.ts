@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
-import { fingerprints, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
+import { fingerprints, HOOK_IMPORTS, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
 import { git, gitRepo } from "./fixtures/git-repo.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 
@@ -94,7 +103,27 @@ describe("fingerprints: what the agent must not change", () => {
     const prints = fingerprints(FACTORY, "unused", "ci", lab);
     expect(prints).toEqual({
       [`the run's guardrail files (${join(lab, ".claude")})`]: sha256("hooks/guard.ts\ndeny\nsettings.json\n{}"),
+      "the run's guardrail file packages/harness/src/neutral.ts": sha256("(missing)"),
     });
+  });
+
+  it("covers the giveaway word list the hooks import, outside .claude (AUD-M4, #284)", () => {
+    const lab = guarded({ "settings.json": "{}" });
+    mkdirSync(join(lab, "packages", "harness", "src"), { recursive: true });
+    writeFileSync(join(lab, "packages", "harness", "src", "neutral.ts"), "export const telltales = (t) => [t];");
+    const first = fingerprints(FACTORY, "unused", "ci", lab);
+    writeFileSync(join(lab, "packages", "harness", "src", "neutral.ts"), "export const telltales = () => [];");
+    expect(fingerprints(FACTORY, "unused", "ci", lab)).not.toEqual(first);
+  });
+
+  it("lists every file outside .claude the hooks import", () => {
+    const hooks = join(LAB_ROOT, ".claude", "hooks");
+    const imported = new Set<string>();
+    for (const file of readdirSync(hooks).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
+      for (const m of readFileSync(join(hooks, file), "utf8").matchAll(/from "(\.\.\/\.\.\/[^"]+)"/g))
+        imported.add(relative(LAB_ROOT, resolve(hooks, m[1] ?? "")).replace(/\\/g, "/"));
+    }
+    expect([...imported].sort()).toEqual([...HOOK_IMPORTS].sort());
   });
 
   it("changes when a guarded file changes, or a new one appears", () => {
@@ -119,6 +148,7 @@ describe("fingerprints: what the agent must not change", () => {
       `the owner's checkout ${resolve(LAB_ROOT, ".")}`,
       `the owner's checkout ${privateRepo}`,
       `the run's guardrail files (${join(lab, ".claude")})`,
+      "the run's guardrail file packages/harness/src/neutral.ts",
     ]);
     expect(Object.keys(first).sort()).toEqual([...expected].sort());
     writeFileSync(join(privateRepo, "notes.md"), "uncommitted\n");
