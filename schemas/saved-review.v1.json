@@ -25,7 +25,10 @@
       "properties": { "name": { "type": ["string", "null"] }, "arm": { "type": ["string", "null"] } },
       "additionalProperties": false
     },
-    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "findings": {
+      "type": "array",
+      "items": { "type": "object", "$ref": "#/$defs/finding", "unevaluatedProperties": false }
+    },
     "openFindings": {
       "type": "array",
       "items": {

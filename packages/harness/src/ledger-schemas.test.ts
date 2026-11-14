@@ -137,6 +137,8 @@ describe("the saved-review schema (AUD-N5)", () => {
     ["an unknown field", { ...SAVED, verdict: "caught" }],
     ["an open finding without its commit", { ...SAVED, openFindings: [FINDING] }],
     ["a PR that isn't a number", { ...SAVED, pr: "7" }],
+    ["a finding with a field the writer never writes (Qodo on PR 289)", { ...SAVED, findings: [{ ...FINDING, x: 1 }] }],
+    ["an open finding with such a field", { ...SAVED, openFindings: [{ ...FINDING, commit: "abcdef0", x: 1 }] }],
   ])("refuses %s", (_name, review) => {
     expect(savedReviewProblem(JSON.parse(JSON.stringify(review)))).toBeDefined();
   });
@@ -152,6 +154,50 @@ describe("the saved-review schema (AUD-N5)", () => {
     expect(savedReviewProblems(reviews)).toEqual([
       "reviews/target-pr7/ccccccc.review.json: not JSON",
       expect.stringMatching(/^reviews\/target-pr7\/ddddddd\.review\.json: \/state /),
+    ]);
+  });
+
+  it("checks archived saves too: an unfinished one renamed, and one moved into its own folder (Qodo on PR 289)", () => {
+    const reviews = mkdtempSync(join(tmpdir(), "schemas-archived-"));
+    const pr = join(reviews, "target-pr7");
+    mkdirSync(join(pr, "bbbbbbb.unfinished-1"), { recursive: true });
+    writeFileSync(join(pr, "bbbbbbb.review.json"), JSON.stringify(SAVED));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-2.json"), JSON.stringify({ ...SAVED, state: "done" }));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-1", "bbbbbbb.review.json"), JSON.stringify({ ...SAVED, x: 1 }));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-1", "bbbbbbb.qodo-api.raw.json"), "{}");
+    expect(savedReviewProblems(reviews)).toEqual([
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.unfinished-1\/bbbbbbb\.review\.json: /),
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.unfinished-2\.json: /),
+    ]);
+  });
+});
+
+describe("the answer key as the tools read it, amendments applied (Qodo on PR 289)", () => {
+  const file = (lines: object[], blankAfterFirst = false) => {
+    const path = join(mkdtempSync(join(tmpdir(), "schemas-amended-")), "ground-truth.jsonl");
+    const text = lines.map((l) => JSON.stringify(l));
+    if (blankAfterFirst) text.splice(1, 0, "");
+    writeFileSync(path, `${text.join("\n")}\n`);
+    return path;
+  };
+
+  it("accepts the kinds of field real amendments add", () => {
+    const also = { alsoBreaks: [{ invariantId: "INV-X-002", proofTest: PROOF }] };
+    expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change: also }]))).toEqual([]);
+    expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change: { rerunOf: "FF-9500" } }]))).toEqual([]);
+  });
+
+  it("reports an entry an amendment made unsound, though each line alone fits", () => {
+    for (const change of [{ validated: false }, { createdAt: "yesterday" }, { note: "an unknown field" }]) {
+      expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change }]))).toEqual([
+        expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended: /),
+      ]);
+    }
+  });
+
+  it("names a line by its place in the file, blank lines counted", () => {
+    expect(answerKeyProblems(file([BUG, { ...CONTROL, extra: 1 }], true))).toEqual([
+      expect.stringMatching(/^ground-truth\.jsonl line 3: /),
     ]);
   });
 });

@@ -68,7 +68,24 @@
         "injectedLines": { "$ref": "#/$defs/lines" },
         "validation": { "$ref": "#/$defs/validation" },
         "validated": { "const": true },
-        "createdAt": { "$ref": "#/$defs/time" }
+        "createdAt": { "$ref": "#/$defs/time" },
+        "alsoBreaks": {
+          "description": "Added by amendment: other invariants the change was found to break, each with its pinned proof.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["invariantId", "proofTest"],
+            "properties": {
+              "invariantId": { "$ref": "#/$defs/text" },
+              "proofTest": { "$ref": "#/$defs/pinnedProof" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "rerunOf": {
+          "description": "Added by amendment: the earlier case this one planted again, so both are one defect.",
+          "$ref": "#/$defs/caseId"
+        }
       }
     },
     "sabotage": {
