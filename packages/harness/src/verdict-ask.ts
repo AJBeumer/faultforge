@@ -4,6 +4,7 @@
  */
 import { createInterface } from "node:readline/promises";
 import type { MatchFinding, MatchRuleResult } from "./match-rule.ts";
+import { normalReason } from "./verdict-event.ts";
 
 export type AskFn = (question: string) => Promise<string>;
 
@@ -60,6 +61,37 @@ export async function askNonBlank(ask: AskFn, question: string): Promise<string 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const answer = (await ask(question)).trim();
     if (answer !== "") return answer;
+  }
+  return undefined;
+}
+
+/**
+ * A reason that is this case's own: nonblank, and not one already given for another case (`taken`, as
+ * `normalReason` gives them). Asked again a few times; then `{ taken }` says whether the last answer was
+ * another case's reason rather than blank.
+ */
+export async function askOwnReason(
+  ask: AskFn,
+  question: string,
+  taken: Set<string>,
+): Promise<string | { taken: boolean }> {
+  let wasTaken = false;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const answer = (await ask(question)).trim();
+    wasTaken = answer !== "" && taken.has(normalReason(answer));
+    if (answer !== "" && !wasTaken) return answer;
+  }
+  return { taken: wasTaken };
+}
+
+/** A matched finding's judgement: real or a false alarm, explicitly. Blank or "open" leaves it unjudged. */
+export async function askMatchedJudgement(
+  ask: AskFn,
+  question: string,
+): Promise<{ verdict: FindingVerdict; explicit: true } | undefined> {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const answer = (await ask(question)).trim().toLowerCase();
+    if (answer === "real" || answer === "false alarm") return { verdict: answer, explicit: true };
   }
   return undefined;
 }

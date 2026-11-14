@@ -174,9 +174,13 @@ function plantedDiff(w: ReturnType<typeof world>, caseId: string): string {
   return git("show", "--format=", entry.injectionCommit).replace(/\r\n/g, "\n");
 }
 
-/** The owner's answers: the verdict, then a reason, then "real" for every other finding. */
-const owner = (answer: string) => async (question: string) =>
-  question.startsWith("Verdict") ? answer : question.startsWith("Judge") ? "real" : "Checked against the saved review.";
+/** The owner's answers: the verdict, then a reason of the case's own, then "real" for every finding. */
+const owner = (answer: string, caseId: string) => async (question: string) =>
+  question.startsWith("Verdict")
+    ? answer
+    : question.startsWith("Judge")
+      ? "real"
+      : `Checked ${caseId} against its saved review.`;
 
 async function adjudicateAndBuild(w: ReturnType<typeof world>, caseId: string, answer: string) {
   const quiet = { log: () => {}, error: () => {} };
@@ -190,7 +194,7 @@ async function adjudicateAndBuild(w: ReturnType<typeof world>, caseId: string, a
     log: () => {},
     error: (line) => errors.push(line),
     isTTY: true,
-    ask: owner(answer),
+    ask: owner(answer, caseId),
     ownerLogin: () => "owner",
     now: () => "2026-11-13T10:04:00.000Z",
   });
