@@ -286,7 +286,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       // The workflow checks no private repo out (AUD-H2). A lab ticket's agent saves evidence in <lab>/private,
       // so the runner clones it there; a target ticket's agent starts only with no private content on disk.
       const reviewed = isReviewedTicket(factory, repoKey);
-      access.drop();
+      // The clone goes, unless a Qodo-state worktree kept after a failed push still needs its objects: that
+      // evidence stays, and a target ticket then doesn't start (Qodo on PR 288).
+      if (!access.leftovers().some((p) => basename(dirname(p)).startsWith("qodo-check-"))) access.drop();
       if (reviewed) {
         const left = access.leftovers();
         if (left.length)

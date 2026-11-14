@@ -244,19 +244,40 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
       } else break;
     }
     const program = words[i] ?? "";
-    if (/^(cd|pushd|Set-Location|sl)$/i.test(program)) {
+    if (/^(cd|pushd|popd|Set-Location|sl)$/i.test(program)) {
       const to = words[i + 1];
-      dir = to && dir && !/[$`%~]/.test(to) ? resolve(dir, to) : undefined;
+      // In a subshell, or back through popd, the folder that follows can't be known from the text (Qodo on PR 288).
+      const unknown = /^popd$/i.test(program) || /^\s*[({]/.test(step) || !to || /[$`%~]/.test(to);
+      dir = !unknown && dir ? resolve(dir, to) : undefined;
       continue;
     }
     let at = i;
     let name = basename(program).replace(/\.exe$/i, "");
-    if (/^(npx|pnpx|bunx)$/i.test(name) || (/^(deno|bun)$/i.test(name) && /^run$/i.test(words[i + 1] ?? ""))) {
-      at++;
+    // Package runners and find run the next program: `npm exec`, `pnpm dlx`, `yarn node`, `find -exec` (Qodo on PR 288).
+    const runner =
+      /^(npx|pnpx|bunx)$/i.test(name) ||
+      (/^(npm|pnpm|yarn)$/i.test(name) && /^(exec|x|dlx|node)$/i.test(words[i + 1] ?? ""));
+    if (/^find$/i.test(name)) {
+      const exec = words.findIndex((w) => /^-(exec|execdir|ok|okdir)$/.test(w));
+      if (exec < 0) continue;
+      at = exec;
+      name = basename(words[exec + 1] ?? "");
+      if (!INTERPRETER.test(name)) {
+        if (/[/\\]/.test(words[exec + 1] ?? "")) found.push({ file: words[exec + 1] ?? "", dir });
+        continue;
+      }
+      at = exec + 1;
+    } else if (runner || (/^(deno|bun)$/i.test(name) && /^run$/i.test(words[i + 1] ?? ""))) {
+      at += /^(npm|pnpm|yarn)$/i.test(name) ? 2 : 1;
       while (at < words.length && (words[at] ?? "").startsWith("-")) at++;
-      if (/^(deno|bun)$/i.test(name)) name = "node";
-      else name = basename(words[at] ?? "");
-      if (/^(npx|pnpx|bunx)$/i.test(basename(program)) && !INTERPRETER.test(name)) continue;
+      if (/^(deno|bun)$/i.test(name) || /^node$/i.test(words[i + 1] ?? "")) {
+        name = "node";
+        at--;
+      } else name = basename(words[at] ?? "");
+      if (runner && !INTERPRETER.test(name)) {
+        if (/[/\\]/.test(words[at] ?? "")) found.push({ file: words[at] ?? "", dir });
+        continue;
+      }
     }
     if (!INTERPRETER.test(name)) {
       // A path run as a program, with or without an extension; installed tools under node_modules excepted.

@@ -295,6 +295,14 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     ". ./scratch.js",
     "node < scratch.js",
     "python3 -m newmod",
+    // Package runners, find, and a folder the text can't follow (Qodo on PR 288).
+    "npm exec node scratch.js",
+    "npm exec -- tsx scratch.js",
+    "pnpm dlx tsx scratch.js",
+    "yarn node scratch.js",
+    "find . -name x -exec node scratch.js ;",
+    "( cd src ) ; node server.ts",
+    "pushd src; popd; node server.ts",
     "npx tsx src/tool.ts",
     "npx tsx src/added.ts",
   ])("denies %s", (command) => {

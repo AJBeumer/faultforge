@@ -505,6 +505,17 @@ describe("realDeps in CI: no private checkout where a target ticket's agent runs
 
   const clones = () => vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "clone");
 
+  it("keeps the clone a failed Qodo-state push still needs, and doesn't start a target ticket (Qodo on PR 288)", () => {
+    for (const tree of [join(runs, "private-source"), join(runs, "qodo-check-r", "private")]) {
+      mkdirSync(tree, { recursive: true });
+      writeFileSync(join(tree, ".git"), "gitdir: x\n");
+    }
+    expect(() => realDeps(FACTORY, OPTIONS, "ci").workspace("r", "target")).toThrow(
+      /private checkout is still on disk/,
+    );
+    expect(existsSync(join(runs, "private-source", ".git"))).toBe(true);
+  });
+
   it("clones the private repo for the runner's own steps from its name, and removes the clone after", async () => {
     vi.mocked(git).mockImplementation(() => "abc\trefs/heads/main");
     const deps = realDeps(FACTORY, OPTIONS, "ci");
