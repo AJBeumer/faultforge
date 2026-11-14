@@ -142,8 +142,24 @@ describe("review:gate's cache (AUD-N6)", () => {
     expect(ReviewCache.load(cacheFile).get("x.json", null)).toBeUndefined();
   });
 
-  it("keeps one cache per evidence folder, outside it", () => {
-    expect(defaultCacheFile(join(dir, "a"))).not.toBe(defaultCacheFile(join(dir, "b")));
-    expect(defaultCacheFile(evidence).startsWith(evidence)).toBe(false);
+  it("keeps one cache per evidence folder, in the checkout's node_modules, never a shared temp folder (Qodo on PR 278)", () => {
+    const checkout = join(dir, "checkout");
+    expect(defaultCacheFile(join(dir, "a"), checkout)).not.toBe(defaultCacheFile(join(dir, "b"), checkout));
+    expect(defaultCacheFile(evidence, checkout).startsWith(join(checkout, "node_modules", ".cache"))).toBe(true);
+  });
+
+  it("never caches a review whose split.json could not be read, only one that could not be parsed (Qodo on PR 278)", () => {
+    const split = join(evidence, "local-reviews", "r1", "split.json");
+    rmSync(split);
+    mkdirSync(split); // stat works, reading fails: as a file locked or briefly unreadable would
+    expect(read().records[0]).toMatchObject({ complete: false });
+    const again = read();
+    expect(again.parsed).toBe(1);
+    expect(again.records[0]).toMatchObject({ complete: false });
+
+    rmSync(split, { recursive: true });
+    writeFileSync(split, "{ not json");
+    read();
+    expect(read().parsed).toBe(0);
   });
 });

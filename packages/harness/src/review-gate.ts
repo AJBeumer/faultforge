@@ -13,8 +13,8 @@
  * findings were fixed or dismissed.
  *
  * The staged tree comes from `git write-tree`, which adds the tree to the object store but changes no
- * branch, index, file, review or label. The only other write is a cache of what each saved review held, in
- * the system temp folder (`review-gate-cache.ts`), so a commit parses only the reviews saved since the last one.
+ * branch, index, file, review or label. The only other write is a cache of what each saved review held, under
+ * `node_modules/.cache/` (`review-gate-cache.ts`), so a commit parses only the reviews saved since the last one.
  *
  * Exit codes: 0 covered; 1 not covered (the output names the nearest reviewed tree and its age);
  * 2 could not read the evidence or the tree (a bad option, no such commit, an unreadable folder).
@@ -185,7 +185,7 @@ function main(): number {
     console.error(`could not read the tree: git answered "${tree}"`);
     return 2;
   }
-  const cache = ReviewCache.load(defaultCacheFile(evidence));
+  const cache = ReviewCache.load(defaultCacheFile(evidence, ROOT));
   const { records, problems } = readReviewRecords(evidence, cache);
   cache.save();
 

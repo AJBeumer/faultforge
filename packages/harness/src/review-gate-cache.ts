@@ -2,7 +2,9 @@
  * What `review:gate` found in each saved review last time, so a commit parses only the files that are new or
  * changed since (AUD-N6). The evidence folder only grows, and the gate runs in a hook with a time limit.
  *
- * One JSON file per evidence folder, in the system's temp folder, never in a repository. An entry is used only
+ * One JSON file per evidence folder, under the checkout's own `node_modules/.cache/`: ignored by git, and
+ * writable only by whoever can already change the code that reads it, never a shared temp folder another user
+ * could fill first (Qodo on PR 278). An entry is used only
  * while its file, and the `split.json` beside a `review.json`, have the same size and times as when it was
  * made; anything else is parsed again. The cache is tied to the source of the code that reads reviews, so a
  * change to how a review is read can never be answered from an older reading. A cache that is missing,
@@ -11,7 +13,6 @@
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, type Stats, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ReviewRecord } from "./review-gate-records.ts";
 
@@ -43,10 +44,10 @@ export function sidecarStamp(path: string): string | null {
   }
 }
 
-/** Where the cache for an evidence folder lives. */
-export function defaultCacheFile(root: string): string {
+/** Where the cache for an evidence folder lives, inside the checkout `checkout`. */
+export function defaultCacheFile(root: string, checkout: string): string {
   const id = createHash("sha256").update(resolve(root)).digest("hex").slice(0, 16);
-  return join(tmpdir(), "faultforge-review-gate", `${id}.json`);
+  return join(checkout, "node_modules", ".cache", "review-gate", `${id}.json`);
 }
 
 export class ReviewCache {

@@ -133,20 +133,23 @@ function walk(dir: string, out: string[], problems: string[], top = true): void 
 
 /** The `split.json` `review:local` saved beside a `review.json`, or null when there is none (older saves).
  * The scope counts as incomplete when the diff was never built, or left any file out. */
-function readSidecar(reviewFile: string): Sidecar | null {
-  if (basename(reviewFile) !== "review.json") return null;
+function readSidecar(reviewFile: string): { sidecar: Sidecar | null; certain: boolean } {
+  if (basename(reviewFile) !== "review.json") return { sidecar: null, certain: true };
   const unknownScope: Sidecar = { repo: null, scopeComplete: false };
   try {
     const split = asObject(JSON.parse(readFileSync(join(dirname(reviewFile), "split.json"), "utf8")));
-    if (!split) return unknownScope;
+    if (!split) return { sidecar: unknownScope, certain: true };
     const left = (v: unknown) => (Array.isArray(v) ? v.length : 1);
     const scopeComplete =
       split.diffBuilt !== false && left(split.excludedFiles ?? []) === 0 && left(split.skippedFiles ?? []) === 0;
-    return { repo: typeof split.repo === "string" ? split.repo : null, scopeComplete };
+    return { sidecar: { repo: typeof split.repo === "string" ? split.repo : null, scopeComplete }, certain: true };
   } catch (error) {
     // No split.json at all is an older save. One that exists but cannot be read or parsed is not: it
     // may have recorded a file that never reached Qodo, so the review cannot count as complete.
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : unknownScope;
+    // Only a parse failure is certain: a read that failed may succeed next time, so it is never cached
+    // (Qodo on PR 278).
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { sidecar: null, certain: true };
+    return { sidecar: unknownScope, certain: error instanceof SyntaxError };
   }
 }
 
@@ -181,14 +184,18 @@ export function readReviewRecords(
       }
       parsed++;
       let rec: ReviewRecord | null;
+      let certain = true;
       try {
-        rec = extractReviewRecord(JSON.parse(readFileSync(file, "utf8")), relative, stat.mtimeMs, readSidecar(file));
+        const doc = JSON.parse(readFileSync(file, "utf8"));
+        const side = readSidecar(file);
+        certain = side.certain;
+        rec = extractReviewRecord(doc, relative, stat.mtimeMs, side.sidecar);
       } catch (error) {
         // Not JSON is not a review.
         if (!(error instanceof SyntaxError)) throw error;
         rec = null;
       }
-      cache?.set(relative, stamp, rec);
+      cache?.set(relative, certain ? stamp : null, rec);
       if (rec) records.push(rec);
     } catch (error) {
       // A file git cannot read might have been one: say so.
