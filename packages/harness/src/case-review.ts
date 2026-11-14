@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
-import { findSavedReview } from "./saved-review.ts";
+import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
 const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
@@ -67,13 +67,6 @@ export function qodoReviewComment(
   return review?.html_url && review.updated_at ? { url: review.html_url, updatedAt: review.updated_at } : undefined;
 }
 
-/** The PR number a `pr.opened` event names, however it was written: a number, a string, or `{ number }`. */
-function openedPr(value: unknown): number | undefined {
-  const n = typeof value === "object" && value !== null ? (value as { number?: unknown }).number : value;
-  const parsed = typeof n === "string" ? Number(n) : n;
-  return typeof parsed === "number" && Number.isInteger(parsed) ? parsed : undefined;
-}
-
 export function run(caseId: string, options: RunOptions = {}): number {
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
@@ -82,7 +75,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
-  const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
+  const reviewsDir = options.reviewsDir ?? savedReviewsDir(env);
 
   try {
     const problems = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
@@ -109,7 +102,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
 
     // The save must be for the case's own PR: read from pr.opened however it was written, and passed to the
     // search so another PR's save of the same commit is never picked first (Qodo on PR 214).
-    const casePr = openedPr(opened?.pr);
+    const casePr = prNumberOf(opened?.pr);
     if (casePr === undefined) {
       error(`case:review: ${caseId}'s pr.opened event names no PR (${JSON.stringify(opened?.pr)})`);
       return 2;

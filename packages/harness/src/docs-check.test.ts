@@ -62,3 +62,17 @@ describe("publicFiles: the staged copy too (Qodo on PR 232)", () => {
     expect(docsProblems(files, facts)).toEqual(["docs/log.md (staged): names FF-0002, which has no verdict yet"]);
   });
 });
+
+describe("docsProblems: an id above every case in the answer key (#244)", () => {
+  it("refuses an id past the highest case, unless it is a fixture id", () => {
+    expect(check("Next up is FF-0005.")).toEqual([
+      "docs/x.md: names FF-0005, above the highest case in the answer key",
+    ]);
+    expect(check("Fixtures use FF-0099 and FF-9001.")).toEqual([]);
+  });
+
+  it("allows an id below the highest case that the answer key doesn't hold, as before", () => {
+    const sparse: DocsFacts = { ...facts, caseTemplates: new Map([["FF-0004", ["seed-v1"]]]) };
+    expect(docsProblems([{ path: "docs/x.md", text: "FF-0002" }], sparse)).toEqual([]);
+  });
+});

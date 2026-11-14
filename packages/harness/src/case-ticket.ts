@@ -25,8 +25,10 @@
  *
  * Exit codes: 0 the issue was created (or, with `--dry-run`, printed); 1 refused — the ticket text
  * gives the case away or links to a GitHub issue or PR, the template's `ticket` field is missing or
- * incomplete, the case id isn't a plain token, or this case already has a ticket; 2 could not run —
- * the template wasn't found or unreadable, the audit log couldn't be read, `gh` failed to create the
+ * incomplete, the case id isn't a plain token, the case planted another template (or, outside a dry run,
+ * isn't in the answer key yet), or this case already has a ticket; 2 could not run — the template wasn't
+ * found or unreadable, the answer key or audit log couldn't be read or has an amendment or history
+ * problem (`ledgerProblemsWithHistory`), `gh` failed to create the
  * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
  * check GitHub before retrying rather than risk a duplicate issue), or an earlier run's attempt left its
  * marker without the event: it may have created the issue, so this refuses until a human has checked.
@@ -38,7 +40,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
-import { readAuditLog } from "./ledger.ts";
+import { readAuditLog, readLedger } from "./ledger.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { templateTelltales } from "./neutral.ts";
 import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
@@ -138,6 +141,7 @@ export interface RunOptions {
   error?: (line: string) => void;
   dryRun?: boolean;
   auditEventsPath?: string;
+  groundTruthPath?: string;
   evidenceDir?: string;
   factory?: FactoryConfig;
   /** Stands in for the real `gh` call; a test fakes this instead of spawning the binary. */
@@ -159,6 +163,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
+  const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const evidenceDir = options.evidenceDir ?? join(root, "raw-artifacts", caseId);
   const gh = options.gh ?? ((args: string[]) => execFileSync("gh", args, { encoding: "utf8", timeout: 30_000 }));
   const now = options.now ?? (() => new Date().toISOString());
@@ -190,14 +195,30 @@ export async function run(templateId: string, caseId: string, options: RunOption
     return 1;
   }
 
+  // Nothing is posted next to a broken answer key or audit log, as with every other case command (AUD-M24).
+  const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
+  if (ledgerIssues.length) {
+    error(`case:ticket: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
+    return 2;
+  }
   let events: Record<string, unknown>[] = [];
-  if (existsSync(auditEventsPath)) {
-    try {
-      events = readAuditLog(auditEventsPath);
-    } catch (e) {
-      error(`case:ticket: can't read ${auditEventsPath}: ${message(e)}`);
-      return 2;
-    }
+  let entry: Record<string, unknown> | undefined;
+  try {
+    if (existsSync(auditEventsPath)) events = readAuditLog(auditEventsPath);
+    if (existsSync(groundTruthPath)) entry = readLedger(groundTruthPath).find((e) => e.caseId === caseId);
+  } catch (e) {
+    error(`case:ticket: can't read ${auditEventsPath} or ${groundTruthPath}: ${message(e)}`);
+    return 2;
+  }
+  // The ticket must be for the template the case actually planted: a wrong id would post a wrong public
+  // ticket. A real run comes after inject, so the case must be in the answer key by then (AUD-M24).
+  if (entry ? entry.templateId !== templateId : !options.dryRun) {
+    error(
+      entry
+        ? `case:ticket: refused, ${caseId} planted template ${String(entry.templateId)}, not ${templateId}`
+        : `case:ticket: refused, ${caseId} is not in the answer key yet: run inject first`,
+    );
+    return 1;
   }
   if (alreadyTicketed(events, caseId)) {
     error(`case:ticket: refused, ${caseId} already has a ticket`);

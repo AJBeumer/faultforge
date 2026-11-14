@@ -1,10 +1,51 @@
 /**
- * A review as `review:wait` saved it (`*.review.json`), found by the commit it reviewed, and its findings
- * in the shape the match rule reads. Used by `verdict`, `case:build` and `case:review`.
+ * A review as `review:wait` saved it (`*.review.json`): where it lives, how it is written (once), found by
+ * the commit it reviewed, and its findings in the shape the match rule reads. `review:wait` writes it;
+ * `verdict`, `case:build` and `case:review` read it, all through this module, so the folder can't be
+ * computed two ways (AUD-M24).
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { MatchFinding } from "./match-rule.ts";
+import { evidenceDir, privateDir } from "./paths.ts";
+
+/**
+ * The folder every saved review lives under: `<evidence>/reviews`, with the evidence folder taken from
+ * `factory.json` and moved with private storage when `FAULTFORGE_PRIVATE_DIR` is set.
+ */
+export function savedReviewsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(privateDir(env), basename(evidenceDir()), "reviews");
+}
+
+/** One PR's saves: `<savedReviewsDir>/<repoKey>-pr<N>`. */
+export function savedReviewDir(repoKey: string, pr: number, env: NodeJS.ProcessEnv = process.env): string {
+  return join(savedReviewsDir(env), `${repoKey}-pr${pr}`);
+}
+
+/** The save of one commit in a PR's folder: `<first 7 of the SHA>.review.json`. */
+export function savedReviewPath(dir: string, headSha: string): string {
+  return join(dir, `${headSha.slice(0, 7)}.review.json`);
+}
+
+/**
+ * Writes a save once. A save is the evidence a verdict judged (its hash is in the verdict), so it is never
+ * replaced: an existing file makes this throw, and nothing is written (AUD-M26).
+ */
+export function writeSavedReview(path: string, record: object): void {
+  try {
+    writeFileSync(
+      path,
+      `${JSON.stringify(record, null, 2)}
+`,
+      { flag: "wx" },
+    );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`a saved review already exists at ${path}; it is evidence and is never overwritten`);
+    }
+    throw e;
+  }
+}
 
 /** The relevant parts of a saved `*.review.json` (the shape `review:wait` writes). */
 export interface SavedFinding {
@@ -20,9 +61,38 @@ export interface SavedReview {
   repo?: string;
   pr?: number;
   headSha: string;
-  /** "complete" when absent; anything else means the review did not finish, so a clean result proves nothing. */
+  /**
+   * "complete" only when `review:wait` saw the review of this commit finish. Anything else, including no
+   * state at all, means the review did not finish, so a clean result proves nothing (AUD-M1).
+   */
   state?: string;
   findings?: SavedFinding[];
+}
+
+/** The PR number an event names, however it was written: a number, a string, or `{ number }`. */
+export function prNumberOf(value: unknown): number | undefined {
+  const n = typeof value === "object" && value !== null ? (value as { number?: unknown }).number : value;
+  const parsed = typeof n === "string" ? Number(n) : n;
+  return typeof parsed === "number" && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * A case's PR, from its own events: the latest `pr.opened` (hand-written ones carry the number in three
+ * shapes), else its `review.recorded`. Undefined when neither names one. The saved review is looked up by
+ * it, so another PR's save of the same commit is never the one judged (AUD-M24).
+ */
+export function casePr(caseEvents: Record<string, unknown>[]): number | undefined {
+  for (const type of ["pr.opened", "review.recorded"]) {
+    const event = caseEvents.filter((e) => e.type === type).at(-1);
+    const pr = event ? prNumberOf(event.pr) : undefined;
+    if (pr !== undefined) return pr;
+  }
+  return undefined;
+}
+
+/** True only for a save whose review finished: an absent or unknown state is unfinished. */
+export function isComplete(review: { state?: unknown }): boolean {
+  return review.state === "complete";
 }
 
 /** A saved finding, in the shape the match rule and the report read. */

@@ -182,3 +182,41 @@ describe("validateCaseRecord: what the schema can't say (Qodo on PR 128)", () =>
     expect(validateCaseRecord(other)).toEqual(expect.arrayContaining([expect.stringMatching(/injection\.lines/)]));
   });
 });
+
+describe("validateCaseRecord: outcomes against the findings and the status (#244)", () => {
+  it("refuses review_incomplete with status complete, and status incomplete with a final verdict", () => {
+    const incomplete = { ...ff0001(), human: { ...ff0001().human, disposition: "review_incomplete" } };
+    expect(validateCaseRecord({ ...incomplete, status: "complete" })).toContain(
+      "the disposition review_incomplete disagrees with status complete",
+    );
+    expect(validateCaseRecord({ ...ff0001(), status: "incomplete" })).toContain(
+      "the disposition confirmed_detected disagrees with status incomplete",
+    );
+  });
+
+  it("lets an incomplete review disagree with caught: its verdict claims nothing about the catch (M42f)", () => {
+    const incomplete = { ...ff0001(), human: { ...ff0001().human, disposition: "review_incomplete" } };
+    expect(validateCaseRecord({ ...incomplete, status: "incomplete" })).toEqual([]);
+  });
+
+  it("refuses a clean control with findings and a false alarm with none", () => {
+    const clean = controlRecord();
+    expect(validateCaseRecord({ ...clean, findings: ff0001().findings })).toContain(
+      "confirmed_clean, but Qodo raised 1 finding(s): a clean control has none",
+    );
+    const falseAlarm = {
+      ...clean,
+      schemaVersion: 2,
+      human: { ...clean.human, disposition: "confirmed_false_alarm" },
+    };
+    expect(validateCaseRecord(falseAlarm)).toContain(
+      "confirmed_false_alarm, but Qodo raised no finding to be a false alarm",
+    );
+  });
+});
+
+describe("findLeaks: the answer key's name (M42d)", () => {
+  it("flags ground-truth in any case", () => {
+    expect(findLeaks('{"note":"see Ground-Truth"}')).toEqual(["Ground-Truth"]);
+  });
+});

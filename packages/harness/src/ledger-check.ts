@@ -6,7 +6,9 @@
  *
  * Runs `ledgerProblems` (see `ledger.ts`) on both files, then asks the private repo's git history,
  * including merge commits, and its uncommitted state, whether any commit (or anything not yet
- * committed) removed or changed a line of either file: every commit may only add lines.
+ * committed) removed or changed a line of either file: every commit may only add lines. Last, it
+ * recomputes the `inputHash` of every tool-written injection and verdict event (`ledger-hashes.ts`): a
+ * template, proof or saved review changed after its event is reported.
  *
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
@@ -16,6 +18,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ledgerProblems, ledgerProblemsIn } from "./ledger.ts";
+import { hashProblems } from "./ledger-hashes.ts";
+import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
 const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
@@ -103,13 +107,27 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
   return problems;
 }
 
-/** Every problem with the private ledger: unsound amendments plus any non-append-only history. */
+/**
+ * Every problem with the private ledger: unsound amendments, any non-append-only history, and any tool's
+ * `inputHash` that no longer recomputes from today's template, proofs or saved review (AUD-M26).
+ */
 export function ledgerCheckProblems(privateRoot: string): string[] {
   const problems: string[] = [];
   for (const file of FILES) {
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
   }
+  const env = { ...process.env, FAULTFORGE_PRIVATE_DIR: privateRoot };
+  problems.push(
+    ...hashProblems(
+      {
+        groundTruthPath: join(privateRoot, FILES[0] as string),
+        auditEventsPath: join(privateRoot, FILES[1] as string),
+        reviewsDir: savedReviewsDir(env),
+      },
+      env,
+    ),
+  );
   return problems;
 }
 

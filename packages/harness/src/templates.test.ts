@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { kindTermsOf, privateDir, templateDir, templateProblems } from "./templates.ts";
+import { isTemplateId, kindTermsOf, privateDir, templateDir, templateProblems } from "./templates.ts";
 
 const root = join(import.meta.dirname, "../../..");
 const SEED = "idempotency-guard-bypass-v1";
@@ -141,5 +141,12 @@ describe("every seed template matches the version-2 schema", () => {
   it.each(ids)("%s", (id) => {
     const template = JSON.parse(readFileSync(join(SEED_DIR, id, "template.json"), "utf8"));
     expect(templateProblems(template)).toEqual([]);
+  });
+});
+
+describe("isTemplateId (M45d)", () => {
+  it("accepts one plain folder name and refuses anything that moves up or across", () => {
+    expect(isTemplateId("x-secret-v1")).toBe(true);
+    for (const id of ["a/b", "a\b", "../a", "a..b", ".hidden", "", 7]) expect(isTemplateId(id)).toBe(false);
   });
 });

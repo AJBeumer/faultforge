@@ -172,6 +172,11 @@ function setup() {
   const templatesDir = join(privateDir, "templates", "a-template");
   mkdirSync(templatesDir, { recursive: true });
   writeFileSync(join(templatesDir, "template.json"), JSON.stringify(TEMPLATE));
+  // The case was planted from this template: a real run is refused for any case the answer key doesn't hold.
+  writeFileSync(
+    join(privateDir, "ground-truth.jsonl"),
+    `${JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "a-template" })}\n`,
+  );
   return {
     env: { FAULTFORGE_PRIVATE_DIR: privateDir },
     auditEventsPath: join(privateDir, "audit-events.jsonl"),
@@ -447,5 +452,63 @@ describe("run", () => {
     expect(await run("a-template", "FF-0009", { ...options, error: (l) => errors.push(l) })).toBe(2);
     expect(calls).toBe(1);
     expect(errors.join("\n")).toContain("an earlier run tried to create this ticket");
+  });
+});
+
+describe("run: the ticket matches the case's answer-key entry (#249, AUD-M24)", () => {
+  async function attempt(caseId: string, options: { dryRun?: boolean; groundTruth?: string } = {}) {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    const groundTruthPath = join(env.FAULTFORGE_PRIVATE_DIR, "ground-truth.jsonl");
+    if (options.groundTruth !== undefined) writeFileSync(groundTruthPath, options.groundTruth);
+    const errors: string[] = [];
+    let ghCalled = false;
+    const code = await run("a-template", caseId, {
+      env,
+      auditEventsPath,
+      groundTruthPath,
+      evidenceDir,
+      factory: FACTORY,
+      dryRun: options.dryRun ?? false,
+      log: () => {},
+      error: (line) => errors.push(line),
+      gh: () => {
+        ghCalled = true;
+        return "https://github.com/AJBeumer/faultforge-target/issues/42\n";
+      },
+    });
+    return { code, err: errors.join("\n"), ghCalled };
+  }
+
+  it("refuses a template other than the one the case planted, before calling gh", async () => {
+    const other = `${JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "another-template" })}\n`;
+    const { code, err, ghCalled } = await attempt("FF-0009", { groundTruth: other });
+    expect(code).toBe(1);
+    expect(err).toContain("planted template another-template, not a-template");
+    expect(ghCalled).toBe(false);
+  });
+
+  it("refuses a real run for a case the answer key doesn't hold yet; a dry run may come first", async () => {
+    const real = await attempt("FF-0010");
+    expect(real.code).toBe(1);
+    expect(real.err).toContain("not in the answer key yet");
+    expect(real.ghCalled).toBe(false);
+    expect((await attempt("FF-0010", { dryRun: true })).code).toBe(0);
+  });
+
+  it("refuses, exit 2, while the answer key has an amendment problem", async () => {
+    const broken = [
+      JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "a-template" }),
+      JSON.stringify({
+        kind: "amendment",
+        amends: "FF-0009",
+        change: { caseId: "FF-0001" },
+        reason: "r",
+        evidence: "e",
+      }),
+    ].join("\n");
+    const { code, err, ghCalled } = await attempt("FF-0009", { groundTruth: `${broken}\n` });
+    expect(code).toBe(2);
+    expect(err).toContain("has problems");
+    expect(ghCalled).toBe(false);
   });
 });

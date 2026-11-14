@@ -167,3 +167,13 @@ describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)
     expect(problems.join("\n")).toContain("can't be checked");
   });
 });
+
+describe("appendOnlyProblems: an amendment line is history like any other (M86)", () => {
+  it("names the commit that removed an amendment", () => {
+    const dir = repo();
+    const amendment = '{"kind":"amendment","amends":"FF-0001","change":{"x":1},"reason":"r","evidence":"e"}';
+    commit(dir, "ground-truth.jsonl", `{"caseId":"FF-0001"}\n${amendment}\n`, "case and amendment");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "drop the amendment");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toHaveLength(1);
+  });
+});

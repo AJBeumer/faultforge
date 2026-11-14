@@ -92,7 +92,7 @@ function duplicateIds(lines: LedgerLine[]): Set<string> {
 }
 
 /** Every non-amendment line, in file order, with the amendments that name it applied. */
-function applyAmendments(path: string): LedgerEntry[] {
+function applyAmendments(path: string, asOf?: string): LedgerEntry[] {
   const lines = readLines(path);
   const ambiguous = duplicateIds(lines);
   const baseEntries: LedgerLine[] = [];
@@ -107,6 +107,8 @@ function applyAmendments(path: string): LedgerEntry[] {
   const amendmentsFor = new Map<LedgerLine, Amendment[]>();
   for (const line of lines) {
     if (!isAmendment(line)) continue;
+    // As of a moment: an amendment written later wasn't there yet (one with no readable time is later).
+    if (asOf !== undefined && !(Date.parse(line.at ?? "") <= Date.parse(asOf))) continue;
     const target = line.amends !== undefined ? byId.get(line.amends) : undefined;
     if (!target) continue;
     Object.assign(target, line.change ?? {});
@@ -118,9 +120,12 @@ function applyAmendments(path: string): LedgerEntry[] {
   return baseEntries.map((entry) => ({ ...entry, amendments: amendmentsFor.get(entry) ?? [] }));
 }
 
-/** The answer key's cases, amendments applied. */
-export function readLedger(path: string): LedgerEntry[] {
-  return applyAmendments(path);
+/**
+ * The answer key's cases, amendments applied. With `asOf`, only the amendments written by then: the entry
+ * as a verdict at that time read it, which is what its `inputHash` covers.
+ */
+export function readLedger(path: string, asOf?: string): LedgerEntry[] {
+  return applyAmendments(path, asOf);
 }
 
 /** The audit log's events, amendments applied. */

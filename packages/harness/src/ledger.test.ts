@@ -255,3 +255,27 @@ describe("ledgerProblems", () => {
     ]);
   });
 });
+
+describe("readLedger: a line that isn't JSON (M88)", () => {
+  it("throws rather than drop the line", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+    writeFileSync(path, '{"caseId":"FF-0001"}\nnot json\n');
+    expect(() => readLedger(path)).toThrow();
+  });
+});
+
+describe("readLedger as of a time (#249)", () => {
+  it("applies only the amendments written by then, and lists only those", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+    const amend = (at: string, n: number) =>
+      JSON.stringify({ kind: "amendment", amends: "FF-0001", at, change: { n }, reason: "r", evidence: "e" });
+    writeFileSync(
+      path,
+      `${[JSON.stringify({ caseId: "FF-0001" }), amend("2026-11-01T00:00:00Z", 1), amend("2026-11-03T00:00:00Z", 2)].join("\n")}\n`,
+    );
+    const asOf = readLedger(path, "2026-11-02T00:00:00.000Z")[0];
+    expect(asOf).toMatchObject({ n: 1 });
+    expect(asOf?.amendments).toHaveLength(1);
+    expect(readLedger(path)[0]).toMatchObject({ n: 2 });
+  });
+});

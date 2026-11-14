@@ -17,6 +17,8 @@ export interface AdjudicationEvent {
   environment: string;
   /** sha256 of the ground-truth entry, the template and the saved review, so the inputs can be checked later. */
   inputHash: string;
+  /** The match rule's version (`RULE_VERSION`) for a bug case; a control runs no rule. */
+  ruleVersion?: string;
   disposition: string;
   reason: string;
   judgements: Judgement[];

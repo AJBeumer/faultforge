@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
@@ -11,8 +12,9 @@ import {
   reviewState,
 } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "./review-feeds.ts";
-import { waitForHead, waitForReview } from "./review-poll.ts";
-import { parseArgs } from "./review-wait.ts";
+import { sameCommit, waitForHead, waitForReview } from "./review-poll.ts";
+import { parseArgs, run, type WaitScriptDeps } from "./review-wait.ts";
+import { writeSavedReview } from "./saved-review.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
@@ -745,5 +747,171 @@ describe("findingsShapeProblem: a complete review must hold a readable findings 
   it("refuses a review whose count disagrees with its list", () => {
     expect(findingsShapeProblem({ ...pr1, finding_count: (pr1.findings?.length ?? 0) + 1 })).toMatch(/counts \d+/);
     expect(findingsShapeProblem({ ...pr1, finding_count: pr1.findings?.length ?? 0 })).toBeUndefined();
+  });
+});
+
+describe("findingsShapeProblem: every finding is read field by field (AUD-M9, #249)", () => {
+  const onlyFinding = pr1.findings?.find((f) => f.git_sha === PR1_HEAD) as NonNullable<QodoReview["findings"]>[0];
+  const withFinding = (change: Record<string, unknown>): QodoReview => ({
+    ...pr1,
+    findings: [{ ...onlyFinding, ...change } as never],
+    finding_count: 1,
+  });
+
+  it("accepts the real answer for its head", () => {
+    expect(findingsShapeProblem(pr1, PR1_HEAD)).toBeUndefined();
+  });
+
+  it("refuses an abbreviated or upper-case SHA, rather than drop the finding", () => {
+    expect(findingsShapeProblem(withFinding({ git_sha: PR1_HEAD.slice(0, 7) }), PR1_HEAD)).toMatch(
+      /not a full lower-case commit id/,
+    );
+    expect(findingsShapeProblem(withFinding({ git_sha: PR1_HEAD.toUpperCase() }), PR1_HEAD)).toMatch(
+      /not a full lower-case commit id/,
+    );
+  });
+
+  it("refuses a finding with only one of its lines, string lines, or a renamed file field", () => {
+    expect(findingsShapeProblem(withFinding({ end_line: undefined }), PR1_HEAD)).toMatch(/not a line range/);
+    expect(findingsShapeProblem(withFinding({ start_line: "33", end_line: "33" }), PR1_HEAD)).toMatch(
+      /not a line range/,
+    );
+    expect(findingsShapeProblem(withFinding({ file_path: undefined, path: "src/x.ts" }), PR1_HEAD)).toMatch(
+      /no file_path/,
+    );
+  });
+
+  it("accepts a finding Qodo placed nowhere, with both lines and the file null", () => {
+    expect(
+      findingsShapeProblem(withFinding({ file_path: null, start_line: null, end_line: null }), PR1_HEAD),
+    ).toBeUndefined();
+  });
+
+  it("accepts findings on an earlier commit Qodo reviewed, but not on commits it reports no run for", () => {
+    const earlier = "e".repeat(40);
+    const twoRounds: QodoReview = {
+      ...withFinding({ git_sha: earlier }),
+      review_runs: [...(pr1.review_runs ?? []), { commit_sha: earlier, review_effort: "standard" }],
+    };
+    expect(findingsShapeProblem(twoRounds, PR1_HEAD)).toBeUndefined();
+    expect(findingsShapeProblem(withFinding({ git_sha: earlier }), PR1_HEAD)).toMatch(/none on/);
+  });
+});
+
+describe("reviewState: a skip wins, and only true is complete (AUD-N8)", () => {
+  const session = { commit_sha: PR1_HEAD, status: "completed" };
+  it("is skipped when the head's run was skipped, even if Qodo also marks it complete", () => {
+    const review = {
+      review_session: { ...session, review_complete: true },
+      review_runs: [{ commit_sha: PR1_HEAD, review_effort: "skip" }],
+    };
+    expect(reviewState(review, PR1_HEAD)).toBe("skipped");
+  });
+
+  it("isn't complete when review_complete is a string", () => {
+    expect(reviewState({ review_session: { ...session, review_complete: "true" as never } }, PR1_HEAD)).toBe("running");
+  });
+});
+
+describe("sameCommit (M68)", () => {
+  it("needs at least seven characters of the commit", () => {
+    expect(sameCommit(PR1_HEAD, PR1_HEAD.slice(0, 7))).toBe(true);
+    expect(sameCommit(PR1_HEAD, PR1_HEAD.slice(0, 6))).toBe(false);
+  });
+});
+
+describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #252)", () => {
+  /** Fake GitHub and Qodo: the head is `PR1_HEAD`, and Qodo answers each of `answers` in turn. */
+  function harness(answers: unknown[]) {
+    const dir = join(mkdtempSync(join(tmpdir(), "review-wait-")), "target-pr1");
+    let t = Date.parse("2026-11-14T00:00:00.000Z");
+    let i = 0;
+    const out: string[] = [];
+    const err: string[] = [];
+    let fetches = 0;
+    const deps: WaitScriptDeps = {
+      github: "Owner/target",
+      dir,
+      readHead: async () => PR1_HEAD,
+      checkSuiteTimes: () => ["2026-11-13T23:59:00Z"],
+      commentFeeds: () => ({ pr: "[[]]", inline: "[[]]" }),
+      formalReviews: () => "[]",
+      fetchReview: async () => {
+        fetches++;
+        return answers[Math.min(i++, answers.length - 1)];
+      },
+      rawAnswers: () => ({ last: "raw", recovered: [] }),
+      checkRuns: () => [],
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+    };
+    const wait = (commit: string | null = PR1_HEAD) =>
+      run({ repoKey: "target", pr: 1, timeoutMinutes: 1, commit }, deps);
+    const saved = () => JSON.parse(readFileSync(join(dir, `${PR1_HEAD.slice(0, 7)}.review.json`), "utf8"));
+    return { dir, wait, saved, out, err, fetches: () => fetches };
+  }
+
+  const running = { review_session: { commit_sha: PR1_HEAD, status: "running" } };
+  const skipped = {
+    review_session: { commit_sha: PR1_HEAD, status: "completed", review_complete: false },
+    review_runs: [{ commit_sha: PR1_HEAD, review_effort: "skip" }],
+    findings: [],
+  };
+
+  it("saves a complete review as complete, with its findings, and exits 0", async () => {
+    const h = harness([pr1]);
+    expect(await h.wait()).toBe(0);
+    expect(h.saved()).toMatchObject({ state: "complete", headSha: PR1_HEAD, findings: [{ lines: [33, 33] }] });
+  });
+
+  it("saves a timeout as review incomplete, never complete, and exits 1", async () => {
+    const h = harness([running]);
+    expect(await h.wait()).toBe(1);
+    expect(h.saved().state).toBe("review incomplete");
+    expect(h.saved().reviewSeenCompleteAt).toBeNull();
+  });
+
+  it("saves a skip as skipped by Qodo, never complete, and exits 3", async () => {
+    const h = harness([skipped]);
+    expect(await h.wait()).toBe(3);
+    expect(h.saved().state).toBe("skipped by Qodo");
+  });
+
+  it("refuses, exit 2, a complete review it can't read, and saves no review (M21)", async () => {
+    const h = harness([{ ...pr1, findings: pr1.findings?.map((f) => ({ ...f, git_sha: f.git_sha.slice(0, 7) })) }]);
+    expect(await h.wait()).toBe(2);
+    expect(h.err.join("\n")).toContain("not a full lower-case commit id");
+    expect(() => h.saved()).toThrow();
+  });
+
+  it("exits 2, not 1, when Qodo answers null or text on every poll", async () => {
+    const h = harness([null, "busy"]);
+    expect(await h.wait()).toBe(2);
+    expect(h.err.join("\n")).toContain("not a review");
+  });
+
+  it("refuses, exit 2, to wait again for a commit it already saved, and leaves the save as it was", async () => {
+    const h = harness([pr1]);
+    mkdirSync(h.dir, { recursive: true });
+    const path = join(h.dir, `${PR1_HEAD.slice(0, 7)}.review.json`);
+    writeFileSync(path, '{"state":"review incomplete"}');
+    expect(await h.wait()).toBe(2);
+    expect(await h.wait(null)).toBe(2);
+    expect(h.err.join("\n")).toContain("is never overwritten");
+    expect(readFileSync(path, "utf8")).toBe('{"state":"review incomplete"}');
+    expect(h.fetches()).toBe(0);
+  });
+});
+
+describe("writeSavedReview", () => {
+  it("writes a save once and throws rather than replace it", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "saved-review-")), "abc1234.review.json");
+    writeSavedReview(path, { state: "complete" });
+    expect(() => writeSavedReview(path, { state: "review incomplete" })).toThrow(/never overwritten/);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ state: "complete" });
   });
 });

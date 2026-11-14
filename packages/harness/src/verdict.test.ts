@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,7 +58,17 @@ function fixture(
   const root = mkdtempSync(join(tmpdir(), "verdict-"));
   const entries = opts.entries ?? [GROUND_TRUTH_ENTRY];
   writeFileSync(join(root, "ground-truth.jsonl"), `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
-  writeFileSync(join(root, "audit-events.jsonl"), "");
+  // Each case's PR, which is how verdict finds the save it judges.
+  const opened = (entries as { caseId: string }[]).map((e) =>
+    JSON.stringify({
+      eventId: `${e.caseId}-pr`,
+      type: "pr.opened",
+      at: "2026-11-10T11:00:00.000Z",
+      caseId: e.caseId,
+      pr: 1,
+    }),
+  );
+  writeFileSync(join(root, "audit-events.jsonl"), opened.map((l) => `${l}\n`).join(""));
   mkdirSync(join(root, "templates", TEMPLATE.id), { recursive: true });
   writeFileSync(join(root, "templates", TEMPLATE.id, "template.json"), JSON.stringify(TEMPLATE));
   if (opts.withMalformedReview) {
@@ -513,5 +523,62 @@ describe("npm run verdict: a control case, whose template declares no match term
     const { code, appended } = await runOn("FF-0002", root, { ask: fakeAsk(["review incomplete", "skipped"]).ask });
     expect(code).toBe(0);
     expect(appended[0]).toMatchObject({ disposition: "review_incomplete" });
+  });
+});
+
+describe("npm run verdict: the save it judges (#244, AUD-M1, AUD-M24)", () => {
+  /** A second save of the same commit, on PR 2. */
+  function addSaveOnPr2(root: string, review: Record<string, unknown>) {
+    const dir = join(root, "raw-artifacts", "reviews", "target-pr2");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "c7ffd15.review.json"),
+      JSON.stringify({ pr: 2, headSha: GROUND_TRUTH_ENTRY.injectionCommit, ...review }),
+    );
+  }
+
+  it("finds the save by the case's own PR, never another PR's save of the same commit", async () => {
+    const root = fixture({ findings: [] });
+    addSaveOnPr2(root, { state: "complete", findings: [MATCHING_FINDING] });
+    appendFileSync(
+      join(root, "audit-events.jsonl"),
+      `${JSON.stringify({ eventId: "later-pr", type: "pr.opened", at: "2026-11-10T11:30:00.000Z", caseId: "FF-0001", pr: { number: 2 } })}\n`,
+    );
+    const { ask } = fakeAsk(["detected", "found it"]);
+    const { code, out, appended } = await runOn("FF-0001", root, { ask });
+    expect(code).toBe(0);
+    expect(out).toContain("caught: true");
+    expect(appended[0]).toMatchObject({ disposition: "confirmed_detected", ruleVersion: "1" });
+  });
+
+  it("refuses, exit 2, a case whose PR no event names", async () => {
+    const root = fixture();
+    writeFileSync(join(root, "audit-events.jsonl"), "");
+    const { code, err } = await runOn("FF-0001", root, { ask: fakeAsk([]).ask });
+    expect(code).toBe(2);
+    expect(err).toContain("no pr.opened event naming its PR");
+  });
+
+  it("reads a save with no state as unfinished: only review incomplete is offered (M60)", async () => {
+    const root = fixture({ findings: [] });
+    const path = join(root, "raw-artifacts", "reviews", "target-pr1", "c7ffd154.review.json");
+    const { state: _gone, ...rest } = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify(rest));
+    const { ask } = fakeAsk(["missed", "missed", "missed"]);
+    const { code, out, appended } = await runOn("FF-0001", root, { ask });
+    expect(out).toContain("WARNING: the saved review's state is null");
+    expect(code).toBe(2);
+    expect(appended).toEqual([]);
+  });
+
+  it("refuses, exit 2, a save with no findings list rather than read it as none (M61)", async () => {
+    const root = fixture();
+    const path = join(root, "raw-artifacts", "reviews", "target-pr1", "c7ffd154.review.json");
+    const { findings: _gone, ...rest } = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify(rest));
+    const { code, err, appended } = await runOn("FF-0001", root, { ask: fakeAsk(["missed", "x"]).ask });
+    expect(code).toBe(2);
+    expect(err).toContain("holds no findings list");
+    expect(appended).toEqual([]);
   });
 });
