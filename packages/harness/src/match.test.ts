@@ -155,3 +155,27 @@ describe("disagreements: the record's one set of criteria against the computed r
     ]);
   });
 });
+
+describe("disagreements: caught and the matched ids (M66, M67)", () => {
+  const injection = { file: "src/a.ts", lines: [10, 10] as [number, number] };
+  const placed: MatchFinding = { id: "a", file: "src/a.ts", lines: [10, 10], title: "term", summary: "", category: "" };
+  const pass = { pass: true };
+
+  it("reports a record whose caught disagrees with the rule", () => {
+    const result = applyMatchRule(injection, [placed], ["term"]);
+    const record: CaseRecord = {
+      findings: [placed],
+      detection: { caught: false, matchedFindingIds: ["a"], match: { file: pass, lines: pass, kind: pass } },
+    };
+    expect(disagreements(record, result)).toContain("caught: record says false, computed says true");
+  });
+
+  it("reports a record that matched other findings than the rule did", () => {
+    const result = applyMatchRule(injection, [placed], ["term"]);
+    const record: CaseRecord = {
+      findings: [placed],
+      detection: { caught: true, matchedFindingIds: ["b"], match: { file: pass, lines: pass, kind: pass } },
+    };
+    expect(disagreements(record, result)).toContain("matchedFindingIds: record says [b], computed says [a]");
+  });
+});

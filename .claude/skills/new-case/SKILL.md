@@ -52,7 +52,7 @@ npm run review:wait -- target <pr> --commit <injectionCommit> --timeout 25
 npm run case:review -- <FF-NNNN>
 ```
 
-- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run; 3 Qodo skipped the review (zero findings then does **not** mean clean).
+- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run, or a complete save of that commit already exists (a save is evidence and is never overwritten; an unfinished one is kept under another name when you wait again); 3 Qodo skipped the review (zero findings then does **not** mean clean).
 - `case:review` appends the `review.recorded` event `case:build` needs, from that save: the PR, the review comment's URL and time, the configuration version from `pr.opened`. It refuses a save for another commit or PR, and a case that already has the event (exit 1). Run it whatever `review:wait` said: an inconclusive case needs its review stage too.
 - Any review by another bot (e.g. Copilot) is saved but doesn't count. Note who posted first.
 
@@ -73,10 +73,10 @@ npm run verdict -- <FF-NNNN>
 ## 6. Build the record
 
 ```bash
-npm run case:build -- <FF-NNNN>
+npm run case:build -- <FF-NNNN> --save
 ```
 
-`case:build` builds the record from the answer key, the audit events and the saved review, checks it against the schema and for private text, and prints it. Save the printed record (the JSON, without the `[case:build]` lines before it) as `private/cases/<FF-NNNN>.json`. `private/cases/<FF-NNNN>.overlay.json` is only for prose no event holds; a case with none needs no overlay. Publishing (`--write`, into `examples/`) stays behind the owner's go-ahead.
+`case:build` builds the record from the answer key, the audit events and the saved review, checks it against the schema and for private text, prints it, and with `--save` writes it to `private/cases/<FF-NNNN>.json` itself. Never copy a record by hand. It refuses (exit 2) when the saved review, the template or the answer-key entry changed after the verdict, when a final verdict stands on a review that didn't finish, or when `private/cases/` already holds a different record: report it to the owner, never work around it. `private/cases/<FF-NNNN>.overlay.json` is only for prose no event holds; a case with none needs no overlay. Publishing (`--write`, into `examples/`) stays behind the owner's go-ahead.
 
 ## 7. Close out
 

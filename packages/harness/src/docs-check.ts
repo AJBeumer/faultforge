@@ -8,7 +8,9 @@
  * Reads `README.md` and every text file under `docs/`, and from private storage the answer key, the audit
  * log, the unreleased templates and `templates/HELD-OUT.md`. A case id (`FF-NNNN`) the answer key holds, or an
  * unreleased template id, is allowed only once its case has a `case.adjudicated` event, and never when it is
- * held out. An id the answer key doesn't hold is an example (a test fixture's `FF-0099`), not a case.
+ * held out. An id the answer key doesn't hold is an example (a test fixture's `FF-0099`), not a case, as
+ * long as it isn't above the highest case there: such an id names a case before it exists, and only the
+ * fixture ids (`FF-0099`, `FF-9000` to `FF-9999`) may do that.
  * Without private storage (CI) there is nothing to check against, so it says so and passes.
  *
  * Exit codes: 0 nothing found, or no private storage to check against; 1 a public file names a case or
@@ -35,6 +37,20 @@ export interface DocsFacts {
 
 const TEXT = /\.(md|txt|json|jsonl|ts|yml|yaml|csv|html)$/i;
 
+/**
+ * Case ids public text may use as examples although no case has them: `FF-0099` (an older fixture) and the
+ * whole `FF-9000` to `FF-9999` block, kept for fixtures so no real case reaches it for years.
+ */
+export const FIXTURE_IDS: ReadonlySet<string> = new Set(["FF-0099"]);
+
+export function isFixtureId(id: string): boolean {
+  return FIXTURE_IDS.has(id) || /^FF-9\d{3}$/.test(id);
+}
+
+function caseNumber(id: string): number {
+  return Number(id.replace(/^FF-/, ""));
+}
+
 /** `file: reason` for every case or template a public file may not name yet, or an empty list. */
 export function docsProblems(files: { path: string; text: string }[], facts: DocsFacts): string[] {
   const heldOutCases = new Set(
@@ -43,13 +59,28 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
   const adjudicatedTemplates = new Set(
     [...facts.caseTemplates].filter(([c]) => facts.adjudicated.has(c)).flatMap(([, ts]) => ts),
   );
+  // Only ids in the answer key's own form count: one malformed id must not make every comparison false.
+  const highest = Math.max(0, ...[...facts.caseTemplates.keys()].filter((id) => /^FF-\d+$/.test(id)).map(caseNumber));
   const problems: string[] = [];
   for (const { path, text } of files) {
     // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.
-    const ids = [...text.matchAll(/\bff[\s_-]?(\d{3,})\b/gi)].map((m) => `FF-${(m[1] as string).padStart(4, "0")}`);
+    const matches = [...text.matchAll(/\bff([\s_-]?)(\d{3,})\b/gi)];
+    const ids = matches.map((m) => `FF-${(m[2] as string).padStart(4, "0")}`);
+    // Any spelling but a colour or a hex number: `#ff5733` and `0xff5733` are not cases (Qodo on PR 264).
+    const separated = new Set(
+      matches
+        .filter((m) => !/[#x]$/i.test(text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0)))
+        .map((m) => `FF-${(m[2] as string).padStart(4, "0")}`),
+    );
     for (const id of new Set(ids)) {
-      // An id the answer key doesn't hold is an example or a fixture, not a case.
-      if (!facts.caseTemplates.has(id)) continue;
+      // An id the answer key doesn't hold is an example or a fixture, unless it is above every case there:
+      // then it names a case that hasn't been planted yet, ahead of time (#244), unless it is a fixture id.
+      if (!facts.caseTemplates.has(id)) {
+        if (separated.has(id) && caseNumber(id) > highest && !isFixtureId(id)) {
+          problems.push(`${path}: names ${id}, above the highest case in the answer key`);
+        }
+        continue;
+      }
       if (heldOutCases.has(id)) problems.push(`${path}: names ${id}, a held-out case`);
       else if (!facts.adjudicated.has(id)) problems.push(`${path}: names ${id}, which has no verdict yet`);
     }
