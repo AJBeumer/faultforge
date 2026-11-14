@@ -303,9 +303,21 @@ export function pendingPushUpdates(checkout: string, remote: string, updates: Pu
  */
 const GIT_OPTIONS = String.raw`(?:(?:-C\s*\S*|--work-tree[=\s]*\S*|--git-dir[=\s]*\S*)\s*)*`;
 const ALLOWED_STEP = new RegExp(
-  String.raw`^(?:(?:cd|pushd|popd|Set-Location|sl|echo|true|exit|sleep)\b|git\s+${GIT_OPTIONS}(?:add|rm|mv|commit|push|pull|fetch|status|diff|log|rev-parse|branch|switch|checkout|merge|remote|show|tag|restore)\b|gh\s|npm\s)`,
+  String.raw`^(?:(?:cd|pushd|popd|Set-Location|sl|echo|printf|cat|type|Get-Content|gc|true|exit|sleep)\b|git\s+${GIT_OPTIONS}(?:add|rm|mv|commit|push|pull|fetch|status|diff|log|rev-parse|branch|switch|checkout|merge|remote|show|tag|restore)\b|gh\s|npm\s)`,
   "i",
 );
+
+/**
+ * A step in a chained post, other than the post itself, that runs npm or gh: either can write files without a
+ * redirect (`npm exec`, `gh run download`), so the post's files can't be trusted (Qodo on PR 266).
+ */
+export function writerStep(command: string): string | undefined {
+  const steps = blankQuoted(command)
+    .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return steps.find((s) => /^(?:npm|npx)\s|^gh\s+(?:run|release)\s+download\b|^gh\s+(?:repo|gist)\s+clone\b/.test(s));
+}
 
 /**
  * Why a chained command that mentions git may not run inside a reviewed checkout, or undefined. The guard
@@ -313,7 +325,7 @@ const ALLOWED_STEP = new RegExp(
  * must be one that can't change that content behind its back: no writing step, no hidden command, no
  * redirect other than to `/dev/null` or a descriptor, and no heredoc body that expands `$(…)`.
  */
-export function chainProblem(command: string): string | undefined {
+export function chainProblem(command: string, substitutionsChecked = false): string | undefined {
   // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command,
   // unless the shell escape `\$(` or `` \` `` keeps it literal. An escaped backslash (`\\`) is removed
   // first, so `\\$(…)` is seen for what the shell makes of it: a literal backslash and a real substitution.
@@ -325,7 +337,8 @@ export function chainProblem(command: string): string | undefined {
     .filter(Boolean);
   for (const step of steps) {
     // A substitution runs whatever is inside it, whatever the step around it is allowed to do.
-    if (/\$\(|`/.test(step)) return step;
+    // (A post's substitutions are judged on their own by builtText, which reads a file and refuses a program.)
+    if (!substitutionsChecked && /\$\(|`/.test(step)) return step;
     const harmless = step.replace(/\d*>&\d+/g, "").replace(/\d*>\s*\/dev\/null/g, "");
     if (/>/.test(harmless) || !ALLOWED_STEP.test(step)) return step;
   }

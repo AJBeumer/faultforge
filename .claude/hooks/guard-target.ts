@@ -23,11 +23,10 @@
  *
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
-import { existsSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames } from "./guard-content.ts";
-import { referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
+import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames, writerStep } from "./guard-content.ts";
+import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import {
   commitMessages,
@@ -36,6 +35,7 @@ import {
   postedArguments,
   postedText,
   STDIN_BODY,
+  stringsIn,
 } from "./guard-posted.ts";
 import {
   onlyPrivateRepo,
@@ -50,11 +50,13 @@ import {
   isWrite,
   rawApiWrite,
   rewritesHistory,
+  skipsGitGuard,
   urlDestinations,
 } from "./guard-reach.ts";
 import {
   entersCheckout,
   esc,
+  existingFolder,
   inCheckout,
   linkPattern,
   locate,
@@ -64,6 +66,7 @@ import {
   navigationTargets,
   type Reviewed,
   reviewedRepos,
+  stripReviewedNames,
   within,
 } from "./guard-repos.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
@@ -76,6 +79,8 @@ interface Context {
   env: NodeJS.ProcessEnv;
   /** A test for private template ids, read once per decision; undefined where there are none. */
   names: ((text: string) => boolean) | undefined;
+  /** True for bash, where a backtick runs a command; PowerShell reads it as an escape. */
+  backticks: boolean;
 }
 
 /** A tool's input as parsed from the payload: whatever Claude Code sent. */
@@ -108,7 +113,8 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     const args: ToolInput = input.tool_input ?? {};
     const cwd = String(input.cwd ?? process.cwd());
     names = privateIdMatcher(privateTemplateIds(env));
-    const ctx: Context = { cwd, reviewed: reviewedRepos(env.FAULTFORGE_CONFIG), env, names };
+    const reviewed = reviewedRepos(env.FAULTFORGE_CONFIG);
+    const ctx: Context = { cwd, reviewed, env, names, backticks: tool !== "PowerShell" };
     // One deadline for the whole decision, every scan in it included (audit N-4).
     // Pending content may not carry a private id either (Qodo on PR 265).
     withDeadline(guardBudget(env), () =>
@@ -124,7 +130,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     );
     return ALLOW;
   } catch (error) {
-    if (error instanceof Denied || error instanceof Unreadable) {
+    if (error instanceof Denied || error instanceof Unreadable || error instanceof BuiltText) {
       // A reason that quotes a file or branch name could repeat a private id: it never does (Qodo on PR 265).
       return { kind: "deny", reason: names?.(error.message) ? PRIVATE_ID_REASON : error.message };
     }
@@ -151,16 +157,21 @@ function isChained(command: string): boolean {
 
 /**
  * Every text a command would post, each judged on its own: the command itself (as written and with its
- * quote marks joined), flag values, heredoc bodies and posted files. A commit joins every `-m` and `-F`
- * into one message, so those are also judged together.
+ * quote marks joined), flag values, heredoc bodies, posted files, and files a substitution reads. A commit
+ * joins every `-m` and `-F` into one message, so those are also judged together. With `strict` (a post to a
+ * reviewed repo), text built by any other command is refused (#242).
  */
-function postedPieces(ctx: Context, command: string): string[] {
+function postedPieces(ctx: Context, command: string, strict = false): string[] {
   const pieces = [stripReviewedNames(ctx.reviewed, command), stripReviewedNames(ctx.reviewed, joinedWords(command))];
   pieces.push(...postedText(command), ...referencedFiles(ctx.cwd, command), ...stdinFiles(ctx.cwd, command));
+  pieces.push(...builtText(ctx.cwd, command, strict, ctx.backticks));
   for (const commit of commitSteps(command)) {
     pieces.push([...commitMessages(commit), ...referencedFiles(ctx.cwd, commit)].join("\n"));
   }
-  return pieces;
+  // A GraphQL mutation names itself with the keyword `mutation`, which is not a hint; the text it posts is.
+  // Only the operation keyword, where a query starts: a body's own "mutation" still counts (Qodo on PR 266).
+  const keyword = /((?:\bquery["']?\s*[=:]\s*["']?|^["']?)\s*)mutation(?=\s*[\w({])/;
+  return graphqlMutation(command) ? pieces.map((piece) => piece.replace(keyword, "$1 ")) : pieces;
 }
 
 /**
@@ -244,6 +255,9 @@ function checkCommand(ctx: Context, command: string) {
     return;
   }
 
+  if (skipsGitGuard(command)) {
+    deny(`In ${repo.name}, git's own guard hooks must run: no --no-verify, no commit -n, and no other core.hooksPath.`);
+  }
   if (rewritesHistory(command)) {
     deny(
       `Force pushes to ${repo.name} are not allowed, nor pushes that delete or mirror: its history is evidence for recorded cases.`,
@@ -256,8 +270,11 @@ function checkCommand(ctx: Context, command: string) {
   // Inside a reviewed checkout, a chain that mentions git may hold only steps that can't change the
   // checkout's content behind the guard's back (it looks before the command runs): no copies, redirects,
   // scripts or shell functions in the same command as a commit or push. Those run first, on their own.
-  if (isChained(command) && /\bgit\b/.test(joinedWords(command))) {
-    const step = chainProblem(command);
+  // A post counts too: an earlier step could rewrite the file it reads after the guard looked (Qodo on PR 266).
+  const git = /\bgit\b/.test(joinedWords(command));
+  if (isChained(command) && (writes || git)) {
+    // In a chained post, npm and gh steps could write the file it reads too (`npm exec`, `gh run download`).
+    const step = chainProblem(command, !git) ?? (git ? undefined : writerStep(command));
     if (step !== undefined) {
       deny(
         `In ${repo.name}, a command that writes files or hides a command ("${step.slice(0, 60)}") must run on its own, and the commit or push in a separate command: the guard checks the checkout's content before a command runs, and can't see what an earlier part of the same command would write.`,
@@ -278,7 +295,7 @@ function checkCommand(ctx: Context, command: string) {
 
   // Each piece is judged on its own: a title ending in one word and a body starting with the next must
   // not join into a phrase that neither field holds.
-  const found = [...new Set(postedPieces(ctx, command).flatMap((piece) => telltales(piece)))];
+  const found = [...new Set(postedPieces(ctx, command, true).flatMap((piece) => telltales(piece)))];
   if (found.length) {
     deny(
       `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
@@ -289,17 +306,6 @@ function checkCommand(ctx: Context, command: string) {
   // checkout, read from git, whatever the text says about where it runs.
   const pending = pendingProblem(ctx.reviewed, command, touched);
   if (pending) deny(pending);
-}
-
-/** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
-function existingFolder(path: string): string {
-  let dir = path;
-  while (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    const parent = dirname(dir);
-    if (parent === dir) return dir;
-    dir = parent;
-  }
-  return dir;
 }
 
 function checkFileEdit(ctx: Context, args: ToolInput) {
@@ -330,7 +336,9 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
  * input may name a private template, and when one names a reviewed repo nothing in it may give the lab away.
  */
 function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
-  const text = JSON.stringify(args ?? {});
+  // The input's own text, every string value on its own line: JSON escapes would hide a word after a line
+  // break (`\nplanted`) from the word checks (Qodo on PR 265).
+  const text = stringsIn(args).join("\n");
   if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const repo = ctx.reviewed.find((r) => new RegExp(`${esc(r.github)}|\\b${esc(r.name)}\\b`, "i").test(text));
   if (!repo) return;
@@ -352,7 +360,11 @@ function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
   // itself, not in the extracted arguments, so check the whole command for those.
   const indirect = STDIN_BODY.test(command) || posted.some((p) => /[$`]/.test(p));
   const written = indirect ? command : posted.join("\n");
-  const files = [...referencedFiles(ctx.cwd, command), ...stdinFiles(ctx.cwd, command)];
+  const files = [
+    ...referencedFiles(ctx.cwd, command),
+    ...stdinFiles(ctx.cwd, command),
+    ...builtText(ctx.cwd, command, false, ctx.backticks),
+  ];
   const text = [written, joinedWords(written), ...files].join("\n");
   const linked = repos.find((r) => linkPattern([r])?.test(text));
   if (linked) {
@@ -360,17 +372,6 @@ function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
       `This would link to the target (${linked.name}) from here, and it would show that on its timeline. Name the work as plain text instead, like "target 3".`,
     );
   }
-}
-
-/**
- * Repo names are allowed where they identify a repo: in paths and `owner/name`. Elsewhere they are
- * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
- */
-function stripReviewedNames(reviewed: Reviewed[], text: string): string {
-  const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
-  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
-  // Whole tokens first, then the slash test: one pattern for both backtracks on every long token (AUD-M4).
-  return text.replace(/[^\s"'`]+/g, (token) => (/[/\\]/.test(token) && identifies.test(token) ? " " : token));
 }
 
 /** Ends the check with a deny; `decide()` turns it into the decision. */
