@@ -136,7 +136,9 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   if (events.some((e) => e.type === "pr.opened")) return refuse(`${caseId} already has a pr.opened event`);
   const ticket = (events.find((e) => e.type === "case.ticket-created")?.issue as { number?: unknown } | undefined)
     ?.number;
-  if (typeof ticket !== "number") return refuse(`${caseId} has no target ticket: run case:ticket first`);
+  if (!Number.isInteger(ticket) || (ticket as number) < 1) {
+    return refuse(`${caseId} has no target ticket with a whole issue number: run case:ticket first`);
+  }
   // The template and proofs must be the ones the case was planted from (Qodo on PR 269).
   const injected = events.find((e) => e.type === "sabotage.injected" || e.type === "control.injected");
   if (!injected) return refuse(`${caseId} has no injection event`);
@@ -146,8 +148,11 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   }
   const dir = typeof entry.templateId === "string" ? templateDir(entry.templateId, env) : undefined;
   let title: string;
+  let names: string[];
   try {
-    title = JSON.parse(readFileSync(join(dir ?? "", "template.json"), "utf8")).publish.commitMessage;
+    const template = JSON.parse(readFileSync(join(dir ?? "", "template.json"), "utf8"));
+    title = template.publish.commitMessage;
+    names = [template.id, template.invariantId].filter((n): n is string => typeof n === "string" && n.length > 0);
   } catch {
     return refuse(`${caseId}'s template ${String(entry.templateId)} or its commit message can't be read`);
   }
@@ -155,6 +160,8 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   const giveaways = [title, body].flatMap((text) => [
     ...telltales(text),
     ...(ISSUE_OR_PR_LINK.test(text) ? ["links to a GitHub issue or PR"] : []),
+    // The template's own names, which templateTelltales refuses in every field the reviewer sees (Qodo on PR 269).
+    ...names.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map(() => "names the template"),
   ]);
   if (giveaways.length) return refuse(`the PR text would give the case away (${giveaways.join("; ")})`);
 
