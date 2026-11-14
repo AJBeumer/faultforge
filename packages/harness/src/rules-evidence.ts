@@ -24,6 +24,7 @@ import { readJsonLines } from "./jsonl.ts";
 import { readLedger } from "./ledger.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
+import { isComplete } from "./saved-review.ts";
 
 /** The parts of a saved `*.review.json` this uses. */
 export interface SavedReview {
@@ -174,7 +175,7 @@ export function buildTable(
   const rows: EvidenceRow[] = [];
   for (const group of byPr.values()) {
     group.sort((a, b) => a.review.recordedAt.localeCompare(b.review.recordedAt));
-    const complete = group.filter((g) => g.review.state === "complete");
+    const complete = group.filter((g) => isComplete(g.review));
     const last = complete[complete.length - 1];
     const openIds = last ? new Set((last.review.openFindings ?? []).map((f) => f.id)) : null;
     const lastCompleteAt = last?.review.recordedAt;
@@ -207,7 +208,7 @@ export function buildTable(
   rows.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id));
   // Citable only with a complete review: a skipped or timed-out save proves nothing was reviewed.
   const prs = [...byPr.values()]
-    .filter((group) => group.some((g) => g.review.state === "complete"))
+    .filter((group) => group.some((g) => isComplete(g.review)))
     .map((group) => {
       const { key, review } = group[0] as { key: string; review: SavedReview };
       return { repo: key, github: review.repo, pr: review.pr };

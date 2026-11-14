@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -314,5 +314,13 @@ describe("citationProblems", () => {
 
   it("counts nothing when there are no citations", () => {
     expect(citationProblems("no references here", table)).toEqual({ problems: [], cited: 0 });
+  });
+});
+
+describe("one completeness rule for the verdict and the rules evidence (Qodo on PR 280)", () => {
+  it("uses saved-review.ts's isComplete, not a copy", () => {
+    const text = readFileSync(join(import.meta.dirname, "rules-evidence.ts"), "utf8");
+    expect(text).toMatch(/import \{[^}]*\bisComplete\b[^}]*\} from "\.\/saved-review\.ts"/);
+    expect(text).not.toMatch(/\.state\s*(===|\?\?)/);
   });
 });

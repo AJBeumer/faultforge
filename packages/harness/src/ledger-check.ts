@@ -30,31 +30,45 @@ const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
 const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
 
 /**
- * How a unified diff breaks "only appended", or undefined: `removed` when a hunk removes or changes a line,
- * `inserted` when an added line is followed by an old one, in its hunk or a later hunk of the same file, so
- * it went in before the end (AUD-M10). Header lines and "\ No newline at end of file" carry no content.
+ * How a unified diff breaks "only appended", read one line at a time so a diff of any size is never held
+ * (AUD-N6): `removed` when a hunk removes or changes a line, `inserted` when an added line is followed by an
+ * old one, in its hunk or a later hunk of the same file, so it went in before the end (AUD-M10). Header lines
+ * and "\ No newline at end of file" carry no content.
  */
-export function appendOnlyBreak(diffText: string): "removed" | "inserted" | undefined {
-  let inHunk = false;
-  let added = false;
-  let inserted = false;
-  for (const line of diffText.split("\n")) {
+export class AppendOnlyScanner {
+  private inHunk = false;
+  private added = false;
+  private inserted = false;
+  private removed = false;
+
+  line(line: string): void {
+    if (this.removed) return;
     if (line.startsWith("diff --git")) {
-      inHunk = false;
-      added = false;
-      continue;
+      this.inHunk = false;
+      this.added = false;
+      return;
     }
     if (line.startsWith("@@")) {
-      if (added) inserted = true;
-      inHunk = true;
-      continue;
+      if (this.added) this.inserted = true;
+      this.inHunk = true;
+      return;
     }
-    if (DIFF_HEADER.test(line) || !inHunk || line.startsWith("\\")) continue;
-    if (line.startsWith("-")) return "removed";
-    if (line.startsWith("+")) added = true;
-    else if (line.startsWith(" ") && added) inserted = true;
+    if (DIFF_HEADER.test(line) || !this.inHunk || line.startsWith("\\")) return;
+    if (line.startsWith("-")) this.removed = true;
+    else if (line.startsWith("+")) this.added = true;
+    else if (line.startsWith(" ") && this.added) this.inserted = true;
   }
-  return inserted ? "inserted" : undefined;
+
+  result(): "removed" | "inserted" | undefined {
+    return this.removed ? "removed" : this.inserted ? "inserted" : undefined;
+  }
+}
+
+/** `AppendOnlyScanner` over a whole diff held as text. */
+export function appendOnlyBreak(diffText: string): "removed" | "inserted" | undefined {
+  const scanner = new AppendOnlyScanner();
+  for (const line of diffText.split("\n")) scanner.line(line);
+  return scanner.result();
 }
 
 const BREAK_WORDS = { removed: "removed or changed a line", inserted: "inserted a line before the end" };
@@ -94,47 +108,53 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
   }
 
   if (headExists) {
-    // `-m` shows a merge once per parent. A merge of two branches that each appended puts one side's lines
-    // before the other's against one parent, but is a plain append against the other: two appends meeting,
-    // not an insertion. So a commit is an insertion only when it inserts against every parent it is shown
-    // against; a removal against any parent is always a problem (Qodo on PR 269).
-    // Read as a stream, one commit's diff at a time: the whole history is never held, so it has no size or
-    // time ceiling to outgrow (AUD-N6).
-    const byCommit = new Map<string, ("removed" | "inserted" | undefined)[]>();
-    let current: string[] | null = null;
-    const finish = () => {
-      if (!current) return;
-      const sha = (current[0]?.match(/^commit ([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
-      byCommit.set(sha, [...(byCommit.get(sha) ?? []), appendOnlyBreak(current.join("\n"))]);
+    // `-m` shows a merge once per parent, one right after another. A merge of two branches that each appended
+    // puts one side's lines before the other's against one parent, but is a plain append against the other:
+    // two appends meeting, not an insertion. So a commit is an insertion only when it inserts against every
+    // parent it is shown against; a removal against any parent is always a problem (Qodo on PR 269).
+    // Read as a stream, one line at a time, and judged as each commit ends: neither the history nor one
+    // commit's diff is ever held, so there is no size or time ceiling to outgrow (AUD-N6, Qodo on PR 280).
+    let sha: string | null = null;
+    let breaks: ("removed" | "inserted" | undefined)[] = [];
+    let scanner: AppendOnlyScanner | null = null;
+    const endDiff = () => {
+      if (scanner) breaks.push(scanner.result());
+      scanner = null;
+    };
+    const endCommit = () => {
+      endDiff();
+      if (sha === null) return;
+      const broken = breaks.includes("removed")
+        ? "removed"
+        : breaks.length > 0 && breaks.every((b) => b === "inserted")
+          ? "inserted"
+          : undefined;
+      if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
+      breaks = [];
     };
     try {
       eachGitLine(repoRoot, ["log", "--no-color", "--follow", "-p", "-m", "--", relPath], (line) => {
         if (line.startsWith("commit ")) {
-          finish();
-          current = [];
+          const next = (line.match(/^commit ([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
+          if (next !== sha) endCommit();
+          else endDiff();
+          sha = next;
+          scanner = new AppendOnlyScanner();
         }
-        current?.push(line);
+        scanner?.line(line);
       });
     } catch (error) {
       throw new Error(`git log failed for ${relPath}: ${(error as Error).message}`);
     }
-    finish();
-    for (const [sha, breaks] of byCommit) {
-      const broken = breaks.includes("removed")
-        ? "removed"
-        : breaks.every((b) => b === "inserted")
-          ? "inserted"
-          : undefined;
-      if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
-    }
+    endCommit();
 
-    const uncommitted: string[] = [];
+    const uncommitted = new AppendOnlyScanner();
     try {
-      eachGitLine(repoRoot, ["diff", "--no-color", "HEAD", "--", relPath], (line) => uncommitted.push(line));
+      eachGitLine(repoRoot, ["diff", "--no-color", "HEAD", "--", relPath], (line) => uncommitted.line(line));
     } catch (error) {
       throw new Error(`git diff failed for ${relPath}: ${(error as Error).message}`);
     }
-    const broken = appendOnlyBreak(uncommitted.join("\n"));
+    const broken = uncommitted.result();
     if (broken) problems.push(`${relPath}: uncommitted changes ${BREAK_WORDS[broken]}`);
   }
 
