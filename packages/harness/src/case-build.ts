@@ -23,8 +23,10 @@
  *    file, read in Qodo's API shape and converted with `findingsFor` from `qodo-review.ts`) — a case
  *    without it must have a saved review file. This is a declaration, not a guess from what happens to
  *    exist on disk: a `review.json` backfilled for an unrelated ticket's testing doesn't make a legacy
- *    case look ordinary, or an ordinary case look legacy. Only a legacy case (so far, only FF-0001,
- *    whose review predates both `review:wait` and the current wording of `match-rule.ts`'s criteria)
+ *    case look ordinary, or an ordinary case look legacy. The legacy path is closed (AUD-M1): only the
+ *    cases in `LEGACY_CASES` (FF-0001, whose review predates both `review:wait` and the current wording
+ *    of `match-rule.ts`'s criteria) may take it, the raw file must pass `findingsShapeProblem`, and its
+ *    review state is read from it (`reviewState`) and checked like a saved review's. A legacy case
  *    may also set two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
  *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`/`summary`, which a
  *    legacy raw findings file doesn't carry). The command refuses any other field, or shape, naming it,
@@ -37,7 +39,12 @@
  * The record is built only from the review the owner judged, as it was judged (AUD-M1, AUD-M26): a verdict
  * `verdict` wrote carries an `inputHash` of the answer-key entry, the template and the saved review, and a
  * save, template or entry changed since then is refused. A save whose state is not "complete" admits only
- * `review_incomplete`, and a clean control must have no findings.
+ * `review_incomplete`, and a clean control must have no findings. A verdict that names the match rule's
+ * version (`ruleVersion`) must name today's `RULE_VERSION`: a record is never rebuilt under a rule other
+ * than the one the owner's verdict was judged by. A verdict from before rule versions names none.
+ *
+ * Only the record goes to stdout, so `case:build FF-NNNN > file` captures exactly it; every progress line
+ * and problem goes to stderr.
  *
  * `detection` comes from `applyMatchRule`: the matched finding's criteria when caught, the first
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
@@ -58,7 +65,8 @@
  * listed); 2 nothing was built or saved, because an input is missing or unreadable (the answer key, the
  * events, a bug case's template, the saved review, or an overlay file that exists), the answer key or
  * audit log has an amendment or history problem, the inputs disagree (a missing stage, disagreeing
- * commits, an unfinished review with a final verdict, or inputs changed since the verdict), or a saved
+ * commits, an unfinished review with a final verdict, inputs changed since the verdict, a verdict judged
+ * under another match rule version, or a legacy findings file that can't be read as a review), or a saved
  * record with other content is already there. The message names which.
  *
  * An unexpected error, even while loading, is 2 too: `npm run case:build` runs `case-build-cli.ts`.
@@ -77,15 +85,28 @@ import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { isToolWritten, verdictHashProblem } from "./ledger-hashes.ts";
+import { RULE_VERSION } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
 import { sha256 } from "./provenance.ts";
-import { type Finding, findingsFor, type QodoReview } from "./qodo-review.ts";
+import {
+  type Finding,
+  findingsFor,
+  findingsShapeProblem,
+  type QodoReview,
+  reviewState as qodoReviewState,
+} from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
 import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
 import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 
 /** This repo, where adjudicated templates are published, for `injection.template`. */
 const TEMPLATE_REPO = "AJBeumer/faultforge";
+
+/**
+ * The cases whose review predates `review:wait`, and so may be built from a raw findings file their overlay
+ * names (`legacyFindingsPath`). Closed: every later case has a saved review, and no new case may join (AUD-M1).
+ */
+export const LEGACY_CASES: readonly string[] = ["FF-0001"];
 
 interface CliArgs {
   caseId: string;
@@ -205,15 +226,24 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const foundReview = findSavedReview(reviewsDir, injectionCommit, reviewPr);
   const saved =
     foundReview && isReviewWaitSave(foundReview.review as unknown as Record<string, unknown>) ? foundReview : undefined;
-  const isLegacy = !saved;
+  // Only a case on the closed list may take the legacy path; any other case's legacy extras are refused (AUD-M1).
+  const isLegacy = !saved && LEGACY_CASES.includes(caseId);
 
   const overlayIssues = overlayProblems(overlay as Record<string, unknown>, isLegacy);
   if (overlayIssues.length) {
-    log(`[case:build] overlay problems:\n${overlayIssues.map((p) => `- ${p}`).join("\n")}`);
+    error(`[case:build] overlay problems:\n${overlayIssues.map((p) => `- ${p}`).join("\n")}`);
     return 1;
   }
   for (const field of overlayFieldsTaken(overlay as Record<string, unknown>))
-    log(`[case:build] from overlay: ${field}`);
+    error(`[case:build] from overlay: ${field}`);
+
+  // A record is never rebuilt under another match rule than the verdict's; one from before rule versions has none.
+  if (Object.hasOwn(adjudication, "ruleVersion") && adjudication.ruleVersion !== RULE_VERSION) {
+    error(
+      `case:build: the verdict was judged under match rule version ${JSON.stringify(adjudication.ruleVersion)}, but the rule is now version ${RULE_VERSION}; nothing built`,
+    );
+    return 2;
+  }
 
   // The record is built from the review the owner judged, as it was judged (AUD-M26).
   if (isToolWritten(adjudication) && typeof adjudication.inputHash === "string") {
@@ -235,19 +265,28 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   let findings: Finding[];
   let reviewState: string | null = null;
   if (!saved) {
-    if (!overlay.legacyFindingsPath) {
+    if (!isLegacy || !overlay.legacyFindingsPath) {
       error(
-        `case:build: no saved review for commit ${injectionCommit} on PR ${reviewPr} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
+        `case:build: no saved review for commit ${injectionCommit} on PR ${reviewPr} under ${reviewsDir}${isLegacy ? ", and no legacyFindingsPath in the overlay" : ""}`,
       );
       return 2;
     }
+    // The path names `private/...`: inside private storage, whatever its folder is called (Qodo on PR 286).
+    const legacyPath = resolve(root, overlay.legacyFindingsPath.replace(/^private[\\/]/, ""));
     let raw: QodoReview;
     try {
-      raw = JSON.parse(readFileSync(resolve(ROOT, overlay.legacyFindingsPath), "utf8"));
+      raw = JSON.parse(readFileSync(legacyPath, "utf8"));
     } catch (e) {
-      error(`case:build: can't read ${overlay.legacyFindingsPath}: ${message(e)}`);
+      error(`case:build: can't read ${legacyPath}: ${message(e)}`);
       return 2;
     }
+    // Read like any other review: a file that isn't a review's shape is refused, and its state is checked (AUD-M1).
+    const shape = raw !== null && typeof raw === "object" ? findingsShapeProblem(raw, injectionCommit) : "not a review";
+    if (shape) {
+      error(`case:build: the legacy findings file ${legacyPath} can't be used: ${shape}`);
+      return 2;
+    }
+    reviewState = qodoReviewState(raw, injectionCommit);
     findings = findingsFor(raw, injectionCommit);
   } else {
     reviewState = typeof saved.review.state === "string" ? saved.review.state : "";
@@ -305,7 +344,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
 
   const problems = [...validateCaseRecord(record), ...findLeaks(JSON.stringify(record))];
   if (problems.length) {
-    log(`[case:build] problems found:\n${problems.map((p) => `- ${p}`).join("\n")}`);
+    error(`[case:build] problems found:\n${problems.map((p) => `- ${p}`).join("\n")}`);
     return 1;
   }
 
@@ -316,14 +355,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     // Created exclusively, so of two builds racing for an absent file only one writes (Qodo on PR 264).
     try {
       writeFileSync(savePath, text, { flag: "wx" });
-      log(`[case:build] saved ${savePath}`);
+      error(`[case:build] saved ${savePath}`);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       if (readFileSync(savePath, "utf8") !== text) {
         error(`case:build: ${savePath} already holds a different record; compare them, nothing saved`);
         return 2;
       }
-      log(`[case:build] ${savePath} already holds this record`);
+      error(`[case:build] ${savePath} already holds this record`);
     }
   }
   if (!options.write) {
@@ -335,7 +374,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const hash = sha256(text);
   const alreadyPublished = events.some((e) => e.type === "case.published" && e.sha256 === hash);
   if (alreadyPublished) {
-    log(`[case:build] wrote ${outPath} (already recorded as published with this content)`);
+    error(`[case:build] wrote ${outPath} (already recorded as published with this content)`);
     return 0;
   }
   appendEvent(auditEventsPath, {
@@ -346,7 +385,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     sha256: hash,
     path: `examples/${caseId}.json`,
   });
-  log(`[case:build] wrote ${outPath}`);
+  error(`[case:build] wrote ${outPath}`);
   return 0;
 }
 

@@ -27,6 +27,10 @@ export interface QodoReview {
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isLine(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 1;
 }
@@ -70,6 +74,17 @@ function findingProblem(finding: unknown, index: number): string | undefined {
  */
 export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
+  // Read below and by `reviewState`: each run must be an object, never a list or a bare value, which would throw
+  // there (Qodo on PR 286). A run still being filled may lack its commit, and no runs at all may be null: both
+  // are read as they always were, as no run for that commit.
+  const runs: unknown = review.review_runs;
+  if (runs !== undefined && runs !== null && (!Array.isArray(runs) || !runs.every(isPlainObject))) {
+    return "Qodo's complete review lists its runs in something other than a list of runs";
+  }
+  const session: unknown = review.review_session;
+  if (session !== undefined && session !== null && !isPlainObject(session)) {
+    return "Qodo's complete review has a review session that isn't an object";
+  }
   if (typeof review.finding_count === "number" && review.finding_count !== review.findings.length) {
     return `Qodo's complete review counts ${review.finding_count} findings but lists ${review.findings.length}`;
   }
