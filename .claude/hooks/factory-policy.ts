@@ -17,7 +17,7 @@
  *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
  *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
  *  - reading `/proc`, the answer key, the audit log and the templates with any tool, and in a target ticket's
- *    run the private checkouts the runner names in `FAULTFORGE_PRIVATE_CHECKOUTS` (#284)
+ *    run the private checkouts the runner names in `FAULTFORGE_PRIVATE_CHECKOUTS` (#284; a lab ticket's too, #299)
  *
  * Every rule reads the command as written and in normalised spellings (shell-decode.ts): `g''h`, `\gh`,
  * `${x}`, ANSI-C strings, and a program's punctuation read as spaces.
@@ -191,7 +191,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
           if (reason && !reasons.includes(reason)) reasons.push(reason);
       }
     } else if (READ_TOOLS.includes(tool)) {
-      const reason = readViolation(args, cwd, env);
+      const reason = readViolation(args, cwd, env, tool);
       if (reason) reasons = [reason];
     } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
       const reason = editViolation(

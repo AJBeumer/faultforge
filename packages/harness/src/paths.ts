@@ -36,3 +36,13 @@ export function privateDir(env: NodeJS.ProcessEnv = process.env, factory?: Facto
 export function runsDir(root: string = ROOT): string {
   return resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(root, "..", "faultforge-runs"));
 }
+
+/** A case's id: `FF-` and four digits. Checked before it names a file (`<id>.json`), so `../x` can name none. */
+export const CASE_ID = /^FF-\d{4}$/;
+
+/** True when `id` is a case id; otherwise says why on `error`, as `tool`, and is false (#299). */
+export function caseIdOk(id: string, tool: string, error: (line: string) => void): boolean {
+  if (CASE_ID.test(id)) return true;
+  error(`${tool}: a case id is FF- and four digits, not ${JSON.stringify(id.slice(0, 40))}`);
+  return false;
+}
