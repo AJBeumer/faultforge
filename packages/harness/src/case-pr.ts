@@ -37,10 +37,8 @@ import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { telltales } from "./neutral.ts";
-import { ROOT } from "./paths.ts";
+import { TOOL } from "./provenance.ts";
 import { privateDir, templateDir } from "./templates.ts";
-
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 export interface PrArgs {
   caseId: string;
@@ -261,11 +259,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     );
     process.exit(1);
   }
-  run(parsed).then(
-    (code) => process.exit(code),
-    (e) => {
+  run(parsed)
+    .then((code) => process.exit(code))
+    .catch((e: unknown) => {
       console.error(`case:pr: ${message(e)}`);
       process.exit(2);
-    },
-  );
+    });
 }

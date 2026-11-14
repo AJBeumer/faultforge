@@ -12,6 +12,7 @@
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
+import { readJsonLines } from "./jsonl.ts";
 import { ROOT } from "./paths.ts";
 
 const eventSchema = new Ajv2020({ allErrors: true }).compile(
@@ -136,12 +137,7 @@ export function appendAnswerKeyEntry(path: string, entry: Record<string, unknown
     throw new Error(`refusing an answer-key entry with case id ${JSON.stringify(caseId)}`);
   }
   appendLine(path, entry, () => {
-    const held = existsSync(path)
-      ? readFileSync(path, "utf8")
-          .split("\n")
-          .filter((l) => l.trim())
-          .some((l) => (JSON.parse(l) as { caseId?: unknown; kind?: unknown }).caseId === caseId)
-      : false;
+    const held = existsSync(path) && readJsonLines(path).some((line) => line.caseId === caseId);
     if (held) throw new Error(`${caseId} is already in the answer key; nothing appended`);
   });
 }

@@ -92,3 +92,10 @@ describe("docsProblems: a colour is not a case id (Qodo on PR 264)", () => {
     expect(check("see FF-5733")).toEqual(["docs/x.md: names FF-5733, above the highest case in the answer key"]);
   });
 });
+
+describe("docsProblems: every spelling of a future case id (Qodo on PR 264)", () => {
+  it("refuses FF5000 written without a separator, and still passes a colour", () => {
+    expect(check("next: FF5000")).toEqual(["docs/x.md: names FF-5000, above the highest case in the answer key"]);
+    expect(check("color: #FF5000;")).toEqual([]);
+  });
+});

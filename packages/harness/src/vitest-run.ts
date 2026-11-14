@@ -11,16 +11,29 @@
  * because the runner's own path is fixed before the config is read. Starting Vitest from the real path
  * gives both one spelling. On Linux and macOS the real path is the path, so nothing changes there.
  *
- * Exit codes: Vitest's own (0 every test passed, 1 a test failed or Vitest could not run); 1 also when
- * Vitest could not be started at all. A signal sent to the launcher is passed on to Vitest, and a signal
- * that stops Vitest stops the launcher the same way.
+ * Exit codes: Vitest's own, passed on (0 every test passed, 1 a test failed, or Vitest stopped on an error of
+ * its own); 2 the launcher could not start Vitest at all (the working folder or Vitest itself couldn't be found).
+ * A signal sent to the launcher is passed on to Vitest, and a signal that stops Vitest stops the launcher the
+ * same way.
  */
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-const root = realpathSync.native(process.cwd());
-const child = spawn(process.execPath, [join(root, "node_modules", "vitest", "vitest.mjs"), ...process.argv.slice(2)], {
+function cannotStart(reason: string): never {
+  console.error(`vitest-run: could not start Vitest: ${reason}`);
+  process.exit(2);
+}
+
+let root = "";
+try {
+  root = realpathSync.native(process.cwd());
+} catch (error) {
+  cannotStart(error instanceof Error ? error.message : String(error));
+}
+const vitest = join(root, "node_modules", "vitest", "vitest.mjs");
+if (!existsSync(vitest)) cannotStart(`${vitest} not found; run npm ci`);
+const child = spawn(process.execPath, [vitest, ...process.argv.slice(2)], {
   cwd: root,
   stdio: "inherit",
 });
@@ -30,10 +43,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, () => child.kill(signal));
 }
 
-child.on("error", (error) => {
-  console.error(`vitest-run: could not start Vitest: ${error.message}`);
-  process.exit(1);
-});
+child.on("error", (error) => cannotStart(error.message));
 
 // Vitest's own ending is the launcher's: its exit code, or the signal that stopped it.
 child.on("exit", (code, signal) => {

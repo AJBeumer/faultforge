@@ -27,10 +27,11 @@ import { readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
+import { TOOL } from "./provenance.ts";
 import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
+
 import { privateDir } from "./templates.ts";
 
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 const REVIEWER = "qodo-code-review[bot]";
 
 export interface RunOptions {

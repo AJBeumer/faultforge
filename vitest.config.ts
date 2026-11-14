@@ -1,7 +1,16 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "vitest/config";
+import { spellingProblem } from "./packages/harness/src/drive-spelling.ts";
+
+// Started from another spelling of this folder (`d:\…` for `D:\…`), every test file fails to load with an error
+// that says nothing about the code. Stop with one that says what to run instead (AUD-M25).
+// Windows only, and only for a difference in case: a junction or symlink to the checkout is left as it was.
+if (process.platform === "win32") {
+  const spelling = spellingProblem(process.cwd(), realpathSync.native(process.cwd()));
+  if (spelling) throw new Error(spelling);
+}
 
 /**
  * A few tests build fixtures under the OS temp directory by a fixed name (one reviewed-repo config,

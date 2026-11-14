@@ -23,6 +23,7 @@
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { appendAmendment } from "./ledger-append.ts";
@@ -48,8 +49,6 @@ export interface AmendOptions {
   now?: () => string;
   append?: (path: string, value: object) => void;
 }
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function run(caseId: string, options: AmendOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
@@ -158,11 +157,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     console.error("usage: npm run verdict:amend -- <FF-NNNN> [--dry-run]");
     process.exit(2);
   }
-  run(caseId, { dryRun: parsed.values["dry-run"] ?? false }).then(
-    (code) => process.exit(code),
-    (e) => {
+  run(caseId, { dryRun: parsed.values["dry-run"] ?? false })
+    .then((code) => process.exit(code))
+    .catch((e: unknown) => {
       console.error(`verdict:amend: ${message(e)}`);
       process.exit(2);
-    },
-  );
+    });
 }

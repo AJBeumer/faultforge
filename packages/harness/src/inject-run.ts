@@ -4,11 +4,11 @@
  * written only through `ledger-append.ts`.
  */
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Proof } from "./inject-template.ts";
+import { readJsonLines } from "./jsonl.ts";
 import { ROOT } from "./paths.ts";
 import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 
@@ -98,16 +98,9 @@ export function git(targetDir: string, ...gitArgs: string[]): string {
   return result.stdout.trim();
 }
 
+/** The file's lines (`readJsonLines`), or none when there is no file yet. */
 export function readJsonl(path: string): Record<string, unknown>[] {
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
-export function sha256(data: string | Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
+  return existsSync(path) ? readJsonLines(path) : [];
 }
 
 export function log(message: string) {
