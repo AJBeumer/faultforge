@@ -51,6 +51,7 @@ interface Script {
   originMain?: string;
   gitThrows?: string;
   corpus?: Proof[];
+  unguarded?: string;
 }
 
 /** Private storage with both templates, a target with the file to change, and fakes for everything else. */
@@ -87,6 +88,7 @@ function world(script: Script = {}) {
     originMain: () => script.originMain ?? BASE,
     branches: () => ({ existsLocally: () => false, existsOnOrigin: () => false }),
     baseTreeProblems: () => [],
+    guardProblem: () => script.unguarded,
     diff: () => ({ status: 0, stdout: "diff", stderr: "" }),
     runProof: (_places, stage, _proof, i) =>
       stage === "base" ? ((script.base ?? [])[i] ?? "pass") : ((script.variant ?? [])[i] ?? "fail"),
@@ -156,6 +158,13 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(w.errors.join("\n")).toContain("FF-9500 is already in the ledger");
     expect(w.inject({ caseId: "FF-95" })).toBe(1);
     expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
+  });
+
+  it("refuses a real case in a target without git's guard, but validates there (#242)", () => {
+    const w = world({ unguarded: "the target has no guard" });
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join(" ")).toContain("Run npm run guard:install first");
+    expect(world({ unguarded: "x" }).inject({ validateOnly: true, caseId: undefined })).toBe(0);
   });
 
   it("refuses a dirty checkout (I07), a detached HEAD, and a HEAD that isn't origin/main", () => {

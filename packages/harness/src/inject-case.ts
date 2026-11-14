@@ -12,6 +12,7 @@ import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { type BranchExistence, deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { errorText } from "./error-text.ts";
+import { guardProblem } from "./guard-install.ts";
 import { git as gitIn, readJsonl, run as runCommand, runProof, runStep, type StepPlaces } from "./inject-run.ts";
 import {
   applyMutation,
@@ -50,6 +51,8 @@ export interface InjectDeps {
   originMain: (targetDir: string) => string;
   branches: (targetDir: string) => BranchExistence;
   baseTreeProblems: (targetDir: string, commit: string) => string[];
+  /** Why the target lacks git's own guard (`guard-install.ts`), or undefined when it has it. */
+  guardProblem: (targetDir: string) => string | undefined;
   diff: (targetDir: string) => { status: number | null; stdout: string; stderr: string; error?: Error };
   runProof: (places: StepPlaces, stage: "base" | "variant", proof: Proof, index: number) => Outcome;
   runStep: (places: StepPlaces, name: string, cmd: string, args: string[]) => Outcome;
@@ -76,6 +79,7 @@ export function liveInjectDeps(env: NodeJS.ProcessEnv = process.env): InjectDeps
     originMain: (dir) => runCommand("git", ["rev-parse", "--verify", "--quiet", "origin/main"], dir).stdout.trim(),
     branches: gitBranchExistence,
     baseTreeProblems,
+    guardProblem,
     diff: (dir) => runCommand("git", ["diff"], dir),
     runProof,
     runStep: (places, name, cmd, args) => runStep(places, name, cmd, args),
@@ -148,6 +152,11 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
         `target HEAD ${baseCommit.slice(0, 7)} is not origin/main (${originMain.slice(0, 7) || "missing"}): switch to main and pull first`,
       );
     }
+  }
+  // A real case commits in the target, so git's own guard must be there to check that commit (#242).
+  if (!validateOnly) {
+    const unguarded = deps.guardProblem(targetDir);
+    if (unguarded) refuse(`${unguarded}. Run npm run guard:install first.`);
   }
   const existence = deps.branches(targetDir);
   const branch = validateOnly ? template.publish.branch : deriveBranchName(template.publish.branch, existence);

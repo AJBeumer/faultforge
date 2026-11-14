@@ -3,7 +3,7 @@
  * template ids in any post, a slow or broken hook, and the spellings that slipped past the text checks.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -426,5 +426,49 @@ describe("holes Qodo found in the second version (PR 265)", () => {
     execFileSync("git", ["init", "-q", "--bare", bare]);
     execFileSync("git", ["-C", bare, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git"]);
     expect(bash("git push --force origin main", bare)).toMatch(/Force pushes/);
+  });
+});
+
+describe("holes Qodo found in the third version (PR 265, fixed here)", () => {
+  it("reads an MCP input's text, so a word after a line break is still a word", () => {
+    const input = { owner: "AJBeumer", repo: "faultforge-target", body: "Notes\nplanted bug" };
+    expect(verdict("mcp__github__add_comment", input)).toMatch(/says planted/);
+    expect(verdict("mcp__github__add_comment", { body: "Notes\nx-secret-v1" })).toMatch(/still private/);
+  });
+
+  it("doesn't take a cd inside a quoted message as a move into private storage", () => {
+    const priv = PRIVATE.replace(/\\/g, "/");
+    expect(bash(`echo "x; cd ${priv}" && git commit -m "x-secret-v1"`)).toMatch(/still private/);
+  });
+
+  it("reads every file a piped cat is given", () => {
+    const dir = targetFolder("Small cleanup.\n");
+    writeFileSync(join(dir, "more.md"), "The planted bug\n");
+    expect(bash("cat body.md more.md | gh pr create --title Tidy --body-file -", dir)).toMatch(/says planted/);
+  });
+
+  it("doesn't take a destination built by the shell as private storage", () => {
+    const priv = privateFolder();
+    execFileSync("git", ["init", "-q", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-private.git"]);
+    const command =
+      'GH_REPO=AJBeumer/faultforge-private gh issue create --repo "$PUBLIC" --title x --body "x-secret-v1"';
+    expect(bash(command, LAB, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private/);
+  });
+
+  it("follows a link inside private storage to where it really leads", () => {
+    const outside = mkdtempSync(join(tmpdir(), "guard-outside-"));
+    const priv = privateFolder();
+    symlinkSync(outside, join(priv, "link"), "junction");
+    const write = { file_path: join(priv, "link", "notes.md"), content: "x-secret-v1" };
+    expect(verdict("Write", write, LAB, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private/);
+  });
+
+  it("sees -C after other git options", () => {
+    const clone = tempRepo();
+    clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
+    const dir = clone.dir.replace(/\\/g, "/");
+    expect(bash(`git --no-pager -C "${dir}" commit --allow-empty -m "Fix the planted bug"`)).toMatch(/says planted/);
+    expect(bash(`git -c core.pager=cat -C "${dir}" push --force origin main`)).toMatch(/Force pushes/);
   });
 });

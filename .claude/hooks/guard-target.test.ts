@@ -611,10 +611,13 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
     const piped = join(folder, "body.md").replace(/\\/g, "/");
     writeFileSync(piped, "Small cleanup.\n");
     expect(bash(`cat ${piped} | ${TO_TARGET} --body-file -`)).toBeUndefined();
-    expect(bash(`${TO_TARGET} --body "$(cat ../FaultForge/notes/body.md)"`)).toBeUndefined();
+    // A substituted file is read too now (#242): a real clean one passes; one the guard can't read, behind a
+    // variable or missing, is refused rather than allowed unread.
+    expect(bash(`${TO_TARGET} --body "$(cat ${piped})"`)).toBeUndefined();
     expect(bash(`echo "see AJBeumer/faultforge#12" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab/);
-    expect(bash(`${TO_TARGET} --body "$(cat $HOME/FaultForge/notes/body.md)"`)).toBeUndefined();
-    expect(bash(`${TO_TARGET} --body "$(cat %USERPROFILE%\\FaultForge\\body.md)"`)).toBeUndefined();
+    expect(bash(`${TO_TARGET} --body "$(cat ../FaultForge/notes/body.md)"`)).toMatch(/can't read that file/);
+    expect(bash(`${TO_TARGET} --body "$(cat $HOME/FaultForge/notes/body.md)"`)).toMatch(/can't read that file/);
+    expect(bash(`${TO_TARGET} --body "$(cat %USERPROFILE%\\FaultForge\\body.md)"`)).toMatch(/can't read that file/);
   });
 
   it("doesn't count a heredoc that another command reads as posted text", () => {

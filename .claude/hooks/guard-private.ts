@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
 import { checkoutAt, within } from "./guard-repos.ts";
-import { blankQuoted, gitSteps } from "./shell-scan.ts";
+import { blankQuoted, gitSteps, quotedMask } from "./shell-scan.ts";
 
 const LAB_ROOT = join(import.meta.dirname, "../..");
 
@@ -71,6 +71,21 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
 export const PRIVATE_ID_REASON =
   "This would name a bug template that is still private, in a post anyone (the reviewer included) can read. Leave the template's name out; describe the work instead.";
 
+/** The command's steps, split at `;`, `&`, `|` and new lines outside quoted text, each trimmed. */
+function steps(command: string): string[] {
+  const quoted = quotedMask(command);
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < command.length; i++) {
+    if (!quoted[i] && /[;&|\n]/.test(command[i] ?? "")) {
+      parts.push(command.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(command.slice(start));
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
 /**
  * True when every write in the command stays in private storage, where template ids belong: each git
  * commit, push, tag or note runs there (its `-C`, or the folder the command has moved to), and any gh or
@@ -88,11 +103,14 @@ export function onlyPrivateRepo(command: string, cwd: string, root: string, dest
   const tools = blankQuoted(command);
   if (/\b(?:gh|curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b/i.test(tools) && !destinations.length)
     return false;
+  // A destination the shell builds (`--repo "$X"`) can't be known here (Qodo on PR 265).
+  if (/(?:--repo|\s-R)[\s=]*["']?[$`%]|\bGH_REPO\s*=\s*["']?[$`%]/.test(command)) return false;
   // Anything that points git at another folder or repository makes the step's target unclear.
   if (/\bGIT_(?:DIR|WORK_TREE)\b|--git-dir|--work-tree/i.test(tools)) return false;
   let here = cwd;
   let wrote = false;
-  for (const step of command.split(/&&|\|\||[;|\n]/).map((s) => s.trim())) {
+  // Split only at operators outside quoted text: a `cd` inside a message moves nowhere (Qodo on PR 265).
+  for (const step of steps(command)) {
     const move = /^(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?["']?([^"'\s]+)/i.exec(step);
     if (move?.[1]) {
       if (/[$`%]|^~/.test(move[1])) return false;

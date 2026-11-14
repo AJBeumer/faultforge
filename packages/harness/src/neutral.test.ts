@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { telltales, templateTelltales } from "./neutral.ts";
+import { normalizeLookalikes, telltales, templateTelltales } from "./neutral.ts";
 
 describe("telltales", () => {
   it.each([
@@ -139,5 +139,23 @@ describe("telltales: one row per pattern, so none can be removed unnoticed (#188
     ["the hidden tests", "mentions the hidden proof test"],
   ])("flags %s", (text, reason) => {
     expect(telltales(text)).toContain(reason);
+  });
+});
+
+describe("telltales read look-alike and invisible characters as a reader sees them (#242)", () => {
+  it.each([
+    ["a Cyrillic a", "plаnted"],
+    ["a Greek omicron", "grοund truth"],
+    ["a zero-width joiner", "led‍ger"],
+    ["a soft hyphen", "Fault­Forge"],
+    ["a non-breaking hyphen", "FF‑0012"],
+    ["full-width letters", "ｌｅｄｇｅｒ"],
+  ])("finds a word written with %s", (_name, text) => {
+    expect(telltales(text)).not.toEqual([]);
+  });
+
+  it("leaves ordinary text alone", () => {
+    expect(normalizeLookalikes("Filter bookings by status")).toBe("Filter bookings by status");
+    expect(telltales("Filter bookings by status")).toEqual([]);
   });
 });
