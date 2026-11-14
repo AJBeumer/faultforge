@@ -68,7 +68,6 @@ import {
 } from "./factory-settle.ts";
 import type { Verification } from "./factory-verify.ts";
 import type { RunMode } from "./factory-workspace.ts";
-import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
@@ -132,6 +131,8 @@ export interface TickDeps {
   /** Actions or the owner's PC: the claim comment records it, and recovery leaves the other's claims alone. */
   mode?: RunMode;
   claimMode?(github: string, number: number): RunMode | null;
+  /** The owner's reviewed checkouts without the git-level guard; a local tick refuses to start beside them (#242). */
+  unguarded?(): string[];
   /** Open issues (not PRs) with the label, in one repo. */
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
@@ -504,6 +505,12 @@ export function tokenFrom(
   }
 }
 
+/** Why no tick may run on this machine as it is (exit 2), or null. Read through the deps, so it is tested. */
+export function setupRefusal(deps: Pick<TickDeps, "unguarded">): string | null {
+  const unguarded = deps.unguarded?.() ?? [];
+  return unguarded.length ? `factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.` : null;
+}
+
 async function main() {
   let values: { ci?: boolean; minutes?: string; budget?: string };
   try {
@@ -534,10 +541,9 @@ async function main() {
     console.error(`factory:tick couldn't set up: ${error instanceof Error ? error.message : error}`);
     process.exit(2);
   }
-  // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
-  const unguarded = mode === "local" ? unguardedCheckouts(factory, LAB_ROOT) : [];
-  if (unguarded.length) {
-    console.error(`factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.`);
+  const refusal = setupRefusal(deps);
+  if (refusal) {
+    console.error(refusal);
     process.exit(2);
   }
   const outcome = await tick(factory, deps, options);

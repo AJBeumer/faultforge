@@ -38,6 +38,10 @@ vi.mock("./factory-hooks.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./factory-hooks.ts")>()),
   requireHooks: vi.fn(() => ({ problems: [], hooks: [] })),
 }));
+vi.mock("./guard-install.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./guard-install.ts")>()),
+  unguardedCheckouts: vi.fn(() => ["faultforge-target: no guard hooks"]),
+}));
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
@@ -49,9 +53,10 @@ import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
-import type { Candidate, Workspace } from "./factory-tick.ts";
+import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -303,6 +308,18 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     rmSync(ws.private, { recursive: true, force: true });
     expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-gone", ws)).toThrow(/private worktree is gone/);
     expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
+  });
+
+  it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself (#242)", () => {
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual(["faultforge-target: no guard hooks"]);
+    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT);
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(
+      /^factory:tick refused: faultforge-target: no guard hooks. Run npm run guard:install first.$/,
+    );
+    vi.mocked(unguardedCheckouts).mockClear();
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS, "ci"))).toBeNull();
+    expect(vi.mocked(unguardedCheckouts)).not.toHaveBeenCalled();
+    expect(setupRefusal({ unguarded: () => [] })).toBeNull();
   });
 
   it("takes the lock in the runs folder when local, and never holds one in CI", () => {

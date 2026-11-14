@@ -19,6 +19,7 @@ import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
 import { gh, ghAll, ghJson } from "./github.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
 import { checkTicket } from "./ticket-ready.ts";
@@ -39,6 +40,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     mode,
+    // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
+    unguarded: () => unguardedCheckouts(factory, LAB_ROOT),
     // GitHub reads get three tries: one transient failure must not cost the tick (AUD-N10).
     claimMode: (github, number) =>
       claimModeFrom(
@@ -237,6 +240,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
 
   return {
     ...deps,
+    // The VM's target checkout gets the guard from the workflow's own step (factory.yml), not from here.
+    unguarded: () => [],
     // The workflow's concurrency group allows one run at a time.
     lock: () => ({ acquired: true, release: () => {} }),
     workspace() {
