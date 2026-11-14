@@ -5,37 +5,63 @@
  * in chunks, so memory stays bounded by the longest line and there is no size ceiling. Synchronous, so its
  * callers stay synchronous.
  *
- * The temporary file lives inside the repository's own git folder, never the shared system temp folder: the
- * output can be the private answer key's history, and a run that is killed before it cleans up must not leave
- * that anywhere it wasn't already (Qodo on PR 280). Leftovers from such a run are removed by the next one.
+ * The temporary file lives in a folder of its own under the system temp folder, made with mode 0700 and the
+ * file with 0600, so only this user can read it: the output can be the private answer key's history. It is
+ * never inside the repository being read, so a check such as `ledger:check` writes nothing there. The folder is
+ * removed when the call ends, and a folder an earlier, killed run left behind is removed by the next run once
+ * it is an hour old.
  */
-import { spawnSync } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const CHUNK = 1024 * 1024;
-const PREFIX = "line-stream-";
+/** The name every temporary folder starts with, so a later run can find a killed run's leftovers. */
+export const TEMP_PREFIX = "faultforge-git-lines-";
 const STALE_MS = 60 * 60 * 1000;
 
-/** The repository's git folder (`.git`, or a worktree's own folder under it). */
-export function gitDirOf(repoRoot: string): string {
-  const result = spawnSync("git", ["-C", repoRoot, "rev-parse", "--absolute-git-dir"], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`not a git repository: ${repoRoot}: ${String(result.stderr).trim()}`);
-  return result.stdout.trim();
-}
-
-/** Removes temporary folders an earlier, killed run left in `gitDir`, once they are an hour old. */
-function sweep(gitDir: string, now: number): void {
-  for (const name of readdirSync(gitDir)) {
-    if (!name.startsWith(PREFIX)) continue;
-    const path = join(gitDir, name);
+/** Removes temporary folders an earlier, killed run left in `tempRoot`, once they are an hour old. */
+function sweep(tempRoot: string, now: number): void {
+  for (const name of readdirSync(tempRoot)) {
+    if (!name.startsWith(TEMP_PREFIX)) continue;
+    const path = join(tempRoot, name);
     try {
       if (now - statSync(path).mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
     } catch {
-      // Another run may be removing it at the same moment.
+      // Another run may be removing it at the same moment, or it belongs to another user.
     }
   }
+}
+
+/** `repoRoot` itself when it is the root of its own git repository; throws otherwise, saying which. */
+export function ownRepoRoot(repoRoot: string): string {
+  let toplevel: string;
+  try {
+    toplevel = execFileSync("git", ["-C", repoRoot, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch (error) {
+    throw new Error(`${repoRoot} is not inside a git repository: ${(error as Error).message}`);
+  }
+  // Real paths on both sides: a Windows temp folder can be given by its short 8.3 name (RUNNER~1) while git
+  // reports the long one, and a symlinked folder (macOS /tmp) differs the same way. Same folder, same answer.
+  if (realpathSync.native(toplevel) !== realpathSync.native(repoRoot)) {
+    throw new Error(`${repoRoot} is not the root of its own git repository (git found ${toplevel} instead)`);
+  }
+  return toplevel;
 }
 
 /** Calls `onLine` with each line git prints (without its line break). Throws when git fails, with its stderr. */
@@ -44,12 +70,14 @@ export function eachGitLine(
   args: string[],
   onLine: (line: string) => void,
   now: number = Date.now(),
+  tempRoot: string = tmpdir(),
 ): void {
-  const gitDir = gitDirOf(repoRoot);
-  sweep(gitDir, now);
-  const dir = mkdtempSync(join(gitDir, PREFIX));
-  const file = join(dir, "out");
+  sweep(tempRoot, now);
+  const dir = mkdtempSync(join(tempRoot, TEMP_PREFIX));
   try {
+    // mkdtemp already makes it 0700 on POSIX; said again so it never depends on that.
+    chmodSync(dir, 0o700);
+    const file = join(dir, "out");
     const out = openSync(file, "w", 0o600);
     let result: ReturnType<typeof spawnSync>;
     try {

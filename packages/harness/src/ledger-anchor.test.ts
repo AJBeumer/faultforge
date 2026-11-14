@@ -1,0 +1,136 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { anchorProblems, readAnchors, recordAnchor } from "./ledger-anchor.ts";
+import { appendOnlyProblems, ledgerCheckProblems } from "./ledger-check.ts";
+
+function sh(dir: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+}
+
+/** A private repository whose answer key gained one line per commit, and an empty anchors file beside it. */
+function world() {
+  const repo = mkdtempSync(join(tmpdir(), "ledger-anchor-"));
+  sh(repo, "init", "--quiet", "-b", "main");
+  sh(repo, "config", "user.email", "test@example.com");
+  sh(repo, "config", "user.name", "Test");
+  sh(repo, "config", "core.autocrlf", "false");
+  const key = join(repo, "ground-truth.jsonl");
+  const add = (line: string) => {
+    writeFileSync(key, `${readFileOr(key)}${line}\n`);
+    sh(repo, "add", "ground-truth.jsonl");
+    sh(repo, "commit", "--quiet", "-m", `add ${line}`);
+  };
+  add('{"caseId":"FF-9001"}');
+  add('{"caseId":"FF-9002"}');
+  const anchors = join(mkdtempSync(join(tmpdir(), "ledger-anchors-")), "ledger-anchors.txt");
+  return { repo, key, anchors, add };
+}
+
+function readFileOr(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Replaces the whole history with one new commit holding the working tree as it is. */
+function squash(repo: string) {
+  sh(repo, "checkout", "--quiet", "--orphan", "squashed");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "--quiet", "-m", "one commit");
+  sh(repo, "branch", "--quiet", "-D", "main");
+  sh(repo, "branch", "--quiet", "-m", "main");
+}
+
+describe("recordAnchor (AUD-M11)", () => {
+  it("appends the date and the private HEAD's commit id, and nothing else", () => {
+    const w = world();
+    const head = sh(w.repo, "rev-parse", "HEAD");
+    expect(recordAnchor(w.repo, w.anchors, new Date("2026-11-14T03:00:00Z"))).toEqual({ commit: head, added: true });
+    expect(readFileSync(w.anchors, "utf8")).toBe(`2026-11-14 ${head}\n`);
+  });
+
+  it("adds nothing when HEAD is already the last anchor, and a line for a new HEAD", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    expect(recordAnchor(w.repo, w.anchors).added).toBe(false);
+    w.add('{"caseId":"FF-9003"}');
+    expect(recordAnchor(w.repo, w.anchors).added).toBe(true);
+    expect(readAnchors(w.anchors).anchors).toHaveLength(2);
+  });
+
+  it("refuses a folder that isn't the root of its own repository, and leaves the private repository as it was", () => {
+    const w = world();
+    const status = sh(w.repo, "status", "--porcelain", "--ignored");
+    expect(() => recordAnchor(join(w.repo, "nope"), w.anchors)).toThrow();
+    recordAnchor(w.repo, w.anchors);
+    expect(sh(w.repo, "status", "--porcelain", "--ignored")).toBe(status);
+  });
+});
+
+describe("anchorProblems (AUD-M11)", () => {
+  it("passes a history that only grew after the anchor", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    w.add('{"caseId":"FF-9003"}');
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([]);
+  });
+
+  it("catches a squashed history that rewrote a line, which the commit-by-commit check can no longer see", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    writeFileSync(w.key, '{"caseId":"FF-9001","changed":true}\n{"caseId":"FF-9002"}\n');
+    squash(w.repo);
+    // The single commit only adds lines, so the history check alone passes it.
+    expect(appendOnlyProblems(w.repo, "ground-truth.jsonl")).toEqual([]);
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([
+      expect.stringMatching(/is not an ancestor of the private HEAD; was its history squashed or rewritten\?$/),
+    ]);
+  });
+
+  it("catches a squash even with the same content, and an anchored commit the repository no longer holds", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    squash(w.repo);
+    expect(anchorProblems(w.repo, w.anchors)).toHaveLength(1);
+    writeFileSync(w.anchors, `2026-11-14 ${"e".repeat(40)}\n`);
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([
+      expect.stringContaining("the private repository no longer holds that commit"),
+    ]);
+  });
+
+  it("catches a file that is no longer what the anchored commit held, followed only by new lines", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    writeFileSync(w.key, '{"caseId":"FF-9001"}\n');
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([
+      expect.stringContaining("ground-truth.jsonl then is not the start of ground-truth.jsonl today"),
+    ]);
+  });
+
+  it("reports a missing anchors file, an empty one, and a line that isn't an anchor", () => {
+    const w = world();
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([expect.stringContaining("no anchors file")]);
+    writeFileSync(w.anchors, "");
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([expect.stringContaining("holds no anchor")]);
+    const head = sh(w.repo, "rev-parse", "HEAD");
+    writeFileSync(w.anchors, `2026-11-14 ${head}\n2026-11-14 ${head} 25 lines\n`);
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([
+      expect.stringContaining('line 2 is not "YYYY-MM-DD <commit id>"'),
+    ]);
+  });
+
+  it("is part of ledger:check when an anchors file is given", () => {
+    const w = world();
+    writeFileSync(join(w.repo, "audit-events.jsonl"), "");
+    w.add('{"caseId":"FF-9003"}');
+    recordAnchor(w.repo, w.anchors);
+    expect(ledgerCheckProblems(w.repo, w.anchors)).toEqual([]);
+    squash(w.repo);
+    expect(ledgerCheckProblems(w.repo, w.anchors).join("\n")).toContain("is not an ancestor of the private HEAD");
+  });
+});

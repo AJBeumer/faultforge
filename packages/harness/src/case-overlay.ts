@@ -23,7 +23,7 @@ export function overlayProblems(raw: Record<string, unknown>, isLegacy = false):
     if (!allowed.includes(key)) {
       problems.push(
         LEGACY_ONLY_TOP_LEVEL.includes(key)
-          ? `overlay sets ${key}, which only a case with no saved review may use`
+          ? `overlay sets ${key}, which only a legacy case (one whose review predates review:wait) may use`
           : `overlay sets ${key}, which is not allowed`,
       );
     }

@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, run } from "./case-build.ts";
 import { type BuildInputs, buildCaseRecord, type Overlay, repoSlug } from "./case-builder.ts";
@@ -8,9 +8,16 @@ import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, readLedger } from "./ledger.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
+import { RULE_VERSION } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
+
+/** What `run` wrote to stderr other than its `[case:build]` progress lines, which go there too. */
+function problemsIn(err: string[]): string {
+  return err.filter((line) => !line.startsWith("[case:build] ")).join("\n");
+}
+
 import { isPublishedTemplate } from "./templates.ts";
 
 const ENTRY: LedgerEntry = {
@@ -275,10 +282,10 @@ describe("overlayProblems", () => {
 
   it("rejects the legacy-only extras for a case with a saved review", () => {
     expect(overlayProblems({ findings: [{ id: "f1", severity: "high" }] }, false)).toEqual([
-      "overlay sets findings, which only a case with no saved review may use",
+      "overlay sets findings, which only a legacy case (one whose review predates review:wait) may use",
     ]);
     expect(overlayProblems({ legacyFindingsPath: "x.json" }, false)).toEqual([
-      "overlay sets legacyFindingsPath, which only a case with no saved review may use",
+      "overlay sets legacyFindingsPath, which only a legacy case (one whose review predates review:wait) may use",
     ]);
     expect(overlayProblems({ detection: { matchDetailOverrides: { kind: "x" } } }, false)).toEqual([
       "overlay sets detection.matchDetailOverrides, which is not allowed",
@@ -362,17 +369,35 @@ describe("parseCliArgs", () => {
 });
 
 describe("run: legacy path only applies with no genuine saved review", () => {
-  const CASE_ID = "FF-9001";
+  const CASE_ID = "FF-0001";
   const INJECTION_COMMIT = "d".repeat(40);
-  // overlay.legacyFindingsPath is read relative to the repo root (it names a path like
-  // "private/raw-artifacts/<case>/..."), so the fixture's own file is named relative to it too.
-  const REPO_ROOT = join(import.meta.dirname, "../../..");
+  // overlay.legacyFindingsPath is read relative to the folder that holds private storage (it names a path
+  // like "private/raw-artifacts/<case>/..."), so the fixture's own file is named relative to it too.
+  const legacyPathOf = (fx: { root: string }) => relative(dirname(fx.root), join(fx.root, "legacy-findings.json"));
+  const writeLegacy = (fx: { root: string }, review: unknown) =>
+    writeFileSync(join(fx.root, "legacy-findings.json"), JSON.stringify(review));
+  /** A complete review of the injection commit in Qodo's API shape, with one finding on the injected lines. */
+  const legacyReview = () => ({
+    review_session: { commit_sha: INJECTION_COMMIT, status: "completed", review_complete: true },
+    findings: [
+      {
+        id: "legacy-1",
+        git_sha: INJECTION_COMMIT,
+        file_path: "src/x.ts",
+        start_line: 1,
+        end_line: 2,
+        category: "Bug",
+        title: "An off-by-one",
+        description: "loops off by one",
+      },
+    ] as unknown[],
+  });
 
-  function fixture() {
+  function fixture(caseId = CASE_ID) {
     const root = mkdtempSync(join(tmpdir(), "case-build-"));
     const groundTruthPath = join(root, "ground-truth.jsonl");
     const auditEventsPath = join(root, "audit-events.jsonl");
-    const overlayPath = join(root, `${CASE_ID}.overlay.json`);
+    const overlayPath = join(root, `${caseId}.overlay.json`);
     const examplesDir = join(root, "examples");
     mkdirSync(examplesDir, { recursive: true });
     mkdirSync(join(root, "templates", "t1"), { recursive: true });
@@ -382,7 +407,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     );
 
     const entry = {
-      caseId: CASE_ID,
+      caseId,
       kind: "sabotage",
       templateId: "t1",
       invariantId: "INV-1",
@@ -396,11 +421,11 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     writeFileSync(groundTruthPath, `${JSON.stringify(entry)}\n`);
 
     const events = [
-      { eventId: "e1", type: "sabotage.injected", caseId: CASE_ID, at: "2026-11-01T00:00:00.000Z" },
+      { eventId: "e1", type: "sabotage.injected", caseId, at: "2026-11-01T00:00:00.000Z" },
       {
         eventId: "e2",
         type: "review.recorded",
-        caseId: CASE_ID,
+        caseId,
         at: "2026-11-01T00:05:00.000Z",
         pr: { repo: "Owner/target", number: 5, url: "https://github.com/Owner/target/pull/5" },
         review: {
@@ -415,7 +440,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
       {
         eventId: "e3",
         type: "case.adjudicated",
-        caseId: CASE_ID,
+        caseId,
         at: "2026-11-01T00:10:00.000Z",
         disposition: "confirmed_detected",
         by: "Owner",
@@ -423,14 +448,14 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     ];
     writeFileSync(auditEventsPath, `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
 
-    return { root, groundTruthPath, auditEventsPath, overlayPath, examplesDir };
+    return { root, groundTruthPath, auditEventsPath, overlayPath, examplesDir, caseId };
   }
 
   async function runOn(fx: ReturnType<typeof fixture>, overlay: Record<string, unknown>) {
     writeFileSync(fx.overlayPath, JSON.stringify(overlay));
     const out: string[] = [];
     const err: string[] = [];
-    const code = await run(CASE_ID, {
+    const code = await run(fx.caseId, {
       env: { FAULTFORGE_PRIVATE_DIR: fx.root },
       log: (l) => out.push(l),
       error: (l) => err.push(l),
@@ -498,14 +523,14 @@ describe("run: legacy path only applies with no genuine saved review", () => {
         findings: [{ id: "wrong", git_sha: INJECTION_COMMIT, file_path: "src/x.ts", start_line: 1, end_line: 2 }],
       }),
     );
-    const { code, out } = await runOn(fx, {
+    const { code, err } = await runOn(fx, {
       challenge: { verdict: "not_run", note: "n" },
-      legacyFindingsPath: relative(REPO_ROOT, join(fx.root, "legacy-findings.json")),
+      legacyFindingsPath: legacyPathOf(fx),
     });
     // The overlay sets legacyFindingsPath even though a genuine saved review exists: refused, since
     // that extra is reserved for a case with no saved review.
     expect(code).toBe(1);
-    expect(out.join("\n")).toMatch(/only a case with no saved review may use/);
+    expect(err.join("\n")).toMatch(/only a legacy case/);
   });
 
   it("falls back to the overlay's legacy path when the saved review isn't a genuine review:wait save", async () => {
@@ -523,29 +548,47 @@ describe("run: legacy path only applies with no genuine saved review", () => {
         findings: [],
       }),
     );
-    writeFileSync(
-      join(fx.root, "legacy-findings.json"),
-      JSON.stringify({
-        findings: [
-          {
-            id: "legacy-1",
-            git_sha: INJECTION_COMMIT,
-            file_path: "src/x.ts",
-            start_line: 1,
-            end_line: 2,
-            category: "Bug",
-            title: "An off-by-one",
-            description: "loops off by one",
-          },
-        ],
-      }),
-    );
+    writeLegacy(fx, legacyReview());
     const { code, out } = await runOn(fx, {
       challenge: { verdict: "not_run", note: "n" },
-      legacyFindingsPath: relative(REPO_ROOT, join(fx.root, "legacy-findings.json")),
+      legacyFindingsPath: legacyPathOf(fx),
     });
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("qodo:legacy-1");
+  });
+
+  it("refuses the legacy path for any case but the closed list's, with no saved review at all (AUD-M1)", async () => {
+    const fx = fixture("FF-9007");
+    writeLegacy(fx, legacyReview());
+    const { code, err, out } = await runOn(fx, { legacyFindingsPath: legacyPathOf(fx) });
+    expect(code).toBe(1);
+    expect(err.join("\n")).toContain("overlay sets legacyFindingsPath, which only a legacy case");
+    expect(out).toEqual([]);
+  });
+
+  it("refuses an incomplete legacy review with a final verdict, as for a saved one (AUD-M1)", async () => {
+    const fx = fixture();
+    writeFileSync(
+      fx.auditEventsPath,
+      readFileSync(fx.auditEventsPath, "utf8").replace("confirmed_detected", "confirmed_missed"),
+    );
+    const running = legacyReview();
+    running.review_session.review_complete = false;
+    running.findings = [];
+    writeLegacy(fx, running);
+    const { code, err } = await runOn(fx, { legacyFindingsPath: legacyPathOf(fx) });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain('state is "running", not "complete"');
+  });
+
+  it("refuses a legacy file that isn't a review's shape (AUD-M1)", async () => {
+    for (const bad of [[], { findings: [{ id: "x", git_sha: INJECTION_COMMIT.slice(0, 7) }] }]) {
+      const fx = fixture();
+      writeLegacy(fx, bad);
+      const { code, err } = await runOn(fx, { legacyFindingsPath: legacyPathOf(fx) });
+      expect(code).toBe(2);
+      expect(err.join("\n")).toContain("can't be used");
+    }
   });
 
   it("builds an inconclusive record from a save of a review that never finished (#192)", async () => {
@@ -570,7 +613,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
       }),
     );
     const { code, out, err } = await runOn(fx, { challenge: { verdict: "not_run", note: "n" } });
-    expect(err.join("\n")).toBe("");
+    expect(problemsIn(err)).toBe("");
     expect(code).toBe(0);
     const text = out.join("\n");
     const record = JSON.parse(text.slice(text.indexOf("{")));
@@ -682,8 +725,8 @@ describe("run: a control case (#162)", () => {
       overlayPath,
       examplesDir: join(fx.root, "examples"),
     });
-    const text = out.join("\n");
-    return { code, err: err.join("\n"), record: code === 0 ? JSON.parse(text.slice(text.indexOf("{"))) : null };
+    // stdout is exactly the record; progress lines go to stderr.
+    return { code, err: problemsIn(err), record: code === 0 ? JSON.parse(out.join("\n")) : null };
   }
 
   it("builds a clean control with no overlay as a version 2 record, with what it changed from the answer key", async () => {
@@ -775,7 +818,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
   const TEMPLATE_TEXT = JSON.stringify({ match: { kindTerms: ["off by one"] } });
 
   /** A bug case adjudicated by verdict (tool-written, with its inputHash) on a finished review of PR 7. */
-  function fixture(opts: { state?: string; disposition?: string } = {}) {
+  function fixture(opts: { state?: string; disposition?: string; ruleVersion?: unknown } = {}) {
     const root = mkdtempSync(join(tmpdir(), "case-build-gate-"));
     const groundTruthPath = join(root, "ground-truth.jsonl");
     const auditEventsPath = join(root, "audit-events.jsonl");
@@ -837,6 +880,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
         disposition: opts.disposition ?? "confirmed_missed",
         reason: "r",
         judgements: [],
+        ...(Object.hasOwn(opts, "ruleVersion") ? { ruleVersion: opts.ruleVersion } : {}),
       },
     ];
     writeFileSync(auditEventsPath, events.map((e) => `${JSON.stringify(e)}\n`).join(""));
@@ -860,13 +904,40 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
       casesDir: join(fx.root, "cases"),
       save: extra.save ?? false,
     });
-    return { code, out: out.join("\n"), err: err.join("\n") };
+    return { code, out: out.join("\n"), err: problemsIn(err), progress: err.join("\n") };
   }
 
   it("builds from the save the verdict judged", async () => {
     const { code, err } = await build(fixture());
     expect(err).toBe("");
     expect(code).toBe(0);
+  });
+
+  it("builds under the match rule the verdict was judged by, or one from before rule versions", async () => {
+    expect((await build(fixture({ ruleVersion: RULE_VERSION }))).code).toBe(0);
+    expect((await build(fixture())).code).toBe(0);
+  });
+
+  it("refuses, exit 2, a verdict judged under another match rule version", async () => {
+    for (const ruleVersion of [`${RULE_VERSION}0`, null, Number(RULE_VERSION)]) {
+      const { code, err, out } = await build(fixture({ ruleVersion }));
+      expect(code).toBe(2);
+      expect(err).toContain(`but the rule is now version ${RULE_VERSION}`);
+      expect(out).toBe("");
+    }
+  });
+
+  it("prints only the record on stdout, and every progress line on stderr", async () => {
+    const fx = fixture();
+    const { code, out, progress } = await build(fx, {
+      overlay: { challenge: { verdict: "not_run", note: "n" } },
+      save: true,
+    });
+    expect(code).toBe(0);
+    expect(`${out}\n`).toBe(readFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "utf8"));
+    expect(JSON.parse(out)).toMatchObject({ caseId: CASE_ID });
+    expect(progress).toContain("[case:build] from overlay: challenge");
+    expect(progress).toContain("[case:build] saved");
   });
 
   it("refuses, exit 2, a saved review changed after the verdict", async () => {
@@ -910,10 +981,11 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
   it("refuses, exit 1, a record that leaks a private path or fails the schema (M44, M44c)", async () => {
     const leak = await build(fixture(), { overlay: { detection: { notes: ["see private/raw-artifacts/x"] } } });
     expect(leak.code).toBe(1);
-    expect(leak.out).toContain("problems found");
+    expect(leak.progress).toContain("problems found");
+    expect(leak.out).toBe("");
     const invalid = await build(fixture(), { overlay: { challenge: { verdict: "maybe", note: "n" } } });
     expect(invalid.code).toBe(1);
-    expect(invalid.out).toContain("/challenge/verdict");
+    expect(invalid.progress).toContain("/challenge/verdict");
   });
 
   it("--save writes private/cases/<id>.json, and never replaces a different record there (#249)", async () => {

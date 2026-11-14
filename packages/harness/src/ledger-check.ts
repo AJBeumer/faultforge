@@ -6,9 +6,15 @@
  *
  * Runs `ledgerProblems` (see `ledger.ts`) on both files, then asks the private repo's git history,
  * including merge commits, and its uncommitted state, whether any commit (or anything not yet
- * committed) removed or changed a line of either file: every commit may only add lines. Last, it
- * recomputes the `inputHash` of every tool-written injection and verdict event (`ledger-hashes.ts`): a
- * template, proof or saved review changed after its event is reported.
+ * committed) removed or changed a line of either file: every commit may only add lines. That history can
+ * itself be squashed or rewritten, so it then checks each commit `npm run ledger:anchor` recorded in this
+ * repo's `docs/ledger-anchors.txt` (`ledger-anchor.ts`): each must still be an ancestor of the private HEAD,
+ * and both files at it must be the start of today's. Last, it recomputes the `inputHash` of every
+ * tool-written injection and verdict event (`ledger-hashes.ts`): a template, proof or saved review changed
+ * after its event is reported.
+ *
+ * It only reads: git's output is streamed through a private temporary folder outside the repository
+ * (`git-stream.ts`), so the private repository is left exactly as it was.
  *
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
@@ -16,16 +22,15 @@
  * An unexpected error, even while loading, is 2 too: `npm run ledger:check` runs `ledger-check-cli.ts`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { eachGitLine } from "./git-stream.ts";
+import { eachGitLine, ownRepoRoot } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
+import { ANCHORS_FILE, anchorProblems, LEDGER_FILES as FILES } from "./ledger-anchor.ts";
 import { readEventProblems } from "./ledger-append.ts";
 import { hashProblems } from "./ledger-hashes.ts";
 import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
-
-const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
 
 const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
 
@@ -72,22 +77,6 @@ export function appendOnlyBreak(diffText: string): "removed" | "inserted" | unde
 }
 
 const BREAK_WORDS = { removed: "removed or changed a line", inserted: "inserted a line before the end" };
-
-/** The private repo's own root for `repoRoot`, or throws when it isn't inside its own git repository. */
-function ownRepoRoot(repoRoot: string): string {
-  let toplevel: string;
-  try {
-    toplevel = execFileSync("git", ["-C", repoRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`${repoRoot} is not inside a git repository: ${(error as Error).message}`);
-  }
-  // Real paths on both sides: a Windows temp folder can be given by its short 8.3 name (RUNNER~1) while git
-  // reports the long one, and a symlinked folder (macOS /tmp) differs the same way. Same folder, same answer.
-  if (realpathSync.native(toplevel) !== realpathSync.native(repoRoot)) {
-    throw new Error(`${repoRoot} is not the root of its own git repository (git found ${toplevel} instead)`);
-  }
-  return toplevel;
-}
 
 /**
  * Problems from a file's git history and working tree: one entry per commit (including a merge's own
@@ -162,15 +151,17 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
 }
 
 /**
- * Every problem with the private ledger: unsound amendments, any non-append-only history, and any tool's
+ * Every problem with the private ledger: unsound amendments, any non-append-only history, any anchored
+ * commit that today's history no longer holds or no longer extends (`anchorsPath`, AUD-M11), and any tool's
  * `inputHash` that no longer recomputes from today's template, proofs or saved review (AUD-M26).
  */
-export function ledgerCheckProblems(privateRoot: string): string[] {
+export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): string[] {
   const problems: string[] = [];
   for (const file of FILES) {
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
   }
+  if (anchorsPath !== undefined) problems.push(...anchorProblems(privateRoot, anchorsPath));
   // Every event readable as an event: the lenient check every shape on disk passes (AUD-M5).
   const auditPath = join(privateRoot, FILES[1] as string);
   if (existsSync(auditPath)) {
@@ -227,7 +218,7 @@ export function main(): number {
   const root = privateDir();
   let problems: string[];
   try {
-    problems = ledgerCheckProblems(root);
+    problems = ledgerCheckProblems(root, ANCHORS_FILE);
   } catch (error) {
     console.error(`[ledger:check] could not read a file or the private repo's history: ${(error as Error).message}`);
     return 2;
