@@ -105,7 +105,12 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
     for (const commitDiff of log.split(/^commit /m).slice(1)) {
       const sha = (commitDiff.match(/^([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
       const broken = appendOnlyBreak(commitDiff);
-      if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
+      // A merge of two branches that each appended shows one side's lines before the other's against one
+      // parent: that is two appends meeting, not an insertion. A removal is never allowed (Qodo on PR 269).
+      const isMerge = /^Merge: /m.test(commitDiff.split("\n\n")[0] ?? "");
+      if (broken && !(isMerge && broken === "inserted")) {
+        problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
+      }
     }
 
     let uncommitted: string;

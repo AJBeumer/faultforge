@@ -67,7 +67,7 @@ describe("appendEvent", () => {
     expect(() => appendEvent(torn, PUBLISHED)).toThrow(/complete line/);
     const locked = temp("audit-events.jsonl");
     writeFileSync(`${locked}.lock`, "");
-    expect(() => appendEvent(locked, PUBLISHED)).toThrow(/held for over/);
+    expect(() => appendEvent(locked, PUBLISHED, { lockWaitMs: 100 })).toThrow(/held for over/);
   });
 
   it("checks pr.opened and case.adjudicated as the tools write them", () => {

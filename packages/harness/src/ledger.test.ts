@@ -325,3 +325,20 @@ describe("ledgerProblems: locked fields and the shape of a change (AUD-M10, #251
     expect(ledgerProblems(file([verdict, amend(["x"])]))).toHaveLength(1);
   });
 });
+
+describe("ledgerProblems: the injection facts are locked too (Qodo on PR 269)", () => {
+  it.each(["targetRepo", "invariantId", "defectClass", "branch", "validation"])(
+    "reports an amendment that changes %s",
+    (field) => {
+      const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+      const lines = [
+        { caseId: "FF-9001" },
+        { kind: "amendment", amends: "FF-9001", change: { [field]: "x" }, reason: "r", evidence: "e" },
+      ];
+      writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+      expect(ledgerProblems(path)).toEqual([
+        `amendment amending FF-9001: changes ${field}, which an amendment may not touch`,
+      ]);
+    },
+  );
+});

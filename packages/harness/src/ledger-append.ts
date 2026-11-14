@@ -61,12 +61,18 @@ export function readEventProblems(event: Record<string, unknown>): string | unde
   return undefined;
 }
 
-const LOCK_WAIT_MS = 5_000;
+/** How long an append waits for another writer's lock before it gives up. */
+export const LOCK_WAIT_MS = 5_000;
+
+/** Options every append takes; the tests shorten the wait. */
+export interface AppendOptions {
+  lockWaitMs?: number;
+}
 
 /** Runs `write` holding `<path>.lock`, created exclusively; a lock held too long is reported, never broken. */
-function withLock(path: string, write: () => void): void {
+function withLock(path: string, write: () => void, waitMs = LOCK_WAIT_MS): void {
   const lock = `${path}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + waitMs;
   let fd: number | undefined;
   while (fd === undefined) {
     try {
@@ -74,7 +80,7 @@ function withLock(path: string, write: () => void): void {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       if (Date.now() > deadline) {
-        throw new Error(`${lock} has been held for over ${LOCK_WAIT_MS / 1000} s; if no tool is writing, remove it`);
+        throw new Error(`${lock} has been held for over ${waitMs / 1000} s; if no tool is writing, remove it`);
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
@@ -95,21 +101,25 @@ function requireCompleteLastLine(path: string): void {
   }
 }
 
-function appendLine(path: string, value: object, check?: () => void): void {
-  withLock(path, () => {
-    requireCompleteLastLine(path);
-    check?.();
-    appendFileSync(path, `${JSON.stringify(value)}\n`);
-  });
+function appendLine(path: string, value: object, check?: () => void, options: AppendOptions = {}): void {
+  withLock(
+    path,
+    () => {
+      requireCompleteLastLine(path);
+      check?.();
+      appendFileSync(path, `${JSON.stringify(value)}\n`);
+    },
+    options.lockWaitMs,
+  );
 }
 
 /** Appends one audit event, after checking it against its type's schema. Throws, writing nothing, if it fails. */
-export function appendEvent(path: string, event: Record<string, unknown>): void {
+export function appendEvent(path: string, event: Record<string, unknown>, options: AppendOptions = {}): void {
   const problems = eventProblems(event);
   if (problems.length) {
     throw new Error(`refusing to write a ${String(event.type)} event: ${problems.join("; ")}`);
   }
-  appendLine(path, event);
+  appendLine(path, event, undefined, options);
 }
 
 /**

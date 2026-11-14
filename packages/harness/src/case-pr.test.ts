@@ -10,7 +10,10 @@ const COMMIT = "c".repeat(40);
 const FACTORY = { repos: { target: { github: "Owner/target" } } } as unknown as FactoryConfig;
 
 /** Private storage after inject and case:ticket for FF-9400, and qodo:check's saved state. */
-function fixture(events: object[] = [{ type: "case.ticket-created", issue: { number: 12 } }]) {
+const TICKET = { type: "case.ticket-created", issue: { number: 12 } };
+const PLANTED = { type: "sabotage.injected" };
+
+function fixture(events: object[] = [PLANTED, TICKET]) {
   const root = mkdtempSync(join(tmpdir(), "case-pr-"));
   mkdirSync(join(root, "templates", "x-secret-v1"), { recursive: true });
   writeFileSync(
@@ -33,7 +36,6 @@ const ARGS: PrArgs = {
   caseId: "FF-9400",
   body: "Moves the lookup into one helper.",
   relationships: "none active, confirmed by the owner",
-  qodoState: "2026-11-14T00-00-00Z",
   dryRun: false,
 };
 
@@ -48,6 +50,13 @@ function fakeGh(head = COMMIT) {
   return { gh, calls };
 }
 
+let qodo = (root: string) => ({
+  exitCode: 0,
+  snapshotVersion: "qodo-v10",
+  evidenceDir: join(root, "raw-artifacts", "qodo-state", "2026-11-14T00-00-00Z"),
+  message: "matches qodo-v10",
+});
+
 async function open(root: string, args: Partial<PrArgs> = {}, gh = fakeGh()) {
   const err: string[] = [];
   const code = await run(
@@ -60,6 +69,7 @@ async function open(root: string, args: Partial<PrArgs> = {}, gh = fakeGh()) {
       gh: gh.gh,
       now: () => "2026-11-14T01:00:00.000Z",
       eventId: () => "pr-event",
+      qodoCheck: async (root) => qodo(root),
     },
   );
   const events = readFileSync(join(root, "audit-events.jsonl"), "utf8")
@@ -115,8 +125,9 @@ describe("case:pr (#251, AUD-M5)", () => {
 
   it("refuses a branch whose pushed head isn't the injected commit, a case with no ticket, and a second PR", async () => {
     expect((await open(fixture(), {}, fakeGh("d".repeat(40)))).code).toBe(1);
-    expect((await open(fixture([]))).code).toBe(1);
-    const twice = await open(fixture([{ type: "case.ticket-created", issue: { number: 12 } }, { type: "pr.opened" }]));
+    expect((await open(fixture([PLANTED]))).code).toBe(1);
+    expect((await open(fixture([TICKET]))).code).toBe(1);
+    const twice = await open(fixture([PLANTED, TICKET, { type: "pr.opened" }]));
     expect(twice.code).toBe(1);
     expect(twice.err).toContain("already has a pr.opened event");
   });
@@ -149,9 +160,39 @@ describe("case:pr (#251, AUD-M5)", () => {
   });
 
   it("reads its command line", () => {
-    const argv = ["--case", "FF-9400", "--body", "x", "--relationships", "none", "--qodo-state", "2026-11-14"];
-    expect(parseCliArgs(argv)).toMatchObject({ caseId: "FF-9400", qodoState: "2026-11-14", dryRun: false });
-    expect(parseCliArgs([...argv.slice(0, 6)])).toBeNull();
-    expect(parseCliArgs([...argv.slice(0, 7), "../escape"])).toBeNull();
+    const argv = ["--case", "FF-9400", "--body", "x", "--relationships", "none"];
+    expect(parseCliArgs(argv)).toMatchObject({ caseId: "FF-9400", dryRun: false });
+    expect(parseCliArgs(argv.slice(0, 4))).toBeNull();
+    expect(parseCliArgs([...argv, "--qodo-state", "x"])).toBeNull();
+  });
+});
+
+describe("case:pr: what Qodo found on PR 269", () => {
+  it("refuses, before gh pr create, when Qodo doesn't match its snapshot or can't be checked", async () => {
+    const original = qodo;
+    for (const exitCode of [1, 2]) {
+      qodo = (root) => ({ ...original(root), exitCode, message: "a rule changed" });
+      const { code, err, calls } = await open(fixture());
+      expect(code).toBe(1);
+      expect(err).toContain("check didn't pass");
+      expect(calls.some((c) => c[0] === "pr")).toBe(false);
+    }
+    qodo = original;
+  });
+
+  it("records the version and the folder the check itself gave", async () => {
+    const original = qodo;
+    qodo = (root) => ({ ...original(root), snapshotVersion: "qodo-v11" });
+    const { events } = await open(fixture());
+    expect(events.at(-1)).toMatchObject({ qodoConfiguration: "qodo-v11" });
+    qodo = original;
+  });
+
+  it("refuses a template changed since the case was planted", async () => {
+    const changed = { type: "sabotage.injected", tool: "faultforge-harness@1.0.0", inputHash: "0".repeat(64) };
+    const { code, err, calls } = await open(fixture([changed, TICKET]));
+    expect(code).toBe(1);
+    expect(err).toContain("isn't the one it was planted from");
+    expect(calls).toEqual([]);
   });
 });
