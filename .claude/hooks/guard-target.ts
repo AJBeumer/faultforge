@@ -30,11 +30,11 @@ import {
   shellReading,
   UnknownRepository,
   unreadableDestination,
-  unreadableValue,
+  unreadablePost,
 } from "./guard-expand.ts";
 import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
-import { commitMessages, commitSteps, expandedArguments, outsidePostedText, postedText } from "./guard-posted.ts";
+import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
 import {
   onlyPrivateRepo,
   PRIVATE_ID_REASON,
@@ -179,7 +179,7 @@ function checkPrivateIds(ctx: Context, command: string, readable: boolean) {
   if (!names || onlyPrivateRepo(command, ctx.cwd, privateRoot(ctx.env), destinations)) return;
   // Read as strictly as a post to a reviewed repo (#285): text a program builds (printf, base64) or a variable
   // the command doesn't set can't be checked for an id, so it isn't posted.
-  if (readable && unreadableValue(expandedArguments(command))) deny(UNREADABLE_VARIABLE);
+  if (readable && unreadablePost(command)) deny(UNREADABLE_VARIABLE);
   if ([command, joinedWords(command), ...postedPieces(ctx, command, true, false)].some(names)) deny(PRIVATE_ID_REASON);
 }
 
@@ -196,7 +196,7 @@ function checkShell(ctx: Context, command: string) {
   const alias = aliasProblem(command);
   if (alias) deny(alias);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
-  const read = shellReading(command, isWrite(command));
+  const read = shellReading(command);
   // A default repo set here sends later posts to a reviewed repo without naming it (#285).
   if (/\bgh\s+repo\s+set-default\b/.test(joinedWords(read))) {
     const here = locate(ctx.cwd, ctx.reviewed);
@@ -306,7 +306,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   }
   if (!writes) return;
   // A body from a variable the command doesn't set (`-b "$MSG"`) can't be read before it is posted (#285).
-  if (readable && unreadableValue(expandedArguments(command))) deny(UNREADABLE_VARIABLE);
+  if (readable && unreadablePost(command)) deny(UNREADABLE_VARIABLE);
 
   // A reviewed repo may link to its own tickets only when the command really runs in its checkout (the
   // hook's folder, or a `cd`/`git -C` that is a command of its own) and goes nowhere else. Words in a

@@ -9,8 +9,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { leetReadings, telltales } from "../../packages/harness/src/neutral.ts";
 import { hookFileProblem, MIN_HOOK_BYTES, run } from "./fail-closed.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { expandVariables, type RepositoryResolver, setRepositoryResolver } from "./guard-expand.ts";
+import { expandVariables, type RepositoryResolver, setRepositoryResolver, shellReading } from "./guard-expand.ts";
 import { privateIdMatcher } from "./guard-private.ts";
+import { rewritesHistory } from "./guard-reach.ts";
 import { decide } from "./guard-target.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
@@ -74,13 +75,28 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
   });
 
   it("expands a variable the command sets, and judges the text it makes", () => {
-    // Chained, it is refused before the words are read; as a prefix, by its words.
     expect(verdict(`R=${T}; gh issue comment 3 --repo "$R" --body "planted bug"`, LAB, NO_PRIVATE)).toBeDefined();
-    expect(verdict(`R=${T} gh issue comment 3 --repo "$R" --body "planted bug"`, LAB, NO_PRIVATE)).toMatch(
-      /says planted/,
-    );
-    expect(verdict(`M=pla gh pr comment 3 -R ${T} -b "\${M}nted bug"`, LAB, NO_PRIVATE)).toMatch(/says planted/);
+    // A prefix doesn't set what the command's own words expand to: the variable stays unreadable.
+    expect(verdict(`R=${T} gh issue comment 3 --repo "$R" --body "ok"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
+    expect(verdict(`M=pla gh pr comment 3 -R ${T} -b "\${M}nted bug"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
     expect(expandVariables('A=x; B="y"; echo "$A$B ${A}"')).toBe('A=x; B="y"; echo "xy x"');
+  });
+
+  it("expands as the shell does: in order, from statements of their own only (Qodo on PR 291)", () => {
+    expect(expandVariables("echo $A; A=x; echo $A")).toBe("echo $A; A=x; echo x");
+    expect(expandVariables("FLAG=--force; FLAG=-u git push $FLAG")).toBe("FLAG=--force; FLAG=-u git push --force");
+    expect(expandVariables("gh pr comment 3 -b 'R=safe $R'")).toBe("gh pr comment 3 -b 'R=safe $R'");
+  });
+
+  it("reads every quoted part of a posted word, and lets an escaped dollar sign be (Qodo on PR 291)", () => {
+    expect(verdict(`gh pr comment 3 -R ${T} -b 'safe '"$MSG"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
+    expect(verdict(`gh pr comment 3 -R ${T} -b "costs \\$MSG"`, LAB, NO_PRIVATE)).toBeUndefined();
+  });
+
+  it("posts a literal heredoc from the lab while private templates exist, and still finds an id in it (Qodo on PR 291)", () => {
+    const body = (text: string) => `gh pr create --title Tidy --body "$(cat <<'EOF'\n${text}\nEOF\n)"`;
+    expect(verdict(body("Small cleanup."))).toBeUndefined();
+    expect(verdict(body("Demo with x-secret-v1."))).toMatch(/still private/);
   });
 
   it("refuses a write whose repo is a variable the command doesn't set", () => {
@@ -126,6 +142,16 @@ describe("aliases, default repos and repository ids (AUD-M3)", () => {
     expect(verdict(post("222"), LAB, NO_PRIVATE)).toBeUndefined();
     expect(verdict(post("333"), LAB, NO_PRIVATE)).toMatch(/couldn't tell which repo/);
     expect(asked).toEqual(["111", "222", "333"]);
+    // A write only once its method is expanded; an id in a message is words (Qodo on PR 291).
+    expect(
+      verdict('M=PUT; gh api repositories/111/pulls/1/merge -X $M -f commit_title="planted"', LAB, NO_PRIVATE),
+    ).toBeDefined();
+    expect(asked.at(-1)).toBe("111");
+    asked.length = 0;
+    expect(
+      verdict("gh issue create --repo owner/name --title x --body 'see repositories/0'", LAB, NO_PRIVATE),
+    ).toBeUndefined();
+    expect(asked).toEqual([]);
   });
 });
 
@@ -155,8 +181,11 @@ describe("leetspeak (AUD-M3)", () => {
 describe("a force push built from a variable (AUD-M3)", () => {
   it("is a force push in a reviewed checkout unless the command sets the flag to something harmless", () => {
     expect(verdict("git push $FLAG origin main", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
-    expect(verdict("FLAG=--force git push $FLAG origin x", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
-    expect(verdict("FLAG=-u git push $FLAG origin x", TARGET_REPO.dir, NO_PRIVATE)).toBeUndefined();
+    // A prefix doesn't set what the push's own words expand to (Qodo on PR 291).
+    expect(verdict("FLAG=-u git push $FLAG origin x", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
+    expect(rewritesHistory(shellReading("FLAG=--force; FLAG=-u git push $FLAG origin x"), true)).toBe(true);
+    // Set on its own, to a harmless flag, it reads as that flag.
+    expect(rewritesHistory(shellReading("FLAG=-u; git push $FLAG origin x"), true)).toBe(false);
   });
 });
 

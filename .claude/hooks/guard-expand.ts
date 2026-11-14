@@ -5,30 +5,56 @@
  * read (a variable the command doesn't set) is refused where it would be posted.
  */
 import { spawnSync } from "node:child_process";
+import { outsidePostedText, postedRanges } from "./guard-posted.ts";
+import { isWrite } from "./guard-reach.ts";
 import { decodeAnsiC } from "./shell-decode.ts";
-import { joinedWords } from "./shell-scan.ts";
+import { joinedWords, quotedMask } from "./shell-scan.ts";
 
 /** A variable's name in shell text: `$NAME`, `${NAME}`, PowerShell's `$env:NAME`. Not `$(`, `$1` or `$?`. */
 export const VARIABLE = /\$\{?[A-Za-z_]\w*/;
 
+/** A statement that only sets variables to plain text: `A=x`, `export A="x" B='y'`. */
+const ASSIGNS_ONLY =
+  /^\s*(?:(?:export|local|declare|readonly)\s+)?(?:[A-Za-z_]\w*=(?:"[^"$`\\]*"|'[^']*'|[^\s;&|$`'"()<>]*)\s*)+$/;
+const ASSIGNMENT = /([A-Za-z_]\w*)=(?:"([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>]*))/g;
+const POWERSHELL_ASSIGN = /^\s*\$([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')\s*$/;
+
 /**
- * The variables the command sets to plain text (`NAME=value`, `export NAME=value`, PowerShell's
- * `$NAME = 'value'`), each replaced where it is used. A value that is itself built (`$`, a backtick) is left
- * alone: it is still unreadable. Every use is replaced, wherever it sits, so a quoted `'$NAME'` reads as the
- * value too; that can only add text to check.
+ * The variables the command sets to plain text, replaced where the shell would use them (Qodo on PR 291): a
+ * statement of its own (`NAME=value`, `export NAME=value`, PowerShell's `$NAME = 'value'`) sets a value for
+ * the statements after it, never before; a prefix (`NAME=value cmd`) doesn't change how `cmd`'s words expand,
+ * and `NAME=value` inside an argument sets nothing. A value that is itself built (`$`, a backtick) is not
+ * taken: it stays unreadable.
  */
 export function expandVariables(command: string): string {
+  const quoted = quotedMask(command);
   const assigned = new Map<string, string>();
-  const bash =
-    /(?:^|[;&|\n(]\s*|\s)(?:export\s+|local\s+|declare\s+|readonly\s+)?([A-Za-z_]\w*)=("([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>]*))(?=[\s;&|)]|$)/g;
-  for (const m of command.matchAll(bash)) assigned.set(m[1] ?? "", m[3] ?? m[4] ?? m[5] ?? "");
-  const powershell = /\$([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')/g;
-  for (const m of command.matchAll(powershell)) assigned.set(m[1] ?? "", m[2] ?? m[3] ?? "");
-  let text = command;
-  for (const [name, value] of assigned) {
-    text = text.replace(new RegExp(String.raw`\$\{${name}\}|\$${name}(?!\w)`, "g"), () => value);
+  let out = "";
+  let start = 0;
+  const statement = (end: number) => {
+    const text = command.slice(start, end);
+    const powershell = POWERSHELL_ASSIGN.exec(text);
+    if (ASSIGNS_ONLY.test(text)) {
+      for (const m of text.matchAll(ASSIGNMENT)) assigned.set(m[1] ?? "", m[2] ?? m[3] ?? m[4] ?? "");
+      out += text;
+    } else if (powershell) {
+      assigned.set(powershell[1] ?? "", powershell[2] ?? powershell[3] ?? "");
+      out += text;
+    } else {
+      let read = text;
+      for (const [name, value] of assigned)
+        read = read.replace(new RegExp(String.raw`\$\{${name}\}|\$${name}(?!\w)`, "g"), () => value);
+      out += read;
+    }
+  };
+  for (let i = 0; i < command.length; i++) {
+    if (quoted[i] || !/[;&|\n]/.test(command[i] ?? "")) continue;
+    statement(i);
+    out += command[i];
+    start = i + 1;
   }
-  return text;
+  statement(command.length);
+  return out;
 }
 
 /** `%2D` and its kind decoded in a GitHub route (`repos/o/faultforge%2Dtarget`), as GitHub decodes them. */
@@ -74,7 +100,9 @@ export class UnknownRepository extends Error {}
  * be a reviewed repo, so the write is refused.
  */
 export function nameRepositories(command: string, timeoutMs = 4000): string {
-  const ids = [...new Set([...command.matchAll(/\brepositories\/(\d+)/gi)].map((m) => m[1] ?? ""))];
+  // Only a route the command acts on: an id in a posted message is words (Qodo on PR 291).
+  const outside = outsidePostedText(command);
+  const ids = [...new Set([...outside.matchAll(/\brepositories\/(\d+)/gi)].map((m) => m[1] ?? ""))];
   let text = command;
   for (const id of ids) {
     const name = resolver(id, timeoutMs);
@@ -92,9 +120,10 @@ export function nameRepositories(command: string, timeoutMs = 4000): string {
  * The command as the shell would read it: ANSI-C decoded, its own variables expanded, routes decoded, and
  * (for a write) repository ids named. Equal to the command when none of those apply.
  */
-export function shellReading(command: string, writes: boolean, timeoutMs?: number): string {
+export function shellReading(command: string, timeoutMs?: number): string {
   const read = decodeRoutes(expandVariables(decodeAnsiC(command)));
-  return writes ? nameRepositories(read, timeoutMs) : read;
+  // A write in either reading: `-X $M` with `M=PUT` is one only once expanded (Qodo on PR 291).
+  return isWrite(command) || isWrite(read) ? nameRepositories(read, timeoutMs) : read;
 }
 
 /** Why the command may not run because it hides a later post behind an alias, or undefined. */
@@ -104,10 +133,21 @@ export function aliasProblem(command: string): string | undefined {
   return undefined;
 }
 
-/** True when a value posted as text still holds a variable the command doesn't set: its text can't be read. */
-export function unreadableValue(values: string[]): boolean {
-  // A variable inside a substitution is the substitution's: builtText reads that, or refuses it.
-  return values.some((value) => VARIABLE.test(value.replace(/\$\([^)]*\)?/g, "")));
+/**
+ * True when a posted value still holds a variable the command doesn't set: its text can't be read. The whole
+ * shell word counts, every quoted part of it (`'safe '"$MSG"`; Qodo on PR 291), but not single-quoted text,
+ * an escaped `\$`, or a variable inside a substitution, which builtText reads or refuses.
+ */
+export function unreadablePost(command: string): boolean {
+  return postedRanges(command).some(([start, end]) =>
+    VARIABLE.test(
+      command
+        .slice(start, end)
+        .replace(/'[^']*'/g, "")
+        .replace(/\\\$/g, "")
+        .replace(/\$\([^)]*\)?/g, ""),
+    ),
+  );
 }
 
 /** True when the repo a write goes to is a variable the command doesn't set: where it goes can't be read. */

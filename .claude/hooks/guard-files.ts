@@ -140,6 +140,15 @@ export function stdinFiles(cwd: string, command: string): string[] {
   return texts;
 }
 
+/**
+ * True when a substitution only prints a heredoc that holds plain text: `cat` of a body with a quoted delimiter,
+ * or one with no `$` or backtick in it. Nothing is built: the text is the command's own.
+ */
+function literalHeredoc(inner: string): boolean {
+  const m = /^\s*cat\s+<<-?\s*(['"]?)(\w+)\1\s*\n([\s\S]*)\n\s*\2\s*$/.exec(inner);
+  return Boolean(m && (m[1] || !/[$`]/.test(m[3] ?? "")));
+}
+
 /** Text built by a command the guard can't read: refused in a post to a reviewed repo (#242). */
 export class BuiltText extends Error {}
 
@@ -183,6 +192,8 @@ export function builtText(
     ]);
   for (const sub of nested(substitutions(command, backticks))) {
     if (!posted(sub.start)) continue;
+    // `$(cat <<'EOF' … EOF)` posts a heredoc written in the command, already read with it (Qodo on PR 291).
+    if (literalHeredoc(sub.inner)) continue;
     if (!strict && fileRead(sub.inner) === undefined) continue;
     const file = fileRead(sub.inner);
     if (file === undefined) {
