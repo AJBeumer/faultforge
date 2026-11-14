@@ -1648,14 +1648,25 @@ describe("tick: a retried ticket continues the earlier run's pull request (AUD-N
     });
   });
 
-  it("finds the pull requests that close the ticket, and no other", () => {
+  it("finds the owner's own pull requests that close the ticket, and no other", () => {
+    const own = { author: { login: "Owner" }, isCrossRepository: false };
     const prs = [
-      { url: "u1", body: "Closes #18\n\nmore" },
-      { url: "u2", body: "Fixes #180" },
-      { url: "u3", body: "resolves #18." },
-      { url: "u4", body: "See #18" },
-      { url: "u5", body: null },
+      { url: "u1", body: "Closes #18\n\nmore", ...own },
+      { url: "u2", body: "Fixes #180", ...own },
+      { url: "u3", body: "resolves #18.", ...own },
+      { url: "u4", body: "See #18", ...own },
+      { url: "u5", body: null, ...own },
+      { url: "u6", body: "Closes: #18", ...own },
     ];
-    expect(earlierPrs(prs, 18)).toEqual(["u1", "u3"]);
+    expect(earlierPrs(prs, 18, "owner")).toEqual(["u1", "u3", "u6"]);
+  });
+
+  it("never names a stranger's pull request, or one from a fork, as the earlier run's (Qodo on PR 268)", () => {
+    const prs = [
+      { url: "stranger", body: "Fixes #18", author: { login: "mallory" }, isCrossRepository: false },
+      { url: "fork", body: "Fixes #18", author: { login: "owner" }, isCrossRepository: true },
+      { url: "unknown", body: "Fixes #18" },
+    ];
+    expect(earlierPrs(prs, 18, "owner")).toEqual([]);
   });
 });

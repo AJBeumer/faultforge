@@ -164,6 +164,21 @@ export function acquireLock(
   const at = beatNow.at ?? held.at;
   if (!lockIsStale(held, isAlive, isSame))
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${at}` };
+  // The gone runner's agent is ended before the lock changes hands; one that can't be ended keeps the lock
+  // where it is, so no second run starts beside it (Qodo on PR 268).
+  let ended = "";
+  const { agentPid, agentStarted } = beatNow;
+  if (agentPid && agentStarted && isAlive(agentPid) && isSame(agentPid, agentStarted)) {
+    try {
+      killAgent(agentPid);
+      ended = `; ended its agent, pid ${agentPid}`;
+    } catch (error) {
+      return {
+        ...NOT_ACQUIRED,
+        note: `the stale lock's agent, pid ${agentPid}, couldn't be ended, so the lock stays: ${(error as Error).message}`,
+      };
+    }
+  }
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${random()}`);
   try {
@@ -194,15 +209,5 @@ export function acquireLock(
     return lost;
   }
   const why = held.pid && isAlive(held.pid) ? "that pid is now another process" : "its pid is gone";
-  let ended = "";
-  const { agentPid, agentStarted } = beatNow;
-  if (agentPid && agentStarted && isAlive(agentPid) && isSame(agentPid, agentStarted)) {
-    try {
-      killAgent(agentPid);
-      ended = `; ended its agent, pid ${agentPid}`;
-    } catch (error) {
-      ended = `; couldn't end its agent, pid ${agentPid}: ${(error as Error).message}`;
-    }
-  }
   return won(`took over a stale lock from pid ${held.pid ?? "?"} (${at ?? "unknown time"}): ${why}${ended}`);
 }

@@ -4,10 +4,22 @@
  */
 import { spawnSync } from "node:child_process";
 
-/** Kills a process and its children. A process already gone is no crash (audit N-12). */
-export function killTree(pid: number, kill: (pid: number, signal: string) => void = process.kill) {
-  if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
-  else {
+/**
+ * Kills a process and its children. A process already gone is no crash (audit N-12); any other failure
+ * throws, so a caller never takes a kill that didn't happen for one that did (Qodo on PR 268). On Windows
+ * `taskkill` answers 128 for a process that isn't there.
+ */
+export function killTree(
+  pid: number,
+  kill: (pid: number, signal: string) => void = process.kill,
+  taskkill: (pid: number) => { status: number | null; stderr?: string } = (target) =>
+    spawnSync("taskkill", ["/PID", String(target), "/T", "/F"], { encoding: "utf8", timeout: 30_000 }),
+) {
+  if (process.platform === "win32") {
+    const result = taskkill(pid);
+    if (result.status !== 0 && result.status !== 128)
+      throw new Error(`taskkill couldn't end pid ${pid} (exit ${result.status}): ${(result.stderr ?? "").trim()}`);
+  } else {
     try {
       kill(-pid, "SIGKILL");
     } catch (error) {

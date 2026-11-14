@@ -109,6 +109,8 @@ jobs:
           git config --global user.email "$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"')"
       - name: Run one tick
         working-directory: FaultForge
+        # Ten minutes inside the job's own limit: a tick stopped here still leaves the job time to keep its logs.
+        timeout-minutes: 155
         # The runner context exists in a step's env, not in the job's.
         env:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
@@ -124,7 +126,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
           FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
-        run: npm run -s factory:keep -- --branch unsaved-${{ github.run_id }}
+        run: npm run -s factory:keep -- --branch unsaved-${{ github.run_id }}-${{ github.run_attempt }}
       # Only the event log: artifacts of a public repo are downloadable. The agent's full transcript is
       # pushed to the private repo by the tick, and never uploaded here.
       - name: Keep the run log

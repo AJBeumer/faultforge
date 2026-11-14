@@ -310,3 +310,23 @@ describe("acquireLock: a runner killed outright leaves no agent behind (AUD-M19)
     expect(killed).toEqual([]);
   });
 });
+
+describe("acquireLock: an agent that can't be ended keeps the lock where it is (Qodo on PR 268)", () => {
+  it("leaves the stale lock and its heartbeat alone when the kill fails", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-killfail-"));
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 1111, since: new Date().toISOString(), token: "t1" }));
+    writeFileSync(
+      beatFile(d, "t1"),
+      JSON.stringify({ at: new Date().toISOString(), agentPid: 4242, agentStarted: "ticks:5" }),
+    );
+    const lock = acquireLock(d, (pid) => pid === 4242, {
+      isSame: () => true,
+      killAgent: () => {
+        throw new Error("access denied");
+      },
+    });
+    expect(lock.acquired).toBe(false);
+    expect(lock.note).toMatch(/couldn't be ended, so the lock stays: access denied/);
+    expect(JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).token).toBe("t1");
+  });
+});

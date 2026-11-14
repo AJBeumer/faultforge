@@ -211,7 +211,11 @@ export function runAgent(
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (child.pid) killTree(child.pid);
+      try {
+        if (child.pid) killTree(child.pid);
+      } catch (error) {
+        log("error", { message: `couldn't end the agent at its time limit: ${(error as Error).message}` });
+      }
     }, options.minutes * 60_000);
     let buffer = "";
     let final: Record<string, unknown> | null = null;

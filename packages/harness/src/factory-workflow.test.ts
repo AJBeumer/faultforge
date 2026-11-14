@@ -102,6 +102,18 @@ describe("factory workflow", () => {
     expect(artifact).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
   });
 
+  it("stops the tick step before the job's own limit, so the keep step still runs, on a branch per attempt (Qodo on PR 268)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.find((step) => step.startsWith("name: Run one tick")) ?? "";
+    const stepLimit = Number(tick.match(/\n {8}timeout-minutes: (\d+)/)?.[1]);
+    const jobLimit = Number(workflow.match(/name: Factory tick[\s\S]*?timeout-minutes: (\d+)/)?.[1]);
+    const agentLimit = Number(workflow.match(/factory:tick -- --ci --minutes (\d+)/)?.[1]);
+    expect(stepLimit).toBeGreaterThan(agentLimit);
+    expect(jobLimit - stepLimit).toBeGreaterThanOrEqual(5);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expressions, not a JS template
+    expect(workflow).toContain("--branch unsaved-${{ github.run_id }}-${{ github.run_attempt }}");
+  });
+
   it("pins every action to a full commit", () => {
     for (const [, ref] of workflow.matchAll(/uses: [\w./-]+@(\S+)/g)) expect(ref).toMatch(/^[0-9a-f]{40}$/);
   });

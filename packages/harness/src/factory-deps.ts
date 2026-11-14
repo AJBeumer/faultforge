@@ -14,7 +14,7 @@ import { acquireLock, type Lock } from "./factory-lock.ts";
 import { processStartId } from "./factory-process.ts";
 import { claimModeFrom, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
-import { earlierPrs } from "./factory-settle.ts";
+import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
@@ -47,10 +47,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ),
         github.split("/")[0] ?? "",
       ),
+    // Every open PR, however many: gh pages through them up to the limit (Qodo on PR 268).
     openPrs: (github, number) =>
       earlierPrs(
         retried(() =>
-          ghJson<{ url: string; body: string }[]>(
+          ghJson<OpenPr[]>(
             "pr",
             "list",
             "--repo",
@@ -58,12 +59,13 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
             "--state",
             "open",
             "--limit",
-            "100",
+            "5000",
             "--json",
-            "url,body",
+            "url,body,author,isCrossRepository",
           ),
         ),
         number,
+        github.split("/")[0] ?? "",
       ),
     print: (line) => console.log(line),
     // A live holder keeps it however long it runs; a restart frees it (AUD-M19).

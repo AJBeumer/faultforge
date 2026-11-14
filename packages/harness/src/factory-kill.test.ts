@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { killOnExit, type ProcessLike } from "./factory-kill.ts";
+import { killOnExit, killTree, type ProcessLike } from "./factory-kill.ts";
 
 /** A fake runner process: signals and exit are events a test emits; `exit` records its code. */
 function fakeProcess() {
@@ -64,5 +64,15 @@ describe("killOnExit: killing the runner kills the agent's tree (AUD-M19)", () =
     );
     f.emitter.emit("SIGTERM");
     expect(f.exits).toEqual([143]);
+  });
+});
+
+describe("killTree on Windows: a failed taskkill is a failure (Qodo on PR 268)", () => {
+  it.skipIf(process.platform !== "win32")("passes a refused kill on, and takes 'not found' as already gone", () => {
+    expect(() => killTree(4242, process.kill, () => ({ status: 1, stderr: "Access is denied." }))).toThrow(
+      /taskkill couldn't end pid 4242 \(exit 1\): Access is denied/,
+    );
+    expect(() => killTree(4242, process.kill, () => ({ status: 128 }))).not.toThrow();
+    expect(() => killTree(4242, process.kill, () => ({ status: 0 }))).not.toThrow();
   });
 });
