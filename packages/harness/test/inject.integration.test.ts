@@ -25,11 +25,14 @@ function scratchTargetCopy(): string {
 }
 
 /** Runs the inject script the way `npm run inject` does, without npm: `tsx` by path works on every platform. */
-function runInject(args: string[]): { status: number | null; stdout: string; stderr: string } {
+function runInject(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): { status: number | null; stdout: string; stderr: string } {
   const tsx = join(root, "node_modules", "tsx", "dist", "cli.mjs");
   const script = join(root, "packages", "harness", "src", "inject.ts");
   try {
-    const stdout = execFileSync(process.execPath, [tsx, script, ...args], { cwd: root, encoding: "utf8" });
+    const stdout = execFileSync(process.execPath, [tsx, script, ...args], { cwd: root, encoding: "utf8", env });
     return { status: 0, stdout, stderr: "" };
   } catch (error) {
     const e = error as { status: number | null; stdout: string; stderr: string };
@@ -148,7 +151,17 @@ describe("inject exit codes (#8: branch derivation)", () => {
       const gitStatus = () =>
         execFileSync("git", ["-C", dir, "status", "--porcelain", "--branch"], { encoding: "utf8" });
       const before = gitStatus();
-      const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--validate-only"]);
+      // A control whose variant passes the target's whole check, which --validate-only now runs: the seed bug's
+      // variant fails one of today's public tests, so it can't show a clean exit any more.
+      const priv = mkdtempSync(join(tmpdir(), "inject-private-"));
+      scratchDirs.push(priv);
+      mkdirSync(join(priv, "templates", RENAME_CONTROL.id), { recursive: true });
+      writeFileSync(join(priv, "templates", RENAME_CONTROL.id, "template.json"), JSON.stringify(RENAME_CONTROL));
+      const result = runInject(["--template", RENAME_CONTROL.id, "--target", dir, "--validate-only"], {
+        ...process.env,
+        FAULTFORGE_PRIVATE_DIR: priv,
+      });
+      expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(gitStatus()).toBe(before);
     },
@@ -240,3 +253,21 @@ describe("a base that gives the lab away is refused (#224, audit H-4)", () => {
     90_000,
   );
 });
+
+/** A control written for these tests only: a local variable renamed in `listBookings`, behaviour unchanged. */
+const RENAME_CONTROL = {
+  schemaVersion: 2,
+  id: "it-rename-v1",
+  kind: "control",
+  summary: "A local variable renamed. Behaviour unchanged.",
+  file: "src/bookings/list.ts",
+  find: '  const created = deps.store.listBookings(userId);\n  const filtered = status.kind === "value" ? created.filter((booking) => booking.status === status.value) : created;\n',
+  replace:
+    '  const own = deps.store.listBookings(userId);\n  const filtered = status.kind === "value" ? own.filter((booking) => booking.status === status.value) : own;\n',
+  publish: { branch: "rename-own-list", commitMessage: "Rename the list variable in listBookings" },
+  ticket: {
+    title: "Rename the list variable in listBookings",
+    what: "Call the caller's own bookings `own` in listBookings.",
+    criteria: ["Listing behaves as before.", "All existing tests pass."],
+  },
+};
