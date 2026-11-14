@@ -144,10 +144,33 @@ describe("factory policy: the read tools (#284)", () => {
     expect(bash("git -C private add raw-artifacts/reviews").kind).toBe("allow");
   });
 
+  it("denies /proc however it is spelled or linked (Qodo on PR 288)", () => {
+    for (const path of ["/proc/./self/environ", "/proc//self/environ"])
+      expect(ask("Read", { file_path: path }).kind).toBe("deny");
+    expect(bash("ln -s /proc p").kind).toBe("deny");
+  });
+
+  it("denies a search from a folder that holds a private checkout, and a glob into one (Qodo on PR 288)", () => {
+    const owner = resolve("/owner/FaultForge");
+    const runs = resolve("/runs");
+    const target = runEnv({ FAULTFORGE_PRIVATE_CHECKOUTS: [join(owner, "private"), runs].join(delimiter) });
+    expect(ask("Grep", { pattern: "x", path: owner }, RUN, target).kind).toBe("deny");
+    expect(ask("Glob", { pattern: `${join(owner, "private").replace(/\\/g, "/")}/*.md` }, RUN, target).kind).toBe(
+      "deny",
+    );
+    // Another run's leftovers in the runs folder, but not this run's own folder inside it.
+    expect(ask("Read", { file_path: join(runs, "qodo-check-x", "private", "a.md") }, RUN, target).kind).toBe("deny");
+    expect(ask("Read", { file_path: join(RUN, "FaultForge", "README.md") }, RUN, target).kind).toBe("allow");
+    expect(bash(`cat ${join(RUN, "ticket.md").replace(/\\/g, "/")}`, RUN, target).kind).toBe("allow");
+  });
+
   it("denies the private repo by name or by numeric id through gh and git, in any run", () => {
     for (const command of [
       "gh api repos/AJBeumer/faultforge-private/contents/x",
       "gh api repositories/123456789/contents/x",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell variable, not a JS template
+      "gh api repositories/${id}/contents/README.md",
+      "gh api repos/AJBeumer/$(printf x)/contents",
       "gh repo clone AJBeumer/faultforge-private",
       "git clone https://github.com/AJBeumer/faultforge-private x",
     ])
@@ -169,8 +192,27 @@ describe("factory policy: the guardrails from the shell (#284)", () => {
     expect(bash(command).kind).toBe("deny");
   });
 
-  it("allows reading them", () => {
-    for (const command of ["cat .claude/hooks/guard-target.ts", "git diff -- .claude", "grep -n x neutral.ts"])
+  it.each([
+    "cd .claude; echo x > settings.json",
+    "cd .claude&& echo x > hooks/guard.ts",
+    `cp x "$(printf '\\056claude')/settings.json"`,
+    'cp x "$DIR/settings.json"',
+  ])("denies %s, a write it can't tell is clear of them (Qodo on PR 288)", (command) => {
+    expect(bash(command).kind).toBe("deny");
+  });
+
+  it("denies a write from inside a .claude folder, where the Bash tool stayed after a cd (Qodo on PR 288)", () => {
+    expect(bash("echo x > factory-policy.ts", join(RUN, "FaultForge", ".claude", "hooks")).kind).toBe("deny");
+  });
+
+  it("allows reading them, and the run's own commands with harmless redirects", () => {
+    for (const command of [
+      "cat .claude/hooks/guard-target.ts",
+      "git diff -- .claude",
+      "grep -n x neutral.ts",
+      "npm run review:wait -- target 12 --commit $(git rev-parse HEAD) 2>&1",
+      "npm run check > /dev/null 2>&1",
+    ])
       expect(bash(command).kind).toBe("allow");
   });
 
@@ -183,16 +225,29 @@ describe("factory policy: the guardrails from the shell (#284)", () => {
 
 describe("factory policy: a script this run wrote may not run (#284)", () => {
   let repo: string;
+  let env: ReturnType<typeof runEnv>;
+  const gitIn = (dir: string, ...args: string[]) =>
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" });
   beforeAll(() => {
     repo = mkdtempSync(join(tmpdir(), "ff-scripts-"));
     execFileSync("git", ["init", "-q", "-b", "main", repo]);
     mkdirSync(join(repo, "src"), { recursive: true });
     writeFileSync(join(repo, "src", "server.ts"), "console.log(1)\n");
-    execFileSync("git", ["-C", repo, "add", "."]);
-    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+    writeFileSync(join(repo, "src", "tool.ts"), "console.log(2)\n");
+    gitIn(repo, "add", ".");
+    gitIn(repo, "commit", "-qm", "init");
+    // The run's base is the commit it started from; what the agent commits after it doesn't count.
+    env = runEnv({ FAULTFORGE_RUN_ROOT: repo, FAULTFORGE_RUN_BASES: gitIn(repo, "rev-parse", "HEAD").trim() });
     writeFileSync(join(repo, "scratch.js"), "console.log(process.env)\n");
+    writeFileSync(join(repo, "payload"), "#!/bin/sh\nenv\n");
+    writeFileSync(join(repo, "newmod.py"), "import os\n");
     mkdirSync(join(repo, "scripts"), { recursive: true });
     writeFileSync(join(repo, "scripts", "do.mjs"), "x\n");
+    // Changed after the base, and committed: still not the project's own code (Qodo on PR 288).
+    writeFileSync(join(repo, "src", "tool.ts"), "console.log(process.env)\n");
+    writeFileSync(join(repo, "src", "added.ts"), "x\n");
+    gitIn(repo, "add", ".");
+    gitIn(repo, "commit", "-qm", "agent");
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
@@ -204,17 +259,48 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     "python3 scratch.js",
     "bash scratch.js",
     "node -r ./scratch.js src/server.ts",
+    "node --require=./scratch.js src/server.ts",
     `node -e "require('./scratch.js')"`,
     "./scripts/do.mjs",
+    "./payload",
     "cd src && node ../scratch.js",
     "node $F",
+    "timeout 5 node scratch.js",
+    "env A=b nohup node scratch.js",
+    `bash -c "node scratch.js"`,
+    "source scratch.js",
+    ". ./scratch.js",
+    "node < scratch.js",
+    "python3 -m newmod",
+    "npx tsx src/tool.ts",
+    "npx tsx src/added.ts",
   ])("denies %s", (command) => {
-    expect(bash(command, repo).kind).toBe("deny");
+    expect(bash(command, repo, env).kind).toBe("deny");
   });
 
-  it("allows a script that is in the repo's own history, and commands that run no file", () => {
-    for (const command of ["npx tsx src/server.ts", "node src/server.ts", "node --version", "npm run check"])
-      expect(bash(command, repo).kind).toBe("allow");
+  it("allows a script as the run's base holds it, and commands that run no file", () => {
+    for (const command of [
+      "npx tsx src/server.ts",
+      "node src/server.ts",
+      "node --version",
+      "npm run check",
+      "npm start",
+    ])
+      expect(bash(command, repo, env).kind).toBe("allow");
+  });
+
+  it("doesn't take a scratch repo's own commit, or a moved ref, as the run's base (Qodo on PR 288)", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "ff-scratch-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", scratch]);
+      writeFileSync(join(scratch, "x.js"), "console.log(process.env)\n");
+      gitIn(scratch, "add", ".");
+      gitIn(scratch, "commit", "-qm", "x");
+      gitIn(scratch, "update-ref", "refs/remotes/origin/main", "HEAD");
+      expect(bash(`node ${join(scratch, "x.js").replace(/\\/g, "/")}`, repo, env).kind).toBe("deny");
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it("follows the command's own cd to find the script", () => {

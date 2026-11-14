@@ -51,7 +51,9 @@ export function privateCheckoutsFor(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (!isReviewedTicket(factory, repoKey)) return [];
-  const paths = [join(LAB_ROOT, "private"), join(runs, "private-source")];
+  // The whole runs folder: the runner's clone, a Qodo-state worktree kept after a failed push, and other runs'
+  // leftovers all sit there (Qodo on PR 288). The run's own folder inside it stays its own.
+  const paths = [join(LAB_ROOT, "private"), runs];
   if (env.FAULTFORGE_PRIVATE_DIR) paths.push(resolve(env.FAULTFORGE_PRIVATE_DIR));
   return [...new Set(paths)];
 }

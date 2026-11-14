@@ -228,6 +228,11 @@ export function runAgent(
     FAULTFORGE_RUN_ROOT: ws.root,
     FAULTFORGE_TICKET_NUMBER: String(number),
     FAULTFORGE_TICKET_FILE: ticketFile,
+    // The commits the run's repos started from: a script may run only as one of them holds it (#284).
+    FAULTFORGE_RUN_BASES: Object.entries(ws.mainAtStart)
+      .filter(([key]) => key in factory.repos)
+      .map(([, sha]) => sha)
+      .join(","),
     [BROKER_ENV]: broker.dir,
     ...(checkouts.length ? { FAULTFORGE_PRIVATE_CHECKOUTS: checkouts.join(delimiter) } : {}),
   });

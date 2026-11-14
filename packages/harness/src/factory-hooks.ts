@@ -54,7 +54,7 @@ export function readHookProblems(settingsText: string): string[] {
   } catch {
     return ["its settings.json is missing or unreadable"];
   }
-  return ["Read", "Grep", "Glob"]
+  return ["Read", "Grep", "Glob", "NotebookRead"]
     .filter(
       (tool) =>
         !hooks.some(

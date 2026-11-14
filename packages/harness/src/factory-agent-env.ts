@@ -80,6 +80,7 @@ export const AGENT_RUN_VARIABLES: readonly string[] = [
   "FAULTFORGE_TICKET_FILE",
   "FAULTFORGE_REVIEW_BROKER",
   "FAULTFORGE_PRIVATE_CHECKOUTS",
+  "FAULTFORGE_RUN_BASES",
 ];
 
 /** The variables Claude Code signs in with, in the order it is given one. */

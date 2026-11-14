@@ -24,7 +24,12 @@ const COMMAND_RULES: [RegExp, string][] = [
   [/\bgit\b[^\n]*\balias\.[\w-]/i, "no git aliases: an alias hides what a later command runs"],
   // The private repo is the runner's, by name or by numeric id, which hides the name (#284).
   [/\bfaultforge-private\b/i, "the private repo is the runner's: the agent never reaches it"],
-  [/\brepositories\/\d/i, "no GitHub API by repository id: name the repo, so the rules can read where it goes"],
+  // An id or a route the shell builds hides the repo just as well: `repositories/${id}` (Qodo on PR 288).
+  [/\brepositories\/(\d|\$|`)/i, "no GitHub API by repository id: name the repo, so the rules can read where it goes"],
+  [
+    /\bgh\s+api\b[^\n|;&]*(\$\(|`)/i,
+    "build a gh api route in the command, not with $(…): the rules must read where it goes",
+  ],
 ];
 
 /**
@@ -44,6 +49,8 @@ const SECRET_RULES: [RegExp, string][] = [
   [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
   // Another process's files: `/proc/<pid>/envir?n` reads the runner's environment past any spelling rule (Qodo on PR 270).
   [/\/proc\/(\d|self\b|\$|\*|\[|\{)/i, "no reading another process's files under /proc"],
+  // Any path under /proc, however it is spelled or linked: `ln -s /proc p`, `/proc/./self` (Qodo on PR 288).
+  [/(^|[^\w.-])\/proc(\/|\b)/i, "no reading process files under /proc"],
   [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
   // The whole environment from a program, not only from the shell (#243): `env -0`, `printenv` in any form,
   // Node's `process.env` (except one variable by name), Python's `os.environ`.

@@ -34,6 +34,7 @@ describe("hookProblems", () => {
       "factory-policy.ts doesn't run before Read",
       "factory-policy.ts doesn't run before Grep",
       "factory-policy.ts doesn't run before Glob",
+      "factory-policy.ts doesn't run before NotebookRead",
     ]);
     expect(readHookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
   });

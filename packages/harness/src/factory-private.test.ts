@@ -29,7 +29,7 @@ describe("factory-private: a target ticket's run and the private repo (AUD-H2, #
   it("names the private checkouts a target ticket's agent is kept out of, and none for a lab ticket", () => {
     const runs = join(dir, "runs");
     const paths = privateCheckoutsFor(FACTORY, "target", runs, { FAULTFORGE_PRIVATE_DIR: join(dir, "elsewhere") });
-    expect(paths).toEqual([join(LAB_ROOT, "private"), join(runs, "private-source"), join(dir, "elsewhere")]);
+    expect(paths).toEqual([join(LAB_ROOT, "private"), runs, join(dir, "elsewhere")]);
     expect(privateCheckoutsFor(FACTORY, "lab", runs, {})).toEqual([]);
   });
 
