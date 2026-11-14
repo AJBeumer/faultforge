@@ -41,9 +41,14 @@ export function reasonsOfOtherCases(events: Record<string, unknown>[], caseId: s
   const reasons = new Set<string>();
   for (const e of events) {
     if (e.type !== "case.adjudicated" || e.caseId === caseId) continue;
-    for (const field of ["reason", "amendedReason"]) {
-      const value = e[field];
-      if (typeof value === "string" && value.trim()) reasons.add(normalReason(value));
+    // The amendments too: a reason a later amendment replaced is still that case's (Qodo on PR 267).
+    const changes = Array.isArray(e.amendments) ? e.amendments.map((a) => (a as { change?: unknown }).change) : [];
+    for (const source of [e, ...changes]) {
+      if (typeof source !== "object" || source === null) continue;
+      for (const field of ["reason", "amendedReason"]) {
+        const value = (source as Record<string, unknown>)[field];
+        if (typeof value === "string" && value.trim()) reasons.add(normalReason(value));
+      }
     }
   }
   return reasons;
@@ -64,3 +69,16 @@ export const CONTROL_VERDICTS: Record<string, string> = {
   "false alarm": "confirmed_false_alarm",
   "review incomplete": "review_incomplete",
 };
+
+/**
+ * A case's verdict that counts: the latest by `at`, as `case:build` picks it (a tie goes to the later line).
+ * `verdict --supersede` and `verdict:amend` name this one, never merely the last line (Qodo on PR 267).
+ */
+export function latestVerdict<T extends Record<string, unknown>>(caseEvents: T[]): T | undefined {
+  let latest: T | undefined;
+  for (const e of caseEvents) {
+    if (e.type !== "case.adjudicated") continue;
+    if (!latest || Date.parse(String(e.at)) >= Date.parse(String(latest.at))) latest = e;
+  }
+  return latest;
+}

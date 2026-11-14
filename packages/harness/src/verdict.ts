@@ -52,6 +52,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
+import { readAuditLog } from "./ledger.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
@@ -74,6 +75,7 @@ import {
   BUG_VERDICTS,
   CONTROL_VERDICTS,
   type Judgement,
+  latestVerdict,
   reasonsOfOtherCases,
 } from "./verdict-event.ts";
 import { loadVerdictInputs } from "./verdict-inputs.ts";
@@ -131,7 +133,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const { entry, review, reviewText, templateText, kindTerms, isControl, injectedFile, injectedLines } = loaded;
 
   // A second verdict silently winning would change the record (AUD-H4): it must name the one it supersedes.
-  const earlier = loaded.caseEvents.filter((e) => e.type === "case.adjudicated").at(-1);
+  const earlier = latestVerdict(loaded.caseEvents);
   if (earlier && options.supersede !== earlier.eventId) {
     error(
       options.supersede
@@ -256,6 +258,17 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error("verdict: a false alarm needs every finding judged a false alarm; one was left open, so nothing recorded");
     return 2;
   }
+  // The verdict rests on the matched findings' judgements, so it must agree with them (Qodo on PR 267):
+  // detected needs one judged real; missed can't have one judged real.
+  const matchedReal = judgements.some((j) => result?.matchedFindingIds.includes(j.id) && j.verdict === "real");
+  if ((bugAnswer === "detected" && !matchedReal) || (bugAnswer === "missed" && matchedReal)) {
+    error(
+      bugAnswer === "detected"
+        ? "verdict: detected, but no finding the rule matched is judged real; nothing recorded"
+        : "verdict: missed, but a finding the rule matched is judged real; nothing recorded",
+    );
+    return 2;
+  }
 
   const event: AdjudicationEvent = {
     eventId: randomUUID(),
@@ -282,6 +295,12 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 0;
   }
   try {
+    // Read again just before writing: another run may have recorded a verdict while the owner answered.
+    const now = latestVerdict(readAuditLog(auditEventsPath).filter((e) => e.caseId === caseId));
+    if (now?.eventId !== earlier?.eventId) {
+      error(`verdict: another verdict for ${caseId} (${String(now?.eventId)}) was recorded meanwhile; nothing written`);
+      return 2;
+    }
     (options.append ?? defaultAppend)(auditEventsPath, event);
   } catch (e) {
     error(`verdict: can't append to ${auditEventsPath}: ${message(e)}`);

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { applyMatchRule } from "./match-rule.ts";
 import { findSavedReview, type SavedFinding, toMatchFinding } from "./saved-review.ts";
 import { type AskFn, parseCliArgs, printReport, type RunOptions, run } from "./verdict.ts";
+import { reasonsOfOtherCases } from "./verdict-event.ts";
 
 const TEMPLATE = {
   id: "idempotency-guard-bypass-v1",
@@ -666,5 +667,61 @@ describe("npm run verdict: a reason belongs to its case, every match is judged, 
 
   it("reads --supersede from the command line", () => {
     expect(parseCliArgs(["FF-0001", "--supersede", "abc"])).toMatchObject({ caseId: "FF-0001", supersede: "abc" });
+  });
+});
+
+describe("npm run verdict: what Qodo found on PR 267", () => {
+  const verdictLine = (fields: Record<string, unknown>) =>
+    `${JSON.stringify({ type: "case.adjudicated", caseId: "FF-0001", disposition: "confirmed_detected", reason: "x", ...fields })}\n`;
+
+  it("refuses detected when no matched finding is judged real, and missed when one is", async () => {
+    const detected = await runOn("FF-0001", fixture(), { ask: fakeAsk(["detected", "found", "false alarm", "r"]).ask });
+    expect(detected.code).toBe(2);
+    expect(detected.err).toContain("no finding the rule matched is judged real");
+    const missed = await runOn("FF-0001", fixture(), { ask: fakeAsk(["missed", "yes", "nope", "real", "r"]).ask });
+    expect(missed.code).toBe(2);
+    expect(missed.err).toContain("a finding the rule matched is judged real");
+  });
+
+  it("supersedes the latest verdict by time, as case:build picks it, not the last line", async () => {
+    const root = fixture();
+    appendFileSync(join(root, "audit-events.jsonl"), verdictLine({ eventId: "later", at: "2026-11-10T11:59:00.000Z" }));
+    appendFileSync(
+      join(root, "audit-events.jsonl"),
+      verdictLine({ eventId: "earlier", at: "2026-11-10T11:50:00.000Z" }),
+    );
+    const { code, err } = await runOn("FF-0001", root, { ask: fakeAsk([]).ask, supersede: "earlier" });
+    expect(code).toBe(2);
+    expect(err).toContain("isn't FF-0001's latest verdict, later");
+  });
+
+  it("writes nothing when another verdict was recorded while the owner answered", async () => {
+    const root = fixture();
+    let n = 0;
+    const ask = async () => {
+      if (n === 0)
+        appendFileSync(
+          join(root, "audit-events.jsonl"),
+          verdictLine({ eventId: "rival", at: "2026-11-10T11:58:00.000Z" }),
+        );
+      return ["detected", "found it", "real", "r"][n++] ?? "";
+    };
+    const { code, err, appended } = await runOn("FF-0001", root, { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("recorded meanwhile");
+    expect(appended).toEqual([]);
+  });
+
+  it("counts a reason an amendment later replaced as still taken", () => {
+    const events = [
+      {
+        type: "case.adjudicated",
+        caseId: "FF-0002",
+        reason: "a",
+        amendedReason: "second",
+        amendments: [{ change: { amendedReason: "first" } }, { change: { amendedReason: "second" } }],
+      },
+    ];
+    expect(reasonsOfOtherCases(events, "FF-0001")).toEqual(new Set(["a", "second", "first"]));
   });
 });

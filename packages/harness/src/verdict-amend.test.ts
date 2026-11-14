@@ -148,3 +148,12 @@ describe("verdict:amend (#250, AUD-H4)", () => {
     expect(errors.join("\n")).toContain("has no verdict");
   });
 });
+
+describe("verdict:amend: the evidence is what the verdict judged (Qodo on PR 267)", () => {
+  it("cites the file the verdict names", async () => {
+    const root = fixture({ reviewFile: "elsewhere/judged.review.json" });
+    const { code, out } = await amend(root, { dryRun: true, ask: answers(["a reason of its own"]) });
+    expect(code).toBe(0);
+    expect(out).toContain('"evidence": "elsewhere/judged.review.json"');
+  });
+});
