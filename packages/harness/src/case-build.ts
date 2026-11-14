@@ -63,8 +63,10 @@
  */
 
 import { randomUUID } from "node:crypto";
+
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildCaseRecord, latestEvent, type Overlay, requireField } from "./case-builder.ts";
@@ -73,8 +75,9 @@ import { findLeaks, validateCaseRecord } from "./case-record.ts";
 import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { isToolWritten, sha256, verdictHashProblem } from "./ledger-hashes.ts";
+import { isToolWritten, verdictHashProblem } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
+import { sha256 } from "./provenance.ts";
 import { type Finding, findingsFor, type QodoReview } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
 import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";

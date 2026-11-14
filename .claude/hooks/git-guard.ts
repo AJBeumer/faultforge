@@ -15,7 +15,6 @@
  * be read, or the call was malformed. A hook that can't check refuses: git then stops the commit or push.
  */
 import { readFileSync } from "node:fs";
-import { telltales } from "../../packages/harness/src/neutral.ts";
 import {
   DEFAULT_BUDGET_MS,
   type Pending,
@@ -23,14 +22,19 @@ import {
   pendingIndex,
   pendingPush,
   pendingPushUpdates,
+  reasonsIn,
   withDeadline,
+  withPrivateNames,
 } from "./guard-content.ts";
+import { privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
 import { firstLine, isEntry } from "./hook-io.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
 export function check(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
   // One deadline for every scan this hook runs (audit N-4).
-  return withDeadline(DEFAULT_BUDGET_MS, () => checkNow(stage, checkout, arg, stdin));
+  // Private template ids may not travel either (AUD-H1); none are known where there is no private folder.
+  const names = privateIdMatcher(privateTemplateIds(process.env));
+  return withDeadline(DEFAULT_BUDGET_MS, () => withPrivateNames(names, () => checkNow(stage, checkout, arg, stdin)));
 }
 
 function checkNow(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
@@ -45,7 +49,7 @@ function checkNow(stage: string, checkout: string, arg?: string, stdin = ""): Pe
   } else if (stage === "commit-msg") {
     if (!arg) throw new Error("commit-msg needs the message file git passes");
     // The whole file: with `-m`, git keeps lines that start with `#` (Qodo on PR 213).
-    pending = { reasons: telltales(readFileSync(arg, "utf8")), where: "the commit message" };
+    pending = { reasons: reasonsIn(readFileSync(arg, "utf8")), where: "the commit message" };
   } else throw new Error(`unknown stage ${stage}`);
   return pending.reasons.length ? pending : undefined;
 }
@@ -65,8 +69,10 @@ function main(): number {
     if (!checkout) throw new Error("usage: git-guard.ts <pre-commit|commit-msg|pre-push> <checkout> [message file]");
     const found = check(stage, checkout, arg, stage === "pre-push" ? readFileSync(0, "utf8") : "");
     if (!found) return 0;
+    // A branch named after a private template would be printed in `where`: never print it (Qodo on PR 265).
+    const where = found.reasons.includes("names a private template") ? "what this would send" : found.where;
     console.error(
-      `review guard: refused. ${found.where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,
+      `review guard: refused. ${where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,
     );
     return 1;
   } catch (error) {

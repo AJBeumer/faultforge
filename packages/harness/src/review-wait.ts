@@ -11,8 +11,8 @@
  *
  * The save (`<evidence>/reviews/<repo>-pr<N>/<sha7>.review.json`, from `saved-review.ts`) is never written
  * over: a verdict's hash covers it. When a complete save of the commit exists, nothing is waited for or
- * written. An unfinished one (timed out, skipped, head moved) may be waited for again; it is kept, renamed
- * `<sha7>.unfinished-<n>.json`, when the new save is written.
+ * written. An unfinished one (timed out, skipped, head moved) may be waited for again: it and every other
+ * `<sha7>.*` file are first moved into `<sha7>.unfinished-<n>/`, so none of its evidence is written over.
  *
  * Exit codes: 0 Qodo's review of the head (with `--commit`, of that commit) is complete and saved; 1 there
  * is no complete review of it within the time limit, whether Qodo didn't finish or, with `--commit`, the head

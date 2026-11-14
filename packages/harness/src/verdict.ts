@@ -47,6 +47,7 @@ import { gh } from "./github.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
+import { TOOL } from "./provenance.ts";
 import { isComplete, savedReviewsDir, toMatchFinding } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 import {
@@ -60,8 +61,6 @@ import {
 } from "./verdict-ask.ts";
 import { type AdjudicationEvent, BUG_VERDICTS, CONTROL_VERDICTS, type Judgement } from "./verdict-event.ts";
 import { loadVerdictInputs } from "./verdict-inputs.ts";
-
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 export interface RunOptions {
   env?: NodeJS.ProcessEnv;

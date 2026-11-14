@@ -38,7 +38,8 @@
  * `case-build.ts` requires `sabotage.injected`/`control.injected`, `review.recorded` and
  * `case.adjudicated` for the case it's building; a case missing one is refused, naming the stage.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readJsonLines } from "./jsonl.ts";
 
 export interface Amendment {
   kind: "amendment";
@@ -74,10 +75,7 @@ function isBlank(value: unknown): boolean {
 }
 
 function readLines(path: string): LedgerLine[] {
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line));
+  return readJsonLines<LedgerLine>(path);
 }
 
 /** Ids held by more than one non-amendment entry: an amendment naming one can't pick a single target. */
