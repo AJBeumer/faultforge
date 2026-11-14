@@ -49,6 +49,7 @@ vi.mock("./ticket-ready.ts", async (importOriginal) => ({
 
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
+import { RUNNER_MARKER } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
@@ -223,7 +224,7 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     ]);
   });
 
-  it("comments on the ticket with gh issue comment", () => {
+  it("comments on the ticket with gh issue comment, behind the runner's mark (AUD-M21)", () => {
     realDeps(FACTORY, OPTIONS).comment("owner/target", 18, "Picked up.");
     expect(vi.mocked(gh)).toHaveBeenCalledWith(
       "issue",
@@ -232,7 +233,8 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
       "--repo",
       "owner/target",
       "--body",
-      "Picked up.",
+      `${RUNNER_MARKER}
+Picked up.`,
     );
   });
 

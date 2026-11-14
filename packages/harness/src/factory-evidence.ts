@@ -28,9 +28,9 @@ export function blockedEvidencePaths(paths: string[], evidenceRoot: string): str
 }
 
 /**
- * Every path that differs between `priv`'s worktree (as it stands right now, committed or not) and
- * `origin/main`: committed changes made earlier in the run, plus whatever is modified or untracked in
- * the working tree. Every one of the three commands below prints a bare path per line, nothing else —
+ * Every path that differs between `priv`'s worktree (as it stands right now, committed or not) and `base`,
+ * the commit the run started on: committed changes made earlier in the run, plus whatever is modified or
+ * untracked in the working tree. Every one of the three commands below prints a bare path per line, nothing else —
  * deliberately never `git status --porcelain`, whose leading status characters can be mistaken for part
  * of the path once the shared `git`/`gitLong` helpers (used here, same as everywhere else) have trimmed
  * the overall output: a path that starts with its own letter can then read as if a status prefix were
@@ -39,9 +39,9 @@ export function blockedEvidencePaths(paths: string[], evidenceRoot: string): str
  * now-missing path — `--name-only` alone would report only the allowed destination and hide that the
  * source was removed from `main`.
  */
-function changedAgainst(priv: string, run: (cwd: string, ...args: string[]) => string, origin: string): string[] {
+function changedAgainst(priv: string, run: (cwd: string, ...args: string[]) => string, base: string): string[] {
   const lines = (s: string) => s.split("\n").filter((p) => p !== "");
-  const committed = lines(run(priv, "diff", "--no-renames", "--name-only", origin, "HEAD"));
+  const committed = lines(run(priv, "diff", "--no-renames", "--name-only", base, "HEAD"));
   const uncommitted = lines(run(priv, "diff", "--no-renames", "--name-only", "HEAD"));
   const untracked = lines(run(priv, "ls-files", "--others", "--exclude-standard"));
   return [...new Set([...committed, ...uncommitted, ...untracked])];
@@ -61,7 +61,8 @@ export interface EvidencePush {
 const QUARANTINE_PUSH_ATTEMPTS = 3;
 
 /**
- * Lists every path `priv`'s branch changed against `origin/main`, before anything is staged or committed
+ * Lists every path `priv`'s branch changed since `base` (the commit the run started on; by default where its
+ * branch left `origin/main`), before anything is staged or committed
  * (#102), and decides from that list alone whether the branch may reach `main`: every path must be under
  * one of the allowed evidence roots, or nothing does. Only once that's decided does it commit what's
  * there, and push it either to `main` (allowed) or to a branch of its own (blocked, so the owner still has
@@ -73,9 +74,13 @@ export function commitAndPublish(
   runId: string,
   run: (cwd: string, ...args: string[]) => string,
   runLong: (cwd: string, ...args: string[]) => string,
+  base?: string,
 ): EvidencePush {
   runLong(priv, "fetch", "--quiet", "origin", "main");
-  const blocked = blockedEvidencePaths(changedAgainst(priv, run, "origin/main"), evidenceRoot);
+  // The run's own changes only: from the commit it started on, never from `origin/main` as fetched now,
+  // which would count anyone else's push during the run as the run's change and report its paths (AUD-M2).
+  const from = base ?? run(priv, "merge-base", "origin/main", "HEAD");
+  const blocked = blockedEvidencePaths(changedAgainst(priv, run, from), evidenceRoot);
   run(priv, "add", "-A");
   if (run(priv, "status", "--porcelain"))
     run(priv, "commit", "--quiet", "-m", `Factory run ${runId}: log and evidence`);

@@ -473,7 +473,8 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });
       try {
         const saved = deps.saveEvidence(runId, ws);
-        if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+        if (saved.blocked.length)
+          log("evidence-blocked", { files: saved.blocked.length, savedAt: saved.savedAt ?? null });
         logSaved(saved, runId);
       } catch {
         // The live log under the runs folder still has everything.

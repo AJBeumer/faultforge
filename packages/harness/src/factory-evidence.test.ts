@@ -68,6 +68,54 @@ describe("commitAndPublish: what a run may push to the private repo (#102)", () 
     return dir;
   }
 
+  it("a push to private main by someone else during the run is not the run's change (AUD-M2, two clones)", () => {
+    const origin = bareOrigin();
+    const run = clone(origin);
+    const other = clone(origin);
+    // The run writes only its evidence.
+    mkdirSync(join(run, "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(run, "raw-artifacts", "factory-runs", "x.jsonl"), '{"event":"idle"}\n');
+    // Meanwhile the owner pushes a case record and a template to main.
+    mkdirSync(join(other, "templates", "x-secret-v1"), { recursive: true });
+    writeFileSync(join(other, "templates", "x-secret-v1", "template.json"), "{}\n");
+    writeFileSync(join(other, "ground-truth.jsonl"), '{"caseId":"FF-9001"}\n');
+    sh(other, "add", "-A");
+    sh(other, "commit", "--quiet", "-m", "owner's case");
+    sh(other, "push", "--quiet", "origin", "HEAD:main");
+    const result = commitAndPublish(run, "raw-artifacts", "x", sh, sh);
+    expect(result).toEqual({ pushed: true, blocked: [] });
+    expect(sh(origin, "show", "main:raw-artifacts/factory-runs/x.jsonl")).toContain("idle");
+    expect(sh(origin, "show", "main:ground-truth.jsonl")).toContain("FF-9001");
+  });
+
+  it("a second copy after the first push, with main moved again, still sees only the run's own files", () => {
+    const origin = bareOrigin();
+    const run = clone(origin);
+    const other = clone(origin);
+    const log = join(run, "raw-artifacts", "factory-runs", "y.jsonl");
+    mkdirSync(join(run, "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(log, '{"event":"picked"}\n');
+    expect(commitAndPublish(run, "raw-artifacts", "y", sh, sh).pushed).toBe(true);
+    sh(other, "pull", "--quiet", "origin", "main");
+    writeFileSync(join(other, "audit-events.jsonl"), '{"event":"x"}\n');
+    sh(other, "add", "-A");
+    sh(other, "commit", "--quiet", "-m", "owner's audit event");
+    sh(other, "push", "--quiet", "origin", "HEAD:main");
+    writeFileSync(log, '{"event":"picked"}\n{"event":"finished"}\n');
+    expect(commitAndPublish(run, "raw-artifacts", "y", sh, sh)).toEqual({ pushed: true, blocked: [] });
+  });
+
+  it("diffs from the commit the run started on when given, not from main as fetched now", () => {
+    const calls: string[][] = [];
+    const run = (_cwd: string, ...args: string[]) => {
+      calls.push(args);
+      return "";
+    };
+    commitAndPublish("/priv", "raw-artifacts", "z", run, run, "abc1234");
+    expect(calls).toContainEqual(["diff", "--no-renames", "--name-only", "abc1234", "HEAD"]);
+    expect(calls.some((c) => c[0] === "diff" && c.includes("origin/main"))).toBe(false);
+  });
+
   it("pushes an allowed run straight to main", () => {
     const origin = bareOrigin();
     const priv = clone(origin);
