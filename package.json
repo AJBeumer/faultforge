@@ -5,18 +5,18 @@
   "scripts": {
     "inject": "tsx packages/harness/src/inject.ts",
     "match": "tsx packages/harness/src/match.ts",
-    "ticket:ready": "tsx packages/harness/src/ticket-ready.ts",
+    "ticket:ready": "tsx packages/harness/src/ticket-ready-cli.ts",
     "review:wait": "tsx packages/harness/src/review-wait.ts",
     "review:local": "tsx packages/harness/src/review-local.ts",
     "review:gate": "tsx packages/harness/src/review-gate.ts",
-    "factory:tick": "tsx packages/harness/src/factory-tick.ts",
-    "factory:timeline": "tsx packages/harness/src/factory-timeline.ts",
+    "factory:tick": "tsx packages/harness/src/factory-tick-cli.ts",
+    "factory:timeline": "tsx packages/harness/src/factory-timeline-cli.ts",
     "factory:keep": "tsx packages/harness/src/factory-keep.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx packages/harness/src/vitest-run.ts run --project unit",
     "test:integration": "tsx packages/harness/src/vitest-run.ts run --project integration",
     "check": "npm run typecheck && npm run lint && npm test && npm run -s docs:check",
-    "docs:check": "tsx packages/harness/src/docs-check.ts",
+    "docs:check": "tsx packages/harness/src/docs-check-cli.ts",
     "lint": "biome check .",
     "format": "biome check --write .",
     "rules:evidence": "tsx packages/harness/src/rules-evidence.ts",
@@ -31,7 +31,7 @@
     "case:pr": "tsx packages/harness/src/case-pr.ts",
     "case:review": "tsx packages/harness/src/case-review.ts",
     "case:rerun": "tsx packages/harness/src/case-rerun.ts",
-    "guard:install": "tsx packages/harness/src/guard-install.ts"
+    "guard:install": "tsx packages/harness/src/guard-install-cli.ts"
   },
   "repository": {
     "type": "git",
