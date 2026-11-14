@@ -5,7 +5,7 @@
  * Each run starts a real Vitest on one small test file.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -41,18 +41,23 @@ describe.runIf(process.platform === "win32" && other)("both drive spellings", ()
     120_000,
   );
 
-  it("a direct Vitest from the spelling that isn't real says to use npm test", () => {
-    // `root` is the real spelling (the launcher starts Vitest there), so `other` is the one that isn't.
-    const result = run(other as string, [
-      join(root, "node_modules/vitest/vitest.mjs"),
-      "run",
-      "--project",
-      "unit",
-      testFile,
-    ]);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain("npm test");
-  }, 120_000);
+  // Only when `root` is the checkout's real path, so `other` is that path in another case. Loaded through a
+  // junction or symlink, the config rightly leaves the alias alone (Qodo on PR 260).
+  it.runIf(realpathSync.native(root) === root)(
+    "a direct Vitest from the spelling that isn't real says to use npm test",
+    () => {
+      const result = run(other as string, [
+        join(root, "node_modules/vitest/vitest.mjs"),
+        "run",
+        "--project",
+        "unit",
+        testFile,
+      ]);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain("npm test");
+    },
+    120_000,
+  );
 });
 
 describe("the launcher's exit codes", () => {
