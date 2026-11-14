@@ -18,12 +18,13 @@
  * amendment or history problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { errorText as message } from "./error-text.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
 import { TOOL } from "./provenance.ts";
@@ -167,7 +168,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
       log(JSON.stringify(event, null, 2));
       return 0;
     }
-    appendFileSync(auditEventsPath, `${JSON.stringify(event)}\n`);
+    appendEvent(auditEventsPath, event);
     log(`recorded: ${caseId} review of ${short} (${save.state ?? "state not saved"}), ${where.url}`);
     return 0;
   } catch (e) {
