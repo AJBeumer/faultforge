@@ -78,3 +78,50 @@ describe("relabelWith (#107, Qodo on PR 123)", () => {
     expect(result).toEqual({ removeFailed: null, addFailed: null });
   });
 });
+
+/** A ticket's labels, with GitHub's two calls: add some, remove one. Either can be made to fail. */
+function labelsOn(start: string[], fail: { add?: boolean; remove?: boolean } = {}) {
+  const labels = new Set(start);
+  return {
+    labels,
+    removeOne: (label: string) => {
+      if (fail.remove) throw new ExternalCallError("gh api", { stderr: "gh: HTTP 502: Bad Gateway (...)\n" });
+      labels.delete(label);
+    },
+    addAll: (add: string[]) => {
+      if (fail.add) throw new ExternalCallError("gh issue edit", { stderr: "gh: HTTP 502: Bad Gateway (...)\n" });
+      for (const l of add) labels.add(l);
+    },
+  };
+}
+
+describe("relabelWith: add before remove, so a ticket never ends with no factory label (AUD-M19)", () => {
+  it("a failed add leaves the old label in place and removes nothing", () => {
+    const t = labelsOn(["ready-for-agent"], { add: true });
+    const result = relabelWith(["ready-for-agent"], ["agent-working"], t.removeOne, t.addAll);
+    expect(result.addFailed).toBeInstanceOf(ExternalCallError);
+    expect([...t.labels]).toEqual(["ready-for-agent"]);
+  });
+
+  it("a good add then a good removal leaves exactly the new label", () => {
+    const t = labelsOn(["agent-working", "ready-for-agent"]);
+    expect(relabelWith(["agent-working", "ready-for-agent"], ["agent-done"], t.removeOne, t.addAll)).toEqual({
+      removeFailed: null,
+      addFailed: null,
+    });
+    expect([...t.labels]).toEqual(["agent-done"]);
+  });
+
+  it("a failed removal after a good add leaves both labels, never neither", () => {
+    const t = labelsOn(["agent-working"], { remove: true });
+    const result = relabelWith(["agent-working"], ["agent-needs-help"], t.removeOne, t.addAll);
+    expect(result.removeFailed).toBeInstanceOf(ExternalCallError);
+    expect([...t.labels].sort()).toEqual(["agent-needs-help", "agent-working"]);
+  });
+
+  it("never removes a label it was also asked to add", () => {
+    const t = labelsOn(["agent-needs-help"]);
+    relabelWith(["agent-needs-help", "ready-for-agent"], ["agent-needs-help"], t.removeOne, t.addAll);
+    expect([...t.labels]).toEqual(["agent-needs-help"]);
+  });
+});

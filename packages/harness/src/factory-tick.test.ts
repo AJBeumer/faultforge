@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type AgentRun, agentStep } from "./factory-agent.ts";
 import { windowProblems } from "./factory-audit.ts";
@@ -13,20 +14,24 @@ import {
   hooksEvent,
   runsHook,
 } from "./factory-hooks.ts";
-import { type RecoveryDeps, recoverStranded, STRANDED_COMMENT } from "./factory-recovery.ts";
+import { STRANDED_COMMENT } from "./factory-recovery.ts";
 import {
+  EXIT_CODES,
+  exitCodeFor,
   type IssueEvent,
   LABELS,
   lastLabelled,
   oldest,
   parseAgentResult,
   prNumber,
+  QODO_CHECK_COMMENT,
   redact,
   runIdFor,
   safeText,
   settle,
   type TickDeps,
   tick,
+  tokenFrom,
   type Workspace,
 } from "./factory-tick.ts";
 import { checkProblems, openActionRequired, revertCheckProblems } from "./factory-verify.ts";
@@ -195,7 +200,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).toEqual(["relabel owner/target#18 -ready-for-agent +", "save without workspace"]);
     expect(f.comments[0]?.body).toMatch(/added by stranger, and only the repository owner/);
     expect(f.comments[0]?.body).not.toMatch(/@stranger/);
-    expect(f.events.map((e) => e.event)).toEqual(["picked", "refused"]);
+    expect(f.events.map((e) => e.event)).toEqual(["picked", "refused", "saved"]);
   });
 
   it("matches the owner's login case-insensitively", async () => {
@@ -305,7 +310,7 @@ describe("tick: stop paths", () => {
             : { text: "x", provenance: { ...ownerOnly, commenters: ["owner", "mallory"] } };
         },
       });
-      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
       expect(f.calls).not.toContain("agent");
       expect(f.comments.at(-1)?.body).toMatch(/changed before the run started/);
     });
@@ -373,10 +378,8 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/drifted from the snapshot/);
-    // Summarized only: no rule name or content in a comment a reviewer can read (Qodo on PR 145).
-    expect(f.comments.at(-1)?.body).toMatch(/new rule 4664849/);
-    expect(f.comments.at(-1)?.body).not.toMatch(/Share helpers/);
+    // A fixed sentence: nothing from the check itself reaches a ticket a reviewer can read (#245).
+    expect(f.comments.at(-1)?.body).toBe(QODO_CHECK_COMMENT);
     expect(f.events.map((e) => e.event)).toEqual(["picked", "claimed", "qodo-checked", "finished", "saved"]);
   });
 
@@ -391,7 +394,27 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/couldn't be checked against the snapshot/);
+    expect(f.comments.at(-1)?.body).toBe(QODO_CHECK_COMMENT);
+  });
+
+  it("posts the same fixed sentence for any failed Qodo check, whatever its message or differences say (#245)", async () => {
+    const bodies: string[] = [];
+    for (const qodo of [
+      { exitCode: 2 as const, message: "could not read Qodo's live state: HTTP 500 <secret detail>", differences: [] },
+      {
+        exitCode: 1 as const,
+        message: "1 difference(s) from qodo-v9",
+        differences: [{ kind: "rule" as const, type: "new" as const, id: "77", name: "Private rule text" }],
+      },
+    ]) {
+      const f = fake(
+        { "owner/lab#5": { title: "Tool", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+        { qodoCheck: async () => qodo },
+      );
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      bodies.push(f.comments.at(-1)?.body ?? "");
+    }
+    expect(bodies).toEqual([QODO_CHECK_COMMENT, QODO_CHECK_COMMENT]);
   });
 
   it("claims before the agent starts, then finishes done and cleans up", async () => {
@@ -402,6 +425,8 @@ describe("tick: stop paths", () => {
       "qodo-check",
       "workspace",
       "agent",
+      // The evidence first: agent-done only once it is saved (#245). Then the label, then the log's final copy.
+      "save with workspace",
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       "save with workspace",
       "cleanup",
@@ -419,9 +444,40 @@ describe("tick: stop paths", () => {
       "audited",
       "verified",
       "finished",
-      "cleanup",
       "saved",
+      "cleanup",
     ]);
+  });
+
+  it("sets agent-done only after the evidence is saved, and a failed save ends agent-needs-help (#245)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (_runId, w) => {
+          f.calls.push(`save ${w ? "with" : "without"} workspace`);
+          throw new Error("push rejected");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    const relabels = f.calls.filter((c) => c.startsWith("relabel"));
+    expect(relabels).toEqual([
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+    ]);
+    expect(f.calls.indexOf("save with workspace")).toBeLessThan(f.calls.indexOf(relabels[1] ?? ""));
+    expect(f.comments.at(-1)?.body).toMatch(/evidence couldn't be saved[\s\S]*the run log has the error/);
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({ label: LABELS.help });
+    expect(f.calls).not.toContain("cleanup");
+  });
+
+  it("sets agent-done only after the evidence push went through, not when it only failed quietly (#245)", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { saveEvidence: () => ({ file: "", pushed: false, blocked: [] }) },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`);
   });
 
   it("downgrades an otherwise-done run to needs-help when the evidence save was blocked, and cleans up once it reached its own branch (#102)", async () => {
@@ -440,9 +496,10 @@ describe("tick: stop paths", () => {
       "qodo-check",
       "workspace",
       "agent",
-      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       "save with workspace",
-      `relabel owner/target#18 -${LABELS.working},${LABELS.ready},${LABELS.done} +${LABELS.help}`,
+      // Straight to needs-help: the ticket never shows agent-done for a run whose evidence was blocked.
+      `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
+      "save with workspace",
       "cleanup",
     ]);
     expect(f.comments.at(-1)?.body).toMatch(
@@ -487,7 +544,7 @@ describe("tick: stop paths", () => {
     expect(body).toMatch(/blocked-20261109-093001-target-18/);
   });
 
-  it("still reports the blocked evidence on the ticket even when the corrective relabel keeps failing, retried once (#102)", async () => {
+  it("a blocked run whose relabel keeps failing still ends needs-help, reported as a runner failure, with the block in the log (#102)", async () => {
     let addAttempts = 0;
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -508,14 +565,15 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
-    expect(f.comments.at(-1)?.body).toMatch(
-      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
-    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(addAttempts).toBe(2);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
+    expect(f.events.map((e) => e.event)).toContain("evidence-blocked");
+    // Nothing was added, so agent-working stays on and recovery finds the ticket on the next tick.
+    expect(f.calls).not.toContain("cleanup");
   });
 
-  it("still relabels the blocked run even when posting the comment about it fails, retried once (#102)", async () => {
+  it("still relabels the blocked run when posting the comment about it fails (#102)", async () => {
     let commentAttempts = 0;
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -537,10 +595,9 @@ describe("tick: stop paths", () => {
       },
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
-    expect(commentAttempts).toBe(2);
-    expect(f.calls).toContain(
-      `relabel owner/target#18 -${LABELS.working},${LABELS.ready},${LABELS.done} +${LABELS.help}`,
-    );
+    expect(commentAttempts).toBe(1);
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({ label: LABELS.help });
   });
 
   it("takes the ticket labelled longest ago, across repos, one per tick", async () => {
@@ -608,7 +665,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     // The agent must never have been started on a ticket whose claim didn't actually land.
     expect(f.calls).not.toContain("agent");
     // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again.
@@ -616,7 +673,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("does not report the run as finished when the finish step's own label add fails (Qodo on PR 123)", async () => {
@@ -630,14 +687,14 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     // The fallback relabel is still tried, even though the finish-step one failed.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
       `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("needs help when a gh/git call during the audit times out, names the call, and still relabels (#107)", async () => {
@@ -649,9 +706,9 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(git ls-remote timed out\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("needs help when a gh/git call during verify times out, names the call, and still relabels (#107)", async () => {
@@ -663,9 +720,9 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments.at(-1)?.body).toMatch(/runner failed \(npm review:wait timed out\)/);
+    expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
   it("reports the opened pull request on the ticket when the time limit is hit after the agent opened one (#107)", async () => {
@@ -684,37 +741,84 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/pull\/42/);
   });
 
-  it("never gives a ticket a second final label when saving fails after the label", async () => {
+  it("a cleanup that fails after the label adds no second label, and the saved log says so (Qodo on PR 262)", async () => {
+    const copies: string[][] = [];
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
-        saveEvidence: () => {
-          throw new Error("push rejected");
+        cleanup: () => {
+          throw new Error("worktree busy");
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    const save = f.deps.saveEvidence;
+    f.deps.saveEvidence = (runId, w) => {
+      copies.push(f.events.map((e) => String(e.event)));
+      return save(runId, w);
+    };
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
       `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
     ]);
     expect(f.comments).toHaveLength(2);
-    expect(f.events.at(-1)).toMatchObject({ event: "error", message: "push rejected", afterLabel: LABELS.done });
+    expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
+    // The last copy holds the cleanup failure.
+    expect(copies.at(-1)?.at(-1)).toBe("error");
+    // Through the run's own worktree, never a fresh one that would clash with its branch (Qodo on PR 262).
+    expect(f.calls.filter((c) => c.startsWith("save"))).toEqual(Array(3).fill("save with workspace"));
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({
+      message: expect.stringMatching(/worktree busy/),
+    });
   });
 
-  it("logs the saved event before the copy is made, so the saved log ends with it", async () => {
-    let lastWhenSaved: unknown;
-    const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
-    const record = f.deps.record;
-    f.deps.saveEvidence = () => {
-      lastWhenSaved = f.events.at(-1);
-      return { file: "", pushed: true, blocked: [] };
-    };
-    f.deps.record = record;
-    await tick(FACTORY, f.deps, OPTIONS);
-    expect(lastWhenSaved).toMatchObject({
-      event: "saved",
-      evidence: "private/raw-artifacts/factory-runs/20261109-093001-target-18.jsonl",
+  describe("the saved run log ends with the label the ticket shows (AUD-M18)", () => {
+    /** The last event in the log each time it is copied to private storage. */
+    function lastSaved(overrides: Partial<TickDeps> = {}) {
+      const copies: Record<string, unknown>[] = [];
+      const f = fake(
+        { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+        overrides,
+      );
+      const save = f.deps.saveEvidence;
+      f.deps.saveEvidence = (runId, w) => {
+        copies.push(f.events.at(-1) ?? {});
+        return save(runId, w);
+      };
+      return { f, copies };
+    }
+
+    it("for a run that finished done", async () => {
+      const { f, copies } = lastSaved();
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+      expect(copies.at(-1)).toMatchObject({ event: "finished", label: LABELS.done });
+      // `saved` comes after the push, so it is in the live log only.
+      expect(f.events.map((e) => e.event).slice(-2)).toEqual(["saved", "cleanup"]);
+    });
+
+    it("for a run that needs help", async () => {
+      const { f, copies } = lastSaved({ runAgent: async () => ({ ...AGENT_OK, timedOut: true, resultText: null }) });
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      expect(copies.at(-1)).toMatchObject({ event: "finished", label: LABELS.help });
+    });
+
+    it("for a runner failure, with the label the runner applied", async () => {
+      const { f, copies } = lastSaved({
+        audit: () => {
+          throw new Error("gh api: HTTP 502");
+        },
+      });
+      await tick(FACTORY, f.deps, OPTIONS);
+      expect(copies).toHaveLength(1);
+      expect(copies[0]).toMatchObject({ event: "finished", label: LABELS.help, by: "runner" });
+    });
+
+    it("for a stop at the Qodo check", async () => {
+      const { f, copies } = lastSaved({
+        qodoCheck: async () => ({ exitCode: 2, message: "no snapshot", differences: [] }),
+      });
+      await tick(FACTORY, f.deps, OPTIONS);
+      expect(copies.at(-1)).toMatchObject({ event: "finished", label: LABELS.help });
     });
   });
 
@@ -727,9 +831,9 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
-    expect(f.comments[1]?.body).toMatch(/runner failed \(npm ci failed\)/);
+    expect(f.comments[1]?.body).toMatch(/runner failed; the run log has the error/);
     expect(f.released()).toBe(true);
   });
 
@@ -1148,7 +1252,7 @@ describe("hooks-checked: the run log records the hook self-test (#126)", () => {
         throw new HooksCheckError("the workspace's hooks failed their self-test: x", failed);
       },
     });
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     const names = f.events.map((e) => e.event);
     expect(names).not.toContain("agent-started");
     expect(names.indexOf("hooks-checked")).toBeLessThan(names.indexOf("error"));
@@ -1236,50 +1340,271 @@ describe("tick: recovering from an interrupted run (#197)", () => {
   });
 });
 
-describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 211)", () => {
-  type Call = string;
-  function world(opts: { help?: number[]; addFails?: boolean; removeFails?: boolean; commentFails?: boolean }) {
-    const calls: Call[] = [];
-    const deps: RecoveryDeps = {
-      labelled: (_github, label) =>
-        label === LABELS.working
-          ? [{ number: 7, title: "t" }]
-          : (opts.help ?? []).map((number) => ({ number, title: "t" })),
-      relabel: (_github, number, remove, add) => {
-        calls.push(`relabel #${number} -${remove.join(",")} +${add.join(",")}`);
-        return {
-          removeFailed: remove.length && opts.removeFails ? "403" : null,
-          addFailed: add.length && opts.addFails ? "403" : null,
-        };
-      },
-      comment: (_github, number) => {
-        if (opts.commentFails) throw new Error("502");
-        calls.push(`comment #${number}`);
+describe("tick: a refusal comments once, even when its label removal fails (#245)", () => {
+  /** A ticket that keeps `ready-for-agent` while removals fail, across ticks sharing one comment list. */
+  function twoTicks(kind: "stranger" | "not-ready") {
+    const labels = new Set<string>([LABELS.ready]);
+    const comments: string[] = [];
+    let removalWorks = false;
+    const tickOnce = () => {
+      const f = fake(
+        {
+          "owner/target#18": {
+            title: "Filter",
+            events: [labelled(kind === "stranger" ? "stranger" : "owner", "2026-11-09T08:00:00Z")],
+            labels: [...labels],
+          },
+        },
+        {
+          ...(kind === "not-ready" ? { ready: () => ({ title: "Filter", problems: ["missing section"] }) } : {}),
+          relabel: (_github, _number, remove, add) => {
+            for (const l of add) labels.add(l);
+            if (!removalWorks) return { removeFailed: new Error("HTTP 502"), addFailed: null };
+            for (const l of remove) if (!add.includes(l)) labels.delete(l);
+            return { removeFailed: null, addFailed: null };
+          },
+          comment: (_github, _number, body) => comments.push(body),
+        },
+      );
+      return tick(FACTORY, f.deps, OPTIONS);
+    };
+    return {
+      comments,
+      labels,
+      tickOnce,
+      fixRemoval: () => {
+        removalWorks = true;
       },
     };
-    return { deps, calls, run: () => recoverStranded([{ github: "o/t" }], deps) };
   }
 
-  it("keeps agent-working when the help label can't be added, so the next tick tries again", () => {
-    const w = world({ addFails: true });
-    expect(w.run()).toMatchObject({ recovered: [], failed: [expect.stringContaining("couldn't add")] });
-    expect(w.calls.some((c) => c.startsWith("relabel #7 -agent-working"))).toBe(false);
+  for (const kind of ["stranger", "not-ready"] as const) {
+    it(`${kind}: no comment while the label stays on, then exactly one once it comes off`, async () => {
+      const w = twoTicks(kind);
+      await w.tickOnce();
+      await w.tickOnce();
+      expect(w.comments).toEqual([]);
+      w.fixRemoval();
+      await w.tickOnce();
+      expect(w.comments).toHaveLength(1);
+      expect(w.labels.has(LABELS.ready)).toBe(false);
+    });
+  }
+});
+
+describe("factory:tick exit codes (#245)", () => {
+  const header = readFileSync(join(import.meta.dirname, "factory-tick.ts"), "utf8").split("*/")[0] ?? "";
+  const codes = header.slice(header.indexOf("Exit codes:"));
+
+  it("gives each outcome the code its header states, following the ticket's final label", () => {
+    expect(EXIT_CODES).toEqual({
+      busy: 0,
+      idle: 0,
+      refused: 0,
+      "not-ready": 1,
+      done: 0,
+      "needs-help": 1,
+      failed: 3,
+    });
+    for (const outcome of ["busy", "idle", "refused", "done"] as const) {
+      expect(exitCodeFor(outcome)).toBe(0);
+      expect(codes).toMatch(new RegExp(`0 [^;]*\\b${outcome === "done" ? "agent-done" : outcome}\\b`));
+    }
+    for (const outcome of ["needs-help", "not-ready"] as const) expect(exitCodeFor(outcome)).toBe(1);
+    expect(codes).toMatch(/1 the ticket it took now carries\s+(\*\s+)?`agent-needs-help`[^;]*isn't ready/);
+    expect(codes).toMatch(/2 the command line or the\s+(\*\s+)?environment was\s+(\*\s+)?wrong/);
+    expect(codes).toMatch(/3 the tick itself failed/);
   });
 
-  it("changes no label when the comment fails, so the notice is retried", () => {
-    const w = world({ commentFails: true });
-    expect(w.run().failed).toHaveLength(1);
-    expect(w.calls).toEqual([]);
+  it("a tick failure and a ticket that needs the owner exit with different codes (AUD-M18)", async () => {
+    // Before any pick: GitHub can't be read. No ticket was touched, so it is no ticket's needs-help.
+    const early = fake(
+      {},
+      {
+        labelled: () => {
+          throw new Error("HTTP 502");
+        },
+      },
+    );
+    const failed = await tick(FACTORY, early.deps, OPTIONS);
+    expect(failed).toBe("failed");
+    // After the claim: the ticket gets agent-needs-help, but the exit code still says the runner failed.
+    const late = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("gh api: HTTP 502");
+        },
+      },
+    );
+    expect(await tick(FACTORY, late.deps, OPTIONS)).toBe("failed");
+    expect(late.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    const stopped = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { runAgent: async () => ({ ...AGENT_OK, timedOut: true, resultText: null }) },
+    );
+    const help = await tick(FACTORY, stopped.deps, OPTIONS);
+    expect(help).toBe("needs-help");
+    expect(exitCodeFor(failed)).toBe(3);
+    expect(exitCodeFor(help)).toBe(1);
   });
 
-  it("retries only the removal for a ticket that already has the help label: no second comment", () => {
-    const w = world({ help: [7] });
-    expect(w.run().recovered).toEqual(["o/t#7"]);
-    expect(w.calls).toEqual([`relabel #7 -${LABELS.working},${LABELS.ready} +`]);
+  it("each outcome the tick returns is the one its final label calls for", async () => {
+    const done = fake({ "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
+    expect(exitCodeFor(await tick(FACTORY, done.deps, OPTIONS))).toBe(0);
+    const help = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { ready: () => ({ title: "F", problems: ["missing"] }) },
+    );
+    expect(exitCodeFor(await tick(FACTORY, help.deps, OPTIONS))).toBe(1);
+    expect(help.calls[0]).toBe(`relabel owner/target#18 -${LABELS.ready} +${LABELS.help}`);
   });
 
-  it("reports a failed removal, so it isn't counted as recovered", () => {
-    const w = world({ removeFails: true });
-    expect(w.run()).toMatchObject({ recovered: [], failed: [expect.stringContaining("couldn't remove")] });
+  it("a missing or empty token file is a setup problem (exit 2), never a crash", () => {
+    const missing = () => {
+      throw Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+    };
+    expect(tokenFrom({ GH_TOKEN_FILE: "nowhere" }, missing)).toEqual({
+      problem: "factory:tick can't read GH_TOKEN_FILE (ENOENT).",
+    });
+    expect(tokenFrom({ GH_TOKEN_FILE: "empty" }, () => "  \n")).toMatchObject({ problem: expect.any(String) });
+    expect(tokenFrom({})).toMatchObject({ problem: expect.stringMatching(/needs GH_TOKEN/) });
+    expect(tokenFrom({ GH_TOKEN_FILE: "f" }, () => "tok\n")).toEqual({ token: "tok" });
+    expect(tokenFrom({ GH_TOKEN: "env", GH_TOKEN_FILE: "f" }, missing)).toEqual({ token: "env" });
+    // The header names it under 2.
+    expect(codes).toMatch(/a token file that can't be read/);
+  });
+});
+
+describe("tick: saved means saved (Qodo on PR 262)", () => {
+  it("a runner failure whose log reached neither main nor a branch logs no saved event", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("HTTP 502");
+        },
+        saveEvidence: () => ({ file: "", pushed: false, blocked: ["config/x"], savedAt: undefined }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
+    expect(f.events.map((e) => e.event)).not.toContain("saved");
+    expect(f.events.at(-1)).toMatchObject({ event: "error", message: expect.stringMatching(/reached neither/) });
+  });
+
+  it("when the final copy fails, the run folder is kept: the saved copy lacks the outcome", async () => {
+    let copies = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => {
+          copies++;
+          if (copies === 2) throw new Error("push rejected");
+          return { file: `x/${runId}.jsonl`, pushed: true, blocked: [] };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.calls).not.toContain("cleanup");
+    expect(f.events.map((e) => e.event)).not.toContain("saved");
+    expect(f.events.at(-1)).toMatchObject({ event: "kept" });
+  });
+
+  it("every logged step is a heartbeat for the lock", async () => {
+    let beats = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        lock: () => ({
+          acquired: true,
+          release: () => {},
+          refresh: () => {
+            beats++;
+          },
+        }),
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(beats).toBe(f.events.length);
+  });
+});
+
+describe("tick: the outcome is logged and copied even when a later step fails (Qodo on PR 262, round 2)", () => {
+  it("a Qodo stop whose log copy fails is copied again by the runner-failure path", async () => {
+    let copies = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        qodoCheck: async () => ({ exitCode: 2, message: "no snapshot", differences: [] }),
+        saveEvidence: (runId) => {
+          copies++;
+          if (copies === 1) throw new Error("push rejected");
+          return { file: `x/${runId}.jsonl`, pushed: true, blocked: [] };
+        },
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(copies).toBe(2);
+    expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
+    expect(f.events.at(-1)).toMatchObject({ event: "saved" });
+  });
+
+  it("a not-ready ticket whose comment fails still logs the label it got", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        ready: () => ({ title: "F", problems: ["missing"] }),
+        comment: () => {
+          throw new Error("HTTP 502");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("not-ready");
+    expect(f.events.map((e) => e.event)).toEqual(["picked", "error", "not-ready", "saved"]);
+  });
+
+  it("a heartbeat that throws never stops the run", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        lock: () => ({
+          acquired: true,
+          release: () => {},
+          refresh: () => {
+            throw new Error("disk full");
+          },
+        }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+  });
+});
+
+describe("tick: errors stay in the run log, never on a ticket (Qodo on PR 262, round 4)", () => {
+  it("a runner failure naming a private path keeps it out of the comment, and in the log", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("git -C private/templates/x-secret-v1 failed");
+        },
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/x-secret-v1/);
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({ message: expect.stringMatching(/x-secret-v1/) });
+  });
+
+  it("a failed evidence save names no error on the ticket", async () => {
+    const f = fake(
+      { "owner/lab#5": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: () => {
+          throw new Error("fatal: https://github.com/owner/private-repo.git rejected templates/x-secret-v1");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/x-secret-v1|private-repo/);
   });
 });

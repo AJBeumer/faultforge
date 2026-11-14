@@ -34,6 +34,7 @@ export function printReport(log: (line: string) => void, findings: MatchFinding[
   }
   log(`caught: ${result.caught}`);
   log(`matched: ${result.matchedFindingIds.join(", ") || "none"}`);
+  log(`rule version: ${result.ruleVersion}`);
 }
 
 export async function defaultAsk(question: string): Promise<string> {

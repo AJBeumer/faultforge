@@ -166,12 +166,21 @@ describe("issueNumberFromUrl", () => {
   });
 });
 
+const INJECTED_LINE = `${JSON.stringify({ eventId: "inj", type: "sabotage.injected", at: "2026-11-10T00:00:00.000Z", caseId: "FF-0009" })}\n`;
+
 function setup() {
   const base = mkdtempSync(join(tmpdir(), "faultforge-case-ticket-"));
   const privateDir = join(base, "private");
   const templatesDir = join(privateDir, "templates", "a-template");
   mkdirSync(templatesDir, { recursive: true });
   writeFileSync(join(templatesDir, "template.json"), JSON.stringify(TEMPLATE));
+  // The case was planted from this template: a real run is refused for any case the answer key doesn't hold.
+  writeFileSync(
+    join(privateDir, "ground-truth.jsonl"),
+    `${JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "a-template" })}\n`,
+  );
+  // And its planting is on record (a hand-written event, so no hash to check here).
+  writeFileSync(join(privateDir, "audit-events.jsonl"), INJECTED_LINE);
   return {
     env: { FAULTFORGE_PRIVATE_DIR: privateDir },
     auditEventsPath: join(privateDir, "audit-events.jsonl"),
@@ -226,7 +235,8 @@ describe("run", () => {
     const events = readFileSync(auditEventsPath, "utf8")
       .trim()
       .split("\n")
-      .map((l) => JSON.parse(l));
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.type === "case.ticket-created");
     expect(events).toEqual([
       {
         eventId: "event-1",
@@ -260,7 +270,7 @@ describe("run", () => {
     expect(ghCalled).toBe(false);
     expect(log.join("\n")).toContain(TICKET.title);
     expect(log.join("\n")).toContain("### Acceptance criteria");
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
     expect(() => readFileSync(join(evidenceDir, "ticket.json"), "utf8")).toThrow();
   });
 
@@ -355,7 +365,7 @@ describe("run", () => {
     expect(code).toBe(2);
     expect(readFileSync(join(evidenceDir, "gh-issue-create.raw.txt"), "utf8")).toContain("not a url");
     // Nothing recorded as ticketed, since the issue number was never confirmed.
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
   });
 
   it("refuses a template with no ticket field", async () => {
@@ -431,7 +441,7 @@ describe("run", () => {
     });
 
     expect(code).toBe(2);
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
   });
 
   it("refuses a rerun after a call that may have created the issue, and never calls gh again (#216)", async () => {
@@ -447,5 +457,102 @@ describe("run", () => {
     expect(await run("a-template", "FF-0009", { ...options, error: (l) => errors.push(l) })).toBe(2);
     expect(calls).toBe(1);
     expect(errors.join("\n")).toContain("an earlier run tried to create this ticket");
+  });
+});
+
+describe("run: the ticket matches the case's answer-key entry (#249, AUD-M24)", () => {
+  async function attempt(caseId: string, options: { dryRun?: boolean; groundTruth?: string } = {}) {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    const groundTruthPath = join(env.FAULTFORGE_PRIVATE_DIR, "ground-truth.jsonl");
+    if (options.groundTruth !== undefined) writeFileSync(groundTruthPath, options.groundTruth);
+    const errors: string[] = [];
+    let ghCalled = false;
+    const code = await run("a-template", caseId, {
+      env,
+      auditEventsPath,
+      groundTruthPath,
+      evidenceDir,
+      factory: FACTORY,
+      dryRun: options.dryRun ?? false,
+      log: () => {},
+      error: (line) => errors.push(line),
+      gh: () => {
+        ghCalled = true;
+        return "https://github.com/AJBeumer/faultforge-target/issues/42\n";
+      },
+    });
+    return { code, err: errors.join("\n"), ghCalled };
+  }
+
+  it("refuses a template other than the one the case planted, before calling gh", async () => {
+    const other = `${JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "another-template" })}\n`;
+    const { code, err, ghCalled } = await attempt("FF-0009", { groundTruth: other });
+    expect(code).toBe(1);
+    expect(err).toContain("planted template another-template, not a-template");
+    expect(ghCalled).toBe(false);
+  });
+
+  it("refuses a real run for a case the answer key doesn't hold yet; a dry run may come first", async () => {
+    const real = await attempt("FF-0010");
+    expect(real.code).toBe(1);
+    expect(real.err).toContain("not in the answer key yet");
+    expect(real.ghCalled).toBe(false);
+    expect((await attempt("FF-0010", { dryRun: true })).code).toBe(0);
+  });
+
+  it("refuses, exit 2, while the answer key has an amendment problem", async () => {
+    const broken = [
+      JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "a-template" }),
+      JSON.stringify({
+        kind: "amendment",
+        amends: "FF-0009",
+        change: { caseId: "FF-0001" },
+        reason: "r",
+        evidence: "e",
+      }),
+    ].join("\n");
+    const { code, err, ghCalled } = await attempt("FF-0009", { groundTruth: `${broken}\n` });
+    expect(code).toBe(2);
+    expect(err).toContain("has problems");
+    expect(ghCalled).toBe(false);
+  });
+});
+
+describe("run: a template changed after its case was planted (Qodo on PR 264)", () => {
+  it("is refused through the injection event's hash, before gh is called", async () => {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    writeFileSync(
+      auditEventsPath,
+      `${JSON.stringify({ eventId: "i", type: "sabotage.injected", caseId: "FF-0009", at: "2026-11-01T00:00:00Z", tool: "faultforge-harness@1.0.0", inputHash: "0".repeat(64) })}\n`,
+    );
+    const errors: string[] = [];
+    let ghCalled = false;
+    const code = await run("a-template", "FF-0009", {
+      env,
+      auditEventsPath,
+      evidenceDir,
+      factory: FACTORY,
+      log: () => {},
+      error: (l) => errors.push(l),
+      gh: () => {
+        ghCalled = true;
+        return "";
+      },
+    });
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("isn't the one it was planted from");
+    expect(ghCalled).toBe(false);
+  });
+});
+
+describe("run: a case whose planting wasn't recorded (Qodo on PR 264)", () => {
+  it("is refused for a real ticket, and a dry run still prints", async () => {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    writeFileSync(auditEventsPath, "");
+    const errors: string[] = [];
+    const options = { env, auditEventsPath, evidenceDir, factory: FACTORY, log: () => {}, gh: () => "" };
+    expect(await run("a-template", "FF-0009", { ...options, error: (l) => errors.push(l) })).toBe(1);
+    expect(errors.join("\n")).toContain("has no injection event");
+    expect(await run("a-template", "FF-0009", { ...options, error: () => {}, dryRun: true })).toBe(0);
   });
 });

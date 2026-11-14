@@ -25,15 +25,66 @@ export interface QodoReview {
   finding_count?: number;
 }
 
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+function isLine(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 1;
+}
+
+function isAbsent(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+/** Why one finding can't be read the way `findingsFor` reads it, or undefined. */
+function findingProblem(finding: unknown, index: number): string | undefined {
+  const at = `finding ${index + 1}`;
+  if (typeof finding !== "object" || finding === null) return `${at} is not an object`;
+  const f = finding as Record<string, unknown>;
+  if (typeof f.id !== "string" || !f.id) return `${at} has no id`;
+  // Compared with the head exactly, so a short or upper-case SHA would silently drop the finding (AUD-M9).
+  if (typeof f.git_sha !== "string" || !FULL_SHA.test(f.git_sha)) {
+    return `${at} (${f.id}) has git_sha ${JSON.stringify(f.git_sha)}, not a full lower-case commit id`;
+  }
+  // A renamed field would read as "placed nowhere", which can never match: only an explicit null may say that.
+  if (f.file_path !== null && typeof f.file_path !== "string") return `${at} (${f.id}) has no file_path`;
+  const start = f.start_line;
+  const end = f.end_line;
+  // Both lines or neither: a finding with one of them would be kept with no lines, and could never match.
+  const placed = isLine(start) && isLine(end) && (start as number) <= (end as number);
+  if (!placed && !(isAbsent(start) && isAbsent(end))) {
+    return `${at} (${f.id}) has start_line ${JSON.stringify(start)} and end_line ${JSON.stringify(end)}, not a line range`;
+  }
+  for (const field of ["title", "category", "description", "action_level"]) {
+    if (!isAbsent(f[field]) && typeof f[field] !== "string") return `${at} (${f.id}) has a ${field} that isn't text`;
+  }
+  return undefined;
+}
+
 /**
  * Why a review Qodo calls complete can't be read as a list of findings, or undefined. A missing or renamed
  * `findings` list would otherwise read as zero findings, which for a case is a miss: the one answer the
- * evidence doesn't support (#196). `finding_count`, when present, must agree with the list.
+ * evidence doesn't support (#196). `finding_count`, when present, must agree with the list. Every finding
+ * must carry the fields `findingsFor` reads, in the form it compares them (AUD-M9). And findings that are
+ * all on commits Qodo reports no run for, with none on `headSha`, mean the commit ids changed form: an
+ * error, never an empty review. Findings on earlier commits of the same PR, which Qodo did review, are fine.
  */
-export function findingsShapeProblem(review: QodoReview): string | undefined {
+export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
   if (typeof review.finding_count === "number" && review.finding_count !== review.findings.length) {
     return `Qodo's complete review counts ${review.finding_count} findings but lists ${review.findings.length}`;
+  }
+  for (const [i, finding] of review.findings.entries()) {
+    const problem = findingProblem(finding, i);
+    if (problem) return `Qodo's complete review can't be read: ${problem}`;
+  }
+  if (headSha === undefined || !review.findings.length) return undefined;
+  const reviewed = new Set([
+    headSha,
+    ...(review.review_runs ?? []).map((r) => r.commit_sha),
+    review.review_session?.commit_sha,
+  ]);
+  if (!review.findings.some((f) => f.git_sha === headSha) && review.findings.every((f) => !reviewed.has(f.git_sha))) {
+    return `Qodo's complete review lists ${review.findings.length} findings, none on ${headSha} or on any commit it reports reviewing`;
   }
   return undefined;
 }
@@ -57,9 +108,11 @@ export function reviewState(review: QodoReview, headSha: string): "complete" | "
   const session = review.review_session;
   if (!session || session.commit_sha !== headSha) return "not-started";
   if (session.status !== "completed") return "running";
-  if (session.review_complete) return "complete";
+  // A skip is checked first: Qodo marking a skipped run complete must still read as skipped (AUD-N8). Only
+  // the boolean true counts as complete, never a string that merely looks like it.
   const run = review.review_runs?.find((r) => r.commit_sha === headSha);
-  return run?.review_effort === "skip" ? "skipped" : "running";
+  if (run?.review_effort === "skip") return "skipped";
+  return session.review_complete === true ? "complete" : "running";
 }
 
 /** The findings Qodo raised on this commit, in a stable shape. */
