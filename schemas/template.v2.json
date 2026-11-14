@@ -29,6 +29,10 @@
   "properties": {
     "$schema": { "type": "string" },
     "schemaVersion": { "const": 2 },
+    "benchmark": {
+      "description": "The benchmark version whose rules the template follows. Absent means 1: no template written before version 2 changes.",
+      "enum": [1, 2]
+    },
     "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
     "kind": { "enum": ["bug", "control"] },
     "summary": { "type": "string", "minLength": 1 },
