@@ -112,3 +112,12 @@ describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 
     expect(second.on("o/t#7")).toEqual([HELP]);
   });
 });
+
+describe("recoverStranded: a ticket that already shows agent-done (Qodo on PR 262)", () => {
+  it("only loses agent-working: its run finished, so no stranded comment and no help label", () => {
+    const w = world({ "o/t#7": [WORKING, "agent-done"] });
+    expect(w.run().recovered).toEqual(["o/t#7"]);
+    expect(w.calls).toEqual([`relabel o/t#7 -${WORKING},${READY} +`]);
+    expect(w.on("o/t#7")).toEqual(["agent-done"]);
+  });
+});

@@ -35,9 +35,14 @@ function windowsStartId(pid: number): string | null {
   return out.status === 0 && Number.isFinite(Date.parse(text)) ? `created:${text}` : null;
 }
 
-/** Elsewhere: `ps`, to the second. */
+/** Elsewhere: `ps`, to the second, in UTC. */
 function psStartId(pid: number): string | null {
-  const out = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 15_000 });
+  // In UTC whatever the zone or the season: `lstart` is printed in local time (Qodo on PR 262).
+  const out = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+    encoding: "utf8",
+    timeout: 15_000,
+    env: { ...process.env, TZ: "UTC" },
+  });
   const text = (out.stdout ?? "").trim();
   return out.status === 0 && text ? `lstart:${text}` : null;
 }

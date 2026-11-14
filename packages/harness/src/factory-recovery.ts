@@ -16,6 +16,7 @@
 const WORKING = "agent-working";
 const READY = "ready-for-agent";
 const HELP = "agent-needs-help";
+const DONE = "agent-done";
 
 export interface RecoveryDeps {
   labelled(github: string, label: string): { number: number; title: string }[];
@@ -40,7 +41,8 @@ export const STRANDED_COMMENT =
  * the comment first, then `agent-needs-help` is added, and only then is `agent-working` removed. A failure
  * before the removal leaves `agent-working` on, so the next tick tries again. A ticket that already carries
  * `agent-needs-help` was commented on before and only lost its removal, so only the removal is retried and
- * no second comment is posted.
+ * no second comment is posted. Neither is one that already carries `agent-done`: its run finished and was
+ * labelled (the new label goes on before the old comes off), and only lost its removal (Qodo on PR 262).
  */
 export function recoverStranded(
   repos: { github: string }[],
@@ -53,7 +55,10 @@ export function recoverStranded(
     let helped: Set<number>;
     try {
       stranded = deps.labelled(github, WORKING);
-      helped = new Set(stranded.length ? deps.labelled(github, HELP).map((t) => t.number) : []);
+      // A ticket that already shows a run's result only lost its last label removal.
+      helped = new Set(
+        stranded.length ? [HELP, DONE].flatMap((label) => deps.labelled(github, label).map((t) => t.number)) : [],
+      );
     } catch (error) {
       failed.push(`${github}: couldn't list its tickets (${(error as Error).message})`);
       continue;
