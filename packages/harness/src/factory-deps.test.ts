@@ -286,7 +286,76 @@ Picked up.`,
       labelledBy: "owner",
     };
     realDeps(FACTORY, OPTIONS, "ci").audit(ws, ticket, "a", "b");
-    expect(vi.mocked(auditRun)).toHaveBeenCalledWith(FACTORY, join(LAB_ROOT, "private"), "ci", ws, ticket, "a", "b");
+    expect(vi.mocked(auditRun)).toHaveBeenCalledWith(
+      FACTORY,
+      { checkout: join(LAB_ROOT, "private"), main: expect.any(Function) },
+      "ci",
+      ws,
+      ticket,
+      "a",
+      "b",
+    );
+  });
+
+  it("carries a target ticket's evidence folder into a worktree the runner makes after the agent (AUD-H2, #284)", () => {
+    const ws = { ...workspace(join(runs, "run-t")), private: "" };
+    const reviews = join(ws.lab, "private", "raw-artifacts", "reviews", "target-pr19");
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "review.json"), "{}");
+    const temp = join(runs, "run-t-evidence", "private");
+    // The faked `git worktree add` makes the folder the real one would.
+    vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
+      if (args[0] === "worktree") {
+        mkdirSync(temp, { recursive: true });
+        writeFileSync(join(temp, ".git"), "gitdir: elsewhere\n");
+      }
+      return "";
+    });
+    // The agent can write here: a forged run log must not stand in for the runner's (Qodo on PR 288).
+    mkdirSync(join(ws.lab, "private", "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(ws.lab, "private", "raw-artifacts", "factory-runs", "run-t.jsonl"), "forged\n");
+    writeFileSync(join(runs, "run-t.jsonl"), "runner\n");
+    let carried = false;
+    let log = "";
+    vi.mocked(commitAndPublish).mockImplementationOnce((dir) => {
+      carried = existsSync(join(dir, "raw-artifacts", "reviews", "target-pr19", "review.json"));
+      log = readFileSync(join(dir, "raw-artifacts", "factory-runs", "run-t.jsonl"), "utf8");
+      return { pushed: true, blocked: [] };
+    });
+    try {
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-t", ws);
+      expect(carried).toBe(true);
+      expect(log).toBe("runner\n");
+    } finally {
+      vi.mocked(gitLong).mockImplementation(() => "");
+    }
+    const add = vi.mocked(gitLong).mock.calls.find((c) => c[1] === "worktree");
+    expect(add).toEqual([join(LAB_ROOT, "private"), "worktree", "add", "-b", "run-run-t", temp, "origin/main"]);
+    expect(vi.mocked(commitAndPublish)).toHaveBeenCalledWith(temp, "raw-artifacts", "run-t", git, gitLong);
+    // Published, so the runner's own worktree is removed, never the run folder the cleanup still needs.
+    expect(existsSync(join(runs, "run-t-evidence"))).toBe(false);
+    expect(existsSync(ws.lab)).toBe(true);
+  });
+
+  it("saves a target run's next copy through the worktree a failed push left, not a second branch (Qodo on PR 288)", () => {
+    const ws = { ...workspace(join(runs, "run-u")), private: "" };
+    const temp = join(runs, "run-u-evidence", "private");
+    vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
+      if (args[0] === "worktree") {
+        mkdirSync(temp, { recursive: true });
+        writeFileSync(join(temp, ".git"), "gitdir: elsewhere\n");
+      }
+      return "";
+    });
+    vi.mocked(commitAndPublish).mockReturnValueOnce({ pushed: false, blocked: [] });
+    try {
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+    } finally {
+      vi.mocked(gitLong).mockImplementation(() => "");
+    }
+    expect(vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "worktree")).toHaveLength(1);
+    expect(vi.mocked(commitAndPublish)).toHaveBeenCalledTimes(2);
   });
 
   it("copies the run log and transcript into the workspace's private worktree, then publishes them", () => {
@@ -374,7 +443,7 @@ describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo 
 
   it("runs npm ci in every worktree that has a package.json, and only there", () => {
     const { lab, target } = layout("run-1", true);
-    const ws = realDeps(FACTORY, OPTIONS).workspace("run-1");
+    const ws = realDeps(FACTORY, OPTIONS).workspace("run-1", "lab");
     expect(ws.lab).toBe(lab);
     expect(vi.mocked(npm).mock.calls).toEqual([
       [lab, ["ci", "--no-audit", "--no-fund"]],
@@ -384,7 +453,7 @@ describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo 
 
   it("skips a worktree without a package.json", () => {
     const { lab } = layout("run-2", false);
-    realDeps(FACTORY, OPTIONS).workspace("run-2");
+    realDeps(FACTORY, OPTIONS).workspace("run-2", "lab");
     expect(vi.mocked(npm).mock.calls).toEqual([[lab, ["ci", "--no-audit", "--no-fund"]]]);
   });
 
@@ -392,10 +461,81 @@ describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo 
     const { root, lab } = layout("run-3", true);
     const output = `${"x".repeat(100)}${"y".repeat(400)}`;
     vi.mocked(npm).mockImplementation(() => ({ status: 1, output }));
-    expect(() => realDeps(FACTORY, OPTIONS).workspace("run-3")).toThrow(
+    expect(() => realDeps(FACTORY, OPTIONS).workspace("run-3", "lab")).toThrow(
       new Error(`npm ci failed in ${lab}: ${"y".repeat(400)}`),
     );
     expect(vi.mocked(npm)).toHaveBeenCalledTimes(1);
     expect(existsSync(root)).toBe(false);
+  });
+
+  const privateWorktreeAdds = () =>
+    vi.mocked(gitLong).mock.calls.filter((c) => c[0] === join(LAB_ROOT, "private") && c[1] === "worktree");
+
+  it("gives a lab ticket's run a private worktree, and a target ticket's run none (AUD-H2, #284)", () => {
+    const { lab } = layout("run-4", false);
+    const labRun = realDeps(FACTORY, OPTIONS).workspace("run-4", "lab");
+    expect(labRun.private).toBe(join(lab, "private"));
+    expect(privateWorktreeAdds()).toHaveLength(1);
+    vi.mocked(gitLong).mockClear();
+    layout("run-5", false);
+    const targetRun = realDeps(FACTORY, OPTIONS).workspace("run-5", "target");
+    expect(targetRun.private).toBe("");
+    expect(privateWorktreeAdds()).toEqual([]);
+  });
+});
+
+describe("realDeps in CI: no private checkout where a target ticket's agent runs (AUD-H2, #284)", () => {
+  let runs: string;
+  const saved = { ...process.env };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runs = mkdtempSync(join(tmpdir(), "runs-ci-"));
+    process.env.FAULTFORGE_RUNS_DIR = runs;
+    process.env.FAULTFORGE_PRIVATE_REPO = "owner/private-store";
+  });
+
+  afterEach(() => {
+    for (const name of ["FAULTFORGE_RUNS_DIR", "FAULTFORGE_PRIVATE_REPO"]) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+    rmSync(runs, { recursive: true, force: true });
+  });
+
+  const clones = () => vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "clone");
+
+  it("keeps the clone a failed Qodo-state push still needs, and doesn't start a target ticket (Qodo on PR 288)", () => {
+    for (const tree of [join(runs, "private-source"), join(runs, "qodo-check-r", "private")]) {
+      mkdirSync(tree, { recursive: true });
+      writeFileSync(join(tree, ".git"), "gitdir: x\n");
+    }
+    expect(() => realDeps(FACTORY, OPTIONS, "ci").workspace("r", "target")).toThrow(
+      /private checkout is still on disk/,
+    );
+    expect(existsSync(join(runs, "private-source", ".git"))).toBe(true);
+  });
+
+  it("clones the private repo for the runner's own steps from its name, and removes the clone after", async () => {
+    vi.mocked(git).mockImplementation(() => "abc\trefs/heads/main");
+    const deps = realDeps(FACTORY, OPTIONS, "ci");
+    vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
+      if (args[0] === "clone") mkdirSync(join(args[3] ?? "", ".git"), { recursive: true });
+      if (args[0] === "worktree") mkdirSync(args[4] ?? "", { recursive: true });
+      return "";
+    });
+    try {
+      deps.saveEvidence("run-2", null);
+    } catch {
+      // the faked worktree has no .git file: only the clone is the subject here
+    } finally {
+      vi.mocked(gitLong).mockImplementation(() => "");
+    }
+    expect(clones()[0]?.slice(1)).toEqual([
+      "clone",
+      "--quiet",
+      "https://github.com/owner/private-store.git",
+      join(runs, "private-source"),
+    ]);
   });
 });

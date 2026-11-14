@@ -2,6 +2,7 @@
  * The factory policy's rules for shell commands: what an unattended run may not run, read or reach. Split from
  * factory-policy.ts, which may not pass 400 lines (CLAUDE.md, module size rule); it exports them again.
  */
+import { codeAsWords, spokenWords } from "./shell-decode.ts";
 import { joinedWords, MAX_COMMAND_CHARS, quotedMask } from "./shell-scan.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
@@ -18,6 +19,17 @@ const COMMAND_RULES: [RegExp, string][] = [
   ],
   [/\b(schtasks|setx|crontab|launchctl|reg\s+(add|delete|import))\b/i, "no scheduled tasks or persistent settings"],
   [/\bdismiss/i, "never dismiss a finding"],
+  // An alias runs later under a name no rule knows: `gh alias set c 'pr merge'`, `git config alias.p …` (#284).
+  [/\bgh\s+alias\s+(set|import)\b/i, "no gh aliases: an alias hides what a later command runs"],
+  [/\bgit\b[^\n]*\balias\.[\w-]/i, "no git aliases: an alias hides what a later command runs"],
+  // The private repo is the runner's, by name or by numeric id, which hides the name (#284).
+  [/\bfaultforge-private\b/i, "the private repo is the runner's: the agent never reaches it"],
+  // An id or a route the shell builds hides the repo just as well: `repositories/${id}` (Qodo on PR 288).
+  [/\brepositories\/(\d|\$|`)/i, "no GitHub API by repository id: name the repo, so the rules can read where it goes"],
+  [
+    /\bgh\s+api\b[^\n|;&]*(\$\(|`)/i,
+    "build a gh api route in the command, not with $(…): the rules must read where it goes",
+  ],
 ];
 
 /**
@@ -37,6 +49,8 @@ const SECRET_RULES: [RegExp, string][] = [
   [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
   // Another process's files: `/proc/<pid>/envir?n` reads the runner's environment past any spelling rule (Qodo on PR 270).
   [/\/proc\/(\d|self\b|\$|\*|\[|\{)/i, "no reading another process's files under /proc"],
+  // Any path under /proc, however it is spelled or linked: `ln -s /proc p`, `/proc/./self` (Qodo on PR 288).
+  [/(^|[^\w.-])\/proc(\/|\b)/i, "no reading process files under /proc"],
   [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
   // The whole environment from a program, not only from the shell (#243): `env -0`, `printenv` in any form,
   // Node's `process.env` (except one variable by name), Python's `os.environ`.
@@ -50,20 +64,48 @@ const SECRET_RULES: [RegExp, string][] = [
   ],
   // Python's `environ` under any name (`os.environ`, `import os as o; o.environ`, `from os import environ`).
   [/\benviron\b/, "no reading the environment (os.environ)"],
+  // Perl's `%ENV` and `$ENV{…}`, Ruby's `ENV` (#284). `NODE_ENV` and other names that only end in ENV don't count.
+  [/\bENV\b/, "no reading the environment (ENV, %ENV)"],
+  // The shell's other listings: `declare -p`, `typeset -x`, `compgen -e` or `-v` (#284).
+  [
+    /\b(declare|typeset)\s+-[a-zA-Z]*[xp]\b|\bcompgen\s+-[a-zA-Z]*[ve]\b/,
+    'no dumping the environment (one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine)',
+  ],
+];
+
+/** A step that runs a language's interpreter, whose code can reach the environment under any name. */
+const INTERPRETER = /\b(node|nodejs|deno|bun|tsx|ts-node|python\d*(\.\d+)?|py|perl|ruby|php|irb)\b/i;
+
+/**
+ * Code that reaches a name it builds at run time, which no word rule can read (#284): `process` used other
+ * than as `process.<name>` (`globalThis.process`, `Reflect.get(process, …)`, `require("process")`), Reflect,
+ * a computed member of `globalThis`, and names built from character codes, base64 or `eval`.
+ */
+const BUILT_NAMES: [RegExp, string][] = [
+  [
+    // Not a word in a file name: `scripts/process-data.mjs` (Qodo on PR 288).
+    /(?<![\w/\\-])process\b(?![-/\\])(?!\s*\.\s*(?!env\b)[A-Za-z_$])/,
+    "no reading the whole environment: in code, use process only as process.<name> (process.env.FAULTFORGE_TICKET_FILE is fine)",
+  ],
+  [
+    /\bReflect\s*\.|\bglobalThis\s*\[|\bfromCharCode\b|\batob\s*\(|\beval\s*\(|\bnew\s+Function\b|\bFunction\s*\(|\b__import__\b|\bgetattr\s*\(/,
+    "code that builds a name at run time can't be checked before it runs; write the name out",
+  ],
 ];
 
 /** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
 
 /** Shell tools that send requests. */
-const HTTP_TOOLS = /\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i;
+const HTTP_TOOLS =
+  /\b(curl|wget|nc|ncat|netcat|socat|ssh|scp|sftp|telnet|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i;
 
 /**
  * Network calls from a program written into the command (#243): `fetch(`, Node's `http.request` and its
  * modules, Python's `urllib`, `requests` and `socket`, a browser-style request or socket.
  */
 const NETWORK_CODE =
-  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket|httpx|aiohttp)\b|\bfrom\s+(requests|socket|httpx|aiohttp|urllib[\w.]*|http\.client)\s+import\b|\bsocket\s*\.\s*(socket|create_connection)\b|\b(require|import)\s*\(\s*["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bfrom\s+["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
+  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`]?(node:)?(https?|net|tls|dgram|undici)\b|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket|httpx|aiohttp)\b|\bfrom\s+(requests|socket|httpx|aiohttp|urllib[\w.]*|http\.client)\s+import\b|\bsocket\s*\.\s*(socket|create_connection)\b|\b(require|import)\s*\(\s*["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bfrom\s+["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
 
 /**
  * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
@@ -146,7 +188,9 @@ function stepViolations(command: string): string[] {
     const push = git < 0 ? -1 : all.findIndex((w, i) => i > git && /^push$/i.test(w));
     if (push >= 0) {
       const after = all.slice(push + 1);
-      const force = /^(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)(=|$)/i;
+      // Short flags combine: `-fu` and `-uf` force, `-du` deletes (#284).
+      const force =
+        /^(-[a-zA-Z]*[fd][a-zA-Z]*|--force|--force-with-lease|--force-if-includes|--mirror|--delete|--prune)(=|$)/;
       if (after.some((w) => force.test(w) || /^\+\S/.test(w) || /^:\S/.test(w)))
         reasons.add("no force push or remote delete");
       // The branch may be quoted, and may end the step with a closing bracket right after it (#194).
@@ -172,6 +216,9 @@ function violationsIn(command: string, ticket?: string): string[] {
     reasons.push(
       "no reading the whole environment (process.env); one variable by name, process.env.FAULTFORGE_TICKET_FILE, is fine",
     );
+  if (INTERPRETER.test(command)) {
+    for (const [pattern, reason] of BUILT_NAMES) if (pattern.test(named)) reasons.push(reason);
+  }
   // A request, by a tool or by code, may only name the app on localhost, and must name it: a URL built at
   // run time (a variable, a decoded string) can't be checked, so it is refused (#243).
   if (HTTP_TOOLS.test(command) || NETWORK_CODE.test(command)) {
@@ -212,8 +259,13 @@ function violationsIn(command: string, ticket?: string): string[] {
  * the words around it stay apart (Qodo on PR 132: `true` backtick newline `git push --force …` backtick runs
  * the push). No rule can know which shell will run the text, so every rule reads the command both ways,
  * glued and spaced, and a violation in either reading counts: the rules fail closed.
+ *
+ * Each of those is also read as the words it runs (#284): empty quotes, escaped letters, `${x}` and ANSI-C
+ * strings removed or decoded (`g''h pr merge`, `\gh`, `$'\x67h'`), and once more with a program's punctuation
+ * read as spaces, so `execFileSync('g'+'h', ['pr', 'merge'])` meets the same rules as `gh pr merge`.
  */
 export function readings(raw: string): string[] {
   const continuation = /[\\`]\r?\n/g;
-  return [...new Set([raw.replace(continuation, ""), raw.replace(continuation, " ")])];
+  const base = [raw.replace(continuation, ""), raw.replace(continuation, " ")];
+  return [...new Set(base.flatMap((text) => [text, spokenWords(text), codeAsWords(text)]))];
 }

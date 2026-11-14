@@ -20,8 +20,7 @@ describe("helpers that live in one module (AUD-N1)", () => {
   });
 
   it("hashes only through it: no other module builds a hash of its own", () => {
-    // factory-workspace.ts is another worker's file, moved over in its own change; it may already be done.
-    const inline = filesMatching(/createHash\(/).filter((file) => file !== "factory-workspace.ts");
+    const inline = filesMatching(/createHash\(/);
     expect(inline).toEqual(["provenance.ts"]);
   });
 

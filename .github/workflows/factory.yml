@@ -85,7 +85,9 @@ jobs:
     # Secrets are given to the steps that need them, never to the whole job, and no checkout keeps its token
     # in .git/config: git authenticates through gh, which reads GH_TOKEN from the environment at push time.
     steps:
-      # Same layout as the owner's folders: FaultForge/, FaultForge/private/ and faultforge-target/.
+      # Same layout as the owner's folders: FaultForge/ and faultforge-target/. No private repo before the tick:
+      # a target ticket's agent runs with nothing private on disk. The runner clones it when it needs it, into
+      # FaultForge/private only for a lab ticket, and removes its own clone again (AUD-H2, factory-private.ts).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
@@ -99,13 +101,6 @@ jobs:
           ref: main
           path: faultforge-target
           fetch-depth: 0
-          token: ${{ secrets.FACTORY_GH_TOKEN }}
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: AJBeumer/faultforge-private
-          ref: main
-          path: FaultForge/private
           token: ${{ secrets.FACTORY_GH_TOKEN }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -143,9 +138,20 @@ jobs:
           # agent's GH_TOKEN. Unset, the agent gets FACTORY_GH_TOKEN and the run log warns (AUD-H2).
           FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}
           FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
+          FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private
         run: npm run -s factory:tick -- --ci --minutes 120 --budget 25
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
+      # Only after the tick, when no agent runs any more: the keep step below writes through this checkout.
+      - name: Check out private storage for the logs
+        if: always()
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: AJBeumer/faultforge-private
+          ref: main
+          path: FaultForge/private
+          token: ${{ secrets.FACTORY_GH_TOKEN }}
+          persist-credentials: false
       - name: Keep the logs of a run that didn't save them
         if: always()
         working-directory: FaultForge

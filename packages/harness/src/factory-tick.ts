@@ -220,7 +220,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return "needs-help";
     }
 
-    ws = deps.workspace(id);
+    ws = deps.workspace(id, pick.repoKey);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
