@@ -54,7 +54,7 @@ export function privateTemplateIds(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): 
 
 /**
  * A test for text that names any of `ids`: case-insensitive, as a whole word (letters or digits on either
- * side make it another word), with `-`, `_`, `.` or a space between the id's parts all counting. Look-alike
+ * side make it another word), with any separator between the id's parts counting (privateIdPattern). Look-alike
  * letters and invisible characters are normalised first. Undefined when there are no ids.
  */
 export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | undefined {
@@ -68,16 +68,19 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
   };
 }
 
-/** The whole-word pattern for `ids`, their parts joined by any of `-`, `_`, `.` or a space. */
+/**
+ * The whole-word pattern for `ids`, their parts joined by any separator (#299): none, or up to three marks that
+ * are not letters or digits, in any mix, so `x--secret--v1`, `x_secret.v1` and `x - secret / v1` all count.
+ */
 function privateIdPattern(ids: string[]): RegExp {
   const alternatives = ids.map((id) =>
     id
-      .split(/[-_.\s]+/)
+      .split(/[^\p{L}\p{N}]+/u)
       .filter(Boolean)
       .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("[-_.\\s]?"),
+      .join("[^\\p{L}\\p{N}]{0,3}"),
   );
-  return new RegExp(`(?<![a-z0-9])(?:${alternatives.join("|")})(?![a-z0-9])`, "i");
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}])`, "iu");
 }
 
 /** The denial, which never repeats the id. */
