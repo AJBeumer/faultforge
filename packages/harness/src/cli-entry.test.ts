@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runEntry } from "./cli-entry.ts";
+import { exitWhenWritten, runEntry } from "./cli-entry.ts";
 
 describe("runEntry's failure paths (AUD-N3, Qodo on PR 277)", () => {
   const run = async (main: (argv: string[]) => number | Promise<number>) => {
@@ -46,5 +46,23 @@ describe("runEntry's failure paths (AUD-N3, Qodo on PR 277)", () => {
       return 1;
     });
     expect([code, seen, said]).toEqual([1, ["a"], []]);
+  });
+});
+
+describe("exitWhenWritten (Qodo on PR 277)", () => {
+  it("exits once every stream has taken what was written", async () => {
+    const exits: number[] = [];
+    const streams = [{ write: (_: string, done: () => void) => setTimeout(done, 5) }];
+    await exitWhenWritten(2, streams, (c) => exits.push(c), 10_000);
+    expect(exits).toEqual([2]);
+  });
+
+  it("still exits, after the limit, when a stream never takes its output", async () => {
+    const exits: number[] = [];
+    const stalled = [{ write: () => true }];
+    const started = Date.now();
+    await exitWhenWritten(3, stalled, (c) => exits.push(c), 50);
+    expect(exits).toEqual([3]);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

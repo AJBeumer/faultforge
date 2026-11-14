@@ -26,10 +26,21 @@ export async function runEntry(
 
 /**
  * Exits with `code` once everything already written to stdout and stderr has been handed on: `process.exit`
- * straight away can cut off the end of a long output going to a pipe (Qodo on PR 277).
+ * straight away can cut off the end of a long output going to a pipe (Qodo on PR 277). Waits at most
+ * `limitMs`: a reader that has stopped reading must never keep the process alive (Qodo on PR 277, round 2).
  */
-export async function exitWhenWritten(code: number): Promise<never> {
-  const flushed = (stream: NodeJS.WriteStream) => new Promise<void>((done) => stream.write("", () => done()));
-  await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
-  process.exit(code);
+export async function exitWhenWritten(
+  code: number,
+  streams: { write(chunk: string, done: (error?: Error | null) => void): unknown }[] = [process.stdout, process.stderr],
+  exit: (code: number) => void = (c) => process.exit(c),
+  limitMs = 5_000,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<void>((done) => {
+    timer = setTimeout(done, limitMs);
+  });
+  const flushed = streams.map((stream) => new Promise<void>((done) => stream.write("", () => done())));
+  await Promise.race([Promise.all(flushed), limit]);
+  clearTimeout(timer);
+  exit(code);
 }
