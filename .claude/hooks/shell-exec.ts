@@ -6,7 +6,10 @@
  *    `iex` or `source <(…)`, and a substitution or a variable run as the command itself (`$(…)`). Only a literal
  *    the hooks can read may be run that way (`bash -c 'npm test'`, `echo 'ls' | sh`);
  *  - inline code in an interpreter (`node -e`, `python -c`, `perl -e`, `ruby -e`, a heredoc fed to one) that
- *    makes a network call: it can post to a reviewed repo without gh, where the guard reads nothing.
+ *    starts another program (`system`, `subprocess`, `child_process`) or runs code it builds (`exec`, `eval`):
+ *    counted as built code (re-grade 3);
+ *  - inline code in an interpreter that makes a network call: it can post to a reviewed repo without gh, where
+ *    the guard reads nothing.
  * Both are refused outright: a decoder can be anything (`base64 -d`, `xxd -r`, `rev`, `openssl enc -d`,
  * `printf '\x..'`), so the rule is about where the text goes, not how it was made.
  */
@@ -15,7 +18,7 @@ import { quotedSpans, substitutions } from "./shell-scan.ts";
 
 /** The denial for text run as shell code. It never quotes the command, which could hold a private id. */
 export const BUILT_CODE_REASON =
-  "This command runs text it builds or reads at run time as shell code: a decoded string, a substitution or a variable piped or passed to a shell, eval or source, or run as the command. No hook can read that code before it runs. Run the command itself, written out.";
+  "This command runs text it builds or reads at run time as shell code: a decoded string, a substitution or a variable piped or passed to a shell, eval or source, or run as the command, or inline interpreter code that starts another program. No hook can read that code before it runs. Run the command itself, written out.";
 
 /** The denial for inline interpreter code that makes a network call. */
 export const INLINE_NETWORK_REASON =
@@ -273,9 +276,51 @@ function stepProblem(step: Step, before: Step | undefined, backticks: boolean, d
   return false;
 }
 
+/**
+ * Code in a language interpreter that starts another program, or runs code it builds (re-grade 3): no hook reads
+ * what that program is. One pattern per family, chosen by the interpreter's name, so a template literal in
+ * `node -e` or a regex's `.exec(` isn't taken for Perl's backticks or a shell call.
+ */
+const SUBPROCESS_CODE: [interpreter: RegExp, code: RegExp][] = [
+  [
+    /^(node|nodejs|deno|bun|tsx|ts-node)$/,
+    new RegExp(
+      [
+        String.raw`\bchild_process\b|\bworker_threads\b|["'\x60](node:)?vm["'\x60]`,
+        String.raw`\b(eval|Function)\s*\(|\bnew\s+Function\b`,
+        // A module named by anything but one literal: `require('child_' + 'process')`, `import(x)`.
+        String.raw`\b(require|import|getBuiltinModule)\s*\(\s*(?!["'\x60][^"'\x60+]*["'\x60]\s*\))`,
+        String.raw`\b(globalThis|global|process|module|self|window)\s*\[`,
+        String.raw`\bprocess\s*\.\s*(binding|_linkedBinding|dlopen)\b|\bBun\s*\.\s*(spawn\w*|\$)|\bDeno\s*\.\s*(run|Command)\b`,
+      ].join("|"),
+    ),
+  ],
+  [
+    /^(python\d*(\.\d+)?|py)$/,
+    /\bos\s*\.\s*(system|popen|exec\w*|spawn\w*|fork\w*|posix_spawn\w*)\b|\bsubprocess\b|\bpty\b|\bfrom\s+os\s+import\b|\b(exec|eval|compile|getattr|__import__)\s*\(|\bimportlib\b|\bctypes\b|\bmultiprocessing\b/,
+  ],
+  [/^perl$/, /\b(system|exec|qx|readpipe|eval|fork)\b|`|\bopen\b[^;]*\||\bIPC::/],
+  [
+    /^(ruby|irb)$/,
+    /\b(system|exec|spawn|fork|eval|\w*_eval|send|public_send|__send__)\b|`|%x[{([<|!]|\bIO\s*\.\s*popen\b|\bOpen3\b|\bKernel\b|\bPTY\b/,
+  ],
+  [
+    /^php$/,
+    /\b(shell_exec|exec|system|passthru|popen|proc_open|pcntl_exec|eval|assert|create_function|call_user_func\w*)\s*\(|`/,
+  ],
+];
+
+/** True when inline code in a language interpreter starts a program or runs code it builds. */
+function subprocessCode(command: string, backticks: boolean): boolean {
+  return interpreterRuns(command, backticks).some(({ name, code }) =>
+    SUBPROCESS_CODE.some(([interpreter, pattern]) => interpreter.test(name) && pattern.test(code)),
+  );
+}
+
 /** True when the command runs built text as shell code, read as written and with ANSI-C strings decoded. */
 function builtCode(command: string, backticks: boolean, depth = 0): boolean {
   for (const text of new Set([command, decodeAnsiC(command)])) {
+    if (subprocessCode(text, backticks)) return true;
     const all = steps(text, backticks);
     if (all.some((step, i) => stepProblem(step, all[i - 1], backticks, depth))) return true;
     // What a substitution runs is a command too: `gh pr create -b "$(… | base64 -d | sh)"`.
@@ -294,20 +339,27 @@ export function builtCodeProblem(command: string, backticks = true): string | un
  * that pipes it in, or from a heredoc), or none.
  */
 export function interpreterPipelines(command: string, backticks = true): string[] {
+  return [...new Set(interpreterRuns(command, backticks).map((run) => run.code))];
+}
+
+/** Each interpreter a pipeline runs, by name, with the pipeline's whole text as its code. */
+function interpreterRuns(command: string, backticks: boolean): { name: string; code: string }[] {
   const pipelines: Step[][] = [];
   for (const step of steps(command, backticks)) {
     const last = pipelines[pipelines.length - 1];
     if (step.piped && last) last.push(step);
     else pipelines.push([step]);
   }
-  return pipelines
-    .filter((pipeline) =>
-      pipeline.some((step) => {
+  return pipelines.flatMap((pipeline) => {
+    const code = pipeline.map((step) => step.text).join(" | ");
+    return pipeline
+      .map((step) => {
         const all = words(step.text);
-        return INTERPRETERS.test(programName(all[programAt(all).at] ?? ""));
-      }),
-    )
-    .map((pipeline) => pipeline.map((step) => step.text).join(" | "));
+        return programName(all[programAt(all).at] ?? "");
+      })
+      .filter((name) => INTERPRETERS.test(name))
+      .map((name) => ({ name, code }));
+  });
 }
 
 /** Why the command may not run because inline interpreter code in it makes a network call, or undefined. */

@@ -102,6 +102,48 @@ export function referencedFiles(cwd: string, command: string): string[] {
   return files;
 }
 
+/** One file a gist or a release would publish: where it is, and its text. */
+export interface Asset {
+  path: string;
+  text: string;
+}
+
+/**
+ * The files a gist or a release would publish (re-grade 3): every word after `gh gist create|edit` or
+ * `gh release create|upload` that names an existing file, from every folder the command could read it from.
+ * A flag's value is read too when it names a file: reading one file too many is harmless, and skipping a flag
+ * that takes no value would skip the file after it. A release asset may carry a label (`file#label`). Words
+ * that are no file (a release's tag) are skipped: gh fails on a missing asset, so nothing unread is posted.
+ * A secret gist counts as much as a public one.
+ */
+export function assetFiles(cwd: string, command: string): Asset[] {
+  const assets: Asset[] = [];
+  const value = /"([^"]*)"|'([^']*)'|([^\s"';&|<>()]+)/g;
+  for (const step of command.split(/[;&|\n]/)) {
+    const start = /\bgh\s+(gist\s+(?:create|edit|new)|release\s+(?:create|upload))\b/.exec(step);
+    if (!start) continue;
+    const words = [...step.slice(start.index + start[0].length).matchAll(value)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+    for (const word of words) {
+      // `--add=<file>` and the like: the value after `=`.
+      const named = word.replace(/^--?[\w-]+=/, "");
+      if (/[$`]|%\w+%/.test(named)) {
+        throw new Unreadable(
+          "This gist or release names a word the shell builds at run time, so the guard can't read what it would publish. Name the files as written.",
+        );
+      }
+      if (!named || named.startsWith("-")) continue;
+      for (const file of new Set([named, named.replace(/#[^\\/]*$/, "")])) {
+        const paths = isAbsolute(file) ? [file] : folders(cwd, command).map((dir) => resolve(dir, file));
+        for (const path of paths) {
+          if (!existsSync(path) || !statSync(path).isFile()) continue;
+          for (const text of readPosted(cwd, command, path)) assets.push({ path, text });
+        }
+      }
+    }
+  }
+  return assets;
+}
+
 /**
  * The files whose text reaches a post through stdin (AUD-M3): an input redirect (`< body.md`) and a file
  * piped in by `cat`, `type`, `Get-Content` or `gc`, when a flag reads the body from stdin. Read from every
