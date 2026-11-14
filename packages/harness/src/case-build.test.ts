@@ -6,6 +6,7 @@ import { parseCliArgs, run } from "./case-build.ts";
 import { type BuildInputs, buildCaseRecord, type Overlay, repoSlug } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { validateCaseRecord } from "./case-record.ts";
+import { ANCHOR_REMINDER } from "./case-save.ts";
 import { type LedgerEntry, readLedger } from "./ledger.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { RULE_VERSION } from "./match-rule.ts";
@@ -940,6 +941,22 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect(JSON.parse(out)).toMatchObject({ caseId: CASE_ID });
     expect(progress).toContain("[case:build] from overlay: challenge");
     expect(progress).toContain("[case:build] saved");
+    // --save ends with the reminder to anchor the private history, on stderr, never in the record.
+    expect(progress.trimEnd().endsWith(ANCHOR_REMINDER)).toBe(true);
+    expect(ANCHOR_REMINDER).toContain("npm run ledger:anchor");
+    expect(out).not.toContain("ledger:anchor");
+  });
+
+  it("ends a --save of a record already saved with the same reminder, and a refused one without it", async () => {
+    const fx = fixture();
+    expect((await build(fx, { save: true })).code).toBe(0);
+    const again = await build(fx, { save: true });
+    expect(again.code).toBe(0);
+    expect(again.progress.trimEnd().endsWith(ANCHOR_REMINDER)).toBe(true);
+    writeFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "{}\n");
+    const refused = await build(fx, { save: true });
+    expect(refused.code).toBe(2);
+    expect(refused.progress).not.toContain(ANCHOR_REMINDER);
   });
 
   it("refuses, exit 2, a saved review changed after the verdict", async () => {

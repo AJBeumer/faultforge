@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { gh } from "./github.ts";
-import { evidenceDir, ROOT } from "./paths.ts";
+import { evidenceDir, evidenceKindDir, ROOT } from "./paths.ts";
 import { buildTable, casePrs, type EvidenceRow, groundTruthCommits, readSavedReviews } from "./rules-evidence.ts";
 
 /** The pattern threshold, in one place: this many findings, over at least this many PRs. */
@@ -125,7 +125,7 @@ export function propose(
     prs: casePrs(join(priv, "cases")),
     commits: groundTruthCommits(join(priv, "ground-truth.jsonl")),
   };
-  const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
+  const table = buildTable(readSavedReviews(evidenceKindDir(evidence, "reviews")), excluded);
   const patterns = findPatterns(table.rows);
   print(
     `A pattern is at least ${THRESHOLD.findings} findings with one category over ${THRESHOLD.prs} PRs in one repo.`,

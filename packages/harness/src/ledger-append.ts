@@ -31,6 +31,7 @@ export const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "case.evidence-added",
   "case.published",
   "ledger.amended",
+  "template.revised",
 ]);
 
 /** Why `event` may not be written, in plain words, or an empty list. */

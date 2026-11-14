@@ -9,7 +9,7 @@ import { type FactoryConfig, repoConfig } from "./factory-config.ts";
 import { REVERT_CHECK_TIMEOUT_MS } from "./factory-exec.ts";
 import { reviewerRuleGates } from "./factory-gates.ts";
 import type { Workspace } from "./factory-tick.ts";
-import { ROOT as LAB_ROOT } from "./paths.ts";
+import { ROOT as LAB_ROOT, prEvidenceDir } from "./paths.ts";
 import { buildTrustedCheckout, removeTrustedCheckout } from "./trusted-checkout.ts";
 
 export interface Verification {
@@ -209,10 +209,10 @@ export function verifyPrWith(
     // answers, which are worth keeping even when the PR doesn't count as verified (Qodo on PR 171).
     // The whole per-PR folder, not just the final record: this is the same permanent path
     // `saveEvidence` already carries to the private repo.
-    const trustedReviewDir = join(trustedLab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+    const trustedReviewDir = prEvidenceDir(join(trustedLab, factory.evidence), "reviews", repoKey, pr);
     const reviewRecordFile = join(trustedReviewDir, `${short}.review.json`);
     if (existsSync(trustedReviewDir)) {
-      const permanentReviewDir = join(ws.lab, factory.evidence, "reviews", `${repoKey}-pr${pr}`);
+      const permanentReviewDir = prEvidenceDir(join(ws.lab, factory.evidence), "reviews", repoKey, pr);
       try {
         mkdirSync(permanentReviewDir, { recursive: true });
         cpSync(trustedReviewDir, permanentReviewDir, { recursive: true });
@@ -262,17 +262,11 @@ export function verifyPrWith(
     // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
     // Same trusted checkout as review:wait, for the same reason (#161).
     const revertRecordFile = join(
-      trustedLab,
-      factory.evidence,
-      "revert-checks",
-      `${repoKey}-pr${pr}`,
+      prEvidenceDir(join(trustedLab, factory.evidence), "revert-checks", repoKey, pr),
       `${short}.revert-check.json`,
     );
     const permanentRecordFile = join(
-      ws.lab,
-      factory.evidence,
-      "revert-checks",
-      `${repoKey}-pr${pr}`,
+      prEvidenceDir(join(ws.lab, factory.evidence), "revert-checks", repoKey, pr),
       `${short}.revert-check.json`,
     );
     const revert = io.npm(

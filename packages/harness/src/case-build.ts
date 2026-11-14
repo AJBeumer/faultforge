@@ -55,7 +55,8 @@
  * control's record is always version 2. A bug case's record stays version 1 and keeps its bytes.
  *
  * `--save` writes the record to `private/cases/<caseId>.json`, in place of copying it by hand (AUD-M24). A
- * file already there with other content is refused, never replaced. `--write` publishes: it writes
+ * file already there with other content is refused, never replaced. It ends by printing the reminder to run
+ * `npm run ledger:anchor` (`case-save.ts`). `--write` publishes: it writes
  * `examples/<caseId>.json` and appends a `case.published` audit event (the written record's `sha256` and
  * `path`). Writing the same case twice with unchanged content is a no-op the second time (the file is
  * rewritten, but no duplicate event is appended) rather than a new event every run.
@@ -72,13 +73,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { parseArgs } from "node:util";
 import { buildCaseRecord, latestEvent, type Overlay, requireField } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
+import { saveCaseRecord } from "./case-save.ts";
 import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
@@ -349,22 +351,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const text = `${printRecord(record)}\n`;
-  if (options.save) {
-    const savePath = join(casesDir, `${caseId}.json`);
-    mkdirSync(casesDir, { recursive: true });
-    // Created exclusively, so of two builds racing for an absent file only one writes (Qodo on PR 264).
-    try {
-      writeFileSync(savePath, text, { flag: "wx" });
-      error(`[case:build] saved ${savePath}`);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      if (readFileSync(savePath, "utf8") !== text) {
-        error(`case:build: ${savePath} already holds a different record; compare them, nothing saved`);
-        return 2;
-      }
-      error(`[case:build] ${savePath} already holds this record`);
-    }
-  }
+  // Ends with the reminder to anchor the private history (`case-save.ts`).
+  if (options.save && saveCaseRecord(casesDir, caseId, text, error) === 2) return 2;
   if (!options.write) {
     log(text.trimEnd());
     return 0;

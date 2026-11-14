@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { anchorProblems, readAnchors, recordAnchor } from "./ledger-anchor.ts";
+import { ANCHOR_LAG_LIMIT, anchorLagWarning, anchorProblems, readAnchors, recordAnchor } from "./ledger-anchor.ts";
 import { anchorsFileProblems, appendOnlyProblems, ledgerCheckProblems } from "./ledger-check.ts";
 
 function sh(dir: string, ...args: string[]): string {
@@ -237,5 +237,60 @@ describe("an anchors file replaced by a link (Qodo on PR 286)", () => {
       context.skip(); // Windows without the right to make links: the link can't be made here, so can't be tested.
     }
     expect(anchorsFileProblems(w.anchors)).toEqual([expect.stringContaining("is a link")]);
+  });
+});
+
+describe("anchorLagWarning: ledger:check warns when the private HEAD runs far past the last anchor", () => {
+  it("says nothing within the limit, and warns, naming the count, once past it", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors, new Date("2026-11-14T00:00:00Z"));
+    expect(anchorLagWarning(w.repo, w.anchors, 2)).toBeUndefined();
+    w.add('{"caseId":"FF-9003"}');
+    w.add('{"caseId":"FF-9004"}');
+    expect(anchorLagWarning(w.repo, w.anchors, 2)).toBeUndefined();
+    w.add('{"caseId":"FF-9005"}');
+    const warning = anchorLagWarning(w.repo, w.anchors, 2);
+    expect(warning).toContain("3 commits past the last anchor (2026-11-14), more than 2");
+    expect(warning).toContain("npm run ledger:anchor");
+    // A new anchor clears it.
+    recordAnchor(w.repo, w.anchors);
+    expect(anchorLagWarning(w.repo, w.anchors, 2)).toBeUndefined();
+  });
+
+  it("leaves a missing anchors file or an unknown anchor to anchorProblems, which reports them as problems", () => {
+    const w = world();
+    expect(anchorLagWarning(w.repo, w.anchors)).toBeUndefined();
+    writeFileSync(w.anchors, `2026-11-14 ${"c".repeat(40)}\n`);
+    expect(anchorLagWarning(w.repo, w.anchors)).toBeUndefined();
+  });
+
+  it("has a limit of a few cases' commits", () => {
+    expect(ANCHOR_LAG_LIMIT).toBeGreaterThanOrEqual(5);
+    expect(ANCHOR_LAG_LIMIT).toBeLessThanOrEqual(20);
+  });
+
+  it("is printed by ledger:check as a warning that never changes its exit code", () => {
+    const text = readFileSync(join(import.meta.dirname, "ledger-check.ts"), "utf8");
+    const main = text.slice(text.indexOf("export function main(): number"));
+    expect(main).toMatch(
+      /const lag = anchorLagWarning\(root, ANCHORS_FILE\);\n\s*if \(lag\) console\.log\(`\[ledger:check\] warning: \$\{lag\}`\);/,
+    );
+    expect(main.slice(main.indexOf("const lag"), main.indexOf("console.log(`[ledger:check] warning"))).not.toMatch(
+      /return/,
+    );
+  });
+});
+
+describe("the new-case skill anchors after every saved case", () => {
+  it("has a step that runs ledger:anchor after case:build --save and commits the anchor through a PR", () => {
+    const skill = readFileSync(join(import.meta.dirname, "../../../.claude/skills/new-case/SKILL.md"), "utf8");
+    const save = skill.indexOf("npm run case:build -- <FF-NNNN> --save");
+    const anchor = skill.indexOf("npm run ledger:anchor\n");
+    expect(save).toBeGreaterThan(0);
+    expect(anchor).toBeGreaterThan(save);
+    const step = skill.slice(skill.indexOf("## 8. Anchor the private history"));
+    expect(step).toContain("docs/ledger-anchors.txt");
+    expect(step).toMatch(/open a PR/);
+    expect(step).toMatch(/Never commit the anchor straight to `main`/);
   });
 });

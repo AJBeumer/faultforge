@@ -37,6 +37,20 @@ export function runsDir(root: string = ROOT): string {
   return resolve(process.env.FAULTFORGE_RUNS_DIR ?? join(root, "..", "faultforge-runs"));
 }
 
+/** The kinds of per-PR evidence the harness saves: `review:wait`'s saved reviews and `revert:check`'s records. */
+export type PrEvidenceKind = "reviews" | "revert-checks";
+
+/** `<evidence>/<kind>`: the folder of one kind of per-PR evidence, under any evidence folder (a checkout's own,
+ * a trusted checkout's, private storage's). The one place these folder names are spelled. */
+export function evidenceKindDir(evidence: string, kind: PrEvidenceKind): string {
+  return join(evidence, kind);
+}
+
+/** `<evidence>/<kind>/<repoKey>-pr<N>`: one PR's folder of that kind, the same under every evidence folder. */
+export function prEvidenceDir(evidence: string, kind: PrEvidenceKind, repoKey: string, pr: number | string): string {
+  return join(evidenceKindDir(evidence, kind), `${repoKey}-pr${pr}`);
+}
+
 /** A case's id: `FF-` and four digits. Checked before it names a file (`<id>.json`), so `../x` can name none. */
 export const CASE_ID = /^FF-\d{4}$/;
 

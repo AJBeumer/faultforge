@@ -92,3 +92,20 @@ npm run case:build -- <FF-NNNN> --save
 - Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
 - If the template is now adjudicated and not held back for the benchmark, ask whether to copy it to `templates/seed/`.
 - Tick off related items in `private/BACKLOG.md`.
+- Last, once everything above is committed and pushed, anchor the private history (section 8).
+
+## 8. Anchor the private history
+
+After every case whose record was saved, once section 7 is done and `private/` and this repository are pushed (`case:build --save` ends by reminding you), anchor its history in this public repository, so a later rewrite of the answer key or audit log can't pass as append-only. From this repository's root, on a fresh branch of its own, so nothing else (the decision log, which names the case) lands on it. If `anchor-<YYYY-MM-DD>` is already taken (a second case that day), add `-2`, `-3`:
+
+```bash
+git -C . fetch -q origin
+git -C . switch -c anchor-<YYYY-MM-DD> origin/main
+npm run ledger:anchor
+npm run check
+```
+
+- `ledger:anchor` appends one line, the date and the private HEAD's commit id, to `docs/ledger-anchors.txt`. Exit 0: anchored, or HEAD is already the last anchor (then there is nothing to commit and you are done). Exit 2: it couldn't read the private HEAD or the anchors file; fix that before anything else.
+- Commit only `docs/ledger-anchors.txt`, as `Anchor the private history (<YYYY-MM-DD>)`, push the branch and open a PR for it. Name no case, template or verdict in the branch, commit or PR: a held-back case may be among the commits anchored.
+- The owner merges it, as any other PR. Never commit the anchor straight to `main`.
+- `npm run ledger:check` warns when the private HEAD has run more than a set number of commits past the last anchor: a sign this step was skipped.

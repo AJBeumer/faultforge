@@ -7,19 +7,19 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { MatchFinding } from "./match-rule.ts";
-import { evidenceDir, privateDir } from "./paths.ts";
+import { evidenceDir, evidenceKindDir, prEvidenceDir, privateDir } from "./paths.ts";
 
 /**
  * The folder every saved review lives under: `<evidence>/reviews`, with the evidence folder taken from
  * `factory.json` and moved with private storage when `FAULTFORGE_PRIVATE_DIR` is set.
  */
 export function savedReviewsDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(privateDir(env), basename(evidenceDir()), "reviews");
+  return evidenceKindDir(join(privateDir(env), basename(evidenceDir())), "reviews");
 }
 
 /** One PR's saves: `<savedReviewsDir>/<repoKey>-pr<N>`. */
 export function savedReviewDir(repoKey: string, pr: number, env: NodeJS.ProcessEnv = process.env): string {
-  return join(savedReviewsDir(env), `${repoKey}-pr${pr}`);
+  return prEvidenceDir(join(privateDir(env), basename(evidenceDir())), "reviews", repoKey, pr);
 }
 
 /** The save of one commit in a PR's folder: `<first 7 of the SHA>.review.json`. */
