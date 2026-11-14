@@ -88,14 +88,15 @@ npm run case:build -- <FF-NNNN> --save
 
 - Never click **Dismiss** on a Qodo finding and never chat with Qodo on a case PR. Qodo's PR history indexing learns from both, which would bias later cases.
 - Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue). They close the PR.
-- Commit and push `private/`: `Add <case>: <template id>, <verdict>`. Then anchor it straight away (section 8).
+- Commit and push `private/`: `Add <case>: <template id>, <verdict>`.
 - Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
 - If the template is now adjudicated and not held back for the benchmark, ask whether to copy it to `templates/seed/`.
 - Tick off related items in `private/BACKLOG.md`.
+- Last, once everything above is committed and pushed, anchor the private history (section 8).
 
 ## 8. Anchor the private history
 
-After every case whose record was saved, once `private/` is pushed (`case:build --save` ends by reminding you), anchor its history in this public repository, so a later rewrite of the answer key or audit log can't pass as append-only. From this repository's root, on a fresh branch:
+After every case whose record was saved, once section 7 is done and `private/` and this repository are pushed (`case:build --save` ends by reminding you), anchor its history in this public repository, so a later rewrite of the answer key or audit log can't pass as append-only. From this repository's root, on a fresh branch of its own, so nothing else (the decision log, which names the case) lands on it. If `anchor-<YYYY-MM-DD>` is already taken (a second case that day), add `-2`, `-3`:
 
 ```bash
 git -C . fetch -q origin
