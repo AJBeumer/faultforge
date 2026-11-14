@@ -75,7 +75,7 @@ export function quotedSpans(command: string): Span[] {
         });
       }
       // `at` is the closing delimiter's line end (its newline is kept as a command separator), or the next line.
-      i = at > i + 1 ? at : i + 1;
+      i = Math.max(at, i + 1);
       wordStart = true;
       continue;
     }
@@ -196,4 +196,62 @@ export function gitSteps(text: string, verb: RegExp): Step[] {
     const step = { start: part.start + at, text: part.text.slice(at) };
     return verb.test(step.text) ? [step] : [];
   });
+}
+
+/** A command substitution: where it starts (`$(` or a backtick) and the command inside it. */
+export interface Substitution {
+  start: number;
+  inner: string;
+}
+
+/**
+ * Every outermost command substitution the shell would run: `$(…)` (bash and PowerShell), and a backtick
+ * pair when `backticks` is set (bash; to PowerShell a backtick is an escape). Single-quoted text, comments and
+ * heredoc bodies with a quoted delimiter are literal, so nothing in them runs. One pass with a stack, so
+ * nested or unclosed openers cost nothing extra; an unclosed one runs to the end of the command.
+ */
+export function substitutions(command: string, backticks: boolean): Substitution[] {
+  const literal = new Array<boolean>(command.length).fill(false);
+  for (const span of quotedSpans(command)) {
+    if (span.kind === "single" || span.kind === "comment") literal.fill(true, span.start, span.end);
+    if (span.kind === "heredoc" && !span.runs && span.body) literal.fill(true, span.body.start, span.body.end);
+  }
+  const found: Substitution[] = [];
+  const open: number[] = [];
+  let depth = 0;
+  let tick = -1;
+  for (let i = 0; i < command.length; i++) {
+    if (literal[i]) continue;
+    const c = command[i];
+    if (c === "\\" && backticks) {
+      i++;
+      continue;
+    }
+    // In PowerShell a backtick escapes the next character: `$( is literal text (Qodo on PR 266).
+    if (c === "`" && !backticks) {
+      i++;
+      continue;
+    }
+    if (c === "$" && command[i + 1] === "(") {
+      open.push(i);
+      depth++;
+      i++;
+    } else if (c === "(" && open.length) {
+      open.push(-1);
+    } else if (c === ")" && open.length) {
+      const start = open.pop() ?? -1;
+      if (start >= 0) depth--;
+      if (start >= 0 && depth === 0) found.push({ start, inner: command.slice(start + 2, i) });
+    } else if (c === "`" && backticks && !open.length) {
+      if (tick < 0) tick = i;
+      else {
+        found.push({ start: tick, inner: command.slice(tick + 1, i) });
+        tick = -1;
+      }
+    }
+  }
+  const outer = open.find((s) => s >= 0);
+  if (outer !== undefined) found.push({ start: outer, inner: command.slice(outer + 2) });
+  if (tick >= 0) found.push({ start: tick, inner: command.slice(tick + 1) });
+  return found;
 }

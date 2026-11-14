@@ -15,11 +15,12 @@
  * which must be nonblank, differ from the original, and not be any other case's reason or amended reason.
  *
  * Exit codes: 0 the amendment was appended (or, with `--dry-run`, printed); 1 nothing was written because it
- * was refused: stdin is not a terminal, the verdict already has an amended reason, or no acceptable reason was
- * given after retrying; 2 nothing was written because it couldn't run: usage, the answer key or audit log has a
+ * was refused: stdin is not a terminal, the verdict already has an amended reason (or gained one, or was
+ * replaced, while the owner answered), or no acceptable reason was given after retrying; 2 nothing was written because it couldn't run: usage, the answer key or audit log has a
  * problem, the case has no verdict, its saved review can't be found, the owner's login can't be read, or the
  * line couldn't be appended.
  */
+import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -31,7 +32,7 @@ import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { casePr, findSavedReview, savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 import { type AskFn, askOwnReason, defaultAsk } from "./verdict-ask.ts";
-import { normalReason, reasonsOfOtherCases } from "./verdict-event.ts";
+import { latestVerdict, normalReason, reasonsOfOtherCases } from "./verdict-event.ts";
 
 export const AMENDMENT_REASON = "Adds an accurate reason, written after the verdict; the original reason is kept.";
 
@@ -74,14 +75,30 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     return 2;
   }
   const caseEvents = events.filter((e) => e.caseId === caseId);
-  const verdict = caseEvents.filter((e) => e.type === "case.adjudicated").at(-1);
-  if (!verdict || typeof verdict.eventId !== "string") {
+  const verdict = latestVerdict(caseEvents);
+  if (!verdict) {
     error(`verdict:amend: ${caseId} has no verdict to add a reason to`);
     return 2;
   }
+  // An amendment names its target by id; a case id would name all the case's events at once.
+  if (typeof verdict.eventId !== "string") {
+    error(`verdict:amend: ${caseId}'s verdict has no event id, so no amendment can name it; ask the owner`);
+    return 2;
+  }
+  // The evidence is what the verdict judged: the file it names, else its PR's save, else (a legacy case with
+  // no save) its case record (Qodo on PR 267).
   const save = entry ? findSavedReview(reviewsDir, String(entry.injectionCommit), casePr(caseEvents)) : undefined;
-  if (!save) {
-    error(`verdict:amend: the saved review ${caseId}'s verdict judged can't be found under ${reviewsDir}`);
+  const record = join(root, "cases", `${caseId}.json`);
+  const evidence =
+    typeof verdict.reviewFile === "string"
+      ? verdict.reviewFile
+      : save
+        ? relative(root, save.path).replace(/\\/g, "/")
+        : existsSync(record)
+          ? `cases/${caseId}.json`
+          : undefined;
+  if (!evidence) {
+    error(`verdict:amend: neither the review ${caseId}'s verdict judged nor its case record can be found`);
     return 2;
   }
 
@@ -124,9 +141,7 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     at,
     change: { amendedReason: reason, amendedReasonAt: at, amendedReasonBy: by, amendedReasonWrittenLater: true },
     reason: AMENDMENT_REASON,
-    // The file the verdict hashed when it names one, else its case's PR's save.
-    evidence:
-      typeof verdict.reviewFile === "string" ? verdict.reviewFile : relative(root, save.path).replace(/\\/g, "/"),
+    evidence,
   };
   if (options.dryRun) {
     log(`(dry run) would append to ${auditEventsPath}:`);
@@ -134,6 +149,14 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     return 0;
   }
   try {
+    // Read again just before writing: another run may have amended or replaced the verdict meanwhile.
+    const fresh = readAuditLog(auditEventsPath);
+    const again = latestVerdict(fresh.filter((e) => e.caseId === caseId));
+    const takenNow = reasonsOfOtherCases(fresh, caseId).has(normalReason(reason));
+    if (again?.eventId !== verdict.eventId || again.amendedReason !== undefined || takenNow) {
+      error(`verdict:amend: ${caseId}'s verdict changed while you answered; nothing written`);
+      return 1;
+    }
     const { kind: _kind, ...line } = amendment;
     if (options.append) options.append(auditEventsPath, amendment);
     else appendAmendment(auditEventsPath, line);

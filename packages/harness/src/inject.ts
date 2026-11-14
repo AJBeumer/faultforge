@@ -27,6 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
+import { guardProblem } from "./guard-install.ts";
 import { git as gitIn, log, readJsonl, run, runProof, runStep } from "./inject-run.ts";
 import {
   applyMutation,
@@ -123,6 +124,11 @@ if (!validateOnly) {
       `target HEAD ${baseCommit.slice(0, 7)} is not origin/main (${originMain.slice(0, 7) || "missing"}): switch to main and pull first`,
     );
   }
+}
+// A real case commits in the target, so git's own guard must be there to check that commit (#242).
+if (!validateOnly) {
+  const unguarded = guardProblem(targetDir);
+  if (unguarded) fail(`${unguarded}. Run npm run guard:install first.`);
 }
 // --validate-only derives nothing and never asks origin: its temporary branch is deleted before the run
 // ends, so it only needs the one local check it always had, to avoid `git switch -c` failing outright.
