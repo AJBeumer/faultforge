@@ -3,20 +3,11 @@
  * artefact, and one proof test at a time in its own scratch folder. Also the answer key's jsonl helpers.
  */
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Proof } from "./inject-template.ts";
+import { readJsonLines } from "./jsonl.ts";
 import { ROOT } from "./paths.ts";
 import { type Outcome, outcomeOf, proofOutcomeOf, readVitestReport, stepLogText } from "./run-outcome.ts";
 
@@ -106,20 +97,13 @@ export function git(targetDir: string, ...gitArgs: string[]): string {
   return result.stdout.trim();
 }
 
+/** The file's lines (`readJsonLines`), or none when there is no file yet. */
 export function readJsonl(path: string): Record<string, unknown>[] {
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  return existsSync(path) ? readJsonLines(path) : [];
 }
 
 export function appendJsonl(path: string, value: object) {
   appendFileSync(path, `${JSON.stringify(value)}\n`);
-}
-
-export function sha256(data: string | Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 export function log(message: string) {
