@@ -92,7 +92,7 @@ function duplicateIds(lines: LedgerLine[]): Set<string> {
 }
 
 /** Every non-amendment line, in file order, with the amendments that name it applied. */
-function applyAmendments(path: string, asOf?: string): LedgerEntry[] {
+function applyAmendments(path: string, keep?: (amendment: Amendment, nth: number) => boolean): LedgerEntry[] {
   const lines = readLines(path);
   const ambiguous = duplicateIds(lines);
   const baseEntries: LedgerLine[] = [];
@@ -107,12 +107,11 @@ function applyAmendments(path: string, asOf?: string): LedgerEntry[] {
   const amendmentsFor = new Map<LedgerLine, Amendment[]>();
   for (const line of lines) {
     if (!isAmendment(line)) continue;
-    // As of a moment: an amendment written later wasn't there yet (one with no readable time is later).
-    if (asOf !== undefined && !(Date.parse(line.at ?? "") <= Date.parse(asOf))) continue;
     const target = line.amends !== undefined ? byId.get(line.amends) : undefined;
     if (!target) continue;
-    Object.assign(target, line.change ?? {});
     const applied = amendmentsFor.get(target) ?? [];
+    if (keep && !keep(line, applied.length)) continue;
+    Object.assign(target, line.change ?? {});
     applied.push(line);
     amendmentsFor.set(target, applied);
   }
@@ -120,12 +119,22 @@ function applyAmendments(path: string, asOf?: string): LedgerEntry[] {
   return baseEntries.map((entry) => ({ ...entry, amendments: amendmentsFor.get(entry) ?? [] }));
 }
 
+/** The answer key's cases, amendments applied. */
+export function readLedger(path: string): LedgerEntry[] {
+  return applyAmendments(path);
+}
+
 /**
- * The answer key's cases, amendments applied. With `asOf`, only the amendments written by then: the entry
- * as a verdict at that time read it, which is what its `inputHash` covers.
+ * Every version an entry has had, oldest first: with none of its amendments applied, then the first, the
+ * first two, and so on. The file is append-only, so whatever a tool read at some moment was one of these;
+ * a verdict's `inputHash` covers whichever it was, whatever times the amendments claim.
  */
-export function readLedger(path: string, asOf?: string): LedgerEntry[] {
-  return applyAmendments(path, asOf);
+export function entryVersions(path: string, id: string): LedgerEntry[] {
+  const all = applyAmendments(path).find((e) => idOf(e) === id);
+  if (!all) return [];
+  return Array.from({ length: all.amendments.length + 1 }, (_, count) =>
+    applyAmendments(path, (amendment, nth) => amendment.amends !== id || nth < count).find((e) => idOf(e) === id),
+  ).filter((e): e is LedgerEntry => e !== undefined);
 }
 
 /** The audit log's events, amendments applied. */

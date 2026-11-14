@@ -59,7 +59,8 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
   const adjudicatedTemplates = new Set(
     [...facts.caseTemplates].filter(([c]) => facts.adjudicated.has(c)).flatMap(([, ts]) => ts),
   );
-  const highest = Math.max(0, ...[...facts.caseTemplates.keys()].map(caseNumber));
+  // Only ids in the answer key's own form count: one malformed id must not make every comparison false.
+  const highest = Math.max(0, ...[...facts.caseTemplates.keys()].filter((id) => /^FF-\d+$/.test(id)).map(caseNumber));
   const problems: string[] = [];
   for (const { path, text } of files) {
     // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.

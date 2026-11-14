@@ -76,3 +76,12 @@ describe("docsProblems: an id above every case in the answer key (#244)", () => 
     expect(docsProblems([{ path: "docs/x.md", text: "FF-0002" }], sparse)).toEqual([]);
   });
 });
+
+describe("docsProblems: a malformed id in the answer key (Qodo on PR 264)", () => {
+  it("still refuses an id above the highest well-formed case", () => {
+    const odd: DocsFacts = { ...facts, caseTemplates: new Map([...facts.caseTemplates, ["FF-X", ["seed-v1"]]]) };
+    expect(docsProblems([{ path: "docs/x.md", text: "FF-0005" }], odd)).toEqual([
+      "docs/x.md: names FF-0005, above the highest case in the answer key",
+    ]);
+  });
+});

@@ -33,7 +33,7 @@ function fixture(verdictTool = "faultforge-harness@1.0.0") {
   const saveText = JSON.stringify({ pr: 4, headSha: COMMIT, state: "complete", findings: [] });
   writeFileSync(savePath, saveText);
   const at = "2026-11-03T00:00:00.000Z";
-  const judged = readLedger(groundTruthPath, at)[0];
+  const judged = readLedger(groundTruthPath)[0];
   const events = [
     {
       eventId: "inj",
@@ -70,8 +70,8 @@ describe("hashProblems (AUD-M26, #249)", () => {
     const path = join(fx.dir, "template.json");
     writeFileSync(path, readFileSync(path, "utf8").replace("bug", "bug "));
     expect(hashProblems(fx.paths, fx.env)).toEqual([
-      "FF-9200 sabotage.injected event inj: its inputHash no longer recomputes, so an input changed after it was recorded",
-      "FF-9200 case.adjudicated event ver: its inputHash no longer recomputes, so an input changed after it was recorded",
+      "FF-9200 sabotage.injected event inj: its inputHash no longer recomputes: the template or a proof changed after it was recorded",
+      "FF-9200 case.adjudicated event ver: its inputHash no longer recomputes: the answer-key entry, the template or the saved review changed after it was recorded",
     ]);
   });
 
@@ -120,5 +120,55 @@ describe("ownProofFiles", () => {
       "b.ts",
     ]);
     expect(ownProofFiles({ kind: "control" })).toEqual([]);
+  });
+});
+
+describe("hashProblems: what Qodo found on PR 264", () => {
+  it("checks a verdict against the file it names, even when that isn't the PR's save (--review)", () => {
+    const fx = fixture();
+    const other = join(fx.root, "elsewhere.review.json");
+    writeFileSync(other, '{"pr":4,"state":"complete","findings":[]}');
+    const lines = readFileSync(fx.paths.auditEventsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const verdict = lines.find((e) => e.eventId === "ver");
+    verdict.reviewFile = "elsewhere.review.json";
+    verdict.inputHash = verdictInputHash(
+      readLedger(fx.paths.groundTruthPath)[0] as never,
+      readFileSync(join(fx.dir, "template.json"), "utf8"),
+      readFileSync(other, "utf8"),
+    );
+    writeFileSync(fx.paths.auditEventsPath, lines.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    expect(hashProblems(fx.paths, fx.env)).toEqual([]);
+    writeFileSync(other, "{}");
+    expect(hashProblems(fx.paths, fx.env)).toEqual([expect.stringContaining("event ver")]);
+  });
+
+  it("accepts an amendment already in the file when the verdict read it, whatever time it claims", () => {
+    const fx = fixture();
+    // Appended before the verdict, but dated after it: the verdict hashed the entry with it applied.
+    const amendment = { kind: "amendment", amends: "FF-9200", at: "2027-01-01T00:00:00.000Z", change: { x: 1 } };
+    appendFileSync(fx.paths.groundTruthPath, `${JSON.stringify({ ...amendment, reason: "r", evidence: "e" })}\n`);
+    const lines = readFileSync(fx.paths.auditEventsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const verdict = lines.find((e) => e.eventId === "ver");
+    verdict.inputHash = verdictInputHash(
+      readLedger(fx.paths.groundTruthPath)[0] as never,
+      readFileSync(join(fx.dir, "template.json"), "utf8"),
+      readFileSync(fx.savePath, "utf8"),
+    );
+    writeFileSync(fx.paths.auditEventsPath, lines.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    expect(hashProblems(fx.paths, fx.env)).toEqual([]);
+  });
+
+  it("reports a template that no longer parses, and goes on to the other events", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.dir, "template.json"), "{ not json");
+    const problems = hashProblems(fx.paths, fx.env);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain("can't be recomputed");
   });
 });

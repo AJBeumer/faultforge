@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ledgerProblems, readAuditLog, readLedger } from "./ledger.ts";
+import { entryVersions, ledgerProblems, readAuditLog, readLedger } from "./ledger.ts";
 
 function fileOf(...lines: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-"));
@@ -264,18 +264,27 @@ describe("readLedger: a line that isn't JSON (M88)", () => {
   });
 });
 
-describe("readLedger as of a time (#249)", () => {
-  it("applies only the amendments written by then, and lists only those", () => {
+describe("entryVersions (#249, Qodo on PR 264)", () => {
+  it("gives every version an entry has had, by file order of its amendments, whatever times they claim", () => {
     const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
-    const amend = (at: string, n: number) =>
-      JSON.stringify({ kind: "amendment", amends: "FF-0001", at, change: { n }, reason: "r", evidence: "e" });
+    const amend = (amends: string, at: string, n: number) =>
+      JSON.stringify({ kind: "amendment", amends, at, change: { n }, reason: "r", evidence: "e" });
     writeFileSync(
       path,
-      `${[JSON.stringify({ caseId: "FF-0001" }), amend("2026-11-01T00:00:00Z", 1), amend("2026-11-03T00:00:00Z", 2)].join("\n")}\n`,
+      `${[
+        JSON.stringify({ caseId: "FF-0001" }),
+        JSON.stringify({ caseId: "FF-0002" }),
+        amend("FF-0001", "2026-11-09T00:00:00Z", 1),
+        amend("FF-0002", "2026-11-02T00:00:00Z", 9),
+        amend("FF-0001", "2026-11-01T00:00:00Z", 2),
+      ].join("\n")}\n`,
     );
-    const asOf = readLedger(path, "2026-11-02T00:00:00.000Z")[0];
-    expect(asOf).toMatchObject({ n: 1 });
-    expect(asOf?.amendments).toHaveLength(1);
-    expect(readLedger(path)[0]).toMatchObject({ n: 2 });
+    const versions = entryVersions(path, "FF-0001");
+    expect(versions.map((v) => [v.n, v.amendments.length])).toEqual([
+      [undefined, 0],
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(entryVersions(path, "FF-0009")).toEqual([]);
   });
 });

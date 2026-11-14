@@ -52,7 +52,7 @@ npm run review:wait -- target <pr> --commit <injectionCommit> --timeout 25
 npm run case:review -- <FF-NNNN>
 ```
 
-- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run, or a save of that commit already exists (a save is evidence and is never overwritten); 3 Qodo skipped the review (zero findings then does **not** mean clean).
+- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run, or a complete save of that commit already exists (a save is evidence and is never overwritten; an unfinished one is kept under another name when you wait again); 3 Qodo skipped the review (zero findings then does **not** mean clean).
 - `case:review` appends the `review.recorded` event `case:build` needs, from that save: the PR, the review comment's URL and time, the configuration version from `pr.opened`. It refuses a save for another commit or PR, and a case that already has the event (exit 1). Run it whatever `review:wait` said: an inconclusive case needs its review stage too.
 - Any review by another bot (e.g. Copilot) is saved but doesn't count. Note who posted first.
 

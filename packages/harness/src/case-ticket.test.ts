@@ -512,3 +512,30 @@ describe("run: the ticket matches the case's answer-key entry (#249, AUD-M24)", 
     expect(ghCalled).toBe(false);
   });
 });
+
+describe("run: a template changed after its case was planted (Qodo on PR 264)", () => {
+  it("is refused through the injection event's hash, before gh is called", async () => {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    writeFileSync(
+      auditEventsPath,
+      `${JSON.stringify({ eventId: "i", type: "sabotage.injected", caseId: "FF-0009", at: "2026-11-01T00:00:00Z", tool: "faultforge-harness@1.0.0", inputHash: "0".repeat(64) })}\n`,
+    );
+    const errors: string[] = [];
+    let ghCalled = false;
+    const code = await run("a-template", "FF-0009", {
+      env,
+      auditEventsPath,
+      evidenceDir,
+      factory: FACTORY,
+      log: () => {},
+      error: (l) => errors.push(l),
+      gh: () => {
+        ghCalled = true;
+        return "";
+      },
+    });
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("isn't the one it was planted from");
+    expect(ghCalled).toBe(false);
+  });
+});

@@ -9,20 +9,21 @@
  * minutes later to add findings. Only Qodo's API saying the run for the head commit is `completed`
  * counts. Read-only towards GitHub and Qodo throughout.
  *
- * The save (`<evidence>/reviews/<repo>-pr<N>/<sha7>.review.json`, from `saved-review.ts`) is written once
- * and never replaced: a verdict's hash covers it. When it already exists for the commit, nothing is waited
- * for or written.
+ * The save (`<evidence>/reviews/<repo>-pr<N>/<sha7>.review.json`, from `saved-review.ts`) is never written
+ * over: a verdict's hash covers it. When a complete save of the commit exists, nothing is waited for or
+ * written. An unfinished one (timed out, skipped, head moved) may be waited for again; it is kept, renamed
+ * `<sha7>.unfinished-<n>.json`, when the new save is written.
  *
  * Exit codes: 0 Qodo's review of the head (with `--commit`, of that commit) is complete and saved; 1 there
  * is no complete review of it within the time limit, whether Qodo didn't finish or, with `--commit`, the head
  * never became that commit or moved past it (what was seen is saved); 2 it couldn't run: usage, a missing
  * key, every poll failed or answered something that isn't a review, a complete review in a shape this can't
- * read, or a save of this commit that already exists; 3 Qodo finished the run but skipped reviewing it.
+ * read, or a complete save of this commit that already exists; 3 Qodo finished the run but skipped reviewing it.
  *
  * After a push, pass `--commit`: right after a push GitHub can still show the previous head, and
  * without it the previous commit's finished review would be reported as the answer (PR 65, 9 Nov).
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
@@ -32,7 +33,7 @@ import { QodoApi } from "./qodo-api.ts";
 import { findingsFor, findingsShapeProblem, openFindings, type QodoReview, reviewEffort } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds } from "./review-feeds.ts";
 import { waitForHead, waitForReview } from "./review-poll.ts";
-import { savedReviewDir, savedReviewPath, writeSavedReview } from "./saved-review.ts";
+import { savedReviewDir, savedReviewPath, savedReviewRefusal, writeSavedReview } from "./saved-review.ts";
 
 export interface Args {
   repoKey: string;
@@ -112,11 +113,11 @@ export async function run(args: Args, deps: WaitScriptDeps): Promise<number> {
 async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScriptDeps): Promise<number> {
   const { dir, github, log } = deps;
   const deadline = deps.now() + timeoutMinutes * 60_000;
-  // A save is never overwritten (AUD-M26): refused before any waiting once the commit is known.
+  // A complete save is never overwritten (AUD-M26): refused before any waiting once the commit is known. An
+  // unfinished one may be waited for again, and is kept under another name (Qodo on PR 264).
   const refuseExisting = (sha: string) => {
-    const path = savedReviewPath(dir, sha.toLowerCase());
-    if (existsSync(path))
-      throw new Error(`${path} already exists: a saved review is evidence and is never overwritten`);
+    const refusal = savedReviewRefusal(savedReviewPath(dir, sha.toLowerCase()));
+    if (refusal) throw new Error(refusal);
   };
   let headSha: string;
   if (commit === null) {
