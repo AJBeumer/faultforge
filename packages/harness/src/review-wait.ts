@@ -34,7 +34,13 @@ import { QodoApi } from "./qodo-api.ts";
 import { findingsFor, findingsShapeProblem, openFindings, type QodoReview, reviewEffort } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds } from "./review-feeds.ts";
 import { waitForHead, waitForReview } from "./review-poll.ts";
-import { savedReviewDir, savedReviewPath, savedReviewRefusal, writeSavedReview } from "./saved-review.ts";
+import {
+  archiveUnfinished,
+  savedReviewDir,
+  savedReviewPath,
+  savedReviewRefusal,
+  writeSavedReview,
+} from "./saved-review.ts";
 
 export interface Args {
   repoKey: string;
@@ -113,10 +119,13 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
   const { dir, github, log } = deps;
   const deadline = deps.now() + timeoutMinutes * 60_000;
   // A complete save is never overwritten (AUD-M26): refused before any waiting once the commit is known. An
-  // unfinished one may be waited for again, and is kept under another name (Qodo on PR 264).
+  // unfinished one may be waited for again: it is moved, with every raw answer and feed saved beside it,
+  // into a folder of its own first, so this wait overwrites none of its evidence (Qodo on PR 264).
   const refuseExisting = (sha: string) => {
     const refusal = savedReviewRefusal(savedReviewPath(dir, sha.toLowerCase()));
     if (refusal) throw new Error(refusal);
+    const kept = archiveUnfinished(dir, sha.toLowerCase());
+    if (kept) log(`An unfinished save of ${sha.slice(0, 7)} was kept, with its evidence, in ${kept}`);
   };
   let headSha: string;
   if (commit === null) {
@@ -272,10 +281,17 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
 /** The real GitHub, Qodo and clock behind `run`. */
 export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
   const { github } = repoConfig(loadFactory(), repoKey);
-  const api = new QodoApi();
+  // Made on first use: a missing key is then a failed poll (exit 2), and building the deps never throws.
+  let made: QodoApi | undefined;
+  const api = () => {
+    made ??= new QodoApi();
+    return made;
+  };
   return {
     github,
-    dir: savedReviewDir(repoKey, pr),
+    // Under this checkout's own evidence folder, whatever FAULTFORGE_PRIVATE_DIR says: factory-verify runs it in a
+    // trusted checkout and copies the saves from there (Qodo on PR 264).
+    dir: savedReviewDir(repoKey, pr, {}),
     readHead: async () => gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim(),
     checkSuiteTimes: (sha) =>
       ghAll<{ created_at: string }>(
@@ -288,8 +304,8 @@ export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
     }),
     formalReviews: () => gh("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/reviews`),
     fetchReview: () =>
-      api.call("get-pr-review-findings", { pr_url: `https://github.com/${github}/pull/${pr}`, extended: true }),
-    rawAnswers: () => ({ last: api.lastRaw, recovered: api.lastRecoveredRaw }),
+      api().call("get-pr-review-findings", { pr_url: `https://github.com/${github}/pull/${pr}`, extended: true }),
+    rawAnswers: () => ({ last: made?.lastRaw ?? "", recovered: made?.lastRecoveredRaw ?? [] }),
     checkRuns: (sha) =>
       ghAll<{ name: string; status: string; conclusion: string | null }>(
         `repos/${github}/commits/${sha}/check-runs`,

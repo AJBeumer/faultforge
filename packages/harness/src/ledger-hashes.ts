@@ -133,8 +133,11 @@ export function hashProblems(
   const entries = readLedger(paths.groundTruthPath);
   const events = readAuditLog(paths.auditEventsPath);
   const problems: string[] = [];
+  // A verdict a later one superseded no longer stands, so its inputs may have moved on (Qodo on PR 264).
+  const superseded = new Set(events.map((e) => e.supersedes).filter((id): id is string => typeof id === "string"));
   for (const event of events) {
     if (!isToolWritten(event) || typeof event.inputHash !== "string") continue;
+    if (superseded.has(String(event.eventId))) continue;
     const label = `${String(event.caseId)} ${String(event.type)} event ${String(event.eventId)}`;
     if (event.type === "case.adjudicated") {
       const caseEvents = events.filter((e) => e.caseId === event.caseId);

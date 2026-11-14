@@ -66,8 +66,12 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
     // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.
     const matches = [...text.matchAll(/\bff([\s_-]?)(\d{3,})\b/gi)];
     const ids = matches.map((m) => `FF-${(m[2] as string).padStart(4, "0")}`);
-    // Written with a separator, as a case id is: `#ff5733` is a colour, not a case (Qodo on PR 264).
-    const separated = new Set(matches.filter((m) => m[1]).map((m) => `FF-${(m[2] as string).padStart(4, "0")}`));
+    // Any spelling but a colour or a hex number: `#ff5733` and `0xff5733` are not cases (Qodo on PR 264).
+    const separated = new Set(
+      matches
+        .filter((m) => !/[#x]$/i.test(text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0)))
+        .map((m) => `FF-${(m[2] as string).padStart(4, "0")}`),
+    );
     for (const id of new Set(ids)) {
       // An id the answer key doesn't hold is an example or a fixture, unless it is above every case there:
       // then it names a case that hasn't been planted yet, ahead of time (#244), unless it is a fixture id.

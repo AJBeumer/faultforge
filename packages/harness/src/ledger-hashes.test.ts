@@ -189,3 +189,16 @@ describe("verdictHashProblem: a template named by a later amendment (Qodo on PR 
     expect(hashProblems(fx.paths, fx.env).filter((p) => p.includes("event ver"))).toEqual([]);
   });
 });
+
+describe("hashProblems: a superseded verdict (Qodo on PR 264)", () => {
+  it("is no longer checked once a later verdict names it in supersedes", () => {
+    const fx = fixture();
+    writeFileSync(fx.savePath, "{}");
+    expect(hashProblems(fx.paths, fx.env)).toHaveLength(1);
+    appendFileSync(
+      fx.paths.auditEventsPath,
+      `${JSON.stringify({ eventId: "ver2", type: "case.adjudicated", caseId: "FF-9200", at: "2026-11-04T00:00:00Z", tool: "manual-session", supersedes: "ver" })}\n`,
+    );
+    expect(hashProblems(fx.paths, fx.env)).toEqual([]);
+  });
+});

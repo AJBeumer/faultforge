@@ -4,7 +4,7 @@
  * `verdict`, `case:build` and `case:review` read it, all through this module, so the folder can't be
  * computed two ways (AUD-M24).
  */
-import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { MatchFinding } from "./match-rule.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
@@ -46,6 +46,26 @@ export function savedReviewRefusal(path: string): string | undefined {
   return existingState(path) === "complete"
     ? `${path} already holds a complete review: a saved review is evidence and is never overwritten`
     : undefined;
+}
+
+/**
+ * Before a new wait for a commit whose save is unfinished: moves that save and every other file of the
+ * commit (`<sha7>.*`: raw answers, comment feeds, head wait) into `<sha7>.unfinished-<n>/`, so the new wait
+ * overwrites none of it. Returns the folder, or undefined when there was no save to keep.
+ */
+export function archiveUnfinished(dir: string, headSha: string): string | undefined {
+  const path = savedReviewPath(dir, headSha);
+  if (existingState(path) === undefined || existingState(path) === "complete") return undefined;
+  const short = headSha.slice(0, 7);
+  let n = 1;
+  while (existsSync(join(dir, `${short}.unfinished-${n}`))) n++;
+  const kept = join(dir, `${short}.unfinished-${n}`);
+  mkdirSync(kept);
+  for (const file of readdirSync(dir)) {
+    const full = join(dir, file);
+    if (file.startsWith(`${short}.`) && full !== kept && statSync(full).isFile()) renameSync(full, join(kept, file));
+  }
+  return kept;
 }
 
 /**
