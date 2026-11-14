@@ -1,0 +1,49 @@
+# Raises the lab's alert (#308): one open issue labelled `alert` per kind, or a comment on the open one. Called by
+# check.yml when CI on main fails, and by factory.yml when a tick ends with exit 2 or 3. The text is fixed words,
+# the workflow's name and the run's URL (packages/harness/src/alert.ts): never a log line or a private path.
+# The lab's own GITHUB_TOKEN, with issues: write, in this job only; no other secret.
+name: Alert
+
+on:
+  workflow_call:
+    inputs:
+      kind:
+        description: ci-main or factory
+        required: true
+        type: string
+      outcome:
+        description: one of the kind's fixed outcomes (a factory tick's exit code)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  alert:
+    name: Raise the alert
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    # Two failures at once comment one after the other, so they can't open two issues of one kind.
+    concurrency:
+      group: alert-${{ inputs.kind }}
+      cancel-in-progress: false
+    steps:
+      # Only the script, from this run's own commit; nothing installed, nothing private.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: packages/harness/src/alert.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      # Inputs reach the script through the environment, never pasted into the shell.
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ inputs.kind }}
+          OUTCOME: ${{ inputs.outcome }}
+        run: node packages/harness/src/alert.ts "$KIND" "$OUTCOME"
