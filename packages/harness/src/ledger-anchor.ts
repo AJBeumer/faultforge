@@ -23,7 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { eachGitLine, ownRepoRoot } from "./git-stream.ts";
+import { eachGitLine, LineReader, ownRepoRoot } from "./git-stream.ts";
 import { ROOT } from "./paths.ts";
 import { privateDir } from "./templates.ts";
 
@@ -59,28 +59,32 @@ function git(repoRoot: string, ...args: string[]) {
   return spawnSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" });
 }
 
-/** True when `prefix` is the start of `lines`, line for line. */
-function startsWith(lines: string[], prefix: string[]): boolean {
-  return prefix.length <= lines.length && prefix.every((line, i) => line === lines[i]);
+/**
+ * Whether the file at `commit` is the start of the file today, line by line (line endings aside). Both are
+ * read one line at a time, side by side, so neither is ever held whole (Qodo on PR 286).
+ */
+function isStartOfToday(privateRoot: string, commit: string, file: string): boolean {
+  const path = join(privateRoot, file);
+  const today = existsSync(path) ? new LineReader(path) : null;
+  let same = true;
+  try {
+    eachGitLine(privateRoot, ["show", `${commit}:${file}`], (line) => {
+      if (same && today?.next()?.replace(/\r$/, "") !== line.replace(/\r$/, "")) same = false;
+    });
+  } finally {
+    today?.close();
+  }
+  return same;
 }
 
-/** A file's lines, without line endings or the empty string after a final line break. */
-function linesOf(text: string): string[] {
-  const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
-  if (lines.at(-1) === "") lines.pop();
-  return lines;
-}
-
-/** Problems with each anchored commit in `anchorsPath`, checked against the private repository at `privateRoot`. */
+/**
+ * Problems with each anchored commit in `anchorsPath`, checked against the private repository at `privateRoot`.
+ * Each anchor costs one read of both files as they were then; the anchors are few (one a day at most).
+ */
 export function anchorProblems(privateRoot: string, anchorsPath: string): string[] {
   const { anchors, problems } = readAnchors(anchorsPath);
   if (!anchors.length) return problems.length ? problems : [`${anchorsPath}: holds no anchor`];
   ownRepoRoot(privateRoot);
-  const today = new Map<string, string[]>();
-  for (const file of LEDGER_FILES) {
-    const path = join(privateRoot, file);
-    today.set(file, existsSync(path) ? linesOf(readFileSync(path, "utf8")) : []);
-  }
   for (const { date, commit } of anchors) {
     const label = `anchor ${commit.slice(0, 12)} (${date})`;
     if (git(privateRoot, "cat-file", "-e", `${commit}^{commit}`).status !== 0) {
@@ -97,9 +101,7 @@ export function anchorProblems(privateRoot: string, anchorsPath: string): string
     if (ancestor.status !== 0) throw new Error(`git merge-base failed for ${label}: ${ancestor.stderr.trim()}`);
     for (const file of LEDGER_FILES) {
       if (git(privateRoot, "cat-file", "-e", `${commit}:${file}`).status !== 0) continue;
-      const then: string[] = [];
-      eachGitLine(privateRoot, ["show", `${commit}:${file}`], (line) => then.push(line.replace(/\r$/, "")));
-      if (!startsWith(today.get(file) ?? [], then)) {
+      if (!isStartOfToday(privateRoot, commit, file)) {
         problems.push(`${label}: ${file} then is not the start of ${file} today; a line was removed or changed since`);
       }
     }
@@ -123,7 +125,10 @@ export function recordAnchor(
   const existing = existsSync(anchorsPath) ? readAnchors(anchorsPath) : { anchors: [], problems: [] };
   if (existing.problems.length) throw new Error(existing.problems.join("; "));
   if (existing.anchors.at(-1)?.commit === commit) return { commit, added: false };
-  appendFileSync(anchorsPath, `${now.toISOString().slice(0, 10)} ${commit}\n`);
+  // A file whose last line has no line break gets one first, so two anchors never run together (Qodo on PR 286).
+  const text = existsSync(anchorsPath) ? readFileSync(anchorsPath, "utf8") : "";
+  const separator = text && !text.endsWith("\n") ? "\n" : "";
+  appendFileSync(anchorsPath, `${separator}${now.toISOString().slice(0, 10)} ${commit}\n`);
   return { commit, added: true };
 }
 

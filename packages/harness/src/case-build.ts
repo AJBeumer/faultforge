@@ -271,8 +271,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       );
       return 2;
     }
-    // The path names `private/...`, so it is read from the folder that holds private storage.
-    const legacyPath = resolve(dirname(root), overlay.legacyFindingsPath);
+    // The path names `private/...`: inside private storage, whatever its folder is called (Qodo on PR 286).
+    const legacyPath = resolve(root, overlay.legacyFindingsPath.replace(/^private[\\/]/, ""));
     let raw: QodoReview;
     try {
       raw = JSON.parse(readFileSync(legacyPath, "utf8"));

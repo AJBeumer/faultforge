@@ -70,6 +70,15 @@ function findingProblem(finding: unknown, index: number): string | undefined {
  */
 export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
+  // Read below and by `reviewState`: anything but a list of objects would throw there instead (Qodo on PR 286).
+  const runs: unknown = review.review_runs;
+  if (runs !== undefined && (!Array.isArray(runs) || runs.some((r) => typeof r !== "object" || r === null))) {
+    return "Qodo's complete review lists its runs in something other than a list of runs";
+  }
+  const session: unknown = review.review_session;
+  if (session !== undefined && session !== null && typeof session !== "object") {
+    return "Qodo's complete review has a review session that isn't an object";
+  }
   if (typeof review.finding_count === "number" && review.finding_count !== review.findings.length) {
     return `Qodo's complete review counts ${review.finding_count} findings but lists ${review.findings.length}`;
   }

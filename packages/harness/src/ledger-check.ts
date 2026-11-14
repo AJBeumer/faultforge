@@ -22,8 +22,8 @@
  * An unexpected error, even while loading, is 2 too: `npm run ledger:check` runs `ledger-check-cli.ts`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { eachGitLine, ownRepoRoot } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
 import { ANCHORS_FILE, anchorProblems, LEDGER_FILES as FILES } from "./ledger-anchor.ts";
@@ -151,9 +151,31 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
 }
 
 /**
+ * Problems with the anchors file itself, in the public repository that holds it: it must be committed there,
+ * and its history and working copy may only add lines. An anchor replaced by a line naming a rewritten
+ * private HEAD would otherwise pass every other check (Qodo on PR 286).
+ */
+export function anchorsFileProblems(anchorsPath: string): string[] {
+  if (!existsSync(anchorsPath)) return []; // `anchorProblems` reports a missing file.
+  const folder = dirname(resolve(anchorsPath));
+  const top = spawnSync("git", ["-C", folder, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (top.status !== 0) return [`${anchorsPath}: not in a git repository, so its history can't be checked`];
+  const repoRoot = top.stdout.trim();
+  const relPath = relative(realpathSync.native(repoRoot), realpathSync.native(resolve(anchorsPath)))
+    .split(sep)
+    .join("/");
+  const tracked = spawnSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relPath], {
+    encoding: "utf8",
+  });
+  if (tracked.status !== 0) return [`${relPath}: not committed, so an anchor in it could be changed unseen`];
+  return appendOnlyProblems(repoRoot, relPath);
+}
+
+/**
  * Every problem with the private ledger: unsound amendments, any non-append-only history, any anchored
- * commit that today's history no longer holds or no longer extends (`anchorsPath`, AUD-M11), and any tool's
- * `inputHash` that no longer recomputes from today's template, proofs or saved review (AUD-M26).
+ * commit that today's history no longer holds or no longer extends, or an anchors file that was changed
+ * other than by adding lines (`anchorsPath`, AUD-M11), and any tool's `inputHash` that no longer recomputes
+ * from today's template, proofs or saved review (AUD-M26).
  */
 export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): string[] {
   const problems: string[] = [];
@@ -161,7 +183,8 @@ export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): 
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
   }
-  if (anchorsPath !== undefined) problems.push(...anchorProblems(privateRoot, anchorsPath));
+  if (anchorsPath !== undefined)
+    problems.push(...anchorsFileProblems(anchorsPath), ...anchorProblems(privateRoot, anchorsPath));
   // Every event readable as an event: the lenient check every shape on disk passes (AUD-M5).
   const auditPath = join(privateRoot, FILES[1] as string);
   if (existsSync(auditPath)) {

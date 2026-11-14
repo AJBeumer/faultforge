@@ -371,9 +371,9 @@ describe("parseCliArgs", () => {
 describe("run: legacy path only applies with no genuine saved review", () => {
   const CASE_ID = "FF-0001";
   const INJECTION_COMMIT = "d".repeat(40);
-  // overlay.legacyFindingsPath is read relative to the folder that holds private storage (it names a path
-  // like "private/raw-artifacts/<case>/..."), so the fixture's own file is named relative to it too.
-  const legacyPathOf = (fx: { root: string }) => relative(dirname(fx.root), join(fx.root, "legacy-findings.json"));
+  // overlay.legacyFindingsPath names a path like "private/raw-artifacts/<case>/...", read inside private
+  // storage whatever its folder is called: the fixture's is a temp folder named otherwise (Qodo on PR 286).
+  const legacyPathOf = (_fx: { root: string }) => "private/legacy-findings.json";
   const writeLegacy = (fx: { root: string }, review: unknown) =>
     writeFileSync(join(fx.root, "legacy-findings.json"), JSON.stringify(review));
   /** A complete review of the injection commit in Qodo's API shape, with one finding on the injected lines. */
@@ -582,7 +582,9 @@ describe("run: legacy path only applies with no genuine saved review", () => {
   });
 
   it("refuses a legacy file that isn't a review's shape (AUD-M1)", async () => {
-    for (const bad of [[], { findings: [{ id: "x", git_sha: INJECTION_COMMIT.slice(0, 7) }] }]) {
+    const shortSha = { findings: [{ id: "x", git_sha: INJECTION_COMMIT.slice(0, 7) }] };
+    // review_runs that aren't a list threw out of run instead of a refusal (Qodo on PR 286).
+    for (const bad of [[], shortSha, { ...legacyReview(), review_runs: {} }]) {
       const fx = fixture();
       writeLegacy(fx, bad);
       const { code, err } = await runOn(fx, { legacyFindingsPath: legacyPathOf(fx) });

@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { anchorProblems, readAnchors, recordAnchor } from "./ledger-anchor.ts";
-import { appendOnlyProblems, ledgerCheckProblems } from "./ledger-check.ts";
+import { anchorsFileProblems, appendOnlyProblems, ledgerCheckProblems } from "./ledger-check.ts";
 
 function sh(dir: string, ...args: string[]): string {
   return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
@@ -61,6 +61,15 @@ describe("recordAnchor (AUD-M11)", () => {
     w.add('{"caseId":"FF-9003"}');
     expect(recordAnchor(w.repo, w.anchors).added).toBe(true);
     expect(readAnchors(w.anchors).anchors).toHaveLength(2);
+  });
+
+  it("starts a new line after a last anchor that has no line break, so two never run together (Qodo on PR 286)", () => {
+    const w = world();
+    writeFileSync(w.anchors, `2026-11-13 ${"a".repeat(40)}`);
+    recordAnchor(w.repo, w.anchors);
+    const { anchors, problems } = readAnchors(w.anchors);
+    expect(problems).toEqual([]);
+    expect(anchors.map((a) => a.commit)).toEqual(["a".repeat(40), sh(w.repo, "rev-parse", "HEAD")]);
   });
 
   it("refuses a folder that isn't the root of its own repository, and leaves the private repository as it was", () => {
@@ -129,8 +138,51 @@ describe("anchorProblems (AUD-M11)", () => {
     writeFileSync(join(w.repo, "audit-events.jsonl"), "");
     w.add('{"caseId":"FF-9003"}');
     recordAnchor(w.repo, w.anchors);
+    const lab = labRepo(w.anchors);
     expect(ledgerCheckProblems(w.repo, w.anchors)).toEqual([]);
     squash(w.repo);
     expect(ledgerCheckProblems(w.repo, w.anchors).join("\n")).toContain("is not an ancestor of the private HEAD");
+    expect(lab).toBeTruthy();
+  });
+});
+
+/** Commits the anchors file in a public repository of its own, as this repository holds it. */
+function labRepo(anchors: string): string {
+  const lab = dirname(anchors);
+  sh(lab, "init", "--quiet", "-b", "main");
+  sh(lab, "config", "user.email", "test@example.com");
+  sh(lab, "config", "user.name", "Test");
+  sh(lab, "config", "core.autocrlf", "false");
+  sh(lab, "add", basename(anchors));
+  sh(lab, "commit", "--quiet", "-m", "anchor");
+  return lab;
+}
+
+describe("anchorsFileProblems: an anchor can't be swapped for another (Qodo on PR 286)", () => {
+  it("catches an anchor replaced by one naming a rewritten history, which the anchor check alone passes", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    labRepo(w.anchors);
+    expect(anchorsFileProblems(w.anchors)).toEqual([]);
+    writeFileSync(w.key, '{"caseId":"FF-9001","changed":true}\n{"caseId":"FF-9002"}\n');
+    squash(w.repo);
+    writeFileSync(w.anchors, `2026-11-14 ${sh(w.repo, "rev-parse", "HEAD")}\n`);
+    expect(anchorProblems(w.repo, w.anchors)).toEqual([]);
+    expect(anchorsFileProblems(w.anchors)).toEqual([expect.stringContaining("uncommitted changes removed or changed")]);
+    sh(dirname(w.anchors), "commit", "--quiet", "-am", "swap");
+    expect(anchorsFileProblems(w.anchors)).toEqual([expect.stringContaining("removed or changed a line")]);
+  });
+
+  it("passes a new anchor added after the last, committed or not, and refuses an anchors file never committed", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    expect(anchorsFileProblems(w.anchors)).toEqual([expect.stringContaining("not in a git repository")]);
+    const lab = labRepo(w.anchors);
+    w.add('{"caseId":"FF-9003"}');
+    recordAnchor(w.repo, w.anchors);
+    expect(anchorsFileProblems(w.anchors)).toEqual([]);
+    const other = join(lab, "other-anchors.txt");
+    writeFileSync(other, readFileSync(w.anchors, "utf8"));
+    expect(anchorsFileProblems(other)).toEqual([expect.stringContaining("not committed")]);
   });
 });

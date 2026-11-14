@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utim
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { eachGitLine, TEMP_PREFIX } from "./git-stream.ts";
+import { eachGitLine, isRunning, LineReader, TEMP_PREFIX } from "./git-stream.ts";
 
 /** Every file and folder under `root`, as relative paths, so a test can see that nothing was added. */
 function listing(root: string): string[] {
@@ -67,15 +67,73 @@ describe("eachGitLine (AUD-N6, Qodo on PR 280)", () => {
   });
 
   it("removes what a killed run left behind once it is an hour old, and leaves a fresh one alone", () => {
-    const stale = join(temp, `${TEMP_PREFIX}old`);
-    const fresh = join(temp, `${TEMP_PREFIX}new`);
+    const stale = join(temp, `${TEMP_PREFIX}1001-old`);
+    const fresh = join(temp, `${TEMP_PREFIX}1002-new`);
     mkdirSync(stale);
     mkdirSync(fresh);
     const now = Date.now();
     const hourAndMore = new Date(now - 2 * 60 * 60 * 1000);
     utimesSync(stale, hourAndMore, hourAndMore);
-    eachGitLine(dir, ["rev-parse", "HEAD"], () => {}, now, temp);
+    eachGitLine(
+      dir,
+      ["rev-parse", "HEAD"],
+      () => {},
+      now,
+      temp,
+      () => false,
+    );
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+  });
+
+  it("never removes an old folder whose run is still going, or one that names no run (Qodo on PR 286)", () => {
+    const busy = join(temp, `${TEMP_PREFIX}1003-busy`);
+    const unnamed = join(temp, `${TEMP_PREFIX}old`);
+    const hourAndMore = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const folder of [busy, unnamed]) {
+      mkdirSync(folder);
+      utimesSync(folder, hourAndMore, hourAndMore);
+    }
+    eachGitLine(
+      dir,
+      ["rev-parse", "HEAD"],
+      () => {},
+      Date.now(),
+      temp,
+      (pid) => pid === 1003,
+    );
+    expect(existsSync(busy)).toBe(true);
+    expect(existsSync(unnamed)).toBe(true);
+  });
+
+  it("names its folder after its own process, which counts as running", () => {
+    const names: string[] = [];
+    eachGitLine(dir, ["rev-parse", "HEAD"], () => names.push(...readdirSync(temp)), Date.now(), temp);
+    expect(names[0]?.startsWith(`${TEMP_PREFIX}${process.pid}-`)).toBe(true);
+    expect(isRunning(process.pid)).toBe(true);
+  });
+});
+
+describe("LineReader", () => {
+  it("reads a file line by line across chunks, with or without a final line break", () => {
+    const folder = mkdtempSync(join(tmpdir(), "line-reader-"));
+    try {
+      const long = "é".repeat(700_000);
+      for (const [text, lines] of [
+        [`${long}\n\nb\n`, [long, "", "b"]],
+        ["a\nb", ["a", "b"]],
+        ["", []],
+      ] as const) {
+        const file = join(folder, "f.txt");
+        writeFileSync(file, text);
+        const reader = new LineReader(file);
+        const read: string[] = [];
+        for (let line = reader.next(); line !== undefined; line = reader.next()) read.push(line);
+        reader.close();
+        expect(read).toEqual(lines);
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });

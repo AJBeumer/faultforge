@@ -749,6 +749,13 @@ describe("findingsShapeProblem: a complete review must hold a readable findings 
     expect(findingsShapeProblem({ ...pr1, finding_count: (pr1.findings?.length ?? 0) + 1 })).toMatch(/counts \d+/);
     expect(findingsShapeProblem({ ...pr1, finding_count: pr1.findings?.length ?? 0 })).toBeUndefined();
   });
+
+  it("refuses runs that aren't a list of runs, or a session that isn't an object, instead of throwing (Qodo on PR 286)", () => {
+    for (const review_runs of [{}, "x", [null], [1]]) {
+      expect(findingsShapeProblem({ ...pr1, review_runs: review_runs as never }, PR1_HEAD)).toMatch(/list of runs/);
+    }
+    expect(findingsShapeProblem({ ...pr1, review_session: "done" as never })).toMatch(/isn't an object/);
+  });
 });
 
 describe("findingsShapeProblem: every finding is read field by field (AUD-M9, #249)", () => {
