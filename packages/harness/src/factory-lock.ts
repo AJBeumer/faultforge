@@ -3,7 +3,8 @@
  */
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ownStartId, sameProcess } from "./factory-process.ts";
+import { killTree } from "./factory-kill.ts";
+import { ownStartId, processStartId, sameProcess } from "./factory-process.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 export interface Lock {
@@ -11,13 +12,16 @@ export interface Lock {
   release(): void;
   /** Writes a new heartbeat for a lock that is still this tick's. The tick also does it on a timer. Never throws. */
   refresh(): void;
+  /** Records the agent's pid and start with the heartbeat, so a tick that takes over after this runner was
+   * killed can end the agent it left behind (AUD-M19). */
+  recordAgent(pid: number | null, started?: string): void;
   note?: string;
 }
 
 /** How often a running tick refreshes its heartbeat, on a timer and at every step it logs. */
 export const HEARTBEAT_MS = 60_000;
 
-const NOT_ACQUIRED = { acquired: false, release: () => {}, refresh: () => {} } as const;
+const NOT_ACQUIRED = { acquired: false, release: () => {}, refresh: () => {}, recordAgent: () => {} } as const;
 
 const random = () => Math.random().toString(36).slice(2);
 
@@ -28,12 +32,21 @@ export function beatFile(dir: string, token: string): string {
 
 /** The last heartbeat of the holder with `token`, or undefined when it has none or it can't be read. */
 export function lastBeat(dir: string, token: string | undefined): string | undefined {
-  if (!token) return undefined;
+  return readBeat(dir, token).at;
+}
+
+/** The holder's heartbeat file: its last beat, and its agent's pid and start while one runs. */
+function readBeat(dir: string, token: string | undefined): { at?: string; agentPid?: number; agentStarted?: string } {
+  if (!token) return {};
   try {
-    const at = JSON.parse(readFileSync(beatFile(dir, token), "utf8")).at;
-    return typeof at === "string" ? at : undefined;
+    const beat = JSON.parse(readFileSync(beatFile(dir, token), "utf8"));
+    return {
+      ...(typeof beat.at === "string" ? { at: beat.at } : {}),
+      ...(Number.isInteger(beat.agentPid) ? { agentPid: beat.agentPid } : {}),
+      ...(typeof beat.agentStarted === "string" ? { agentStarted: beat.agentStarted } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -61,13 +74,30 @@ export function lastBeat(dir: string, token: string | undefined): string | undef
  * its *source* path, so two ticks can't both move the same stale lock away; the moved file is checked against
  * the exact bytes read, and anything else is put back with `linkSync`, which never replaces a lock another
  * tick took in between.
+ *
+ * The heartbeat also records the agent's pid and start while one runs (`recordAgent`). A runner killed
+ * outright leaves its agent running with no time limit; the tick that takes the stale lock over kills that
+ * agent's tree first (`killAgent`), before it recovers the ticket (AUD-M19). Only when that pid is alive and
+ * still the process that started then (`isSame`): once the agent ended, its pid may belong to another.
  */
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
-  options: { heartbeatMs?: number; isSame?: (pid: number, started: string | undefined) => boolean } = {},
+  options: {
+    heartbeatMs?: number;
+    isSame?: (pid: number, started: string | undefined) => boolean;
+    killAgent?: (pid: number) => void;
+    /** Reads a live process's start id now (`processStartId`), to tell the recorded agent from a reused pid. */
+    startIdOf?: (pid: number) => string | null;
+  } = {},
 ): Lock {
-  const { heartbeatMs = HEARTBEAT_MS, isSame = (pid, started) => sameProcess(pid, started) } = options;
+  const {
+    heartbeatMs = HEARTBEAT_MS,
+    isSame = (pid, started) => sameProcess(pid, started),
+    killAgent = killTree,
+    startIdOf = processStartId,
+  } = options;
+  let agent: { agentPid: number; agentStarted?: string } | undefined;
   const file = join(dir, "factory.lock");
   const token = `${process.pid}-${random()}`;
   const since = new Date().toISOString();
@@ -87,7 +117,7 @@ export function acquireLock(
   const refresh = () => {
     try {
       const tmp = `${beat}.${random()}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ at: new Date().toISOString() }));
+      writeFileSync(tmp, JSON.stringify({ at: new Date().toISOString(), ...agent }));
       renameSync(tmp, beat);
     } catch {
       // A missed heartbeat is tried again on the next step or timer; a run is never stopped by one.
@@ -113,7 +143,11 @@ export function acquireLock(
     refresh();
     timer = setInterval(refresh, heartbeatMs);
     timer.unref();
-    return { acquired: true, release, refresh, ...(note ? { note } : {}) };
+    const recordAgent = (pid: number | null, started?: string) => {
+      agent = pid ? { agentPid: pid, ...(started ? { agentStarted: started } : {}) } : undefined;
+      refresh();
+    };
+    return { acquired: true, release, refresh, recordAgent, ...(note ? { note } : {}) };
   };
   try {
     take();
@@ -129,9 +163,32 @@ export function acquireLock(
   } catch {
     // An unreadable lock has no pid, so it is stale below; heldText stays "" and won't match anything real.
   }
-  const at = lastBeat(dir, held.token) ?? held.at;
+  const beatNow = readBeat(dir, held.token);
+  const at = beatNow.at ?? held.at;
   if (!lockIsStale(held, isAlive, isSame))
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${at}` };
+  // The gone runner's agent is ended before the lock changes hands; one that can't be ended keeps the lock
+  // where it is, so no second run starts beside it (Qodo on PR 268).
+  // Killed only on proof that the pid is still the agent (its start id read now equals the recorded one);
+  // when that can't be told either way, nothing is killed and the lock stays, for the owner (Qodo on PR 268).
+  let ended = "";
+  const { agentPid, agentStarted } = beatNow;
+  if (agentPid && isAlive(agentPid)) {
+    const now = startIdOf(agentPid);
+    const keep = (why: string) => ({
+      ...NOT_ACQUIRED,
+      note: `the stale lock's agent, pid ${agentPid}, ${why}, so the lock stays`,
+    });
+    if (!agentStarted || now === null) return keep("may still be running and can't be told from another process");
+    if (now === agentStarted) {
+      try {
+        killAgent(agentPid);
+        ended = `; ended its agent, pid ${agentPid}`;
+      } catch (error) {
+        return keep(`couldn't be ended (${(error as Error).message})`);
+      }
+    }
+  }
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${random()}`);
   try {
@@ -162,5 +219,5 @@ export function acquireLock(
     return lost;
   }
   const why = held.pid && isAlive(held.pid) ? "that pid is now another process" : "its pid is gone";
-  return won(`took over a stale lock from pid ${held.pid ?? "?"} (${at ?? "unknown time"}): ${why}`);
+  return won(`took over a stale lock from pid ${held.pid ?? "?"} (${at ?? "unknown time"}): ${why}${ended}`);
 }
