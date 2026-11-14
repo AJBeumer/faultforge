@@ -117,9 +117,9 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
     for (const id of readdirSync(root).sort()) {
       const dir = join(root, id);
       if (seen.has(id) || !existsSync(join(dir, "template.json"))) continue;
-      seen.add(id);
       // A template still being written can't stand in the corpus: it is skipped, and said so, rather than
-      // stopping every control (Qodo on PR 271).
+      // stopping every control (Qodo on PR 271). Only a usable copy marks the id as seen, so a broken private
+      // copy never hides a good published one.
       let template: Template;
       try {
         template = loadTemplate(dir);
@@ -127,7 +127,10 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
         skipped(id, `template.json can't be read (${e instanceof Error ? e.message : String(e)})`);
         continue;
       }
-      if (template.kind !== "bug") continue;
+      if (template.kind !== "bug") {
+        seen.add(id);
+        continue;
+      }
       const problems = templateProblems(template);
       if (problems.length) {
         skipped(id, `it fails the schema (${problems[0]})`);
@@ -139,6 +142,7 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
         skipped(id, `its proof ${missing.proofTest} is missing`);
         continue;
       }
+      seen.add(id);
       corpus.push(...proofs.map((proof) => ({ ...proof, dir })));
     }
   }
