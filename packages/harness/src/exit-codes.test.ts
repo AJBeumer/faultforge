@@ -23,13 +23,8 @@ const UNHANDLED_KNOWN = new Set([
   "case-build.ts",
   "case-review.ts",
   "case-ticket.ts",
-  "docs-check.ts",
-  "factory-tick.ts",
-  "factory-timeline.ts",
-  "guard-install.ts",
   "ledger-check.ts",
   "match.ts",
-  "ticket-ready.ts",
   "verdict.ts",
 ]);
 
@@ -103,5 +98,30 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
     expect(handlesUnexpectedErrors(`try {} catch {}\n${guard} main();`)).toBe(false);
     expect(handlesUnexpectedErrors(`${guard} {\n  try { main(); } catch { process.exit(2); }\n}`)).toBe(true);
     expect(handlesUnexpectedErrors(`process.on("uncaughtException", () => process.exit(2));\nrun();`)).toBe(true);
+  });
+
+  it("catches load-time errors too: an entry on cli-entry.ts imports nothing else statically (AUD-N3)", () => {
+    const problems: string[] = [];
+    const entries = npmScripts().filter(({ text }) => /from "\.\/cli-entry\.ts"/.test(text));
+    for (const { file, text } of entries) {
+      const imports = [...text.matchAll(/^import [^;]*? from "(.+)";$/gm)].map((m) => m[1]);
+      if (imports.join() !== "./cli-entry.ts") problems.push(`${file} imports ${imports.join(", ")}`);
+      if (!/await runEntry\(\s*"[\w:]+",\s*async \(\) =>[^;]*\(await import\("\.\/[\w-]+\.ts"\)\)/.test(text))
+        problems.push(`${file} doesn't load its body inside runEntry`);
+    }
+    // The scripts moved behind cli-entry.ts for AUD-N3 stay there, and each body's header says where its
+    // could-not-run code comes from, so a reader of either file finds it.
+    const moved = { "docs-check": 2, "factory-tick": 3, "factory-timeline": 2, "guard-install": 2, "ticket-ready": 2 };
+    for (const [name, code] of Object.entries(moved)) {
+      const cli = entries.find(({ file }) => file === `${name}-cli.ts`);
+      if (!cli) problems.push(`npm doesn't run ${name}-cli.ts`);
+      else if (!new RegExp(`process\\.argv\\.slice\\(2\\),\\s*${code},?\\s*\\)`).test(cli.text))
+        problems.push(`${name}-cli.ts doesn't pass ${code} to runEntry`);
+      const top = header(readFileSync(join(ROOT, "packages/harness/src", `${name}.ts`), "utf8"));
+      const section = top.slice(top.indexOf("Exit codes:"));
+      if (!new RegExp(`\\b${code}\\b[\\s\\S]*${name}-cli\\.ts`).test(section))
+        problems.push(`${name}.ts's header doesn't say ${code} is also an unexpected error (${name}-cli.ts)`);
+    }
+    expect(problems).toEqual([]);
   });
 });

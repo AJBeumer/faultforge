@@ -32,11 +32,10 @@
  * `agent-needs-help`: a run stopped, or the ticket isn't ready; 2 the command line or the environment was
  * wrong (a bad option, no token, a token file that can't be read, a config that doesn't load), so no tick
  * ran; 3 the tick itself failed (an error in the runner, before or after it picked a ticket; a claimed ticket
- * is labelled `agent-needs-help` and the log says so).
+ * is labelled `agent-needs-help` and the log says so), or an unexpected error anywhere, even while loading:
+ * `npm run factory:tick` runs `factory-tick-cli.ts`, which loads this module inside `cli-entry.ts`.
  */
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentRun } from "./factory-agent.ts";
 import { claimMarker } from "./factory-comments.ts";
@@ -523,11 +522,12 @@ export function setupRefusal(deps: Pick<TickDeps, "unguarded">): string | null {
   return unguarded.length ? `factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.` : null;
 }
 
-async function main() {
+/** The command: `factory-tick-cli.ts` runs it, so an unexpected error, even while loading, is exit 3. */
+export async function main(argv: string[]): Promise<number> {
   let values: { ci?: boolean; minutes?: string; budget?: string };
   try {
     ({ values } = parseArgs({
-      args: process.argv.slice(2),
+      args: argv,
       options: { ci: { type: "boolean" }, minutes: { type: "string" }, budget: { type: "string" } },
     }));
   } catch (error) {
@@ -571,7 +571,5 @@ async function main() {
       );
     }
   }
-  process.exit(exitCodeFor(outcome));
+  return exitCodeFor(outcome);
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main();
