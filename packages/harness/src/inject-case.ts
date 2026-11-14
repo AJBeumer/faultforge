@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { type BranchExistence, deriveBranchName, gitBranchExistence } from "./branch-name.ts";
@@ -73,7 +73,10 @@ export function liveInjectDeps(env: NodeJS.ProcessEnv = process.env): InjectDeps
   return {
     privateDir: privateDir(env),
     findTemplateDir: (id) => findTemplateDir(id, env),
-    corpus: () => proofCorpus([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")]),
+    corpus: () =>
+      proofCorpus([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")], (id, why) =>
+        console.error(`[inject] corpus: skipped ${id}, because ${why}`),
+      ),
     ledgerProblems: ledgerProblemsWithHistory,
     git: gitIn,
     originMain: (dir) => runCommand("git", ["rev-parse", "--verify", "--quiet", "origin/main"], dir).stdout.trim(),
@@ -289,7 +292,17 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
           kind: "control",
           templateId: template.id,
           ...located,
-          validation: { typecheck, publicTests, corpusProofs: proofs.length },
+          // Every corpus proof by file and hash, so the control's validation can be checked later (Qodo on PR 271).
+          validation: {
+            typecheck,
+            publicTests,
+            corpus: proofs.map((proof, i) => ({
+              invariantId: proof.invariantId,
+              proofTest: `${basename(proof.dir ?? templateDir)}/${proof.proofTest}@sha256:${sha256(readFileSync(join(proof.dir ?? templateDir, proof.proofTest)))}`,
+              proofOnBase: proofsOnBase[i],
+              proofOnVariant: proofsOnVariant[i],
+            })),
+          },
           validated: true,
           createdAt,
         };

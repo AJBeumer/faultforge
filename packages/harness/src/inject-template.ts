@@ -92,7 +92,7 @@ export function applyMutation(targetDir: string, template: Template): [number, n
  * each with its own folder. A control's variant must pass all of them: a "harmless" change that breaks any
  * known invariant is a real bug labelled as a control (AUD-M8).
  */
-export function proofCorpus(templateRoots: string[]): Proof[] {
+export function proofCorpus(templateRoots: string[], skipped: (id: string, why: string) => void = () => {}): Proof[] {
   const seen = new Set<string>();
   const corpus: Proof[] = [];
   for (const root of templateRoots) {
@@ -101,9 +101,28 @@ export function proofCorpus(templateRoots: string[]): Proof[] {
       const dir = join(root, id);
       if (seen.has(id) || !existsSync(join(dir, "template.json"))) continue;
       seen.add(id);
-      const template = loadTemplate(dir);
+      // A template still being written can't stand in the corpus: it is skipped, and said so, rather than
+      // stopping every control (Qodo on PR 271).
+      let template: Template;
+      try {
+        template = loadTemplate(dir);
+      } catch (e) {
+        skipped(id, `template.json can't be read (${e instanceof Error ? e.message : String(e)})`);
+        continue;
+      }
       if (template.kind !== "bug") continue;
-      corpus.push(...proofsOf(template).map((proof) => ({ ...proof, dir })));
+      const problems = templateProblems(template);
+      if (problems.length) {
+        skipped(id, `it fails the schema (${problems[0]})`);
+        continue;
+      }
+      const proofs = proofsOf(template);
+      const missing = proofs.find((p) => !existsSync(join(dir, p.proofTest)));
+      if (missing) {
+        skipped(id, `its proof ${missing.proofTest} is missing`);
+        continue;
+      }
+      corpus.push(...proofs.map((proof) => ({ ...proof, dir })));
     }
   }
   return corpus;

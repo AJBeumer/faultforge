@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import type { Proof } from "./inject-template.ts";
+import { type Proof, proofCorpus } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import type { Outcome } from "./run-outcome.ts";
 
@@ -214,7 +214,11 @@ describe("inject run(deps): a control must pass the whole proof corpus (AUD-M8, 
   it("plants a control whose variant passes every corpus proof, and says how many", () => {
     const w = world({ variant: ["pass"] });
     expect(w.inject({ template: CONTROL.id })).toBe(0);
-    expect(w.lines("ground-truth.jsonl")[1]).toMatchObject({ kind: "control", validation: { corpusProofs: 1 } });
+    const proofTest = expect.stringMatching(/^x-secret-v1\/proof\.test\.ts@sha256:[0-9a-f]{64}$/);
+    expect(w.lines("ground-truth.jsonl")[1]).toMatchObject({
+      kind: "control",
+      validation: { corpus: [{ proofTest, proofOnBase: "pass", proofOnVariant: "pass" }] },
+    });
     expect(eventProblems(auditFile(w)[0])).toEqual([]);
   });
 
@@ -268,4 +272,21 @@ describe("the entry files load nothing that could fail before their handler exis
       expect(text).toMatch(/runEntry\([^)]*async \(\) => \(await import\("\.\/[\w-]+\.ts"\)\)\.main/);
     },
   );
+});
+
+describe("proofCorpus: a template still being written (Qodo on PR 271)", () => {
+  it("is skipped and named, never stopping the control", () => {
+    const root = mkdtempSync(join(tmpdir(), "corpus-"));
+    mkdirSync(join(root, "good"));
+    writeFileSync(join(root, "good", "template.json"), JSON.stringify({ ...BUG, id: "good" }));
+    writeFileSync(join(root, "good", "proof.test.ts"), "// p\n");
+    mkdirSync(join(root, "broken"));
+    writeFileSync(join(root, "broken", "template.json"), "{ not json");
+    mkdirSync(join(root, "unproven"));
+    writeFileSync(join(root, "unproven", "template.json"), JSON.stringify({ ...BUG, id: "unproven" }));
+    const skipped: string[] = [];
+    const corpus = proofCorpus([root], (id) => skipped.push(id));
+    expect(corpus.map((p) => p.dir)).toEqual([join(root, "good")]);
+    expect(skipped.sort()).toEqual(["broken", "unproven"]);
+  });
 });
