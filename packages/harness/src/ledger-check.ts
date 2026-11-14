@@ -22,7 +22,7 @@
  * An unexpected error, even while loading, is 2 too: `npm run ledger:check` runs `ledger-check-cli.ts`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { eachGitLine, ownRepoRoot } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
@@ -184,13 +184,20 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
  */
 export function anchorsFileProblems(anchorsPath: string): string[] {
   if (!existsSync(anchorsPath)) return []; // `anchorProblems` reports a missing file.
+  // The file itself, never what a link points to: a link to another file would swap in its anchors while the
+  // anchors file's own history looked untouched (Qodo on PR 286).
+  if (lstatSync(anchorsPath).isSymbolicLink()) return [`${anchorsPath}: is a link, not the anchors file itself`];
   const folder = dirname(resolve(anchorsPath));
   const top = spawnSync("git", ["-C", folder, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (top.status !== 0) return [`${anchorsPath}: not in a git repository, so its history can't be checked`];
   const repoRoot = top.stdout.trim();
-  const relPath = relative(realpathSync.native(repoRoot), realpathSync.native(resolve(anchorsPath)))
+  // Only the folders are resolved (a short or linked temp folder name), never the file.
+  const relPath = relative(realpathSync.native(repoRoot), join(realpathSync.native(folder), basename(anchorsPath)))
     .split(sep)
     .join("/");
+  // Committed as a plain file, not a link (git mode 120000), in HEAD.
+  const mode = spawnSync("git", ["-C", repoRoot, "ls-tree", "HEAD", "--", relPath], { encoding: "utf8" });
+  if (mode.status === 0 && mode.stdout.startsWith("120000")) return [`${relPath}: is committed as a link`];
   // In HEAD itself: a file only staged would have no history, and every line of it would read as added (Qodo on PR 286).
   const committed = spawnSync("git", ["-C", repoRoot, "cat-file", "-e", `HEAD:${relPath}`], { encoding: "utf8" });
   if (committed.status !== 0) return [`${relPath}: not committed, so an anchor in it could be changed unseen`];

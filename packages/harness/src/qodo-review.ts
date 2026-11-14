@@ -74,11 +74,11 @@ function findingProblem(finding: unknown, index: number): string | undefined {
  */
 export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
-  // Read below and by `reviewState`: a run must be an object naming its commit, never a list or a bare value,
-  // which would throw there or be read as no run at all (Qodo on PR 286).
+  // Read below and by `reviewState`: each run must be an object, never a list or a bare value, which would throw
+  // there (Qodo on PR 286). A run still being filled may lack its commit, and no runs at all may be null: both
+  // are read as they always were, as no run for that commit.
   const runs: unknown = review.review_runs;
-  const isRun = (r: unknown) => isPlainObject(r) && typeof r.commit_sha === "string";
-  if (runs !== undefined && (!Array.isArray(runs) || !runs.every(isRun))) {
+  if (runs !== undefined && runs !== null && (!Array.isArray(runs) || !runs.every(isPlainObject))) {
     return "Qodo's complete review lists its runs in something other than a list of runs";
   }
   const session: unknown = review.review_session;

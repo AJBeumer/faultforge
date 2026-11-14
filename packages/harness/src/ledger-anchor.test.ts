@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -202,5 +202,24 @@ describe("an anchors file whose last line has no line break (Qodo on PR 286)", (
     expect(anchorsFileProblems(w.anchors)).toEqual([]);
     sh(lab, "commit", "--quiet", "-am", "anchor");
     expect(anchorsFileProblems(w.anchors)).toEqual([]);
+  });
+});
+
+describe("an anchors file replaced by a link (Qodo on PR 286)", () => {
+  it("is refused, never followed to another file's anchors", (context) => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    const lab = labRepo(w.anchors);
+    const other = join(lab, "other.txt");
+    writeFileSync(other, readFileSync(w.anchors, "utf8"));
+    sh(lab, "add", "other.txt");
+    sh(lab, "commit", "--quiet", "-m", "other");
+    rmSync(w.anchors);
+    try {
+      symlinkSync(other, w.anchors);
+    } catch {
+      context.skip(); // Windows without the right to make links: the link can't be made here, so can't be tested.
+    }
+    expect(anchorsFileProblems(w.anchors)).toEqual([expect.stringContaining("is a link")]);
   });
 });
