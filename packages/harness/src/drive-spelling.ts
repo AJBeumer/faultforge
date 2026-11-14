@@ -8,9 +8,13 @@
  * check to stop a direct `npx vitest` from the other spelling with a message that says what to run instead.
  */
 
-/** A message when `cwd` and its real path differ, or undefined when they are the same spelling. */
+/**
+ * A message when `cwd` is its real path spelled in another case (`d:\…` for `D:\…`), or undefined. A path that
+ * differs in more than case, such as a junction or a symlink to the checkout, is left alone: that is not the
+ * failure measured here (Qodo on PR 260).
+ */
 export function spellingProblem(cwd: string, real: string): string | undefined {
-  if (cwd === real) return undefined;
+  if (cwd === real || cwd.toLowerCase() !== real.toLowerCase()) return undefined;
   return (
     `Vitest was started from "${cwd}", but this folder's real path is "${real}". ` +
     "Started that way every test file fails to load. Run `npm test` (or `npm run test:integration`), " +

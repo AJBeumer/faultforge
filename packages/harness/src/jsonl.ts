@@ -20,7 +20,12 @@ export function parseJsonLines<T = Record<string, unknown>>(text: string): T[] {
   return values;
 }
 
-/** Every value in the file at `path`. Throws when the file can't be read. */
+/** Every value in the file at `path`. Throws when the file can't be read, naming the file for a bad line. */
 export function readJsonLines<T = Record<string, unknown>>(path: string): T[] {
-  return parseJsonLines<T>(readFileSync(path, "utf8"));
+  const text = readFileSync(path, "utf8");
+  try {
+    return parseJsonLines<T>(text);
+  } catch (error) {
+    throw new Error(`${path}: ${(error as Error).message}`);
+  }
 }

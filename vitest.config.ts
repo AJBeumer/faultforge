@@ -6,7 +6,7 @@ import { spellingProblem } from "./packages/harness/src/drive-spelling.ts";
 
 // Started from another spelling of this folder (`d:\…` for `D:\…`), every test file fails to load with an error
 // that says nothing about the code. Stop with one that says what to run instead (AUD-M25).
-// Windows only: elsewhere the cause doesn't arise, and a symlinked checkout keeps working as before.
+// Windows only, and only for a difference in case: a junction or symlink to the checkout is left as it was.
 if (process.platform === "win32") {
   const spelling = spellingProblem(process.cwd(), realpathSync.native(process.cwd()));
   if (spelling) throw new Error(spelling);

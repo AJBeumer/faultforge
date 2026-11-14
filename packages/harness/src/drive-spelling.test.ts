@@ -7,6 +7,10 @@ describe("spellingProblem", () => {
     expect(spellingProblem("/home/x", "/home/x")).toBeUndefined();
   });
 
+  it("leaves a junction or symlink to the checkout alone: it differs in more than case", () => {
+    expect(spellingProblem("C:\\link\\x", "D:\\Projects\\x")).toBeUndefined();
+  });
+
   it("names both spellings and what to run when the drive letter differs", () => {
     const problem = spellingProblem("d:\\Projects\\x", "D:\\Projects\\x");
     expect(problem).toContain('"d:\\Projects\\x"');

@@ -22,6 +22,10 @@ describe("readJsonLines", () => {
       writeFileSync(file, '{"caseId":"FF-9001"}\n');
       expect(readJsonLines(file)).toEqual([{ caseId: "FF-9001" }]);
       expect(() => readJsonLines(join(dir, "missing.jsonl"))).toThrow();
+      // A bad line names its file, so a message about two ledgers says which one (Qodo on PR 260).
+      const bad = join(dir, "bad.jsonl");
+      writeFileSync(bad, "{}\nnot json\n");
+      expect(() => readJsonLines(bad)).toThrow(`${bad}: line 2 is not JSON`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

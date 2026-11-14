@@ -21,11 +21,16 @@ const run = (cwd: string, args: string[]) =>
 describe.runIf(process.platform === "win32" && other)("both drive spellings", () => {
   const spellings = [root, other as string];
 
-  it.each(spellings)("the launcher passes from %s", (cwd) => {
-    const result = run(cwd, [join(root, "packages/harness/src/vitest-run.ts"), "run", "--project", "unit", testFile]);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toMatch(/Tests\s+\d+ passed/);
-  });
+  it.each(spellings)(
+    "the launcher passes from %s",
+    (cwd) => {
+      const result = run(cwd, [join(root, "packages/harness/src/vitest-run.ts"), "run", "--project", "unit", testFile]);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toMatch(/Tests\s+\d+ passed/);
+      // A cold Vitest start on a Windows runner can take longer than the 5 s default (Qodo on PR 260).
+    },
+    120_000,
+  );
 
   it("a direct Vitest from the spelling that isn't real says to use npm test", () => {
     // `root` is the real spelling (the launcher starts Vitest there), so `other` is the one that isn't.

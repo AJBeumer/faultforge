@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
 import { readJsonLines } from "./jsonl.ts";
+import { readLedger } from "./ledger.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
 
@@ -99,20 +100,19 @@ export function casePrs(casesDir: string): Set<string> {
  * is an error, for the same reason as `casePrs`.
  */
 export function groundTruthCommits(groundTruthFile: string): Set<string> {
-  let lines: Record<string, unknown>[];
+  // Each entry as first written and as amended (AUD-N1): a commit an amendment replaced stays excluded, and
+  // so does the one it names. `readLedger` applies only amendments whose target is one entry, so an amendment
+  // that names no entry, or an ambiguous one, excludes nothing (Qodo on PR 260).
+  let entries: Record<string, unknown>[];
   try {
-    lines = readJsonLines(groundTruthFile);
+    const asWritten = readJsonLines(groundTruthFile).filter((line) => line.kind !== "amendment");
+    entries = [...asWritten, ...readLedger(groundTruthFile)];
   } catch (error) {
     throw new Error(`cannot read the answer key at ${groundTruthFile}: ${(error as Error).message}`);
   }
   const commits = new Set<string>();
-  for (const line of lines) {
-    // An amendment's `change` can name a new commit; the one it replaced stays excluded as well (AUD-N1).
-    const change =
-      typeof line.change === "object" && line.change !== null ? (line.change as Record<string, unknown>) : {};
-    for (const source of [line, change]) {
-      for (const sha of [source.injectionCommit, source.reviewedCommit]) if (typeof sha === "string") commits.add(sha);
-    }
+  for (const entry of entries) {
+    for (const sha of [entry.injectionCommit, entry.reviewedCommit]) if (typeof sha === "string") commits.add(sha);
   }
   return commits;
 }
