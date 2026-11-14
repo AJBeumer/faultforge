@@ -19,165 +19,14 @@
  * 2 could not read the evidence or the tree (a bad option, no such commit, an unreadable folder).
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { evidenceDir, ROOT } from "./paths.ts";
+import { HASH, LINE_BREAK, type ReviewRecord, readReviewRecords } from "./review-gate-records.ts";
 
-export interface ReviewRecord {
-  /** The saved file this came from, relative to the evidence folder where possible. */
-  source: string;
-  /** Every tree hash the review recorded (a checkpoint tree, a snapshot tree, or both). */
-  trees: string[];
-  baseSha: string | null;
-  /** The repository the review was run for (`owner/name`), when the saved run says so. */
-  repo: string | null;
-  /** Qodo said its coverage of the change was complete. Absent counts as not complete. */
-  complete: boolean;
-  /** Qodo skipped the review (`review_effort: skip`): it never really ran. */
-  skipped: boolean;
-  /** When the review was made, in ms: its own recorded time, else the saved file's time. */
-  at: number;
-}
-
-const HASH = /^[0-9a-f]{40}$/;
-const LINE_BREAK = String.fromCharCode(10);
-
-function asObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-/** What the run saved next to a review (`split.json`): which repository, and whether every changed
- * file reached Qodo. A review whose diff left a file out is never complete coverage, whatever Qodo's
- * own coverage flag says. */
-export interface Sidecar {
-  repo: string | null;
-  scopeComplete: boolean;
-}
-
-/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.
- * Unwraps the managed-agent envelope (`{output: "<json>"}` holding `{result: payload}`) that earlier
- * saves used, and a bare `{result: payload}`. */
-export function extractReviewRecord(
-  doc: unknown,
-  source: string,
-  fileTimeMs: number,
-  sidecar: Sidecar | null = null,
-): ReviewRecord | null {
-  let obj = asObject(doc);
-  if (obj && typeof obj.output === "string") {
-    try {
-      obj = asObject(JSON.parse(obj.output));
-    } catch {
-      return null;
-    }
-  }
-  if (obj && !obj.meta) obj = asObject(obj.result);
-  const meta = asObject(obj?.meta);
-  if (!meta) return null;
-
-  const checkpoint = asObject(meta.checkpoint);
-  const run = asObject(meta.run);
-  const snapshot = asObject(run?.snapshot);
-  const trees = [checkpoint?.tree_sha, snapshot?.tree_sha].filter(
-    (t): t is string => typeof t === "string" && HASH.test(t),
-  );
-  if (trees.length === 0) return null;
-
-  const effort = asObject(run?.effort);
-  const baseSha = [checkpoint?.base_sha, snapshot?.base_sha].find((b): b is string => typeof b === "string") ?? null;
-  const recorded = [checkpoint?.created_at, asObject(run?.timing)?.finished_at]
-    .map((t) => (typeof t === "string" ? Date.parse(t) : Number.NaN))
-    .find((t) => !Number.isNaN(t));
-  return {
-    source,
-    trees: [...new Set(trees)],
-    baseSha,
-    // Coverage, the finding inventory and the local snapshot must all be complete: the same three
-    // conditions under which `review:local` itself will not exit 3.
-    complete:
-      asObject(meta.coverage)?.complete === true &&
-      asObject(obj?.finding_state)?.complete === true &&
-      (sidecar?.scopeComplete ?? true),
-    repo: sidecar?.repo ?? null,
-    skipped: effort?.effective === "skip",
-    at: recorded ?? fileTimeMs,
-  };
-}
-
-/** Raw transport answers, never a review result: not worth parsing. */
-const NOT_A_RESULT = /^(poll|result|submit|cancel)(-\d+)?\.raw\.json$/;
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
-
-function walk(dir: string, out: string[], problems: string[], top = true): void {
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch (error) {
-    problems.push(`cannot list ${dir}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
-    return;
-  }
-  for (const entry of entries) {
-    const path = join(dir, entry.name);
-    // Top-level `reviews/` holds pull-request reviews, which are never read, so a failure to list it
-    // must not be reported either.
-    if (entry.isDirectory()) {
-      if (!(top && entry.name === "reviews")) walk(path, out, problems, false);
-    } else if (entry.name.endsWith(".json") && !NOT_A_RESULT.test(entry.name)) out.push(path);
-  }
-}
-
-/** The `split.json` `review:local` saved beside a `review.json`, or null when there is none (older saves).
- * The scope counts as incomplete when the diff was never built, or left any file out. */
-function readSidecar(reviewFile: string): Sidecar | null {
-  if (basename(reviewFile) !== "review.json") return null;
-  const unknownScope: Sidecar = { repo: null, scopeComplete: false };
-  try {
-    const split = asObject(JSON.parse(readFileSync(join(dirname(reviewFile), "split.json"), "utf8")));
-    if (!split) return unknownScope;
-    const left = (v: unknown) => (Array.isArray(v) ? v.length : 1);
-    const scopeComplete =
-      split.diffBuilt !== false && left(split.excludedFiles ?? []) === 0 && left(split.skippedFiles ?? []) === 0;
-    return { repo: typeof split.repo === "string" ? split.repo : null, scopeComplete };
-  } catch (error) {
-    // No split.json at all is an older save. One that exists but cannot be read or parsed is not: it
-    // may have recorded a file that never reached Qodo, so the review cannot count as complete.
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : unknownScope;
-  }
-}
-
-/** Every saved review with a recorded tree under `root`, however deep. A file that is not JSON, is too
- * large, or holds no review is skipped, never an error: the evidence folder also holds other things. */
-export function readReviewRecords(root: string): { records: ReviewRecord[]; problems: string[] } {
-  const files: string[] = [];
-  const problems: string[] = [];
-  walk(root, files, problems);
-  const records: ReviewRecord[] = [];
-  for (const file of files) {
-    try {
-      const relative = file.slice(root.length + 1);
-      // `reviews/` holds review:wait's saves of pull-request reviews, made after the push: never
-      // evidence that anything was reviewed before it was committed.
-      if (relative.split(sep)[0] === "reviews") continue;
-      const stat = statSync(file);
-      if (stat.size > MAX_FILE_BYTES) continue;
-      const rec = extractReviewRecord(
-        JSON.parse(readFileSync(file, "utf8")),
-        file.slice(root.length + 1),
-        stat.mtimeMs,
-        readSidecar(file),
-      );
-      if (rec) records.push(rec);
-    } catch (error) {
-      // Not JSON is not a review. A file git cannot read might have been one: say so.
-      if (!(error instanceof SyntaxError))
-        problems.push(`cannot read ${file}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
-    }
-  }
-  return { records, problems };
-}
+export { extractReviewRecord, type ReviewRecord, readReviewRecords, type Sidecar } from "./review-gate-records.ts";
 
 export interface GateScope {
   /** `owner/name` of the repository being checked. */
@@ -223,7 +72,11 @@ export function checkTree(tree: string, allRecords: ReviewRecord[], scope: GateS
 
   const nearest = [...records].sort(byNewest)[0] ?? null;
   if (sameTree.length > 0) {
-    const why = sameTree.some((r) => r.skipped) ? "was skipped" : "had incomplete coverage";
+    const skipped = sameTree.some((r) => r.skipped);
+    const newest = [...sameTree].sort(byNewest)[0] as ReviewRecord;
+    const why = skipped
+      ? "was skipped"
+      : `was incomplete: ${newest.incompleteBecause ?? "its coverage was incomplete"}`;
     return {
       covered: false,
       by: null,
