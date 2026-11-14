@@ -26,11 +26,11 @@ import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
+import { gitSteps, MAX_COMMAND_CHARS, segments } from "./shell-scan.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
   [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
   [/\bgh\s+issue\s+(comment|close|reopen|delete|transfer|lock)\b/i, "the runner reports on the ticket, not the agent"],
-  [/\bgh\s+issue\s+edit\b[^\n]*--(add|remove)-label\b/i, "the runner sets the ticket's labels"],
   [
     /\bgh\s+(repo|label|secret|variable|workflow|ruleset|release)\s+(?!view\b|list\b)\w/i,
     "repo settings are the owner's",
@@ -39,19 +39,6 @@ const COMMAND_RULES: [RegExp, string][] = [
   [
     /\bgh\s+project\s+(?!view\b|list\b|field-list\b|item-list\b)\w/i,
     "the runner tracks the ticket; the board is the owner's",
-  ],
-  [
-    /\bgh\s+api\b[^\n]*(\s(-X|--method)[\s=]*(?!GET\b)\w|\s(-f|-F|--field|--raw-field|--input)[\s=])/i,
-    "gh api is read-only here",
-  ],
-  [
-    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*(\s(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)\b|\s\+\S|\s:\S)/i,
-    "no force push or remote delete",
-  ],
-  // The branch may be quoted, and may end the step with a shell operator right after it (#194).
-  [
-    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s([^\s:]*:)?["']?(refs\/heads\/)?(main|master)["']?(?=[\s;&|)]|$)/i,
-    "never push to main",
   ],
   [/\b(schtasks|setx|crontab|launchctl|reg\s+(add|delete|import))\b/i, "no scheduled tasks or persistent settings"],
   [/\bdismiss/i, "never dismiss a finding"],
@@ -112,11 +99,57 @@ export function commandViolations(raw: string, ticket?: string): string[] {
   return reasons;
 }
 
+/**
+ * The rules that look for one word and then another in the same step (`gh issue edit` then `--add-label`,
+ * `git ... push` then `--force` or `main`). As one pattern over the whole command they backtracked once for
+ * every first word, so a crafted command could keep the hook past its time limit. Here the command is cut
+ * into steps (`segments`, one pass) and each step's words are read one by one: linear in the command.
+ */
+function stepViolations(command: string): string[] {
+  const reasons: string[] = [];
+  const words = (text: string) => text.split(/\s+/).filter(Boolean);
+  for (const step of segments(command)) {
+    const ghAt = step.text.search(/\bgh\s+issue\s+edit\b/i);
+    if (ghAt >= 0 && /--(add|remove)-label\b/i.test(step.text.slice(ghAt)))
+      reasons.push("the runner sets the ticket's labels");
+    const apiAt = step.text.search(/\bgh\s+api\b/i);
+    if (apiAt >= 0) {
+      const rest = words(step.text.slice(apiAt));
+      // A field or an input is a write; so is any method but GET, written `-X POST`, `-XPOST` or `--method=POST`.
+      const method = (w: string, next: string) => {
+        const m = /^(?:-X|--method)(?:=|(?=.))?(.*)$/.exec(w);
+        if (!m) return null;
+        return (m[1] || next).replace(/["']/g, "");
+      };
+      const writes = rest.some((w, i) => {
+        if (/^(-f|-F|--field|--raw-field|--input)(=|$)/.test(w)) return true;
+        const verb = method(w, rest[i + 1] ?? "");
+        return verb !== null && !/^GET$/i.test(verb);
+      });
+      if (writes) reasons.push("gh api is read-only here");
+    }
+  }
+  for (const step of gitSteps(command, /\bpush\b/i)) {
+    const all = words(step.text);
+    const after = all.slice(all.findIndex((w) => /^push\b/i.test(w)) + 1);
+    const force = /^(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)(\b|=|$)/i;
+    if (after.some((w) => force.test(w) || /^\+\S/.test(w) || /^:\S/.test(w)))
+      reasons.push("no force push or remote delete");
+    // The branch may be quoted, and may end the step with a closing bracket right after it (#194).
+    if (after.some((w) => /^([^:]*:)?["']?(refs\/heads\/)?(main|master)["']?\)*$/i.test(w)))
+      reasons.push("never push to main");
+  }
+  return reasons;
+}
+
 /** The reasons found in one reading of the command. */
 function violationsIn(command: string, ticket?: string): string[] {
-  const reasons = [...COMMAND_RULES, ...SECRET_RULES]
-    .filter(([pattern]) => pattern.test(command))
-    .map(([, reason]) => reason);
+  if (command.length > MAX_COMMAND_CHARS)
+    return [`a command over ${MAX_COMMAND_CHARS} characters can't be checked; put long text in a file`];
+  const reasons = [
+    ...[...COMMAND_RULES, ...SECRET_RULES].filter(([pattern]) => pattern.test(command)).map(([, reason]) => reason),
+    ...stepViolations(command),
+  ];
   // A request, by a tool or by code, may only name the app on localhost, and must name it: a URL built at
   // run time (a variable, a decoded string) can't be checked, so it is refused (#243).
   if (HTTP_TOOLS.test(command) || NETWORK_CODE.test(command)) {
@@ -133,14 +166,14 @@ function violationsIn(command: string, ticket?: string): string[] {
       /\bgh\s+issue\s+(view|list|status)\b/,
       // Search can return issue bodies.
       /\bgh\s+search\b/,
-      // GraphQL can read any issue.
-      /\bgh\b[\s\S]*\bgraphql\b/i,
     ];
+    // GraphQL can read any issue: `gh` and `graphql` anywhere, each found once (linear).
+    const graphql = /\bgh\b/i.test(command) && /\bgraphql\b/i.test(command);
     // Any gh api call in a command that mentions issues or search anywhere, in any order (a path can be
     // built in a variable first). Deliberately broad: after three rounds of new spellings, a rule that
     // lists endpoints can't be complete. The agent doesn't need these: review:wait saves Qodo's comments.
-    const apiOnIssues = /\bgh\b[\s\S]*\bapi\b/i.test(command) && /\b(issues|search)\b/i.test(command);
-    if (apiOnIssues || live.some((pattern) => pattern.test(command))) {
+    const apiOnIssues = /\bgh\b/i.test(command) && /\bapi\b/i.test(command) && /\b(issues|search)\b/i.test(command);
+    if (graphql || apiOnIssues || live.some((pattern) => pattern.test(command))) {
       reasons.push("read the ticket from the runner's snapshot file, not live from GitHub");
     }
   }

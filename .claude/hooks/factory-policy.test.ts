@@ -551,3 +551,53 @@ describe("factory policy: the whole environment and network calls from code (#24
     }
   });
 });
+
+describe("factory policy: decides in linear time (AUD-M4, lead's follow-up to PR 265)", () => {
+  const crafted = {
+    "git then push, over and over": "git push x ".repeat(600),
+    "git words, then a push with a branch at the end": `${"git ".repeat(1500)}push origin ${"a".repeat(30)}`,
+    "push, then branch-like words with colons": `git push ${"a:b".repeat(2000)}`,
+    "gh issue edit, over and over": "gh issue edit 5 ".repeat(400),
+    "gh api, over and over": "gh api x ".repeat(700),
+    "gh, then graphql far away": `${"gh ".repeat(2000)}graphql`,
+  };
+
+  it.each(Object.entries(crafted))("a crafted 6 KB command (%s) decides in under a second", (_name, command) => {
+    expect(command.length).toBeGreaterThan(5000);
+    const start = performance.now();
+    commandViolations(command, "18");
+    decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
+      FAULTFORGE_FACTORY_RUN: "r",
+      FAULTFORGE_RUN_ROOT: RUN,
+      FAULTFORGE_TICKET_NUMBER: "18",
+    });
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it("still finds what the step rules looked for", () => {
+    expect(commandViolations("git -C repo push origin HEAD:main")).toContainEqual(
+      expect.stringMatching(/never push to main/),
+    );
+    expect(commandViolations('git push origin "HEAD":"refs/heads/main"')).toContainEqual(
+      expect.stringMatching(/never push to main/),
+    );
+    expect(commandViolations("(git push origin main)")).toContainEqual(expect.stringMatching(/never push to main/));
+    expect(commandViolations("git push --force-with-lease=x origin b")).toContainEqual(
+      expect.stringMatching(/no force push/),
+    );
+    expect(commandViolations("git push origin +b")).toContainEqual(expect.stringMatching(/no force push/));
+    expect(commandViolations("git push origin :b")).toContainEqual(expect.stringMatching(/no force push/));
+    expect(commandViolations("gh api -XPOST repos/o/r/labels")).toContainEqual(expect.stringMatching(/read-only/));
+    expect(commandViolations("gh api --method=PATCH repos/o/r")).toContainEqual(expect.stringMatching(/read-only/));
+    expect(commandViolations("gh issue edit 5 --repo o/r --add-label x")).toContainEqual(
+      expect.stringMatching(/sets the ticket's labels/),
+    );
+    expect(commandViolations("gh api -X GET repos/o/r/pulls")).toEqual([]);
+    expect(commandViolations("git push origin feature-main-menu")).toEqual([]);
+    expect(commandViolations("git push origin my-branch; echo main")).toEqual([]);
+  });
+
+  it("refuses a command longer than it reads", () => {
+    expect(commandViolations("x".repeat(100_001))).toContainEqual(expect.stringMatching(/can't be checked/));
+  });
+});
