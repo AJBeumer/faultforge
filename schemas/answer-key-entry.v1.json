@@ -35,6 +35,7 @@
         "proofOnVariant": { "$ref": "#/$defs/outcome" },
         "typecheck": { "$ref": "#/$defs/outcome" },
         "publicTests": { "$ref": "#/$defs/outcome" },
+        "addedTest": { "$ref": "#/$defs/outcome" },
         "proofs": { "type": "array", "items": { "$ref": "#/$defs/proofRun" } },
         "corpus": { "type": "array", "items": { "$ref": "#/$defs/proofRun" } },
         "corpusSkipped": { "type": "array", "items": { "type": "string" } }

@@ -3,8 +3,9 @@
  * with no `benchmark`, or `benchmark: 1`, follows version 1 and nothing here applies to it, so no recorded
  * case or template changes.
  *
- * - A bug template's ticket criteria may not restate what the planted change breaks: none may contain one of
- *   its own kind terms or its invariant id. The ticket would hand the reviewer the oracle (AUD-H3).
+ * - A bug template's ticket (title, description and criteria) may not restate what the planted change breaks:
+ *   none may contain a word starting with one of
+ *   its own kind terms, or its invariant id. The ticket would hand the reviewer the oracle (AUD-H3).
  * - A criterion shared with other templates must appear in both a bug template and a control. One found only
  *   in controls, or only in bugs, tells the two apart by its wording alone (AUD-H5).
  * - The recorded line range is the lines the change actually touched (`changedLines`), not the whole replaced
@@ -17,7 +18,7 @@ export interface RuleTemplate {
   benchmark?: number;
   invariantId?: string;
   match?: { kindTerms?: string[] };
-  ticket?: { criteria?: string[] };
+  ticket?: { title?: string; what?: string; criteria?: string[] };
   alsoBreaks?: { invariantId: string }[];
 }
 
@@ -28,10 +29,14 @@ export function benchmarkOf(template: { benchmark?: unknown }): number {
 
 const normal = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
-/** True when `term` stands in `text` as words of its own: "race" is not in "trace" (Qodo on PR 274). */
-function names(text: string, term: string): boolean {
+/**
+ * True when `term` starts a word in `text`. Kind terms are often stems ("disclos"), and the match rule finds
+ * them inside longer words, so "disclosed" names "disclos" here too. A term must start its word: "race" is
+ * not in "trace" (Qodo on PR 274).
+ */
+export function names(text: string, term: string): boolean {
   const escaped = normal(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^\\w])${escaped}($|[^\\w])`).test(normal(text));
+  return new RegExp(`(^|[^\\w])${escaped}`).test(normal(text));
 }
 
 /**
@@ -53,11 +58,15 @@ export function benchmarkProblems(template: RuleTemplate, others: RuleTemplate[]
       ...(template.invariantId ? [template.invariantId] : []),
       ...(template.alsoBreaks ?? []).map((a) => a.invariantId),
     ];
-    for (const [i, criterion] of criteria.entries()) {
-      const named = giveaways.filter((term) => names(criterion, term));
-      if (named.length) {
-        problems.push(`ticket.criteria[${i}] restates what the change breaks (${named.join(", ")})`);
-      }
+    // The whole ticket the reviewer sees: its title and description as well as its criteria.
+    const fields: [string, string | undefined][] = [
+      ["ticket.title", template.ticket?.title],
+      ["ticket.what", template.ticket?.what],
+      ...criteria.map((c, i): [string, string] => [`ticket.criteria[${i}]`, c]),
+    ];
+    for (const [field, text] of fields) {
+      const named = text === undefined ? [] : giveaways.filter((term) => names(text, term));
+      if (named.length) problems.push(`${field} restates what the change breaks (${named.join(", ")})`);
     }
   }
   const rest = others.filter((o) => o.id !== template.id);

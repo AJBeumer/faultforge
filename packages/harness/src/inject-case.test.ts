@@ -1,10 +1,19 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import { loadTemplates, type Proof, proofCorpus } from "./inject-template.ts";
+import { applyTestChange, loadTemplates, type Proof, proofCorpus, testChangeFileProblem } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
@@ -53,12 +62,21 @@ interface Script {
   gitThrows?: string;
   corpus?: Proof[];
   unguarded?: string;
+  lint?: Outcome;
+  addedTest?: Outcome;
+  /** Fields that replace the bug or control template's own. */
+  bug?: Record<string, unknown>;
+  control?: Record<string, unknown>;
 }
+
+const TEST_FILE = 'import { sum } from "../src/sum";\n\nit("sums", () => {});\n';
 
 /** Private storage with both templates, a target with the file to change, and fakes for everything else. */
 function world(script: Script = {}) {
   const priv = mkdtempSync(join(tmpdir(), "inject-priv-"));
-  for (const t of [BUG, CONTROL]) {
+  const bug = { ...BUG, ...script.bug };
+  const control = { ...CONTROL, ...script.control };
+  for (const t of [bug, control]) {
     mkdirSync(join(priv, "templates", t.id), { recursive: true });
     writeFileSync(join(priv, "templates", t.id, "template.json"), JSON.stringify(t));
   }
@@ -67,6 +85,10 @@ function world(script: Script = {}) {
   const target = mkdtempSync(join(tmpdir(), "inject-target-"));
   mkdirSync(join(target, "src"));
   writeFileSync(join(target, "src", "sum.ts"), `export function sum() {\n  const total = 1;\n${FIND}}\n`);
+  mkdirSync(join(target, "test"));
+  writeFileSync(join(target, "test", "sum.test.ts"), TEST_FILE);
+  /** The test folder's files and the edited test's text, each time a proof ran on the variant. */
+  const testsAtVariant: string[][] = [];
   const gitCalls: string[][] = [];
   const steps: string[][] = [];
   let committed = false;
@@ -75,7 +97,7 @@ function world(script: Script = {}) {
     findTemplateDir: (id) => join(priv, "templates", id),
     corpus: () =>
       script.corpus ?? [{ invariantId: "INV-X-001", proofTest: "proof.test.ts", dir: join(priv, "templates", BUG.id) }],
-    allTemplates: () => [BUG, CONTROL] as never,
+    allTemplates: () => [bug, control] as never,
     ledgerProblems: () => [],
     git: (_dir, ...args) => {
       gitCalls.push(args);
@@ -92,11 +114,22 @@ function world(script: Script = {}) {
     baseTreeProblems: () => [],
     guardProblem: () => script.unguarded,
     diff: () => ({ status: 0, stdout: "diff", stderr: "" }),
-    runProof: (_places, stage, _proof, i) =>
-      stage === "base" ? ((script.base ?? [])[i] ?? "pass") : ((script.variant ?? [])[i] ?? "fail"),
+    runProof: (_places, stage, _proof, i) => {
+      if (stage === "variant") {
+        const files = readdirSync(join(target, "test")).map(String).sort();
+        testsAtVariant.push([...files, readFileSync(join(target, "test", "sum.test.ts"), "utf8")]);
+      }
+      return stage === "base" ? ((script.base ?? [])[i] ?? "pass") : ((script.variant ?? [])[i] ?? "fail");
+    },
     runStep: (_places, name, _cmd, args) => {
       steps.push([name, ...args]);
-      return name === "typecheck" ? (script.typecheck ?? "pass") : (script.publicTests ?? "pass");
+      const outcomes: Record<string, Outcome | undefined> = {
+        typecheck: script.typecheck,
+        lint: script.lint,
+        "public-tests": script.publicTests,
+        "added-test": script.addedTest,
+      };
+      return outcomes[name] ?? "pass";
     },
     now: () => "2026-11-14T02:00:00.000Z",
     log: () => {},
@@ -111,7 +144,7 @@ function world(script: Script = {}) {
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));
-  return { priv, target, deps, inject, lines, gitCalls, steps, errors };
+  return { priv, target, deps, inject, lines, gitCalls, steps, errors, testsAtVariant };
 }
 
 const auditFile = (w: ReturnType<typeof world>) => {
@@ -346,5 +379,161 @@ describe("inject: what Qodo found on PR 274", () => {
     writeFileSync(join(seed, "same", "proof.test.ts"), "// p\n");
     expect(proofCorpus([priv, seed]).map((p) => p.dir)).toEqual([join(seed, "same")]);
     expect(loadTemplates([priv, seed]).map((t) => t.kind)).toEqual(["bug"]);
+  });
+});
+
+describe("inject --validate-only runs the target's whole check on the variant", () => {
+  const validate = (w: ReturnType<typeof world>, template = BUG.id) =>
+    w.inject({ template, validateOnly: true, caseId: undefined });
+
+  it("runs Biome and the public tests, as the target's own check does", () => {
+    const w = world();
+    expect(validate(w)).toBe(0);
+    expect(w.steps.map((s) => s[0])).toEqual(["typecheck", "lint", "public-tests"]);
+    expect(w.steps.find((s) => s[0] === "lint")?.join(" ")).toMatch(/biome.* check \.$/);
+  });
+
+  it("refuses a variant whose lint fails or doesn't finish", () => {
+    const failing = world({ lint: "fail" });
+    expect(validate(failing)).toBe(1);
+    expect(failing.errors.join("\n")).toContain("the target's lint (Biome) fails on the variant");
+    expect(validate(world({ lint: "not_run" }))).toBe(1);
+  });
+
+  it("refuses a bug variant whose public tests fail, which a real run records but a red check would show", () => {
+    const w = world({ publicTests: "fail" });
+    expect(validate(w)).toBe(1);
+    expect(w.errors.join("\n")).toContain("the target's public tests fail on the variant");
+  });
+
+  it("leaves a real run as it was: no lint step, and a bug's failing public tests are recorded", () => {
+    const w = world({ publicTests: "fail" });
+    expect(w.inject()).toBe(0);
+    expect(w.steps.map((s) => s[0])).toEqual(["typecheck", "public-tests"]);
+    expect(w.lines("ground-truth.jsonl")[1].validation.publicTests).toBe("fail");
+  });
+});
+
+describe("inject: a template's test change, in the same commit", () => {
+  const EDIT = {
+    file: "test/sum.test.ts",
+    find: 'it("sums", () => {});\n',
+    replace: 'it("sums", () => {});\nit("sums twice", () => {});\n',
+  };
+  const NEW = { file: "test/extra.test.ts", content: 'it("adds", () => {});\n' };
+
+  it("applies an edit to a test before the proofs and checks run, runs that test, and records it", () => {
+    const w = world({ bug: { testChange: EDIT } });
+    expect(w.inject()).toBe(0);
+    expect(readFileSync(join(w.target, "test", "sum.test.ts"), "utf8")).toContain("sums twice");
+    expect(w.testsAtVariant[0]?.[1]).toContain("sums twice");
+    expect(w.steps).toContainEqual(["added-test", expect.stringContaining("vitest"), "run", "test/sum.test.ts"]);
+    expect(w.lines("ground-truth.jsonl")[1].validation.addedTest).toBe("pass");
+    expect(answerKeyEntryProblem(w.lines("ground-truth.jsonl")[1])).toBeUndefined();
+  });
+
+  it("creates a new test file and tells git about it, so the diff and the commit hold it", () => {
+    const w = world({ control: { testChange: NEW }, variant: ["pass"] });
+    expect(w.inject({ template: CONTROL.id })).toBe(0);
+    expect(existsSync(join(w.target, "test", "extra.test.ts"))).toBe(true);
+    expect(w.gitCalls).toContainEqual(["add", "--intent-to-add", "--", "test/extra.test.ts"]);
+    const add = w.gitCalls.findIndex((c) => c[0] === "add");
+    expect(add).toBeLessThan(w.gitCalls.findIndex((c) => c[0] === "commit"));
+    // The corpus ran with the control's test in place.
+    expect(w.testsAtVariant[0]).toContain("extra.test.ts");
+  });
+
+  it("refuses a bug whose added test fails on the variant, and a control whose added test breaks a corpus proof", () => {
+    const w = world({ bug: { testChange: EDIT }, addedTest: "fail" });
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join("\n")).toContain("the test the change adds fails on the variant");
+    expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
+    expect(world({ control: { testChange: NEW }, variant: ["fail"] }).inject({ template: CONTROL.id })).toBe(1);
+  });
+
+  it("refuses a test change in the same file as the change, one that gives the case away, or find text not found", () => {
+    const same = world({ bug: { testChange: { ...EDIT, file: "src/sum.ts" } } });
+    expect(same.inject()).toBe(1);
+    expect(same.errors.join("\n")).toContain("testChange must change a test file");
+    const telling = world({ bug: { testChange: { ...NEW, content: "// x-secret-v1\n" } } });
+    expect(telling.inject()).toBe(1);
+    expect(telling.errors.join("\n")).toContain("testChange.content: names x-secret-v1");
+    expect(world({ bug: { testChange: { ...EDIT, find: "nowhere\n" } } }).inject()).toBe(2);
+  });
+
+  it("refuses a bug's test that names its own kind terms, which the ticket may not either (Qodo on PR 293)", () => {
+    const w = world({ bug: { testChange: { ...NEW, content: 'it("is not off by one", () => {});\n' } } });
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join("\n")).toContain("testChange.content: restates what the change breaks (off by one)");
+  });
+
+  it("refuses a test change to git's own folder, or to a file that isn't a test (Qodo on PR 293)", () => {
+    const git = world({ control: { testChange: { file: ".git/config", content: "[x]\n" } }, variant: ["pass"] });
+    expect(git.inject({ template: CONTROL.id, validateOnly: true, caseId: undefined })).toBe(1);
+    expect(git.errors.join("\n")).toContain("may not touch git's own folder");
+    expect(existsSync(join(git.target, ".git", "config"))).toBe(false);
+    const prod = world({ bug: { testChange: { file: "src/other.ts", content: "export const x = 1;\n" } } });
+    expect(prod.inject()).toBe(1);
+  });
+});
+
+describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
+  it("sees the main change's file however it is spelled", () => {
+    expect(testChangeFileProblem("./test//a.test.ts", "test/a.test.ts")).toContain("another file");
+    expect(testChangeFileProblem("test/b.test.ts", "test/a.test.ts")).toBeUndefined();
+    expect(testChangeFileProblem("test/.GIT/x.test.ts", "src/a.ts")).toContain("git's own folder");
+  });
+
+  it("never writes through a link out of the target", (context) => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const outside = mkdtempSync(join(tmpdir(), "test-change-outside-"));
+    try {
+      symlinkSync(outside, join(target, "test"), "junction");
+    } catch {
+      context.skip(); // a link can't be made here
+    }
+    expect(() => applyTestChange(target, { file: "test/x.test.ts", content: "it();\n" })).toThrow(/outside the target/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("never writes through a link whose target is missing", (context) => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const outside = join(mkdtempSync(join(tmpdir(), "test-change-outside-")), "made.test.ts");
+    mkdirSync(join(target, "test"));
+    try {
+      symlinkSync(outside, join(target, "test", "x.test.ts"), "file");
+    } catch {
+      context.skip(); // a file link can't be made here (Windows without the right to)
+    }
+    expect(() => applyTestChange(target, { file: "test/x.test.ts", content: "it();\n" })).toThrow(/is a link/);
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it("leaves a file hard-linked to the edited test as it was", () => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const copy = join(mkdtempSync(join(tmpdir(), "test-change-copy-")), "a.test.ts");
+    mkdirSync(join(target, "test"));
+    writeFileSync(copy, "it(1);\n");
+    linkSync(copy, join(target, "test", "a.test.ts"));
+    applyTestChange(target, { file: "test/a.test.ts", find: "it(1);\n", replace: "it(2);\n" });
+    expect(readFileSync(join(target, "test", "a.test.ts"), "utf8")).toBe("it(2);\n");
+    expect(readFileSync(copy, "utf8")).toBe("it(1);\n");
+    expect(readdirSync(join(target, "test"))).toEqual(["a.test.ts"]);
+  });
+
+  it("refuses a test change kept in test-change.json beside template.json, rather than ignore it", () => {
+    const w = world();
+    writeFileSync(
+      join(w.priv, "templates", BUG.id, "test-change.json"),
+      JSON.stringify({ file: "test/sum.test.ts", find: "x", replace: "y" }),
+    );
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join("\n")).toContain("move it into template.json as testChange");
+  });
+
+  it("refuses a test change that is neither an edit nor a new file (schema)", () => {
+    const w = world({ bug: { testChange: { file: "test/sum.test.ts" } } });
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join("\n")).toContain("fails the schema");
   });
 });

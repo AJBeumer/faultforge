@@ -282,3 +282,55 @@ describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", ()
     expect(record).toMatchObject({ status: "incomplete", human: { disposition: "review_incomplete" } });
   });
 });
+
+/** `inject --validate-only` of a template written into the world's private storage; "ok" or the exit and stderr. */
+function validateOnly(w: ReturnType<typeof world>, template: Record<string, unknown>): string {
+  mkdirSync(join(w.priv, "templates", String(template.id)), { recursive: true });
+  writeFileSync(join(w.priv, "templates", String(template.id), "template.json"), JSON.stringify(template));
+  const tsx = join(root, "node_modules", "tsx", "dist", "cli.mjs");
+  const script = join(root, "packages", "harness", "src", "inject.ts");
+  const args = [tsx, script, "--template", String(template.id), "--target", w.target, "--validate-only"];
+  try {
+    execFileSync(process.execPath, args, {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, FAULTFORGE_PRIVATE_DIR: w.priv },
+      stdio: "pipe",
+    });
+    return "ok";
+  } catch (error) {
+    const e = error as { status: number; stderr: string };
+    return `exit ${e.status}: ${e.stderr}`;
+  }
+}
+
+describe.skipIf(!hasRealTarget)("inject --validate-only on a real target", () => {
+  it("passes a control that adds a test, and leaves the checkout as it was", { timeout: 300_000 }, () => {
+    const w = world();
+    const head = execFileSync("git", ["-C", w.target, "rev-parse", "HEAD"], { encoding: "utf8" });
+    const withTest = {
+      ...CONTROL_TEMPLATE,
+      id: "pipeline-rename-test-v1",
+      testChange: {
+        file: "test/pipeline-extra.test.ts",
+        content: 'import { it } from "vitest";\n\nit("runs", () => {});\n',
+      },
+    };
+    expect(validateOnly(w, withTest)).toBe("ok");
+    expect(existsSync(join(w.target, "test", "pipeline-extra.test.ts"))).toBe(false);
+    expect(execFileSync("git", ["-C", w.target, "status", "--porcelain"], { encoding: "utf8" })).toBe("");
+    expect(execFileSync("git", ["-C", w.target, "rev-parse", "HEAD"], { encoding: "utf8" })).toBe(head);
+  });
+
+  it("refuses a variant the target's own lint would fail, though it typechecks and its tests pass", {
+    timeout: 300_000,
+  }, () => {
+    const w = world();
+    const badlyFormatted = {
+      ...CONTROL_TEMPLATE,
+      id: "pipeline-rename-lint-v1",
+      replace: CONTROL_TEMPLATE.replace.replace("const own =", "const own  ="),
+    };
+    expect(validateOnly(w, badlyFormatted)).toMatch(/^exit 1: [\s\S]*the target's lint \(Biome\) fails on the variant/);
+  });
+});

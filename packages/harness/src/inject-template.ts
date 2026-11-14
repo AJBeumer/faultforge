@@ -2,10 +2,19 @@
  * A template as `inject` reads it: loading it, the checks that refuse it before anything is planted, the
  * proofs its variant must break, and the mutation itself.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { benchmarkOf, benchmarkProblems, changedLines } from "./benchmark-rules.ts";
-import { templateTelltales } from "./neutral.ts";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, posix, relative } from "node:path";
+import { benchmarkOf, benchmarkProblems, changedLines, names } from "./benchmark-rules.ts";
+import { telltales, templateTelltales } from "./neutral.ts";
 import type { Outcome } from "./run-outcome.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
 
@@ -30,7 +39,20 @@ export interface Template {
   alsoBreaks?: AlsoBreaks[];
   /** The benchmark version whose rules it follows (`benchmark-rules.ts`); 1 when absent. */
   benchmark?: number;
+  /** A second change in the same commit: a test for what the ticket asks, so an added test is never a tell. */
+  testChange?: TestChange;
 }
+
+/** A test file the change edits (`find` once, `replace`) or creates (`content`). */
+export interface TestChange {
+  file: string;
+  find?: string;
+  replace?: string;
+  content?: string;
+}
+
+/** The old layout, a test change in its own file beside `template.json`: refused, never silently ignored. */
+export const LOOSE_TEST_CHANGE = "test-change.json";
 
 export interface Proof {
   invariantId: string;
@@ -57,8 +79,16 @@ export function templateRefusal(
   }
   // Everything the template would put in front of the reviewer must read as an ordinary change: the branch
   // name and commit message, the code it looks for and writes, and its target ticket.
-  const giveaways = templateTelltales(template);
+  const giveaways = [...templateTelltales(template), ...testChangeTelltales(template)];
   if (giveaways.length) return `the template gives the case away (${giveaways.join("; ")})`;
+
+  // One place for the whole change: a test change kept in a file of its own would be missed by the input
+  // hash, which reads template.json.
+  if (existsSync(join(templateDir, LOOSE_TEST_CHANGE))) {
+    return `template ${templateId} keeps its test change in ${LOOSE_TEST_CHANGE}: move it into template.json as testChange`;
+  }
+  const testFileProblem = template.testChange && testChangeFileProblem(template.testChange.file, template.file);
+  if (testFileProblem) return `template ${templateId}'s testChange ${testFileProblem}`;
 
   // The terms the match rule's third criterion looks for, declared here before any case runs the template.
   // Only a bug template carries one: a control has no injected problem to describe.
@@ -73,6 +103,117 @@ export function templateRefusal(
   const ruleProblems = benchmarkProblems(template, others);
   if (ruleProblems.length) return `template ${templateId} breaks the benchmark v2 rules: ${ruleProblems.join("; ")}`;
   return undefined;
+}
+
+/** A test file: `<name>.test.<ext>` or `<name>.spec.<ext>`, as the target's test runner picks them up. */
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+
+/**
+ * Why a test change's file can't be used, or undefined. It must be a test file: anything else in the commit
+ * would be a second change the answer key never records (Qodo on PR 293). It may never touch git's own
+ * folder, and must be another file than the main change's, however either is spelled: the recorded lines are
+ * the main change's, and a test change in the same file would move them.
+ */
+export function testChangeFileProblem(file: string, mainFile: string): string | undefined {
+  const normal = (path: string) => posix.normalize(path.replace(/\\/g, "/"));
+  const path = normal(file);
+  if (path.split("/").some((part) => part.toLowerCase() === ".git")) return `may not touch git's own folder (${file})`;
+  if (!TEST_FILE.test(path)) return `must change a test file (*.test.ts or *.spec.ts), not ${file}`;
+  if (path.toLowerCase() === normal(mainFile).toLowerCase()) return `must change another file than ${mainFile}`;
+  return undefined;
+}
+
+/**
+ * What in a template's test change would give the case away: a giveaway word, a name only the lab uses, or,
+ * for a bug, a word starting with one of its kind terms or any invariant it breaks (Qodo on PR 293).
+ */
+function testChangeTelltales(template: Template): string[] {
+  const change = template.testChange;
+  if (!change) return [];
+  const ownNames = [template.id, template.invariantId].filter((name): name is string => Boolean(name));
+  const oracle =
+    template.kind === "bug"
+      ? [
+          ...(template.match?.kindTerms ?? []),
+          ...(template.invariantId ? [template.invariantId] : []),
+          ...(template.alsoBreaks ?? []).map((a) => a.invariantId),
+        ]
+      : [];
+  const fields: [string, string | undefined][] = [
+    ["testChange.file", change.file],
+    ["testChange.find", change.find],
+    ["testChange.replace", change.replace],
+    ["testChange.content", change.content],
+  ];
+  return fields.flatMap(([field, text]) =>
+    text === undefined
+      ? []
+      : [
+          ...telltales(text),
+          ...ownNames.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map((n) => `names ${n}`),
+          ...[...new Set(oracle.filter((term) => names(text, term)))].map(
+            (t) => `restates what the change breaks (${t})`,
+          ),
+        ].map((reason) => `${field}: ${reason}`),
+  );
+}
+
+/** Whether anything is at `path`, a link included even when what it points to is missing. */
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Throws unless `path` is no link itself, and the nearest folder of it that exists really lies inside
+ * `targetDir`: no write leaves the target through a link, a dangling one included (Qodo on PR 293).
+ */
+function assertInside(targetDir: string, path: string): void {
+  if (present(path) && lstatSync(path).isSymbolicLink()) throw new Error(`testChange's file ${path} is a link`);
+  let existing = path;
+  while (!present(existing)) existing = dirname(existing);
+  const root = realpathSync.native(targetDir);
+  const real = realpathSync.native(existing);
+  const rel = relative(root, real);
+  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`testChange's file ${path} lies outside the target`);
+}
+
+/** Writes `text` as a new file put in `path`'s place, so a file hard-linked to the old one keeps its content. */
+function replaceFile(path: string, text: string): void {
+  const next = `${path}.${process.pid}.next`;
+  writeFileSync(next, text, { flag: "wx" });
+  renameSync(next, path);
+}
+
+/**
+ * Applies a template's test change: creates its file (`content`), which must not exist yet, or replaces its
+ * `find` text, which must occur exactly once. Returns true when it created a file, which git must then be told
+ * about so the diff and the commit hold it.
+ */
+export function applyTestChange(targetDir: string, change: TestChange): boolean {
+  const path = join(targetDir, change.file);
+  // Checked here too, not only in `templateRefusal`: this is what writes (Qodo on PR 293).
+  const fileProblem = testChangeFileProblem(change.file, "");
+  if (fileProblem) throw new Error(`testChange ${fileProblem}`);
+  assertInside(targetDir, path);
+  if (change.content !== undefined) {
+    if (present(path)) throw new Error(`testChange would create ${change.file}, which already exists`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, change.content, { flag: "wx" });
+    return true;
+  }
+  const source = readFileSync(path, "utf8");
+  const find = change.find ?? "";
+  const at = source.indexOf(find);
+  if (!find || at === -1 || source.indexOf(find, at + 1) !== -1) {
+    throw new Error(`testChange's find text must occur exactly once in ${change.file}`);
+  }
+  replaceFile(path, source.slice(0, at) + (change.replace ?? "") + source.slice(at + find.length));
+  return false;
 }
 
 /** Every proof the variant must break: the template's own invariant, plus whatever it breaks as collateral. */

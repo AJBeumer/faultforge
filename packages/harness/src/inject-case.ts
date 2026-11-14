@@ -5,7 +5,7 @@
  * unexpected; it never exits the process.
  */
 import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -13,9 +13,11 @@ import { baseTreeProblems } from "./base-tree.ts";
 import { type BranchExistence, deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { errorText } from "./error-text.ts";
 import { guardProblem } from "./guard-install.ts";
+import { checksFailure, runVariantChecks, type VariantChecks } from "./inject-checks.ts";
 import { git as gitIn, readJsonl, run as runCommand, runProof, runStep, type StepPlaces } from "./inject-run.ts";
 import {
   applyMutation,
+  applyTestChange,
   loadTemplate,
   loadTemplates,
   type Proof,
@@ -206,34 +208,27 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
 
   let injectionCommit: string | undefined;
   let injectedLines: [number, number] = [0, 0];
-  let typecheck: Outcome = "pass";
-  let publicTests: Outcome = "pass";
+  let checks: VariantChecks = { typecheck: "pass", publicTests: "pass" };
   let proofsOnVariant: Outcome[] = [];
   let failure: string | undefined;
 
   git("switch", "--quiet", "-c", branch);
   try {
     injectedLines = applyMutation(targetDir, template);
+    // The test the ticket's change would come with, in the same commit; a new file is told to git so the
+    // recorded diff and the commit hold it.
+    if (template.testChange && applyTestChange(targetDir, template.testChange)) {
+      git("add", "--intent-to-add", "--", template.testChange.file);
+    }
     const diff = deps.diff(targetDir); // untrimmed (N-14); a failed diff stops the run (Qodo on PR 233)
     if (diff.status !== 0 || diff.error) throw new Error(`git diff failed: ${diff.stderr.trim()}`);
     if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), diff.stdout);
 
-    // With the target's own test config when it has one: that is what its own check compiles (AUD-N7).
-    const tsconfig = existsSync(join(targetDir, "tsconfig.test.json")) ? "tsconfig.test.json" : "tsconfig.json";
-    typecheck = deps.runStep(places, "typecheck", process.execPath, [
-      join(targetDir, "node_modules/typescript/bin/tsc"),
-      "-p",
-      tsconfig,
-      "--noEmit",
-    ]);
-    if (!validateOnly) {
-      publicTests = deps.runStep(places, "public-tests", process.execPath, [
-        join(targetDir, "node_modules/vitest/vitest.mjs"),
-        "run",
-      ]);
-    }
+    checks = runVariantChecks(deps.runStep, places, template, validateOnly);
     proofsOnVariant = proofs.map((proof, i) => deps.runProof(places, "variant", proof, i));
-    failure = variantFailure(template, proofs, proofsOnVariant, typecheck, validateOnly ? "pass" : publicTests);
+    failure =
+      variantFailure(template, proofs, proofsOnVariant, checks.typecheck, checks.publicTests) ??
+      checksFailure(checks, validateOnly);
 
     if (!failure && !validateOnly) {
       git("commit", "--quiet", "--all", "-m", template.publish.commitMessage);
@@ -292,8 +287,9 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
               proofOnBase: proofsOnBase[i],
               proofOnVariant: proofsOnVariant[i],
             })),
-            typecheck,
-            publicTests,
+            typecheck: checks.typecheck,
+            publicTests: checks.publicTests,
+            ...(checks.addedTest ? { addedTest: checks.addedTest } : {}),
           },
           validated: true,
           createdAt,
@@ -305,8 +301,9 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
           ...located,
           // Every corpus proof by file and hash, so the control's validation can be checked later (Qodo on PR 271).
           validation: {
-            typecheck,
-            publicTests,
+            typecheck: checks.typecheck,
+            publicTests: checks.publicTests,
+            ...(checks.addedTest ? { addedTest: checks.addedTest } : {}),
             corpus: proofs.map((proof, i) => ({
               invariantId: proof.invariantId,
               proofTest: `${basename(proof.dir ?? templateDir)}/${proof.proofTest}@sha256:${sha256(readFileSync(join(proof.dir ?? templateDir, proof.proofTest)))}`,
@@ -341,7 +338,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
   appendEvent(auditPath, event);
   deps.log(
     template.kind === "bug"
-      ? `validated: proof(s) pass on base, fail on variant; public tests ${publicTests}`
+      ? `validated: proof(s) pass on base, fail on variant; public tests ${checks.publicTests}`
       : `validated: the control passes all ${proofs.length} corpus proofs and the public tests`,
   );
   deps.log(
