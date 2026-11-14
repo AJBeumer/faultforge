@@ -11,6 +11,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseJsonLines } from "./jsonl.ts";
 import { evidenceDir, runsDir } from "./paths.ts";
 
 export interface RunEvent {
@@ -49,10 +50,7 @@ export function timeline(events: RunEvent[]): string {
 }
 
 export function parseLog(text: string): RunEvent[] {
-  return text
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as RunEvent);
+  return parseJsonLines<RunEvent>(text);
 }
 
 function minutesBetween(fromIso: string | null, toIso: string | null): number | null {

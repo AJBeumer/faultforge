@@ -227,5 +227,10 @@ function main(): number {
 
 // Run only when called as a script, not when the tests import it.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  process.exitCode = main();
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    console.error(`review:gate could not run: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 2;
+  }
 }
