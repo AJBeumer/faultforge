@@ -8,11 +8,13 @@ import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
-import { git, gitLong, npm } from "./factory-exec.ts";
+import { git, gitLong, npm, retried } from "./factory-exec.ts";
 import { type HooksReport, requireHooks, withCleanupFailure } from "./factory-hooks.ts";
-import { acquireLock } from "./factory-lock.ts";
-import { pidAlive } from "./factory-recovery.ts";
+import { acquireLock, type Lock } from "./factory-lock.ts";
+import { processStartId } from "./factory-process.ts";
+import { claimModeFrom, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
+import { earlierPrs } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
@@ -32,18 +34,53 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const privateRepo = join(LAB_ROOT, "private");
   const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths (N-12)
 
+  // The lock this tick holds, so the agent's pid can be written into it once the agent starts.
+  let held: Lock | undefined;
   const deps: TickDeps = {
     now: () => new Date(),
+    mode,
+    // GitHub reads get three tries: one transient failure must not cost the tick (AUD-N10).
+    claimMode: (github, number) =>
+      claimModeFrom(
+        retried(() =>
+          ghAll<{ body?: string; user?: { login?: string } }>(`repos/${github}/issues/${number}/comments?per_page=100`),
+        ),
+        github.split("/")[0] ?? "",
+      ),
+    openPrs: (github, number) =>
+      earlierPrs(
+        retried(() =>
+          ghJson<{ url: string; body: string }[]>(
+            "pr",
+            "list",
+            "--repo",
+            github,
+            "--state",
+            "open",
+            "--limit",
+            "100",
+            "--json",
+            "url,body",
+          ),
+        ),
+        number,
+      ),
     print: (line) => console.log(line),
     // A live holder keeps it however long it runs; a restart frees it (AUD-M19).
-    lock: () => acquireLock(runs, pidAlive),
+    lock: () => {
+      held = acquireLock(runs, pidAlive);
+      return held;
+    },
     labelled: (github, label) =>
-      ghAll<{ number: number; title: string; pull_request?: unknown }>(
-        `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+      retried(() =>
+        ghAll<{ number: number; title: string; pull_request?: unknown }>(
+          `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+        ),
       ).filter((i) => !i.pull_request),
-    events: (github, number) => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`),
+    events: (github, number) =>
+      retried(() => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`)),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
-    snapshot: (github, number) => ghSnapshot(github, number),
+    snapshot: (github, number) => retried(() => ghSnapshot(github, number)),
     writeTicket(ws, text) {
       const file = join(ws.root, "ticket.md");
       writeFileSync(file, `${text}\n`);
@@ -142,7 +179,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     },
     audit: (ws, ticket, from, to) => auditRun(factory, privateRepo, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) =>
-      runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log),
+      runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log, (pid) =>
+        held?.recordAgent(pid, processStartId(pid) ?? undefined),
+      ),
     verifyPr(ws, repoKey, pr) {
       return verifyPrWith(
         { ghJson, git, npm },

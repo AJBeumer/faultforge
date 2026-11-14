@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type AgentRun, agentStep } from "./factory-agent.ts";
 import { windowProblems } from "./factory-audit.ts";
+import { claimModeOf } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import {
   type HookRunner,
@@ -15,6 +16,7 @@ import {
   runsHook,
 } from "./factory-hooks.ts";
 import { STRANDED_COMMENT } from "./factory-recovery.ts";
+import { earlierPrs } from "./factory-settle.ts";
 import {
   EXIT_CODES,
   exitCodeFor,
@@ -1606,5 +1608,54 @@ describe("tick: errors stay in the run log, never on a ticket (Qodo on PR 262, r
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/x-secret-v1|private-repo/);
+  });
+});
+
+describe("tick: the claim says which way of running took the ticket (AUD-M19)", () => {
+  it("ends the claim comment with the mode's mark, which recovery reads back", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { mode: "ci" },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    const claim = f.comments.find((c) => c.body.startsWith("Picked up"))?.body ?? "";
+    expect(claim).toMatch(/\n\n<!-- scheduled-run claim mode=ci -->$/);
+    expect(claimModeOf([claim])).toBe("ci");
+  });
+});
+
+describe("tick: a retried ticket continues the earlier run's pull request (AUD-N10)", () => {
+  it("names the open pull request that closes the ticket in the ticket file, and logs it", async () => {
+    let written = "";
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        openPrs: () => ["https://github.com/owner/target/pull/40", "https://github.com/other/repo/pull/1"],
+        writeTicket: (w, text) => {
+          written = text;
+          return `${w.root}/ticket.md`;
+        },
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(written).toMatch(/^# Filter/);
+    expect(written).toMatch(
+      /Runner note: an earlier run on this ticket left this pull request open: https:\/\/github\.com\/owner\/target\/pull\/40\./,
+    );
+    expect(written).not.toMatch(/other\/repo/);
+    expect(f.events.find((e) => e.event === "earlier-prs")).toMatchObject({
+      prs: ["https://github.com/owner/target/pull/40"],
+    });
+  });
+
+  it("finds the pull requests that close the ticket, and no other", () => {
+    const prs = [
+      { url: "u1", body: "Closes #18\n\nmore" },
+      { url: "u2", body: "Fixes #180" },
+      { url: "u3", body: "resolves #18." },
+      { url: "u4", body: "See #18" },
+      { url: "u5", body: null },
+    ];
+    expect(earlierPrs(prs, 18)).toEqual(["u1", "u3"]);
   });
 });

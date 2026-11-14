@@ -87,6 +87,21 @@ describe("factory workflow", () => {
     expect(install).not.toContain("secrets.");
   });
 
+  it("keeps a cancelled or crashed run's transcript: an always() step after the tick pushes it to private storage (AUD-M19)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
+    const keep = steps.findIndex((step) => step.includes("npm run -s factory:keep"));
+    expect(tick).toBeGreaterThan(0);
+    expect(keep).toBeGreaterThan(tick);
+    expect(steps[keep]).toMatch(/\n {8}if: always\(\)\n/);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
+    expect(steps[keep]).toContain("FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs");
+    // The public artifact still never holds a transcript.
+    const artifact = steps.find((step) => step.includes("actions/upload-artifact@")) ?? "";
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
+    expect(artifact).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
+  });
+
   it("pins every action to a full commit", () => {
     for (const [, ref] of workflow.matchAll(/uses: [\w./-]+@(\S+)/g)) expect(ref).toMatch(/^[0-9a-f]{40}$/);
   });

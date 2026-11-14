@@ -244,7 +244,18 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     });
     const run = await realDeps(FACTORY, OPTIONS).runAgent(ws, "run-1", "target", 18, "/t.md", log);
     expect(run.exitCode).toBe(0);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(FACTORY, OPTIONS, runs, ws, "run-1", "target", 18, "/t.md", log);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      FACTORY,
+      OPTIONS,
+      runs,
+      ws,
+      "run-1",
+      "target",
+      18,
+      "/t.md",
+      log,
+      expect.any(Function),
+    );
   });
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {

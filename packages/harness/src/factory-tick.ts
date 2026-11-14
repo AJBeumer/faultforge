@@ -39,6 +39,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentRun } from "./factory-agent.ts";
+import { claimMarker } from "./factory-comments.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { type EvidencePush, evidenceFile } from "./factory-evidence.ts";
@@ -48,6 +49,7 @@ import { recoverStranded } from "./factory-recovery.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
 import {
   type Candidate,
+  earlierPrsNote,
   exitCodeFor,
   type Finish,
   type IssueEvent,
@@ -55,6 +57,7 @@ import {
   lastLabelled,
   oldest,
   parseAgentResult,
+  prNumber,
   QODO_CHECK_COMMENT,
   RunnerStop,
   redact,
@@ -125,6 +128,9 @@ export interface TickDeps {
   now(): Date;
   print(line: string): void;
   lock(): { acquired: boolean; release(): void; refresh?(): void; note?: string };
+  /** Actions or the owner's PC: the claim comment records it, and recovery leaves the other's claims alone. */
+  mode?: RunMode;
+  claimMode?(github: string, number: number): RunMode | null;
   /** Open issues (not PRs) with the label, in one repo. */
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
@@ -133,6 +139,8 @@ export interface TickDeps {
   snapshot(github: string, number: number): TicketSnapshot;
   /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
   writeTicket(ws: Workspace, text: string): string;
+  /** Open pull requests of the ticket's repo that close it: an earlier run's work. */
+  openPrs?(github: string, number: number): string[];
   relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
   comment(github: string, number: number, body: string): void;
   /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
@@ -202,7 +210,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   try {
     if (lock.note) log("lock", { note: lock.note });
     const recovery = recoverStranded(Object.values(factory.repos), deps);
-    if (recovery.recovered.length || recovery.failed.length) log("recovered", recovery);
+    if (recovery.recovered.length || recovery.failed.length || recovery.otherMode) log("recovered", recovery);
     const candidates: Candidate[] = [];
     for (const [repoKey, repo] of Object.entries(factory.repos)) {
       for (const issue of deps.labelled(repo.github, LABELS.ready)) {
@@ -307,8 +315,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     claimed = pick;
     // An earlier run's result label goes too: a ticket carries one state at a time (#197).
     relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
+    // The claim says which way of running took it, so the other's recovery leaves it alone (AUD-M19).
+    const mark = deps.mode ? `\n\n${claimMarker(deps.mode)}` : "";
     say(
-      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
+      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.${mark}`,
     );
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
@@ -336,7 +346,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const snapshot = deps.snapshot(pick.github, pick.number);
     const late = provenanceProblems(snapshot.provenance, owner);
     if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
-    const ticketFile = deps.writeTicket(ws, snapshot.text);
+    // A retried ticket continues the pull request an earlier run left open, rather than open a second.
+    const earlier = (deps.openPrs?.(pick.github, pick.number) ?? []).filter((url) => prNumber(url, pick.github));
+    if (earlier.length) log("earlier-prs", { prs: earlier });
+    const ticketFile = deps.writeTicket(ws, earlier.length ? snapshot.text + earlierPrsNote(earlier) : snapshot.text);
     log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
 
     const agentFrom = deps.now().toISOString();

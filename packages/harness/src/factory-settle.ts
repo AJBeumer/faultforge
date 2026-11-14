@@ -203,3 +203,17 @@ export const QODO_CHECK_COMMENT =
 
 /** A stop the runner itself words, with nothing in it but its own text: safe to repeat on a ticket. */
 export class RunnerStop extends Error {}
+/** The open pull requests whose body closes ticket `number` (`Closes #N`, `Fixes #N`, `Resolves #N`). */
+export function earlierPrs(prs: { url: string; body?: string | null }[], number: number): string[] {
+  const closes = new RegExp(`\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#${number}\\b`, "i");
+  return prs.filter((pr) => closes.test(pr.body ?? "")).map((pr) => pr.url);
+}
+
+/**
+ * Added to the ticket file when an earlier run on this ticket left an open pull request, so a retried ticket
+ * continues that one instead of opening a second (AUD-N10). The runner's own words, under a line of its own,
+ * apart from the owner's text; only pull request links of the ticket's repo go in.
+ */
+export function earlierPrsNote(urls: string[]): string {
+  return `\n\n---\nRunner note: an earlier run on this ticket left ${urls.length === 1 ? "this pull request" : "these pull requests"} open: ${urls.join(", ")}. Continue on it: check out its branch, push there and wait for its review. Don't open a second pull request for this ticket.`;
+}

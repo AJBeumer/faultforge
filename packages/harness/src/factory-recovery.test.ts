@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type RecoveryDeps, recoverStranded, STRANDED_COMMENT } from "./factory-recovery.ts";
+import { claimMarker } from "./factory-comments.ts";
+import { claimModeFrom, type RecoveryDeps, recoverStranded, STRANDED_COMMENT } from "./factory-recovery.ts";
 
 const WORKING = "agent-working";
 const READY = "ready-for-agent";
@@ -110,6 +111,44 @@ describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 
     expect(second.run().recovered).toEqual(["o/t#7"]);
     expect(second.calls.filter((c) => c.startsWith("comment"))).toEqual([]);
     expect(second.on("o/t#7")).toEqual([HELP]);
+  });
+});
+
+describe("recoverStranded: a ticket the other way of running claimed is left alone (AUD-M19)", () => {
+  it("skips a ticket whose claim came from the other mode, and still recovers its own and unmarked ones", () => {
+    const w = world({ "o/t#1": [WORKING], "o/t#2": [WORKING], "o/t#3": [WORKING] });
+    const claims: Record<number, "ci" | "local" | null> = { 1: "local", 2: "ci", 3: null };
+    const deps: RecoveryDeps = { ...w.deps, mode: "ci", claimMode: (_github, number) => claims[number] ?? null };
+    const result = recoverStranded([{ github: "o/t" }], deps);
+    expect(result.recovered).toEqual(["o/t#2", "o/t#3"]);
+    expect(result.otherMode).toEqual(["o/t#1 (claimed by a local run)"]);
+    expect(w.on("o/t#1")).toEqual([WORKING]);
+    expect(w.calls.some((c) => c.includes("#1"))).toBe(false);
+  });
+
+  it("a claim mode it can't read leaves the ticket for the next tick, reported", () => {
+    const w = world({ "o/t#1": [WORKING] });
+    const deps: RecoveryDeps = {
+      ...w.deps,
+      mode: "local",
+      claimMode: () => {
+        throw new Error("HTTP 502");
+      },
+    };
+    const result = recoverStranded([{ github: "o/t" }], deps);
+    expect(result.recovered).toEqual([]);
+    expect(result.failed).toEqual(["o/t#1: HTTP 502"]);
+    expect(w.on("o/t#1")).toEqual([WORKING]);
+  });
+
+  it("reads the mode from the latest claim the owner posted, never from someone else's comment", () => {
+    const comments = [
+      { body: `Picked up.\n\n${claimMarker("local")}`, user: { login: "Owner" } },
+      { body: `Picked up again.\n\n${claimMarker("ci")}`, user: { login: "owner" } },
+      { body: claimMarker("local"), user: { login: "stranger" } },
+    ];
+    expect(claimModeFrom(comments, "owner")).toBe("ci");
+    expect(claimModeFrom([{ body: "no mark", user: { login: "owner" } }], "owner")).toBeNull();
   });
 });
 

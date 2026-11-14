@@ -38,7 +38,9 @@ The `/factory` loop inside the run keeps its own limits: at most three review ro
 
 ## Following a run
 
-Every step goes to `<runs>/<run id>.jsonl` as it happens, and the agent's full transcript to `<run id>.agent.jsonl`. Both are pushed to `private/raw-artifacts/factory-runs/` at the end. In Actions, the steps also show in the job's log, and the event log (never the transcript: a public repo's artifacts can be downloaded) is kept as an artifact for 30 days.
+Every step goes to `<runs>/<run id>.jsonl` as it happens, and the agent's full transcript to `<run id>.agent.jsonl`. Both are pushed to `private/raw-artifacts/factory-runs/` at the end. In Actions, the steps also show in the job's log, and the event log (never the transcript: a public repo's artifacts can be downloaded) is kept as an artifact for 30 days. When a job is cancelled or times out, or the tick crashes before its last copy, an `if: always()` step (`npm run factory:keep`) pushes the event log and transcript of every run that didn't log `saved` to a branch of the private repo, `unsaved-<Actions run id>`, never to `main`.
+
+Stopping the runner stops its agent: a stop signal or the runner's own exit kills the agent's process tree. A runner killed outright can't do that, so the lock's heartbeat records the agent's pid and start, and the tick that takes the stale lock over kills that agent's tree first, if that pid is still the process that started then. Every claim comment ends with a hidden mark of the way of running that took it (`<!-- scheduled-run claim mode=ci -->` or `mode=local`), and recovery leaves alone an `agent-working` ticket the other way claimed. Reads from GitHub (labels, events, the ticket, its comments, open PRs) get three tries. A ticket picked up again while an earlier run's PR that closes it is still open gets a runner note in its ticket file: continue that PR instead of opening a second.
 
 ```bash
 npm run factory:timeline -- latest       # the run as a table, from the private repo's copy

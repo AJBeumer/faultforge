@@ -2,12 +2,15 @@
  * The headless agent: its instructions, its command line and deny rules, and the launcher that runs it with a
  * time limit and reads its `stream-json` output. Split from factory-tick.ts (#227).
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type FactoryConfig, repoConfig } from "./factory-config.ts";
+import { killOnExit, killTree } from "./factory-kill.ts";
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
+
+export { killTree } from "./factory-kill.ts";
 
 export interface AgentRun {
   exitCode: number | null;
@@ -104,18 +107,6 @@ export function agentArgs(input: {
   ];
 }
 
-/** Kills the agent and its children. Called from a timer: a process already gone is no crash (audit N-12). */
-export function killTree(pid: number, kill: (pid: number, signal: string) => void = process.kill) {
-  if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
-  else {
-    try {
-      kill(-pid, "SIGKILL");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
-  }
-}
-
 /** The Claude Code binary: FAULTFORGE_CLAUDE, else the npm install's `claude.exe` on Windows, else `claude`. */
 function claudeBinary(): string {
   if (process.env.FAULTFORGE_CLAUDE) return process.env.FAULTFORGE_CLAUDE;
@@ -180,6 +171,7 @@ export function runAgent(
   number: number,
   ticketFile: string,
   log: Logger,
+  onStart: (pid: number) => void = () => {},
 ): Promise<AgentRun> {
   const { github } = repoConfig(factory, repoKey);
   const settingsFile = join(ws.root, "agent-settings.json");
@@ -213,6 +205,9 @@ export function runAgent(
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    // Stopping the runner stops the agent, and the lock learns its pid for a kill the runner can't catch.
+    const unguard = child.pid ? killOnExit(child.pid) : () => {};
+    if (child.pid) onStart(child.pid);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -269,6 +264,7 @@ export function runAgent(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      unguard();
       done({
         exitCode: null,
         timedOut: false,
@@ -283,6 +279,7 @@ export function runAgent(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      unguard();
       if (buffer) onLine(buffer);
       const result = final as Record<string, unknown> | null;
       done({

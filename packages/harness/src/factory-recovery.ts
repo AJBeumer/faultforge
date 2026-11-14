@@ -7,10 +7,14 @@
  * cancelled, it hit the job's time limit, or the machine restarted. It is moved to `agent-needs-help` with a
  * comment, so it shows up on the owner's list instead of looking busy for ever.
  *
- * Only one of the two ways to run the factory (Actions, or the scheduled task on the owner's machine) may
- * be switched on at a time: they don't share a lock, and this would take the other's live ticket for a
- * stranded one.
+ * The two ways to run the factory (Actions, or the scheduled task on the owner's machine) don't share a
+ * lock, so a tick in one can't tell whether the other's run is still alive. The claim comment says which way
+ * claimed the ticket (`claimMarker`), and recovery leaves alone a ticket the other way claimed (AUD-M19):
+ * that one is the other's to recover. A ticket with no claim mark (claimed before the mark existed) is
+ * recovered as before.
  */
+import { claimModeOf } from "./factory-comments.ts";
+import type { RunMode } from "./factory-workspace.ts";
 
 /** The labels the runner uses, repeated here so this module needs nothing from the runner. */
 const WORKING = "agent-working";
@@ -27,6 +31,10 @@ export interface RecoveryDeps {
     add: string[],
   ): { removeFailed: unknown; addFailed: unknown };
   comment(github: string, number: number, body: string): void;
+  /** Which way of running claimed the ticket, from the runner's own comments; absent in older fakes. */
+  claimMode?(github: string, number: number): RunMode | null;
+  /** This tick's own way of running; with `claimMode`, a ticket the other way claimed is left alone. */
+  mode?: RunMode;
 }
 
 /** The comment a stranded ticket gets. Plain words only: it may be posted on a reviewed repo. */
@@ -47,9 +55,10 @@ export const STRANDED_COMMENT =
 export function recoverStranded(
   repos: { github: string }[],
   deps: RecoveryDeps,
-): { recovered: string[]; failed: string[] } {
+): { recovered: string[]; failed: string[]; otherMode?: string[] } {
   const recovered: string[] = [];
   const failed: string[] = [];
+  const otherMode: string[] = [];
   for (const { github } of repos) {
     let stranded: { number: number }[];
     let helped: Set<number>;
@@ -66,6 +75,11 @@ export function recoverStranded(
     for (const { number } of stranded) {
       const ref = `${github}#${number}`;
       try {
+        const claimedBy = deps.mode && deps.claimMode ? deps.claimMode(github, number) : null;
+        if (claimedBy && claimedBy !== deps.mode) {
+          otherMode.push(`${ref} (claimed by a ${claimedBy} run)`);
+          continue;
+        }
         if (!helped.has(number)) {
           deps.comment(github, number, STRANDED_COMMENT);
           const added = deps.relabel(github, number, [], [HELP]);
@@ -79,7 +93,14 @@ export function recoverStranded(
       }
     }
   }
-  return { recovered, failed };
+  return { recovered, failed, ...(otherMode.length ? { otherMode } : {}) };
+}
+
+/** Reads the claim mode from the comments the repo owner posted (the runner's token is the owner's). */
+export function claimModeFrom(comments: { body?: string | null; user?: { login?: string } | null }[], owner: string) {
+  return claimModeOf(
+    comments.filter((c) => c.user?.login?.toLowerCase() === owner.toLowerCase()).map((c) => c.body ?? ""),
+  );
 }
 
 /**
