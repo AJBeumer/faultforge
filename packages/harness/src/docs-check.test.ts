@@ -62,3 +62,40 @@ describe("publicFiles: the staged copy too (Qodo on PR 232)", () => {
     expect(docsProblems(files, facts)).toEqual(["docs/log.md (staged): names FF-0002, which has no verdict yet"]);
   });
 });
+
+describe("docsProblems: an id above every case in the answer key (#244)", () => {
+  it("refuses an id past the highest case, unless it is a fixture id", () => {
+    expect(check("Next up is FF-0005.")).toEqual([
+      "docs/x.md: names FF-0005, above the highest case in the answer key",
+    ]);
+    expect(check("Fixtures use FF-0099 and FF-9001.")).toEqual([]);
+  });
+
+  it("allows an id below the highest case that the answer key doesn't hold, as before", () => {
+    const sparse: DocsFacts = { ...facts, caseTemplates: new Map([["FF-0004", ["seed-v1"]]]) };
+    expect(docsProblems([{ path: "docs/x.md", text: "FF-0002" }], sparse)).toEqual([]);
+  });
+});
+
+describe("docsProblems: a malformed id in the answer key (Qodo on PR 264)", () => {
+  it("still refuses an id above the highest well-formed case", () => {
+    const odd: DocsFacts = { ...facts, caseTemplates: new Map([...facts.caseTemplates, ["FF-X", ["seed-v1"]]]) };
+    expect(docsProblems([{ path: "docs/x.md", text: "FF-0005" }], odd)).toEqual([
+      "docs/x.md: names FF-0005, above the highest case in the answer key",
+    ]);
+  });
+});
+
+describe("docsProblems: a colour is not a case id (Qodo on PR 264)", () => {
+  it("doesn't read #ff5733 as a case above the highest, but still reads FF-5733", () => {
+    expect(check("color: #ff5733;")).toEqual([]);
+    expect(check("see FF-5733")).toEqual(["docs/x.md: names FF-5733, above the highest case in the answer key"]);
+  });
+});
+
+describe("docsProblems: every spelling of a future case id (Qodo on PR 264)", () => {
+  it("refuses FF5000 written without a separator, and still passes a colour", () => {
+    expect(check("next: FF5000")).toEqual(["docs/x.md: names FF-5000, above the highest case in the answer key"]);
+    expect(check("color: #FF5000;")).toEqual([]);
+  });
+});

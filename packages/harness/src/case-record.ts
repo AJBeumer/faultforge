@@ -45,6 +45,7 @@ interface CaseRecord {
   /** A control's change: only its line range is checked here. */
   change?: { lines: [number, number] };
   review?: { reviewedCommit: string };
+  status?: string;
 }
 
 /** Problems with a public case record, or an empty list if it is valid. */
@@ -58,7 +59,7 @@ export function validateCaseRecord(record: unknown): string[] {
 }
 
 /** Cross-field rules JSON Schema can't express: a catch must follow from the findings and the match rule. */
-function consistencyProblems({ findings, detection, human, injection, change, review }: CaseRecord): string[] {
+function consistencyProblems({ findings, detection, human, injection, change, review, status }: CaseRecord): string[] {
   const problems: string[] = [];
   // One finding per id, or the checks below could judge a different finding from the one the rule matched.
   const seen = new Set<string>();
@@ -74,6 +75,17 @@ function consistencyProblems({ findings, detection, human, injection, change, re
   }
   if (change && !isRange(change.lines)) {
     problems.push(`change.lines ${(change.lines as number[]).join("-")} ends before it starts`);
+  }
+  // What each outcome says about the findings and the review, checked for every kind of case: a control
+  // has no detection to check against (AUD-M1).
+  if (human.disposition === "confirmed_clean" && findings.length) {
+    problems.push(`confirmed_clean, but Qodo raised ${findings.length} finding(s): a clean control has none`);
+  }
+  if (human.disposition === "confirmed_false_alarm" && !findings.length) {
+    problems.push("confirmed_false_alarm, but Qodo raised no finding to be a false alarm");
+  }
+  if ((human.disposition === "review_incomplete") !== (status === "incomplete")) {
+    problems.push(`the disposition ${human.disposition} disagrees with status ${status}`);
   }
   if (!detection) return problems;
   const findingsById = new Map(findings.map((f) => [f.id, f]));

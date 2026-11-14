@@ -3,7 +3,8 @@
  * record can't drift from the events that back it, and anyone can regenerate it from the same inputs.
  *
  *   npm run case:build -- FF-0001              # prints the record
- *   npm run case:build -- FF-0001 --write      # writes examples/<caseId>.json
+ *   npm run case:build -- FF-0001 --save       # also saves it as private/cases/<caseId>.json
+ *   npm run case:build -- FF-0001 --write      # publishes it as examples/<caseId>.json
  *
  * Reads, for `<caseId>`:
  *  - the ground-truth entry (`readLedger`, amendments applied): `injection` and `target`.
@@ -30,9 +31,13 @@
  *    and prints which fields it took from the overlay. With no overlay file, the record says its
  *    challenge has not run (#162).
  *  - for an ordinary case, the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`,
- *    matched by `reviewedCommit`, via `findSavedReview` from `saved-review.ts`) for `findings`, cross-checked
- *    against `review.recorded`'s `pr` so a saved file for the right commit but the wrong PR is refused,
- *    not silently used.
+ *    found by the reviewed commit on `review.recorded`'s PR, via `findSavedReview` from `saved-review.ts`)
+ *    for `findings` and its `state`. A save for the right commit on another PR is never used.
+ *
+ * The record is built only from the review the owner judged, as it was judged (AUD-M1, AUD-M26): a verdict
+ * `verdict` wrote carries an `inputHash` of the answer-key entry, the template and the saved review, and a
+ * save, template or entry changed since then is refused. A save whose state is not "complete" admits only
+ * `review_incomplete`, and a clean control must have no findings.
  *
  * `detection` comes from `applyMatchRule`: the matched finding's criteria when caught, the first
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
@@ -42,33 +47,41 @@
  * answer key (template, file, lines, commit) and the overlay's `notes`, which only version 2 holds, so a
  * control's record is always version 2. A bug case's record stays version 1 and keeps its bytes.
  *
- * `--write` also appends a `case.published` audit event (the written record's `sha256` and `path`).
- * Writing the same case twice with unchanged content is a no-op the second time (the file is
+ * `--save` writes the record to `private/cases/<caseId>.json`, in place of copying it by hand (AUD-M24). A
+ * file already there with other content is refused, never replaced. `--write` publishes: it writes
+ * `examples/<caseId>.json` and appends a `case.published` audit event (the written record's `sha256` and
+ * `path`). Writing the same case twice with unchanged content is a no-op the second time (the file is
  * rewritten, but no duplicate event is appended) rather than a new event every run.
  *
- * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed or
+ * Exit codes: 0 the record is valid and leak-free (`validateCaseRecord` + `findLeaks`), printed, saved or
  * written; 1 the record fails those checks, or the overlay sets a field it isn't allowed to (problems
- * listed); 2 nothing was built, because an input is missing or unreadable (the answer key, the events, a
- * bug case's template, the saved review, or an overlay file that exists), the answer key or audit log has an
- * amendment or history problem, or the inputs disagree (a missing stage, disagreeing commits, or a saved review for the
- * wrong PR). The message names which.
+ * listed); 2 nothing was built or saved, because an input is missing or unreadable (the answer key, the
+ * events, a bug case's template, the saved review, or an overlay file that exists), the answer key or
+ * audit log has an amendment or history problem, the inputs disagree (a missing stage, disagreeing
+ * commits, an unfinished review with a final verdict, or inputs changed since the verdict), or a saved
+ * record with other content is already there. The message names which.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:build` runs `case-build-cli.ts`.
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
 import { parseArgs } from "node:util";
 import { buildCaseRecord, latestEvent, type Overlay, requireField } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
+import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { isToolWritten, verdictHashProblem } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
 import { sha256 } from "./provenance.ts";
 import { type Finding, findingsFor, type QodoReview } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
-import { findSavedReview } from "./saved-review.ts";
+import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
 import { isPublishedTemplate, kindTermsOf, privateDir, templateDir } from "./templates.ts";
 
 /** This repo, where adjudicated templates are published, for `injection.template`. */
@@ -77,16 +90,17 @@ const TEMPLATE_REPO = "AJBeumer/faultforge";
 interface CliArgs {
   caseId: string;
   write: boolean;
+  save: boolean;
 }
 
 /** The command line, or null when it's wrong. */
 export function parseCliArgs(argv: string[]): CliArgs | null {
-  let values: { write?: boolean };
+  let values: { write?: boolean; save?: boolean };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
       args: argv,
-      options: { write: { type: "boolean" } },
+      options: { write: { type: "boolean" }, save: { type: "boolean" } },
       allowPositionals: true,
     }));
   } catch {
@@ -94,7 +108,7 @@ export function parseCliArgs(argv: string[]): CliArgs | null {
   }
   const [caseId] = positionals;
   if (!caseId) return null;
-  return { caseId, write: values.write ?? false };
+  return { caseId, write: values.write ?? false, save: values.save ?? false };
 }
 
 export interface RunOptions {
@@ -106,7 +120,10 @@ export interface RunOptions {
   reviewsDir?: string;
   overlayPath?: string;
   examplesDir?: string;
+  /** Where `--save` writes; `private/cases` by default. */
+  casesDir?: string;
   write?: boolean;
+  save?: boolean;
 }
 
 /**
@@ -123,14 +140,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
-  const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
+  const reviewsDir = options.reviewsDir ?? savedReviewsDir(env);
   const overlayPath = options.overlayPath ?? join(root, "cases", `${caseId}.overlay.json`);
   const examplesDir = options.examplesDir ?? join(ROOT, "examples");
+  const casesDir = options.casesDir ?? join(root, "cases");
 
   let entry: LedgerEntry | undefined;
   let events: LedgerEntry[];
@@ -162,12 +179,30 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
 
-  const injectionCommit = entry.injectionCommit as string;
-  // A saved review counts only if it carries the timing fields only review:wait's wait loop writes
-  // (pushSeenAt, reviewStartedAt, reviewSeenCompleteAt): a review.json backfilled by hand (as FF-0001's
-  // was, for an unrelated ticket's testing) can't masquerade as one, and the saved review always wins
-  // over the overlay's legacy path when it genuinely exists.
-  const foundReview = findSavedReview(reviewsDir, injectionCommit);
+  const injectionCommit = entry.injectionCommit;
+  if (typeof injectionCommit !== "string") {
+    error(`case:build: ${caseId}'s ground-truth entry names no injection commit`);
+    return 2;
+  }
+  let reviewPr: number | undefined;
+  let adjudication: LedgerEntry;
+  try {
+    const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage");
+    const recordedPr = requireField(reviewEvent, "pr", "the review stage");
+    reviewPr = prNumberOf(recordedPr);
+    // A PR that can't be read must never send the case down the legacy path (Qodo on PR 264).
+    if (reviewPr === undefined)
+      throw new Error(`the review stage names no readable PR (${JSON.stringify(recordedPr)})`);
+    adjudication = latestEvent(events, ["case.adjudicated"], "the adjudication stage");
+  } catch (e) {
+    error(`case:build: ${message(e)}`);
+    return 2;
+  }
+  // Only the case's own PR's save counts (AUD-M24), and it counts only if it carries the timing fields
+  // review:wait's wait loop writes: a review.json backfilled by hand (as FF-0001's was, for an unrelated
+  // ticket's testing) can't masquerade as one, and the saved review always wins over the overlay's legacy
+  // path when it genuinely exists.
+  const foundReview = findSavedReview(reviewsDir, injectionCommit, reviewPr);
   const saved =
     foundReview && isReviewWaitSave(foundReview.review as unknown as Record<string, unknown>) ? foundReview : undefined;
   const isLegacy = !saved;
@@ -180,11 +215,29 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   for (const field of overlayFieldsTaken(overlay as Record<string, unknown>))
     log(`[case:build] from overlay: ${field}`);
 
+  // The record is built from the review the owner judged, as it was judged (AUD-M26).
+  if (isToolWritten(adjudication) && typeof adjudication.inputHash === "string") {
+    const problem = verdictHashProblem(adjudication, events, groundTruthPath, reviewsDir, env);
+    if (problem) {
+      error(`case:build: the verdict's inputs changed since it was recorded (${problem}); nothing built`);
+      return 2;
+    }
+  }
+  // And the findings and state come from that same file, never another save found for the commit (Qodo on PR 264).
+  if (typeof adjudication.reviewFile === "string") {
+    const judged = resolve(dirname(groundTruthPath), adjudication.reviewFile);
+    if (!saved || resolve(saved.path) !== judged) {
+      error(`case:build: the verdict judged ${judged}, but the save found for this case is ${saved?.path ?? "none"}`);
+      return 2;
+    }
+  }
+
   let findings: Finding[];
+  let reviewState: string | null = null;
   if (!saved) {
     if (!overlay.legacyFindingsPath) {
       error(
-        `case:build: no saved review for commit ${injectionCommit} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
+        `case:build: no saved review for commit ${injectionCommit} on PR ${reviewPr} under ${reviewsDir}, and no legacyFindingsPath in the overlay`,
       );
       return 2;
     }
@@ -197,27 +250,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     }
     findings = findingsFor(raw, injectionCommit);
   } else {
-    let reviewPr: number | undefined;
-    try {
-      const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage") as unknown as Record<
-        string,
-        unknown
-      >;
-      reviewPr = requireField<{ number: number }>(reviewEvent, "pr", "the review stage").number;
-    } catch (e) {
-      error(`case:build: ${message(e)}`);
-      return 2;
-    }
-    if (saved.review.pr !== undefined && saved.review.pr !== reviewPr) {
-      error(
-        `case:build: the saved review at ${saved.path} is for PR ${saved.review.pr}, but this case's review.recorded event is for PR ${reviewPr}`,
-      );
+    reviewState = typeof saved.review.state === "string" ? saved.review.state : "";
+    if (!Array.isArray(saved.review.findings)) {
+      error(`case:build: the saved review at ${saved.path} holds no findings list`);
       return 2;
     }
     // verdict.ts's SavedFinding doesn't declare severity, but the file review:wait writes has it
     // (review-wait.ts's Finding); dropping it here would silently publish an empty severity.
-    const savedFindings = (saved.review.findings ?? []) as unknown as Finding[];
-    findings = savedFindings.map((f) => ({
+    findings = (saved.review.findings as unknown as Finding[]).map((f) => ({
       id: f.id,
       file: f.file,
       lines: f.lines,
@@ -257,7 +297,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
 
   let record: Record<string, unknown>;
   try {
-    record = buildCaseRecord({ entry, events, findings, overlay, kindTerms, templateUrl });
+    record = buildCaseRecord({ entry, events, findings, overlay, kindTerms, templateUrl, reviewState });
   } catch (e) {
     error(`case:build: ${message(e)}`);
     return 2;
@@ -270,6 +310,22 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const text = `${printRecord(record)}\n`;
+  if (options.save) {
+    const savePath = join(casesDir, `${caseId}.json`);
+    mkdirSync(casesDir, { recursive: true });
+    // Created exclusively, so of two builds racing for an absent file only one writes (Qodo on PR 264).
+    try {
+      writeFileSync(savePath, text, { flag: "wx" });
+      log(`[case:build] saved ${savePath}`);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (readFileSync(savePath, "utf8") !== text) {
+        error(`case:build: ${savePath} already holds a different record; compare them, nothing saved`);
+        return 2;
+      }
+      log(`[case:build] ${savePath} already holds this record`);
+    }
+  }
   if (!options.write) {
     log(text.trimEnd());
     return 0;
@@ -282,32 +338,24 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     log(`[case:build] wrote ${outPath} (already recorded as published with this content)`);
     return 0;
   }
-  appendFileSync(
-    auditEventsPath,
-    `${JSON.stringify({
-      eventId: randomUUID(),
-      type: "case.published",
-      at: new Date().toISOString(),
-      caseId,
-      sha256: hash,
-      path: `examples/${caseId}.json`,
-    })}\n`,
-  );
+  appendEvent(auditEventsPath, {
+    eventId: randomUUID(),
+    type: "case.published",
+    at: new Date().toISOString(),
+    caseId,
+    sha256: hash,
+    path: `examples/${caseId}.json`,
+  });
   log(`[case:build] wrote ${outPath}`);
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const parsed = parseCliArgs(process.argv.slice(2));
+/** The command: `case-build-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export async function main(argv: string[]): Promise<number> {
+  const parsed = parseCliArgs(argv);
   if (!parsed) {
-    console.error("usage: npm run case:build -- <caseId> [--write]");
-    process.exit(2);
+    console.error("usage: npm run case:build -- <caseId> [--save] [--write]");
+    return 2;
   }
-  run(parsed.caseId, { write: parsed.write }).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`case:build: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(2);
-    },
-  );
+  return run(parsed.caseId, { write: parsed.write, save: parsed.save });
 }

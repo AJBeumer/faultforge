@@ -48,9 +48,11 @@ still saw them.
 
 ## Reading only
 
-The command changes no branch, file, review or label. Reading the staged tree uses `git write-tree`,
-which adds that tree to git's object store and nothing else. It does not block a commit, and nothing runs
-it automatically any more (see below).
+The command changes no branch, review or label, and no file in a repository. Reading the staged tree uses
+`git write-tree`, which adds that tree to git's object store and nothing else. It keeps one cache file,
+`node_modules/.cache/review-gate/<id>.json`, of what each saved review held, so a run parses only the reviews
+that are new or changed since the last one; git ignores it, and deleting it changes only the speed.
+It does not block a commit, and nothing runs it automatically any more (see below).
 
 ## What the saved evidence shows (14 November)
 

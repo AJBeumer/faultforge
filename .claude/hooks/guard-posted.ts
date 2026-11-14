@@ -3,6 +3,7 @@
  * parts git joins into one commit message. Split out of guard-target.ts along this seam (#199); the guard
  * decides what to do with the text, this module only finds it.
  */
+import { gitSteps, heredocBodies } from "./shell-scan.ts";
 
 /**
  * The text a command would post, as written: flag values and heredoc bodies, or the whole command when
@@ -11,7 +12,7 @@
  */
 export function postedText(command: string): string[] {
   // Flags are read outside heredoc bodies: an option-looking line in one is text, not an argument.
-  const spans = heredocSpans(command);
+  const spans = heredocBodies(command);
   let outside = command;
   for (const span of [...spans].reverse()) outside = outside.slice(0, span.start) + outside.slice(span.end);
   const posted = postedArguments(outside);
@@ -34,44 +35,9 @@ export function postedText(command: string): string[] {
   ];
 }
 
-/** A flag that reads its body from stdin (`-`), followed by a blank, a shell operator or the end. */
-export const STDIN_BODY = /(\s-F|--file|--body-file|--notes-file|--input)[\s=]+-(?=[\s;&|)]|$)/;
-
-/**
- * Where each heredoc body sits in the command, as the shell reads it. The delimiter is the word after
- * `<<` (or `<<-`) with its quoting removed: quote marks and backslashes quote, so `'EOF'`, `\EOF` and
- * `E\OF` all mean `EOF`, and `EOF-` is not `EOF`. The body starts on the next line and ends before the
- * first line that is the delimiter alone; `<<-` lets tabs, never spaces, come before it. A body with no
- * such line runs to the end of the command.
- */
-function heredocSpans(command: string): { start: number; end: number }[] {
-  const spans: { start: number; end: number }[] = [];
-  const opener = /<<(-?)[ \t]*((?:\\.|[^\s<>|;&()])+)/g;
-  let match: RegExpExecArray | null = opener.exec(command);
-  while (match) {
-    const tabs = match[1] === "-";
-    const delimiter = (match[2] ?? "").replace(/\\(.)/g, "$1").replace(/["']/g, "");
-    const lineEnd = command.indexOf("\n", match.index);
-    if (lineEnd < 0 || !delimiter) break;
-    const start = lineEnd + 1;
-    let at = start;
-    let end = command.length;
-    while (at <= command.length) {
-      const next = command.indexOf("\n", at);
-      const line = command.slice(at, next < 0 ? command.length : next);
-      if ((tabs ? line.replace(/^\t+/, "") : line) === delimiter) {
-        end = at;
-        break;
-      }
-      if (next < 0) break;
-      at = next + 1;
-    }
-    spans.push({ start, end });
-    opener.lastIndex = end;
-    match = opener.exec(command);
-  }
-  return spans;
-}
+/** A flag that reads its body from stdin (`-`, or `-F-`), followed by a blank, a shell operator or the end. */
+export const STDIN_BODY =
+  /(\s-F|--file|--body-file|--notes-file|--input)(?:[\s=]+|(?<=-F))-(?=[\s;&|)]|$)|(?:\s-F|--field)[\s=]*["']?[\w.[\]-]+=@-(?=[\s"';&|)]|$)/;
 
 /**
  * The text with the files a body is read from blanked: the path after `cat`, `type` or `Get-Content`
@@ -83,15 +49,15 @@ function blankLocalPaths(text: string, redirects: boolean): string {
   // `--git-dir` and `--work-tree` name where it runs, never what it posts.
   const navigates =
     /\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+-C\s*|--(?:git-dir|work-tree)[=\s]\s*/;
-  const reader = redirects
-    ? new RegExp(`\\b(?:cat|type|Get-Content|gc)\\s+|<\\s*|${navigates.source}`)
-    : /\b(?:cat|type|Get-Content|gc)\s+/;
+  // A reader's own options (`Get-Content -Raw`) come before its file; `$(< file)` reads one too (#242).
+  const readers = /\b(?:cat|type|Get-Content|gc)\s+(?:-(?:Raw|Path|LiteralPath|Encoding\s+\S+)\s+)*|\$\(\s*<\s*/;
+  const reader = redirects ? new RegExp(`${readers.source}|<\\s*|${navigates.source}`) : readers;
   return text.replace(new RegExp(`(${reader.source})(["']?)[^\\s"'\`;&|<>()]+\\2`, "gi"), "$1 ");
 }
 
 /** Every part of a chained command that runs `git commit`, each up to the next shell operator. */
 export function commitSteps(command: string): string[] {
-  return [...command.matchAll(/\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*/g)].map((m) => m[0]);
+  return gitSteps(command, /\bcommit\b/).map((step) => step.text);
 }
 
 /**
@@ -118,7 +84,7 @@ export function postedArguments(command: string): string[] {
  */
 function postedFlagValue(): RegExp {
   const flag =
-    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|(?:-f|-F|--field|--raw-field)\s+\w+=)[\s=]*/;
+    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|(?:-f|-F|--field|--raw-field)[\s=]*[\w.[\]-]+=)[\s=]*/;
   const value = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/;
   return new RegExp(`${flag.source}(?:${value.source})`, "g");
 }
@@ -130,8 +96,30 @@ function postedFlagValue(): RegExp {
  */
 export function outsidePostedText(command: string): string {
   let outside = command;
-  for (const span of [...heredocSpans(command)].reverse()) {
+  for (const span of [...heredocBodies(command)].reverse()) {
     outside = outside.slice(0, span.start) + outside.slice(span.end);
   }
   return outside.replace(postedFlagValue(), " ");
+}
+
+/** Where each posted flag value sits in the command, quotes included: `[start, end)`. */
+export function postedRanges(command: string): [number, number][] {
+  const pattern = new RegExp(postedFlagValue().source, "dg");
+  return [...command.matchAll(pattern)].flatMap((m) => {
+    const value = m.indices?.[1] ?? m.indices?.[2] ?? m.indices?.[3];
+    if (!value) return [];
+    // The quote before a quoted value belongs to it, and so does whatever the shell joins on after its closing
+    // quote, up to the next blank or operator: `--body="a"$(cat f)` posts f too (Qodo on PR 266).
+    let end = value[1] + 1;
+    while (end < command.length && !/[\s;&|]/.test(command[end] ?? "")) end++;
+    return [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), end] as [number, number]];
+  });
+}
+
+/** Every string in a tool input, keys and values, however deeply nested. */
+export function stringsIn(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringsIn);
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => [k, ...stringsIn(v)]);
+  return value === undefined || value === null ? [] : [String(value)];
 }

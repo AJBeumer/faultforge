@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
+import { blankQuoted, quotedSpans } from "./shell-scan.ts";
 
 /** Thrown when git can't answer for a checkout, or can't answer in time: the caller fails closed. */
 export class Uninspectable extends Error {}
@@ -23,6 +24,29 @@ const MAX_FILES = 500;
 const MAX_COMMITS = 50;
 /** The hook has 15 s in settings.json; the scan gives up well before that, so a timeout can't let the tool run. */
 export const DEFAULT_BUDGET_MS = 8000;
+
+/** Besides the giveaway words, a test for private template ids, while a check that set one runs (AUD-H1). */
+let privateNames: ((text: string) => boolean) | undefined;
+
+/**
+ * Runs `fn` with `names` as the private-id test every pending-content scan in it applies, so a private
+ * template id written into a reviewed checkout can't be committed or pushed (Qodo on PR 265).
+ */
+export function withPrivateNames<T>(names: ((text: string) => boolean) | undefined, fn: () => T): T {
+  const outer = privateNames;
+  privateNames = names;
+  try {
+    return fn();
+  } finally {
+    privateNames = outer;
+  }
+}
+
+/** The reasons a text must not travel: its giveaway words, and a private template id it names (never the id). */
+export function reasonsIn(text: string): string[] {
+  const found = telltales(text);
+  return privateNames?.(text) ? [...found, "names a private template"] : found;
+}
 
 /** The one deadline every git call and scan in the current decision shares, while one is set (audit N-4). */
 let active: { end: number; ms: number } | undefined;
@@ -138,7 +162,7 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
       tracked.map((file) => `:0:${file}`),
     ),
   ];
-  return { reasons: telltales(texts.join("\n")), where: "the changes not yet committed" };
+  return { reasons: reasonsIn(texts.join("\n")), where: "the changes not yet committed" };
 }
 
 /**
@@ -163,7 +187,7 @@ export function pendingIndex(checkout: string): Pending {
       staged.filter((file) => !submodules.has(file)).map((file) => `:0:${file}`),
     ),
   ];
-  return { reasons: telltales(texts.join("\n")), where: "the staged changes" };
+  return { reasons: reasonsIn(texts.join("\n")), where: "the staged changes" };
 }
 
 /**
@@ -196,9 +220,9 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
   // have it yet, and without asking the remotes the guard can't tell which (Qodo on PR 208). A giveaway name
   // shouldn't stay on the target either way, so this blocks pushes until it is removed.
   const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
-    (name) => telltales(name).length,
+    (name) => reasonsIn(name).length,
   );
-  const reasons = [...new Set([...telltales(texts.join("\n")), ...giveaways.flatMap((name) => telltales(name))])];
+  const reasons = [...new Set([...reasonsIn(texts.join("\n")), ...giveaways.flatMap((name) => reasonsIn(name))])];
   const where = giveaways.length
     ? `a new branch, or a tag (${giveaways.join(", ")})`
     : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
@@ -265,16 +289,9 @@ export function pendingPushUpdates(checkout: string, remote: string, updates: Pu
       commits.add(sha);
   }
   const texts = [...names, ...commitTexts(checkout, [...commits], tick)];
-  const giveaways = names.filter((name) => telltales(name).length);
+  const giveaways = names.filter((name) => reasonsIn(name).length);
   const where = giveaways.length ? `the pushed ref (${giveaways.join(", ")})` : "the commits this push sends";
-  return { reasons: telltales(texts.join("\n")), where };
-}
-
-/** The command with quoted text and heredoc bodies blanked, so operators inside them don't count. */
-export function blankQuoted(command: string): string {
-  return command
-    .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
-    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (/^"[\s\S]*(\$\(|`)/.test(quoted) ? quoted : " "));
+  return { reasons: reasonsIn(texts.join("\n")), where };
 }
 
 /**
@@ -286,9 +303,21 @@ export function blankQuoted(command: string): string {
  */
 const GIT_OPTIONS = String.raw`(?:(?:-C\s*\S*|--work-tree[=\s]*\S*|--git-dir[=\s]*\S*)\s*)*`;
 const ALLOWED_STEP = new RegExp(
-  String.raw`^(?:(?:cd|pushd|popd|Set-Location|sl|echo|true|exit|sleep)\b|git\s+${GIT_OPTIONS}(?:add|rm|mv|commit|push|pull|fetch|status|diff|log|rev-parse|branch|switch|checkout|merge|remote|show|tag|restore)\b|gh\s|npm\s)`,
+  String.raw`^(?:(?:cd|pushd|popd|Set-Location|sl|echo|printf|cat|type|Get-Content|gc|true|exit|sleep)\b|git\s+${GIT_OPTIONS}(?:add|rm|mv|commit|push|pull|fetch|status|diff|log|rev-parse|branch|switch|checkout|merge|remote|show|tag|restore)\b|gh\s|npm\s)`,
   "i",
 );
+
+/**
+ * A step in a chained post, other than the post itself, that runs npm or gh: either can write files without a
+ * redirect (`npm exec`, `gh run download`), so the post's files can't be trusted (Qodo on PR 266).
+ */
+export function writerStep(command: string): string | undefined {
+  const steps = blankQuoted(command)
+    .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return steps.find((s) => /^(?:npm|npx)\s|^gh\s+(?:run|release)\s+download\b|^gh\s+(?:repo|gist)\s+clone\b/.test(s));
+}
 
 /**
  * Why a chained command that mentions git may not run inside a reviewed checkout, or undefined. The guard
@@ -296,21 +325,20 @@ const ALLOWED_STEP = new RegExp(
  * must be one that can't change that content behind its back: no writing step, no hidden command, no
  * redirect other than to `/dev/null` or a descriptor, and no heredoc body that expands `$(…)`.
  */
-export function chainProblem(command: string): string | undefined {
+export function chainProblem(command: string, substitutionsChecked = false): string | undefined {
   // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command,
   // unless the shell escape `\$(` or `` \` `` keeps it literal. An escaped backslash (`\\`) is removed
   // first, so `\\$(…)` is seen for what the shell makes of it: a literal backslash and a real substitution.
-  for (const m of command.matchAll(/<<-?\s*(["']?)(\w+)\1[^\n]*\n([\s\S]*?)\n\s*\2\s*(?:\n|$)/g)) {
-    const body = (m[3] ?? "").replace(/\\\\/g, "").replace(/\\\$\(|\\`/g, "");
-    if (!m[1] && /\$\(|`/.test(body)) return "a heredoc body that runs $(…)";
-  }
+  // The scan is linear in the command's length (AUD-M4).
+  if (quotedSpans(command).some((span) => span.kind === "heredoc" && span.runs)) return "a heredoc body that runs $(…)";
   const steps = blankQuoted(command)
     .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
     .map((s) => s.trim())
     .filter(Boolean);
   for (const step of steps) {
     // A substitution runs whatever is inside it, whatever the step around it is allowed to do.
-    if (/\$\(|`/.test(step)) return step;
+    // (A post's substitutions are judged on their own by builtText, which reads a file and refuses a program.)
+    if (!substitutionsChecked && /\$\(|`/.test(step)) return step;
     const harmless = step.replace(/\d*>&\d+/g, "").replace(/\d*>\s*\/dev\/null/g, "");
     if (/>/.test(harmless) || !ALLOWED_STEP.test(step)) return step;
   }

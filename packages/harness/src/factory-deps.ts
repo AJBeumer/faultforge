@@ -6,17 +6,21 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileS
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
+import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
-import { git, gitLong, npm } from "./factory-exec.ts";
+import { git, gitLong, npm, retried } from "./factory-exec.ts";
 import { type HooksReport, requireHooks, withCleanupFailure } from "./factory-hooks.ts";
-import { acquireLock } from "./factory-lock.ts";
-import { pidAlive } from "./factory-recovery.ts";
+import { acquireLock, type Lock } from "./factory-lock.ts";
+import { processStartId } from "./factory-process.ts";
+import { claimModeFrom, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
+import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
 import { gh, ghAll, ghJson } from "./github.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
 import { checkTicket } from "./ticket-ready.ts";
@@ -32,18 +36,57 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const privateRepo = join(LAB_ROOT, "private");
   const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths (N-12)
 
+  // The lock this tick holds, so the agent's pid can be written into it once the agent starts.
+  let held: Lock | undefined;
   const deps: TickDeps = {
     now: () => new Date(),
+    mode,
+    // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
+    unguarded: () => unguardedCheckouts(factory, LAB_ROOT),
+    // GitHub reads get three tries: one transient failure must not cost the tick (AUD-N10).
+    claimMode: (github, number) =>
+      claimModeFrom(
+        retried(() =>
+          ghAll<{ body?: string; user?: { login?: string } }>(`repos/${github}/issues/${number}/comments?per_page=100`),
+        ),
+        github.split("/")[0] ?? "",
+      ),
+    // Every open PR, however many: gh pages through them up to the limit (Qodo on PR 268).
+    openPrs: (github, number) =>
+      earlierPrs(
+        retried(() =>
+          ghJson<OpenPr[]>(
+            "pr",
+            "list",
+            "--repo",
+            github,
+            "--state",
+            "open",
+            "--limit",
+            "5000",
+            "--json",
+            "url,body,author,isCrossRepository",
+          ),
+        ),
+        number,
+        github.split("/")[0] ?? "",
+      ),
     print: (line) => console.log(line),
-    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
-    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
+    // A live holder keeps it however long it runs; a restart frees it (AUD-M19).
+    lock: () => {
+      held = acquireLock(runs, pidAlive);
+      return held;
+    },
     labelled: (github, label) =>
-      ghAll<{ number: number; title: string; pull_request?: unknown }>(
-        `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+      retried(() =>
+        ghAll<{ number: number; title: string; pull_request?: unknown }>(
+          `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
+        ),
       ).filter((i) => !i.pull_request),
-    events: (github, number) => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`),
+    events: (github, number) =>
+      retried(() => ghAll<IssueEvent>(`repos/${github}/issues/${number}/events?per_page=100`)),
     ready: (repoKey, number) => checkTicket(factory, repoKey, number),
-    snapshot: (github, number) => ghSnapshot(github, number),
+    snapshot: (github, number) => retried(() => ghSnapshot(github, number)),
     writeTicket(ws, text) {
       const file = join(ws.root, "ticket.md");
       writeFileSync(file, `${text}\n`);
@@ -56,8 +99,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
         (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
       ),
+    // Every comment the runner posts starts with its mark: it posts as the owner, and the mark is how a later
+    // run's snapshot tells it from the owner's own text (AUD-M21).
     comment: (github, number, body) => {
-      gh("issue", "comment", String(number), "--repo", github, "--body", body);
+      gh("issue", "comment", String(number), "--repo", github, "--body", runnerComment(body));
     },
     async qodoCheck(runId) {
       // Its own short-lived worktree, so the live answers reach the private repo's `main` even when
@@ -142,7 +187,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     },
     audit: (ws, ticket, from, to) => auditRun(factory, privateRepo, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) =>
-      runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log),
+      runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log, (pid) =>
+        held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
+      ),
     verifyPr(ws, repoKey, pr) {
       return verifyPrWith(
         { ghJson, git, npm },
@@ -167,6 +214,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         temporary = true;
       }
+      // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
+      // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
+      if (!existsSync(join(priv, ".git")))
+        throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
       const dir = join(priv, evidenceInPrivate, "factory-runs");
       mkdirSync(dir, { recursive: true });
       for (const suffix of [".jsonl", ".agent.jsonl"]) {
@@ -192,6 +243,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
 
   return {
     ...deps,
+    // The VM's target checkout gets the guard from the workflow's own step (factory.yml), not from here.
+    unguarded: () => [],
     // The workflow's concurrency group allows one run at a time.
     lock: () => ({ acquired: true, release: () => {} }),
     workspace() {

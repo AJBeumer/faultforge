@@ -38,6 +38,10 @@ vi.mock("./factory-hooks.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./factory-hooks.ts")>()),
   requireHooks: vi.fn(() => ({ problems: [], hooks: [] })),
 }));
+vi.mock("./guard-install.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./guard-install.ts")>()),
+  unguardedCheckouts: vi.fn(() => ["faultforge-target: no guard hooks"]),
+}));
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
@@ -45,13 +49,15 @@ vi.mock("./ticket-ready.ts", async (importOriginal) => ({
 
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
+import { RUNNER_MARKER } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
-import type { Candidate, Workspace } from "./factory-tick.ts";
+import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
@@ -198,10 +204,12 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(readFileSync(file, "utf8")).toBe("# Filter\n");
   });
 
-  it("removes each label on its own, then adds the new ones in one edit, ignoring a label already gone", () => {
-    vi.mocked(gh).mockImplementationOnce(() => {
-      throw new ExternalCallError("gh api", { stderr: "gh: Label does not exist (HTTP 404)\n" });
-    });
+  it("adds the new labels in one edit, then removes each old one on its own, ignoring a label already gone (AUD-M19)", () => {
+    vi.mocked(gh)
+      .mockImplementationOnce(() => "")
+      .mockImplementationOnce(() => {
+        throw new ExternalCallError("gh api", { stderr: "gh: Label does not exist (HTTP 404)\n" });
+      });
     const problems = realDeps(FACTORY, OPTIONS).relabel(
       "owner/target",
       18,
@@ -210,13 +218,13 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     );
     expect(problems).toEqual({ removeFailed: null, addFailed: null });
     expect(vi.mocked(gh).mock.calls).toEqual([
+      ["issue", "edit", "18", "--repo", "owner/target", "--add-label", "agent-working"],
       ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/ready-for-agent"],
       ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/agent-done"],
-      ["issue", "edit", "18", "--repo", "owner/target", "--add-label", "agent-working"],
     ]);
   });
 
-  it("comments on the ticket with gh issue comment", () => {
+  it("comments on the ticket with gh issue comment, behind the runner's mark (AUD-M21)", () => {
     realDeps(FACTORY, OPTIONS).comment("owner/target", 18, "Picked up.");
     expect(vi.mocked(gh)).toHaveBeenCalledWith(
       "issue",
@@ -225,7 +233,8 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
       "--repo",
       "owner/target",
       "--body",
-      "Picked up.",
+      `${RUNNER_MARKER}
+Picked up.`,
     );
   });
 
@@ -242,7 +251,18 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     });
     const run = await realDeps(FACTORY, OPTIONS).runAgent(ws, "run-1", "target", 18, "/t.md", log);
     expect(run.exitCode).toBe(0);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(FACTORY, OPTIONS, runs, ws, "run-1", "target", 18, "/t.md", log);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      FACTORY,
+      OPTIONS,
+      runs,
+      ws,
+      "run-1",
+      "target",
+      18,
+      "/t.md",
+      log,
+      expect.any(Function),
+    );
   });
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {
@@ -273,6 +293,8 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     const ws = workspace(join(runs, "run-1"));
     writeFileSync(join(runs, "run-1.jsonl"), "{}\n");
     writeFileSync(join(runs, "run-1.agent.jsonl"), "{}\n");
+    mkdirSync(ws.private, { recursive: true });
+    writeFileSync(join(ws.private, ".git"), "gitdir: elsewhere\n");
     const saved = realDeps(FACTORY, OPTIONS).saveEvidence("run-1", ws);
     const dir = join(ws.private, "raw-artifacts", "factory-runs");
     expect(existsSync(join(dir, "run-1.jsonl"))).toBe(true);
@@ -281,6 +303,25 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(saved).toEqual({ file: "private/raw-artifacts/factory-runs/run-1.jsonl", pushed: true, blocked: [] });
     // The workspace's own worktree is never torn down here: only a temporary one is.
     expect(vi.mocked(git)).not.toHaveBeenCalled();
+  });
+
+  it("never saves through a private worktree that is gone: git would find the harness instead (Qodo on PR 262)", () => {
+    const ws = workspace(join(runs, "run-gone"));
+    rmSync(ws.private, { recursive: true, force: true });
+    expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-gone", ws)).toThrow(/private worktree is gone/);
+    expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
+  });
+
+  it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself (#242)", () => {
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual(["faultforge-target: no guard hooks"]);
+    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT);
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(
+      /^factory:tick refused: faultforge-target: no guard hooks. Run npm run guard:install first.$/,
+    );
+    vi.mocked(unguardedCheckouts).mockClear();
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS, "ci"))).toBeNull();
+    expect(vi.mocked(unguardedCheckouts)).not.toHaveBeenCalled();
+    expect(setupRefusal({ unguarded: () => [] })).toBeNull();
   });
 
   it("takes the lock in the runs folder when local, and never holds one in CI", () => {

@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendOnlyProblems, ledgerCheckProblems, ledgerProblemsWithHistory } from "./ledger-check.ts";
+import {
+  AppendOnlyScanner,
+  appendOnlyBreak,
+  appendOnlyProblems,
+  ledgerCheckProblems,
+  ledgerProblemsWithHistory,
+} from "./ledger-check.ts";
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-check-"));
@@ -133,7 +139,8 @@ describe("ledgerCheckProblems: both files together", () => {
   it("is empty for two clean, append-only files", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
-    commit(dir, "audit-events.jsonl", '{"eventId":"evt-1"}\n', "first event");
+    const event = '{"eventId":"evt-1","type":"pr.opened","at":"2026-11-01T00:00:00Z","caseId":"FF-0001"}\n';
+    commit(dir, "audit-events.jsonl", event, "first event");
     expect(ledgerCheckProblems(dir)).toEqual([]);
   });
 });
@@ -165,5 +172,117 @@ describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)
     writeFileSync(join(dir, "nested", "audit-events.jsonl"), '{"eventId":"e1","type":"x"}\n');
     const problems = ledgerProblemsWithHistory([join(dir, "nested", "audit-events.jsonl")]);
     expect(problems.join("\n")).toContain("can't be checked");
+  });
+});
+
+describe("appendOnlyProblems: an amendment line is history like any other (M86)", () => {
+  it("names the commit that removed an amendment", () => {
+    const dir = repo();
+    const amendment = '{"kind":"amendment","amends":"FF-0001","change":{"x":1},"reason":"r","evidence":"e"}';
+    commit(dir, "ground-truth.jsonl", `{"caseId":"FF-0001"}\n${amendment}\n`, "case and amendment");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "drop the amendment");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toHaveLength(1);
+  });
+});
+
+describe("appendOnlyProblems: a line inserted before the end (AUD-M10, #251)", () => {
+  it("names the commit that inserted a line between two old ones", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0003"}\n', "two cases");
+    commit(
+      dir,
+      "ground-truth.jsonl",
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n{"caseId":"FF-0003"}\n',
+      "back-date",
+    );
+    const problems = appendOnlyProblems(dir, "ground-truth.jsonl");
+    expect(problems).toEqual([expect.stringContaining("inserted a line before the end")]);
+  });
+
+  it("finds an uncommitted insertion at the top", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "one case");
+    writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-0000"}\n{"caseId":"FF-0001"}\n');
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([
+      "ground-truth.jsonl: uncommitted changes inserted a line before the end",
+    ]);
+  });
+
+  it("still accepts a plain append", () => {
+    expect(appendOnlyBreak("@@ -1,1 +1,2 @@\n a\n+b\n")).toBeUndefined();
+    expect(appendOnlyBreak("@@ -1,1 +1,2 @@\n+a\n b\n")).toBe("inserted");
+    expect(appendOnlyBreak("@@ -1,2 +1,1 @@\n a\n-b\n")).toBe("removed");
+  });
+});
+
+describe("appendOnlyProblems: two branches that each appended, merged (Qodo on PR 269)", () => {
+  it("accepts the merge, though against one parent the other side's lines come first", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "one case");
+    sh(dir, "switch", "--quiet", "-c", "side");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0003"}\n', "side appends");
+    sh(dir, "switch", "--quiet", "main");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n', "main appends");
+    try {
+      sh(dir, "merge", "--quiet", "--no-edit", "side");
+    } catch {
+      // The two appends meet at the end of the file; resolved by keeping both, main's first.
+    }
+    writeFileSync(
+      join(dir, "ground-truth.jsonl"),
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n{"caseId":"FF-0003"}\n',
+    );
+    sh(dir, "add", "ground-truth.jsonl");
+    sh(dir, "commit", "--quiet", "-m", "merge side");
+    expect(sh(dir, "rev-list", "--parents", "-n", "1", "HEAD").split(" ")).toHaveLength(3);
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+  });
+});
+
+describe("appendOnlyProblems: a merge that inserts against every parent (Qodo on PR 269)", () => {
+  it("is still an insertion", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n', "two cases");
+    sh(dir, "switch", "--quiet", "-c", "side");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0011"}\n', "side");
+    sh(dir, "switch", "--quiet", "main");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0010"}\n', "main");
+    try {
+      sh(dir, "merge", "--quiet", "--no-edit", "side");
+    } catch {
+      // resolved below
+    }
+    const resolved =
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0005"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0010"}\n{"caseId":"FF-0011"}\n';
+    writeFileSync(join(dir, "ground-truth.jsonl"), resolved);
+    sh(dir, "add", "ground-truth.jsonl");
+    sh(dir, "commit", "--quiet", "-m", "merge with a back-dated line");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([
+      expect.stringContaining("inserted a line before the end"),
+    ]);
+  });
+});
+
+describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N6, Qodo on PR 280)", () => {
+  const diffs = [
+    "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@\n a\n b\n+c",
+    "diff --git a/f b/f\n@@ -1,2 +1,2 @@\n a\n-b\n+B",
+    "diff --git a/f b/f\n@@ -1,2 +1,3 @@\n a\n+x\n b",
+    "diff --git a/f b/f\n@@ -1 +1,2 @@\n a\n+x\n@@ -9 +10 @@\n z",
+    "diff --git a/f b/f\n@@ -1 +1,2 @@\n a\n+b\n No newline at end of file",
+  ];
+  it.each(diffs)("gives the same answer fed a line at a time as over the whole text", (diff) => {
+    const scanner = new AppendOnlyScanner();
+    for (const line of diff.split("\n")) scanner.line(line);
+    expect(scanner.result()).toBe(appendOnlyBreak(diff));
+  });
+
+  it("judges a million-line append without holding it", () => {
+    const scanner = new AppendOnlyScanner();
+    for (const line of ["diff --git a/f b/f", "@@ -1 +1,1000001 @@", " a"]) scanner.line(line);
+    for (let i = 0; i < 1_000_000; i++) scanner.line(`+{"n":${i}}`);
+    expect(scanner.result()).toBeUndefined();
+    scanner.line("-gone");
+    expect(scanner.result()).toBe("removed");
   });
 });

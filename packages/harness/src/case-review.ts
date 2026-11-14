@@ -16,17 +16,20 @@
  * `review.recorded` event, so nothing was written (the log is append-only; correct one with an amendment);
  * 2 nothing was written, because an input is missing or unreadable, the answer key or audit log has an
  * amendment or history problem, the save is for another commit, or the saved feed holds no review comment from Qodo.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:review` runs `case-review-cli.ts`.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { errorText as message } from "./error-text.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { ROOT } from "./paths.ts";
 import { TOOL } from "./provenance.ts";
-import { findSavedReview } from "./saved-review.ts";
+import { findSavedReview, prNumberOf, savedReviewsDir } from "./saved-review.ts";
+
 import { privateDir } from "./templates.ts";
 
 const REVIEWER = "qodo-code-review[bot]";
@@ -67,22 +70,14 @@ export function qodoReviewComment(
   return review?.html_url && review.updated_at ? { url: review.html_url, updatedAt: review.updated_at } : undefined;
 }
 
-/** The PR number a `pr.opened` event names, however it was written: a number, a string, or `{ number }`. */
-function openedPr(value: unknown): number | undefined {
-  const n = typeof value === "object" && value !== null ? (value as { number?: unknown }).number : value;
-  const parsed = typeof n === "string" ? Number(n) : n;
-  return typeof parsed === "number" && Number.isInteger(parsed) ? parsed : undefined;
-}
-
 export function run(caseId: string, options: RunOptions = {}): number {
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
-  const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
+  const reviewsDir = options.reviewsDir ?? savedReviewsDir(env);
 
   try {
     const problems = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
@@ -109,7 +104,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
 
     // The save must be for the case's own PR: read from pr.opened however it was written, and passed to the
     // search so another PR's save of the same commit is never picked first (Qodo on PR 214).
-    const casePr = openedPr(opened?.pr);
+    const casePr = prNumberOf(opened?.pr);
     if (casePr === undefined) {
       error(`case:review: ${caseId}'s pr.opened event names no PR (${JSON.stringify(opened?.pr)})`);
       return 2;
@@ -173,7 +168,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
       log(JSON.stringify(event, null, 2));
       return 0;
     }
-    appendFileSync(auditEventsPath, `${JSON.stringify(event)}\n`);
+    appendEvent(auditEventsPath, event);
     log(`recorded: ${caseId} review of ${short} (${save.state ?? "state not saved"}), ${where.url}`);
     return 0;
   } catch (e) {
@@ -182,12 +177,12 @@ export function run(caseId: string, options: RunOptions = {}): number {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const args = process.argv.slice(2);
+/** The command: `case-review-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(args: string[]): number {
   const caseId = args.find((a) => !a.startsWith("--"));
   if (!caseId || !/^FF-\d{4}$/.test(caseId)) {
     console.error("usage: npm run case:review -- <FF-NNNN> [--dry-run]");
-    process.exit(2);
+    return 2;
   }
-  process.exit(run(caseId, { dryRun: args.includes("--dry-run") }));
+  return run(caseId, { dryRun: args.includes("--dry-run") });
 }

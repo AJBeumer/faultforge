@@ -3,6 +3,7 @@
  * and commented on it: only the owner's text may become the agent's instructions. Split from
  * factory-tick.ts (#227).
  */
+import { isRunnerComment } from "./factory-comments.ts";
 import { gh } from "./github.ts";
 
 export interface Provenance {
@@ -104,11 +105,16 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   const comments = allPages<SnapshotComment>("comments", fetch).nodes;
   const renamers = allPages<{ actor?: Who }>("timelineItems", fetch).nodes.map((n) => login(n.actor ?? null));
   const { issue } = edits;
+  // The runner's own comments are left out of the text: it posts as the owner, and a stop comment can quote
+  // an earlier agent's reason or a review finding's title, which must never come back as the owner's
+  // instructions on a retry (AUD-M21). They still count for who commented, and for the history.
   const text = [
     `# ${issue.title}`,
     "",
     issue.body ?? "",
-    ...comments.flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
+    ...comments
+      .filter((c) => !isRunnerComment(c.body))
+      .flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
   ].join("\n");
   const history = JSON.stringify({
     body: edits.nodes.map((n) => login(n.editor)),

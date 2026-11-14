@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ledgerProblems, readAuditLog, readLedger } from "./ledger.ts";
+import { entryVersions, ledgerProblems, readAuditLog, readLedger } from "./ledger.ts";
 
 function fileOf(...lines: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-"));
@@ -254,4 +254,91 @@ describe("ledgerProblems", () => {
       "amendment amending FF-0001: changes kind, which an amendment may not touch",
     ]);
   });
+});
+
+describe("readLedger: a line that isn't JSON (M88)", () => {
+  it("throws rather than drop the line", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+    writeFileSync(path, '{"caseId":"FF-0001"}\nnot json\n');
+    expect(() => readLedger(path)).toThrow();
+  });
+});
+
+describe("entryVersions (#249, Qodo on PR 264)", () => {
+  it("gives every version an entry has had, by file order of its amendments, whatever times they claim", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+    const amend = (amends: string, at: string, n: number) =>
+      JSON.stringify({ kind: "amendment", amends, at, change: { n }, reason: "r", evidence: "e" });
+    writeFileSync(
+      path,
+      `${[
+        JSON.stringify({ caseId: "FF-0001" }),
+        JSON.stringify({ caseId: "FF-0002" }),
+        amend("FF-0001", "2026-11-09T00:00:00Z", 1),
+        amend("FF-0002", "2026-11-02T00:00:00Z", 9),
+        amend("FF-0001", "2026-11-01T00:00:00Z", 2),
+      ].join("\n")}\n`,
+    );
+    const versions = entryVersions(path, "FF-0001");
+    expect(versions.map((v) => [v.n, v.amendments.length])).toEqual([
+      [undefined, 0],
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(entryVersions(path, "FF-0009")).toEqual([]);
+  });
+});
+
+describe("ledgerProblems: locked fields and the shape of a change (AUD-M10, #251)", () => {
+  const file = (lines: object[]) => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "audit-events.jsonl");
+    writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+    return path;
+  };
+  const verdict = { eventId: "v", type: "case.adjudicated", caseId: "FF-9001", disposition: "confirmed_missed" };
+  const amend = (change: unknown) => ({ kind: "amendment", amends: "v", change, reason: "r", evidence: "e" });
+
+  it.each(["disposition", "reason", "injectedLines", "injectedFile", "templateId", "inputHash", "commit"])(
+    "reports an amendment that changes %s",
+    (field) => {
+      expect(ledgerProblems(file([verdict, amend({ [field]: "x" })]))).toEqual([
+        `amendment amending v: changes ${field}, which an amendment may not touch`,
+      ]);
+    },
+  );
+
+  it("accepts the kinds of change real amendments made", () => {
+    for (const change of [
+      { by: "Owner" },
+      { pr: {}, review: {} },
+      { qodoState: "s", relationships: "r" },
+      { alsoBreaks: [] },
+    ]) {
+      expect(ledgerProblems(file([verdict, amend(change)]))).toEqual([]);
+    }
+  });
+
+  it("reports a change that is text or a list, not an object of fields", () => {
+    expect(ledgerProblems(file([verdict, amend("disposition")]))).toEqual([
+      "amendment amending v: its change isn't an object of fields",
+    ]);
+    expect(ledgerProblems(file([verdict, amend(["x"])]))).toHaveLength(1);
+  });
+});
+
+describe("ledgerProblems: the injection facts are locked too (Qodo on PR 269)", () => {
+  it.each(["targetRepo", "invariantId", "defectClass", "branch", "validation"])(
+    "reports an amendment that changes %s",
+    (field) => {
+      const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
+      const lines = [
+        { caseId: "FF-9001" },
+        { kind: "amendment", amends: "FF-9001", change: { [field]: "x" }, reason: "r", evidence: "e" },
+      ];
+      writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+      expect(ledgerProblems(path)).toEqual([
+        `amendment amending FF-9001: changes ${field}, which an amendment may not touch`,
+      ]);
+    },
+  );
 });

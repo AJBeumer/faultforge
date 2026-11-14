@@ -39,6 +39,11 @@ export interface BuildInputs {
   kindTerms: string[];
   /** `injection.template`'s URL, when the template has been published to `templates/seed`. */
   templateUrl?: string;
+  /**
+   * The saved review's own `state` ("" when it has none), or null for a legacy review with no save. Read
+   * from the save, never from the `review.recorded` event: eight hand-written events carry no state.
+   */
+  reviewState?: string | null;
 }
 
 /** Strips a git remote URL, https or ssh (`git@host:owner/repo`, `ssh://git@host/owner/repo`), to `owner/repo`. */
@@ -46,11 +51,20 @@ export function repoSlug(url: string): string {
   return url.replace(/^(?:https?:\/\/|ssh:\/\/[^@/]+@)[^/]+\/|^[^@/\s]+@[^:/]+:/, "").replace(/\.git$/, "");
 }
 
-/** The most recent event of `types` (by `at`), so a later verdict or a re-review is the one that counts. */
+/**
+ * The most recent event of `types`, so a later verdict or a re-review is the one that counts. Compared as
+ * instants, not as text (`11:00:00Z` is earlier than `11:00:00.500Z`); a tie goes to the later line in the
+ * file. An event whose `at` isn't a time is refused, never silently skipped (AUD-N8).
+ */
 export function latestEvent(events: LedgerEntry[], types: string[], stage: string): LedgerEntry {
   const matches = events.filter((e) => types.includes(e.type as string));
   if (!matches.length) throw new Error(`${stage} is missing: no ${types.join(" or ")} event for this case`);
-  return matches.reduce((latest, e) => ((e.at as string) > (latest.at as string) ? e : latest));
+  const time = (e: LedgerEntry) => {
+    const t = Date.parse(e.at as string);
+    if (Number.isNaN(t)) throw new Error(`${stage}: event ${String(e.eventId)} has no readable time`);
+    return t;
+  };
+  return matches.reduce((latest, e) => (time(e) >= time(latest) ? e : latest));
 }
 
 export function requireField<T>(obj: Record<string, unknown>, field: string, stage: string): T {
@@ -74,7 +88,7 @@ function foldedMatch(
 
 /** Pure: the public record depends only on the entry, this case's events, its findings and its overlay. */
 export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
-  const { entry, events, findings, overlay, kindTerms, templateUrl } = inputs;
+  const { entry, events, findings, overlay, kindTerms, templateUrl, reviewState = null } = inputs;
   const caseId = entry.caseId as string;
   const kind = entry.kind as string;
 
@@ -104,6 +118,14 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
   const injectionCommit = entry.injectionCommit as string | undefined;
   if (injectionCommit && reviewedCommit !== injectionCommit) {
     throw new Error(`the review was recorded for commit ${reviewedCommit}, not the injected commit ${injectionCommit}`);
+  }
+  // A miss, a clean control or a false alarm says the review finished: an unfinished one proves none of them,
+  // so only review_incomplete may stand on it (AUD-M1). Checked here, where the record is built, not only
+  // where the verdict was asked: four verdicts were written by hand.
+  if (reviewState !== null && reviewState !== "complete" && disposition !== "review_incomplete") {
+    throw new Error(
+      `the saved review's state is ${JSON.stringify(reviewState)}, not "complete", so ${disposition} can't stand on it; only review_incomplete can`,
+    );
   }
   const adjudicatedCommit = adjudicatedEvent.commit as string | undefined;
   if (adjudicatedCommit && adjudicatedCommit !== reviewedCommit) {
