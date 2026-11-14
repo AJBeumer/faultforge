@@ -4,9 +4,11 @@
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { agentEnv } from "./factory-agent-env.ts";
 import { type FactoryConfig, repoConfig } from "./factory-config.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
+import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
 
@@ -58,7 +60,7 @@ export function agentInstructions(runRoot: string, repoKey: string, number: numb
     "private/ here is a worktree of the private repo on its own branch: save and commit evidence there, but don't push it. The runner pushes it.",
     "Don't comment on, label or close the ticket, and never reply to, resolve or dismiss a review finding: the runner and the owner do that.",
     "Nothing under any .claude/ folder may change in this run, because it holds your own guardrails. If the ticket needs that, report stuck.",
-    "The keys are already in your environment: gh and npm run review:wait pick them up by themselves. Never name, read, print or export them, and don't look for a token file. HTTP tools may only reach the app on localhost.",
+    "gh picks up its token by itself, and npm run review:wait asks the runner, which holds Qodo's key: run it as usual. Never name, read, print or export a key, and don't look for a token file. HTTP tools may only reach the app on localhost.",
     "After you stop, the runner audits what changed (both repos' main, the owner's checkouts, comments and ticket changes during your run, the guardrail files) and stops for help on any surprise.",
     "Finish your final message with exactly one line, and nothing after it:",
     'FACTORY_RESULT {"outcome":"ready|owner-gate|stuck","pr":"<pull request URL or null>","reason":"<one plain sentence>"}',
@@ -193,19 +195,43 @@ export function runAgent(
     instructions: agentInstructions(ws.root, repoKey, number, ticketFile),
     extraDirs,
   });
+  // review:wait goes through the runner, which keeps Qodo's key (AUD-H2): served from a trusted checkout.
+  const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
+  const broker = reviewBroker({
+    dir: join(ws.root, "review-requests"),
+    trustedRoot: join(runs, `review-wait-${runId}`),
+    labDirName: basename(ws.lab),
+    remoteUrl: `https://github.com/${labRepo?.github ?? github}.git`,
+    evidence: factory.evidence,
+    evidenceRoot: resolve(ws.lab, factory.evidence),
+    repoKey,
+  });
+  // Built now, before the agent starts: building it at the first request would stop the runner for minutes.
+  const unbuilt = broker.prepare();
+  if (unbuilt) log("error", { message: `review:wait can't be served in this run: ${unbuilt}` });
+  // Only what the agent's own tools need: no Qodo key, no private-repo token (factory-agent-env.ts).
+  const agent = agentEnv(process.env, {
+    FAULTFORGE_FACTORY_RUN: runId,
+    FAULTFORGE_RUN_ROOT: ws.root,
+    FAULTFORGE_TICKET_NUMBER: String(number),
+    FAULTFORGE_TICKET_FILE: ticketFile,
+    [BROKER_ENV]: broker.dir,
+  });
+  log("agent-env", { names: Object.keys(agent.env).sort(), agentToken: agent.agentToken });
+  if (agent.warning) log("warning", { message: agent.warning });
   return new Promise((done) => {
     const child = spawn(claudeBinary(), args, {
       cwd: ws.lab,
-      env: {
-        ...process.env,
-        FAULTFORGE_FACTORY_RUN: runId,
-        FAULTFORGE_RUN_ROOT: ws.root,
-        FAULTFORGE_TICKET_NUMBER: String(number),
-        FAULTFORGE_TICKET_FILE: ticketFile,
-      },
+      env: agent.env,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    const serving = setInterval(() => broker.serve(), 1000);
+    const stopServing = () => {
+      clearInterval(serving);
+      const left = broker.close();
+      if (left) log("error", { message: left });
+    };
     // Stopping the runner stops the agent, and the lock learns its pid for a kill the runner can't catch.
     const unguard = child.pid ? killOnExit(child.pid) : () => {};
     if (child.pid) onAgent(child.pid);
@@ -271,6 +297,7 @@ export function runAgent(
       clearTimeout(timer);
       unguard();
       onAgent(null);
+      stopServing();
       done({
         exitCode: null,
         timedOut: false,
@@ -287,6 +314,7 @@ export function runAgent(
       clearTimeout(timer);
       unguard();
       onAgent(null);
+      stopServing();
       if (buffer) onLine(buffer);
       const result = final as Record<string, unknown> | null;
       done({
