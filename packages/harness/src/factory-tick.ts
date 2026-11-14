@@ -174,14 +174,22 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   let ws: Workspace | null = null;
   let finalLabel: string | null = null;
   let finishedLogged = false;
+  // Whether a copy of the log that ends with the outcome reached the private repo (`saved` is logged then).
+  let copied = false;
   const log: Logger = (event, detail = {}) => {
     // Every logged value is scrubbed of the secrets in the environment: the log can be public.
     const entry = JSON.parse(redact(JSON.stringify({ t: deps.now().toISOString(), event, ...detail })));
     const shown = Object.keys(detail).length ? ` ${redact(JSON.stringify(detail))}` : "";
     deps.print(`${entry.t} ${event}${shown}`);
     if (runId) deps.record(runId, entry);
-    // Every step is a heartbeat too: the lock's timer can't fire while a long synchronous step runs.
-    lock.refresh?.();
+    if (event === "saved") copied = true;
+    // Every step is a heartbeat too: the lock's timer can't fire while a long synchronous step runs. A
+    // heartbeat that fails never stops the run (Qodo on PR 262).
+    try {
+      lock.refresh?.();
+    } catch {
+      // The next step or the timer tries again.
+    }
   };
   /** `saved` only once the copy reached the private repo, on `main` or on a branch of its own. */
   const logSaved = (saved: EvidencePush, id: string) => {
@@ -239,9 +247,19 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       body: string,
       detail: Record<string, unknown>,
     ) => {
-      if (relabel([LABELS.ready], add)) say(body);
-      else log("error", { message: "no comment until the label is off, so it is posted once" });
+      const off = relabel([LABELS.ready], add);
+      // Set as soon as the label is on, so a failing comment can't leave the log saying no label (Qodo on PR 262).
       if (add.length) finalLabel = LABELS.help;
+      if (!off) log("error", { message: "no comment until the label is off, so it is posted once" });
+      else {
+        try {
+          say(body);
+        } catch (error) {
+          log("error", {
+            message: `couldn't comment on the ticket: ${error instanceof Error ? error.message : error}`,
+          });
+        }
+      }
       log(outcome, detail);
       saveLog(id);
       return outcome;
@@ -414,9 +432,11 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         log("error", { message: `couldn't report on the ticket: ${inner instanceof Error ? inner.message : inner}` });
       }
     }
-    if (runId && !finishedLogged) {
-      // The saved log ends with how the run ended: the label the ticket now shows (AUD-M18).
-      log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });
+    // The saved log ends with how the run ended: the label the ticket now shows (AUD-M18). A copy that
+    // failed after the outcome was logged is tried once more here (Qodo on PR 262).
+    if (runId && !copied) {
+      if (!finishedLogged)
+        log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });
       try {
         const saved = deps.saveEvidence(runId, ws);
         if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });

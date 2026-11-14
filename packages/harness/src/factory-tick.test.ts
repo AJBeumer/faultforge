@@ -1515,3 +1515,54 @@ describe("tick: saved means saved (Qodo on PR 262)", () => {
     expect(beats).toBe(f.events.length);
   });
 });
+
+describe("tick: the outcome is logged and copied even when a later step fails (Qodo on PR 262, round 2)", () => {
+  it("a Qodo stop whose log copy fails is copied again by the runner-failure path", async () => {
+    let copies = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        qodoCheck: async () => ({ exitCode: 2, message: "no snapshot", differences: [] }),
+        saveEvidence: (runId) => {
+          copies++;
+          if (copies === 1) throw new Error("push rejected");
+          return { file: `x/${runId}.jsonl`, pushed: true, blocked: [] };
+        },
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(copies).toBe(2);
+    expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
+    expect(f.events.at(-1)).toMatchObject({ event: "saved" });
+  });
+
+  it("a not-ready ticket whose comment fails still logs the label it got", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        ready: () => ({ title: "F", problems: ["missing"] }),
+        comment: () => {
+          throw new Error("HTTP 502");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("not-ready");
+    expect(f.events.map((e) => e.event)).toEqual(["picked", "error", "not-ready", "saved"]);
+  });
+
+  it("a heartbeat that throws never stops the run", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        lock: () => ({
+          acquired: true,
+          release: () => {},
+          refresh: () => {
+            throw new Error("disk full");
+          },
+        }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+  });
+});

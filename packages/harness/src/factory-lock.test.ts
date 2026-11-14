@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acquireLock, HEARTBEAT_MS, STALE_HEARTBEAT_MS } from "./factory-lock.ts";
+import { acquireLock, beatFile, HEARTBEAT_MS, lastBeat, STALE_HEARTBEAT_MS } from "./factory-lock.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 describe("acquireLock (#107)", () => {
@@ -53,7 +53,7 @@ describe("acquireLock (#107)", () => {
     const dir = tmp();
     writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
     expect(acquireLock(dir, () => false).acquired).toBe(true);
-    expect(readdirSync(dir)).toEqual(["factory.lock"]);
+    expect(readdirSync(dir).filter((n) => !n.endsWith(".beat"))).toEqual(["factory.lock"]);
   });
 
   it("never steals a lock another tick already took over in between this tick's read and its rename (Qodo on PR 123)", () => {
@@ -131,46 +131,76 @@ describe("acquireLock: a running tick keeps its lock however old; a stopped hear
 });
 
 describe("acquireLock: the heartbeat (AUD-M19)", () => {
-  it("refresh writes a newer heartbeat with the same token, and only into a lock that is still this tick's", async () => {
+  const tokenIn = (d: string) => JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).token as string;
+  const beatIn = (d: string) => Date.parse(lastBeat(d, tokenIn(d)) ?? "");
+  const nextClockTick = async (after: number) => {
+    // Windows can step the clock in 16 ms increments.
+    while (Date.now() <= after) await new Promise((r) => setTimeout(r, 5));
+  };
+
+  it("refresh writes a newer heartbeat to the holder's own file, and never touches the lock itself", async () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-beat-"));
     const file = join(d, "factory.lock");
     const lock = acquireLock(d);
-    const first = JSON.parse(readFileSync(file, "utf8"));
-    await new Promise((r) => setTimeout(r, 15));
+    const lockText = readFileSync(file, "utf8");
+    const first = beatIn(d);
+    await nextClockTick(first);
     lock.refresh();
-    const second = JSON.parse(readFileSync(file, "utf8"));
-    expect(second.token).toBe(first.token);
-    expect(second.since).toBe(first.since);
-    expect(Date.parse(second.at)).toBeGreaterThan(Date.parse(first.at));
-    // Someone else's lock now: refresh leaves it alone.
-    writeFileSync(file, JSON.stringify({ pid: 777777, at: "2026-11-10T00:00:00Z", token: "other" }));
-    lock.refresh();
+    expect(beatIn(d)).toBeGreaterThan(first);
+    expect(readFileSync(file, "utf8")).toBe(lockText);
+    lock.release();
+  });
+
+  it("a heartbeat after the lock changed hands lands on the old holder's own file, never on the new lock (Qodo on PR 262)", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-hands-"));
+    const file = join(d, "factory.lock");
+    const old = acquireLock(d);
+    // A tick that took it over: the lock path now holds its lock.
+    writeFileSync(file, JSON.stringify({ pid: 777777, since: "2026-11-10T00:00:00Z", token: "other" }));
+    old.refresh();
     expect(JSON.parse(readFileSync(file, "utf8")).token).toBe("other");
-    expect(readdirSync(d)).toEqual(["factory.lock"]);
+    old.release();
+    expect(JSON.parse(readFileSync(file, "utf8")).token).toBe("other");
+  });
+
+  it("a heartbeat that can't be written never throws", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-nowrite-"));
+    const lock = acquireLock(d);
+    rmSync(d, { recursive: true, force: true });
+    expect(() => lock.refresh()).not.toThrow();
+    expect(() => lock.release()).not.toThrow();
   });
 
   it("a running tick refreshes it on a timer, and stops when it releases", async () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-timer-"));
     const file = join(d, "factory.lock");
     const lock = acquireLock(d, () => true, { heartbeatMs: 20 });
-    const first = Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
-    const heartbeat = () => Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
+    const token = tokenIn(d);
+    const first = beatIn(d);
     // Waits for a beat, up to two seconds: a busy machine can delay a 20 ms timer, never skip it.
-    for (let waited = 0; waited < 2000 && heartbeat() <= first; waited += 20)
-      await new Promise((r) => setTimeout(r, 20));
-    expect(heartbeat()).toBeGreaterThan(first);
+    for (let waited = 0; waited < 2000 && beatIn(d) <= first; waited += 20) await new Promise((r) => setTimeout(r, 20));
+    expect(beatIn(d)).toBeGreaterThan(first);
     lock.release();
     expect(existsSync(file)).toBe(false);
     await new Promise((r) => setTimeout(r, 60));
     expect(existsSync(file)).toBe(false);
+    expect(existsSync(beatFile(d, token))).toBe(false);
+  });
+
+  it("a fresh heartbeat keeps a lock whose own time is old", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-fresh-"));
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-01T00:00:00Z", token: "t1" }));
+    writeFileSync(beatFile(d, "t1"), JSON.stringify({ at: new Date().toISOString() }));
+    expect(acquireLock(d, () => true).acquired).toBe(false);
   });
 
   it("never leaves a lock file without content: it appears whole or not at all", () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-whole-"));
     const lock = acquireLock(d);
     expect(JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).pid).toBe(process.pid);
-    expect(readdirSync(d)).toEqual(["factory.lock"]);
+    expect(readdirSync(d).filter((n) => !n.endsWith(".beat"))).toEqual(["factory.lock"]);
     lock.release();
+    expect(readdirSync(d)).toEqual([]);
   });
 });
 
