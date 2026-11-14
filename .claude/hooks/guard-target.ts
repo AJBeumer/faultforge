@@ -35,7 +35,7 @@ import {
   unreadableDestination,
   unreadablePost,
 } from "./guard-expand.ts";
-import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
+import { assetFiles, BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
 import {
@@ -64,6 +64,7 @@ import {
   type Reviewed,
   reviewedRepos,
   stripReviewedNames,
+  within,
 } from "./guard-repos.ts";
 import {
   type Context,
@@ -159,6 +160,8 @@ function isChained(command: string): boolean {
 function postedPieces(ctx: Context, command: string, strict = false, everywhere = strict): string[] {
   const pieces = [stripReviewedNames(ctx.reviewed, command), stripReviewedNames(ctx.reviewed, joinedWords(command))];
   pieces.push(...postedText(command), ...referencedFiles(ctx.cwd, command), ...stdinFiles(ctx.cwd, command));
+  // A gist's files and a release's assets are posted too (re-grade 3).
+  pieces.push(...assetFiles(ctx.cwd, command).map((asset) => asset.text));
   pieces.push(...builtText(ctx.cwd, command, strict, ctx.backticks, everywhere));
   for (const commit of commitSteps(command)) {
     pieces.push([...commitMessages(commit), ...referencedFiles(ctx.cwd, commit)].join("\n"));
@@ -185,6 +188,21 @@ function checkPrivateIds(ctx: Context, command: string, readable: boolean) {
   // the command doesn't set can't be checked for an id, so it isn't posted.
   if (readable && unreadablePost(command)) deny(UNREADABLE_VARIABLE);
   if ([command, joinedWords(command), ...postedPieces(ctx, command, true, false)].some(names)) deny(PRIVATE_ID_REASON);
+}
+
+/**
+ * A gist or a release may not publish a file from private storage (re-grade 3), unless the release goes to the
+ * private repo itself. A gist is readable by anyone with its link, so it never counts as private.
+ */
+function checkPrivateFiles(ctx: Context, command: string) {
+  const root = privateRoot(ctx.env);
+  if (!assetFiles(ctx.cwd, command).some((asset) => within(asset.path, root))) return;
+  const outside = outsidePostedText(command);
+  const destinations = [...explicitDestinations(outside), ...urlDestinations(outside)];
+  const gist = /\bgh\s+gist\b/.test(joinedWords(command));
+  if (gist || !destinations.length || !onlyPrivateRepo(command, ctx.cwd, root, destinations)) {
+    deny("This would publish a file from private storage. Nothing there may leave it.");
+  }
 }
 
 /** The denial for a post whose text is a shell variable the command doesn't set. */
@@ -266,6 +284,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   const writes = isWrite(command);
   if (writes && readable && unreadableDestination(command))
     deny("This write names its repo with a shell variable the command doesn't set. Name the repo as owner/name.");
+  if (writes) checkPrivateFiles(ctx, command);
   if (writes) checkPrivateIds(ctx, command, readable);
   const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);
 

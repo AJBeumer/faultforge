@@ -288,8 +288,30 @@ export function existingFolder(path: string): string {
  * ordinary words, so a repo named after a forbidden word can't hide that word in a message.
  */
 export function stripReviewedNames(reviewed: Reviewed[], text: string): string {
-  const repoWords = reviewed.flatMap((r) => [r.name, r.folder]).map(esc);
-  const identifies = new RegExp(`faultforge|${repoWords.join("|")}`, "i");
+  const repoWords = ["faultforge", ...reviewed.flatMap((r) => [r.name, r.folder])].map(esc);
+  const identifies = new RegExp(repoWords.join("|"), "i");
+  const owners = [...new Set(reviewed.map((r) => (r.github.split("/")[0] ?? "").toLowerCase()))].map(esc);
+  // `owner/name` for a known owner and a repo name, as a whole token or after `=` or an API path's `repos/`.
+  // A ref (`HEAD:faultforge/x`, `refs/heads/faultforge/x`, `fix/faultforge`) is none of these (re-grade 3).
+  const repoId = new RegExp(
+    `(^|=|\\brepos/)(?:${owners.join("|")})/(?:${repoWords.join("|")})(?=$|[/#]|\\.git\\b)`,
+    "gi",
+  );
   // Whole tokens first, then the slash test: one pattern for both backtracks on every long token (AUD-M4).
-  return text.replace(/[^\s"'`]+/g, (token) => (/[/\\]/.test(token) && identifies.test(token) ? " " : token));
+  return text.replace(/[^\s"'`]+/g, (token) => {
+    if (!/[/\\]/.test(token) || !identifies.test(token)) return token;
+    return isPath(token) ? " " : token.replace(repoId, "$1 ");
+  });
+}
+
+/**
+ * True when a token is a file path or a URL: absolute (`/x`, `C:\x`, `\\host`), relative to here or home
+ * (`./`, `../`, `~`), or with a scheme or an scp-style host. A bare `a/b` is not: it may be a ref, and a
+ * ref's words count.
+ */
+function isPath(token: string): boolean {
+  // A flag's or a field's value counts as itself: `--git-dir=<path>`, `body=@<path>`.
+  return /^(?:-*[\w.-]*=@?|@)?(?:[\\/]|\.{1,2}[\\/]|~|[A-Za-z]:[\\/]|[A-Za-z][\w+.-]*:\/\/|[\w.-]+@[\w.-]+:)/.test(
+    token,
+  );
 }

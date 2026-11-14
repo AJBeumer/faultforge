@@ -62,10 +62,23 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
   const pattern = privateIdPattern(ids);
   // Leetspeak too (#285): the text and the ids are read the same way, so `x-s3cr3t-v1` meets `x-secret-v1`.
   const folded = privateIdPattern(ids.flatMap(leetReadings));
-  return (text) => {
-    const seen = normalizeLookalikes(text);
-    return pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading));
-  };
+  return (text) =>
+    [...new Set([text, percentDecoded(text)])].some((each) => {
+      const seen = normalizeLookalikes(each);
+      return pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading));
+    });
+}
+
+/**
+ * The text with its percent-escapes decoded, as a URL or an API reads them (re-grade 3): `x%2Dsecret` is
+ * `x-secret`. Decoded up to three times, so a doubly escaped `%252D` is read too.
+ */
+export function percentDecoded(text: string): string {
+  let out = text;
+  for (let round = 0; round < 3 && /%[0-9a-f]{2}/i.test(out); round++) {
+    out = out.replace(/%([0-9a-f]{2})/gi, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  }
+  return out;
 }
 
 /**
