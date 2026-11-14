@@ -82,6 +82,9 @@ jobs:
     # The agent gets --minutes; the tick then audits, verifies the PR (revert:check alone may take 25
     # minutes) and saves evidence. 45 minutes beyond the agent keeps a cancelled job from stranding a ticket.
     timeout-minutes: 165
+    # The tick's exit code, for the alert job (#308).
+    outputs:
+      code: ${{ steps.tick.outputs.code }}
     # Secrets are given to the steps that need them, never to the whole job, and no checkout keeps its token
     # in .git/config: git authenticates through gh, which reads GH_TOKEN from the environment at push time.
     steps:
@@ -157,6 +160,7 @@ jobs:
           if [ "$code" = 2 ] || [ "$code" = 3 ]; then echo "::error title=Factory tick::$line"; fi
           echo "- $line" >> "$GITHUB_STEP_SUMMARY"
           echo "reported=true" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
           exit "$code"
       # A tick step that was cancelled or hit its time limit never reached its own report above.
       - name: Report a tick that stopped without reporting
@@ -196,3 +200,18 @@ jobs:
             !${{ runner.temp }}/faultforge-runs/*.agent.jsonl
           if-no-files-found: ignore
           retention-days: 30
+
+  # A tick that couldn't set up (exit 2) or failed (exit 3) opens the lab's alert issue, or comments on the open
+  # one (#308). Exit 1 is a ticket that needs help, which the ticket itself reports. issues: write for this job
+  # alone, with the lab's own token; the tick's job keeps its own permissions.
+  alert:
+    name: Alert on a failed tick
+    needs: tick
+    if: always() && (needs.tick.outputs.code == '2' || needs.tick.outputs.code == '3')
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/alert.yml
+    with:
+      kind: factory
+      outcome: ${{ needs.tick.outputs.code }}

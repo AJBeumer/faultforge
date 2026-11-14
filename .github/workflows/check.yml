@@ -91,3 +91,17 @@ jobs:
         working-directory: FaultForge
       - run: npm run test:integration
         working-directory: FaultForge
+
+  # A red main opens the lab's alert issue, or comments on the open one (#308). Only for a push to main: a PR's
+  # failures show on the PR. issues: write for this job alone, with the lab's own token.
+  alert:
+    name: Alert on a red main
+    needs: [check, check-windows, integration]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/alert.yml
+    with:
+      kind: ci-main
+      outcome: failure
