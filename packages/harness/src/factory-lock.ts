@@ -3,7 +3,7 @@
  */
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ownStartMs, sameProcess } from "./factory-process.ts";
+import { ownStartId, sameProcess } from "./factory-process.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 export interface Lock {
@@ -65,16 +65,18 @@ export function lastBeat(dir: string, token: string | undefined): string | undef
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
-  options: { heartbeatMs?: number; isSame?: (pid: number, started: number | undefined) => boolean } = {},
+  options: { heartbeatMs?: number; isSame?: (pid: number, started: string | undefined) => boolean } = {},
 ): Lock {
   const { heartbeatMs = HEARTBEAT_MS, isSame = (pid, started) => sameProcess(pid, started) } = options;
   const file = join(dir, "factory.lock");
   const token = `${process.pid}-${random()}`;
   const since = new Date().toISOString();
   const beat = beatFile(dir, token);
+  // Read once, the same way a later tick reads it to check this lock's holder (factory-process.ts).
+  const ownStart = ownStartId() ?? undefined;
   const take = () => {
     const tmp = join(dir, `factory.lock.${token}.${random()}.tmp`);
-    const lock = { pid: process.pid, started: ownStartMs(), since, at: since, token };
+    const lock = { pid: process.pid, started: ownStart, since, at: since, token };
     writeFileSync(tmp, JSON.stringify(lock), { flag: "wx" });
     try {
       linkSync(tmp, file);
@@ -120,7 +122,7 @@ export function acquireLock(
     // Fallen through: something is already at `file`, live or stale.
   }
   let heldText = "";
-  let held: { pid?: number; started?: number; at?: string; since?: string; token?: string } = {};
+  let held: { pid?: number; started?: string; at?: string; since?: string; token?: string } = {};
   try {
     heldText = readFileSync(file, "utf8");
     held = JSON.parse(heldText);

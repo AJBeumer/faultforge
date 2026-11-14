@@ -84,9 +84,9 @@ export function recoverStranded(
  * (AUD-M19): neither the lock's age nor its heartbeat's ever frees it, so two ticks never run at once.
  */
 export function lockIsStale(
-  held: { pid?: number; started?: number },
+  held: { pid?: number; started?: string },
   isAlive: (pid: number) => boolean,
-  isSame: (pid: number, started: number | undefined) => boolean,
+  isSame: (pid: number, started: string | undefined) => boolean,
 ): boolean {
   return !held.pid || !isAlive(held.pid) || !isSame(held.pid, held.started);
 }

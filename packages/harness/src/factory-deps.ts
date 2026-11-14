@@ -167,6 +167,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         temporary = true;
       }
+      // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
+      // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
+      if (!existsSync(join(priv, ".git")))
+        throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
       const dir = join(priv, evidenceInPrivate, "factory-runs");
       mkdirSync(dir, { recursive: true });
       for (const suffix of [".jsonl", ".agent.jsonl"]) {

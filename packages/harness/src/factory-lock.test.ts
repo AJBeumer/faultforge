@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { acquireLock, beatFile, lastBeat } from "./factory-lock.ts";
-import { ownStartMs, processStartMs, sameProcess } from "./factory-process.ts";
+import { ownStartId, sameProcess } from "./factory-process.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 describe("acquireLock (#107)", () => {
@@ -136,27 +136,19 @@ describe("acquireLock: a live tick keeps its lock however old; only a gone holde
     ).toBe(true);
   });
 
-  it("knows the holder by when it started, and keeps the lock when that can't be read", () => {
-    const started = Date.parse("2026-11-14T01:00:00.000Z");
-    expect(sameProcess(1, started, () => started + 1200)).toBe(true);
-    expect(sameProcess(1, started, () => started + 3_600_000)).toBe(false);
-    expect(sameProcess(1, started, () => null)).toBe(true);
+  it("knows the holder by the start id the system keeps, and keeps the lock when that can't be read", () => {
+    expect(sameProcess(1, "ticks:900", () => "ticks:900")).toBe(true);
+    expect(sameProcess(1, "ticks:900", () => "ticks:7311")).toBe(false);
+    expect(sameProcess(1, "ticks:900", () => null)).toBe(true);
     // A lock written before the start was recorded.
-    expect(sameProcess(1, undefined, () => started)).toBe(true);
+    expect(sameProcess(1, undefined, () => "ticks:7311")).toBe(true);
   });
 
-  it("reads a real process's start: this test's own process is itself, and not one started an hour earlier", () => {
-    const started = ownStartMs();
-    expect(processStartMs(process.pid)).not.toBeNull();
-    expect(sameProcess(process.pid, started)).toBe(true);
-    expect(sameProcess(process.pid, started - 3_600_000)).toBe(false);
-  });
-
-  it("records when its holder started, so a later tick can tell", () => {
+  it("records its holder's start id, so a later tick can tell", () => {
     const d = dir();
     const lock = acquireLock(d);
     const held = JSON.parse(readFileSync(join(d, "factory.lock"), "utf8"));
-    expect(Math.abs(held.started - ownStartMs())).toBeLessThan(2000);
+    expect(held.started).toBe(ownStartId());
     lock.release();
   });
 

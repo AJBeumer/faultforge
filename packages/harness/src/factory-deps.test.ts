@@ -275,6 +275,8 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     const ws = workspace(join(runs, "run-1"));
     writeFileSync(join(runs, "run-1.jsonl"), "{}\n");
     writeFileSync(join(runs, "run-1.agent.jsonl"), "{}\n");
+    mkdirSync(ws.private, { recursive: true });
+    writeFileSync(join(ws.private, ".git"), "gitdir: elsewhere\n");
     const saved = realDeps(FACTORY, OPTIONS).saveEvidence("run-1", ws);
     const dir = join(ws.private, "raw-artifacts", "factory-runs");
     expect(existsSync(join(dir, "run-1.jsonl"))).toBe(true);
@@ -283,6 +285,13 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(saved).toEqual({ file: "private/raw-artifacts/factory-runs/run-1.jsonl", pushed: true, blocked: [] });
     // The workspace's own worktree is never torn down here: only a temporary one is.
     expect(vi.mocked(git)).not.toHaveBeenCalled();
+  });
+
+  it("never saves through a private worktree that is gone: git would find the harness instead (Qodo on PR 262)", () => {
+    const ws = workspace(join(runs, "run-gone"));
+    rmSync(ws.private, { recursive: true, force: true });
+    expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-gone", ws)).toThrow(/private worktree is gone/);
+    expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
   });
 
   it("takes the lock in the runs folder when local, and never holds one in CI", () => {
