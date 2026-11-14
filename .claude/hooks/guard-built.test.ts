@@ -170,3 +170,31 @@ describe("holes found in the second review of PR 266", () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 });
+
+describe("holes found in the third review of PR 266", () => {
+  it("refuses a chained post after an npm or gh step that could write the file it reads", () => {
+    const notes = file("Small cleanup.\n");
+    expect(bash(`npm exec -- node -e "x"; gh pr comment 1 ${R} --body-file ${notes}`)).toMatch(/must run on its own/);
+    expect(bash(`gh run download 5; gh pr comment 1 ${R} --body-file ${notes}`)).toMatch(/must run on its own/);
+  });
+
+  it("reads an API field piped in through @-", () => {
+    const body = file("The planted bug\n");
+    expect(bash(`cat ${body} | gh api repos/AJBeumer/faultforge-target/issues/1/comments -F body=@-`)).toMatch(
+      /says planted/,
+    );
+  });
+
+  it("reads --no-v… only in a git step, not in a post's text", () => {
+    expect(bash(`gh pr comment 1 ${R} --body "Adds a --no-validate option"`)).toBeUndefined();
+  });
+
+  it.each([
+    "GIT_CONFIG_GLOBAL=/tmp/g git commit -m Tidy",
+    "GIT_CONFIG_SYSTEM=/tmp/g git push origin tidy",
+    "HOME=/tmp git commit -m Tidy",
+    "XDG_CONFIG_HOME=/tmp git push origin tidy",
+  ])("refuses %s in a reviewed checkout", (command) => {
+    expect(bash(command, TARGET)).toMatch(/guard hooks must run/);
+  });
+});

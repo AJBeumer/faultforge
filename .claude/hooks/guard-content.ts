@@ -308,6 +308,18 @@ const ALLOWED_STEP = new RegExp(
 );
 
 /**
+ * A step in a chained post, other than the post itself, that runs npm or gh: either can write files without a
+ * redirect (`npm exec`, `gh run download`), so the post's files can't be trusted (Qodo on PR 266).
+ */
+export function writerStep(command: string): string | undefined {
+  const steps = blankQuoted(command)
+    .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return steps.find((s) => /^(?:npm|npx)\s|^gh\s+(?:run|release)\s+download\b|^gh\s+(?:repo|gist)\s+clone\b/.test(s));
+}
+
+/**
  * Why a chained command that mentions git may not run inside a reviewed checkout, or undefined. The guard
  * checks the checkout's content before the command runs, so every step of a chain that commits or pushes
  * must be one that can't change that content behind its back: no writing step, no hidden command, no

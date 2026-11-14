@@ -25,7 +25,7 @@
  */
 import { resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames } from "./guard-content.ts";
+import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames, writerStep } from "./guard-content.ts";
 import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import {
@@ -273,7 +273,8 @@ function checkCommand(ctx: Context, command: string) {
   // A post counts too: an earlier step could rewrite the file it reads after the guard looked (Qodo on PR 266).
   const git = /\bgit\b/.test(joinedWords(command));
   if (isChained(command) && (writes || git)) {
-    const step = chainProblem(command, !git);
+    // In a chained post, npm and gh steps could write the file it reads too (`npm exec`, `gh run download`).
+    const step = chainProblem(command, !git) ?? (git ? undefined : writerStep(command));
     if (step !== undefined) {
       deny(
         `In ${repo.name}, a command that writes files or hides a command ("${step.slice(0, 60)}") must run on its own, and the commit or push in a separate command: the guard checks the checkout's content before a command runs, and can't see what an earlier part of the same command would write.`,

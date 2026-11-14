@@ -128,7 +128,13 @@ export function skipsGitGuard(command: string): boolean {
   const words = joinedWords(command);
   // Git takes any unambiguous start of a long option (`--no-ver`), and a `-c` whose key the shell builds could
   // be core.hooksPath (Qodo on PR 266).
-  if (/--no-v\w*|\bcore\.hookspath\b|\bGIT_CONFIG_(?:PARAMETERS|COUNT)\b/i.test(words)) return true;
+  // `--no-v…` only counts in a git step: in a post's body it is words (Qodo on PR 266).
+  if (gitSteps(words, /--no-v\w*/).length) return true;
+  // A config file the command points git at could set the hooks path: GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM,
+  // and HOME or XDG_CONFIG_HOME, which move the user's config (Qodo on PR 266).
+  const configFrom =
+    /\bGIT_CONFIG(?:_[A-Z_]+)?\s*=|\b(?:HOME|XDG_CONFIG_HOME)\s*=|\$env:(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\s*=/i;
+  if (/\bcore\.hookspath\b/i.test(words) || configFrom.test(words)) return true;
   if (/\bgit\b[^|;&\n]*\s-c\s*["']?[^\s"']*[$%`]/.test(command)) return true;
   // A quoted option is still an option: `"-n"` reaches git as -n (Qodo on PR 266).
   const flags = command.replace(/(["'])(-[A-Za-z-]+)\1/g, "$2");

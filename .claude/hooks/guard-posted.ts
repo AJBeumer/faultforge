@@ -36,7 +36,8 @@ export function postedText(command: string): string[] {
 }
 
 /** A flag that reads its body from stdin (`-`, or `-F-`), followed by a blank, a shell operator or the end. */
-export const STDIN_BODY = /(\s-F|--file|--body-file|--notes-file|--input)(?:[\s=]+|(?<=-F))-(?=[\s;&|)]|$)/;
+export const STDIN_BODY =
+  /(\s-F|--file|--body-file|--notes-file|--input)(?:[\s=]+|(?<=-F))-(?=[\s;&|)]|$)|(?:\s-F|--field)[\s=]*["']?[\w.[\]-]+=@-(?=[\s"';&|)]|$)/;
 
 /**
  * The text with the files a body is read from blanked: the path after `cat`, `type` or `Get-Content`
