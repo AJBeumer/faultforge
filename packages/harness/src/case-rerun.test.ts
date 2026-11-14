@@ -144,3 +144,24 @@ describe("case:rerun: what Qodo found on PR 273", () => {
     });
   });
 });
+
+describe("case:rerun: round two on PR 273", () => {
+  it("refuses two cases that name no template", () => {
+    const root = fixture([
+      { caseId: "FF-9611", kind: "sabotage", injectionCommit: A },
+      { caseId: "FF-9612", kind: "sabotage", injectionCommit: B },
+    ]);
+    expect(rerun(root, { caseId: "FF-9612", of: "FF-9611" }).err).toContain("names no template");
+  });
+
+  it("refuses, exit 2, while the audit log has an event ledger:check can't read", () => {
+    const root = fixture();
+    writeFileSync(
+      join(root, "audit-events.jsonl"),
+      `${JSON.stringify({ eventId: "x", type: "made.up", at: "2026-11-01T00:00:00Z", caseId: "FF-9601" })}\n`,
+    );
+    const { code, err } = rerun(root);
+    expect(code).toBe(2);
+    expect(err).toContain("unknown type");
+  });
+});

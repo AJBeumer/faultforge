@@ -23,15 +23,18 @@
  * couldn't be appended.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
-import { type LedgerEntry, readLedger } from "./ledger.ts";
-import { appendAmendment } from "./ledger-append.ts";
+import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendAmendment, readEventProblems } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { hashProblems } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
+import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
 export const RERUN_REASON = "Marks a rerun: the same template planted the same tree again, so both are one defect.";
@@ -98,6 +101,10 @@ export function markProblem(entries: LedgerEntry[], caseId: string, of: string):
   // No chains the other way either: a case another names as its original stays an original (Qodo on PR 273).
   const named = entries.find((e) => e.rerunOf === caseId);
   if (named) return `${String(named.caseId)} is already marked a rerun of ${caseId}, so ${caseId} stays an original`;
+  // A missing template on both sides is no evidence of the same template (Qodo on PR 273).
+  for (const entry of [rerun, original]) {
+    if (typeof entry.templateId !== "string" || !entry.templateId) return `${String(entry.caseId)} names no template`;
+  }
   if (rerun.templateId !== original.templateId) {
     return `${caseId} planted ${String(rerun.templateId)}, ${of} planted ${String(original.templateId)}`;
   }
@@ -115,7 +122,21 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
     return 1;
   };
 
-  const problems = ledgerProblemsWithHistory([groundTruthPath, join(root, "audit-events.jsonl")]);
+  const auditEventsPath = join(root, "audit-events.jsonl");
+  // Everything ledger:check would report, not only the amendments and the history (Qodo on PR 273): every
+  // event readable, and every tool's inputHash still recomputing.
+  let problems: string[];
+  try {
+    problems = [
+      ...ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]),
+      ...(existsSync(auditEventsPath) ? readAuditLog(auditEventsPath).flatMap((e) => readEventProblems(e) ?? []) : []),
+      ...(existsSync(auditEventsPath)
+        ? hashProblems({ groundTruthPath, auditEventsPath, reviewsDir: savedReviewsDir(env) }, env)
+        : []),
+    ];
+  } catch (e) {
+    problems = [`the files can't be read: ${message(e)}`];
+  }
   if (problems.length) {
     error(`case:rerun: the answer key or audit log has problems:\n${problems.map((p) => `- ${p}`).join("\n")}`);
     return 2;
