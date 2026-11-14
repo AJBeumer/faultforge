@@ -9,38 +9,55 @@
  * The schemas are compiled on first use, so a command that only imports this module through `ledger-check.ts`
  * never needs them.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { parseJsonLines } from "./jsonl.ts";
-import { readLedger } from "./ledger.ts";
+import { entryVersions, readLedger } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
 
+let ajv: Ajv2020 | undefined;
 const compiled = new Map<string, ValidateFunction>();
-function schema(name: string): ValidateFunction {
-  let validate = compiled.get(name);
+/** The validator for `ref` (a schema file's name, or a `#/$defs/...` inside one), compiled on first use. */
+function schema(ref: string): ValidateFunction {
+  let validate = compiled.get(ref);
   if (!validate) {
-    const ajv = new Ajv2020({ allErrors: true, validateFormats: false });
-    validate = ajv.compile(JSON.parse(readFileSync(join(ROOT, "schemas", name), "utf8")));
-    compiled.set(name, validate);
+    if (!ajv) {
+      ajv = new Ajv2020({ allErrors: true, validateFormats: false });
+      for (const name of ["answer-key-entry.v1.json", "saved-review.v1.json"])
+        ajv.addSchema(JSON.parse(readFileSync(join(ROOT, "schemas", name), "utf8")));
+    }
+    validate = ajv.compile({ $ref: ref });
+    compiled.set(ref, validate);
   }
   return validate;
 }
 
-/** The schema's complaints, short: where in the value, and what. */
+/** The schema's complaints, short: where in the value, what, and which field when one is unexpected. */
 function describe(errors: ErrorObject[] | null | undefined): string {
-  const seen = new Set((errors ?? []).map((e) => `${e.instancePath || "/"} ${e.message ?? "is invalid"}`));
-  return [...seen].slice(0, 5).join("; ");
+  const said = (e: ErrorObject) => {
+    const field = (e.params as { unevaluatedProperty?: string; additionalProperty?: string }) ?? {};
+    const named = field.unevaluatedProperty ?? field.additionalProperty;
+    return `${e.instancePath || "/"} ${e.message ?? "is invalid"}${named ? ` (${named})` : ""}`;
+  };
+  return [...new Set((errors ?? []).map(said))].slice(0, 5).join("; ");
 }
 
-function problemWith(name: string, value: unknown): string | undefined {
-  const validate = schema(name);
+function problemWith(ref: string, value: unknown): string | undefined {
+  const validate = schema(ref);
   return validate(value) ? undefined : describe(validate.errors);
 }
 
-/** Why `entry` doesn't fit the answer-key schema, or undefined. */
+const KINDS = ["sabotage", "control", "amendment"];
+
+/**
+ * Why `entry` doesn't fit the answer-key schema, or undefined. Judged against its own kind's definition only,
+ * so the complaints are about what it is, never about the kinds it was never meant to be (Qodo on PR 289).
+ */
 export function answerKeyEntryProblem(entry: unknown): string | undefined {
-  return problemWith("answer-key-entry.v1.json", entry);
+  const kind = (entry as { kind?: unknown } | null)?.kind;
+  if (typeof kind !== "string" || !KINDS.includes(kind)) return `/kind must be one of ${KINDS.join(", ")}`;
+  return problemWith(`answer-key-entry.v1.json#/$defs/${kind}`, entry);
 }
 
 /** Why `review` doesn't fit the saved-review schema, or undefined. */
@@ -68,10 +85,14 @@ export function answerKeyProblems(path: string): string[] {
     const problem = answerKeyEntryProblem(entry);
     return problem ? [`ground-truth.jsonl line ${lineOf[i]}: ${problem}`] : [];
   });
-  for (const { amendments, ...entry } of readLedger(path)) {
-    if (!amendments.length) continue;
-    const problem = answerKeyEntryProblem(entry);
-    if (problem) problems.push(`ground-truth.jsonl ${String(entry.caseId)} as amended: ${problem}`);
+  // Every version an amended entry has had, not only the last: a tool may have read any of them (Qodo on PR 289).
+  for (const { amendments, caseId } of readLedger(path)) {
+    if (!amendments.length || typeof caseId !== "string") continue;
+    for (const [n, { amendments: _applied, ...version }] of entryVersions(path, caseId).entries()) {
+      if (n === 0) continue; // the line itself, checked above
+      const problem = answerKeyEntryProblem(version);
+      if (problem) problems.push(`ground-truth.jsonl ${caseId} as amended (${n} of ${amendments.length}): ${problem}`);
+    }
   }
   return problems;
 }
@@ -85,7 +106,10 @@ function savesUnder(dir: string): string[] {
     .sort()
     .flatMap((name) => {
       const path = join(dir, name);
-      if (statSync(path).isDirectory()) return savesUnder(path);
+      // A link is never followed: one pointing back up would never end (Qodo on PR 289). review:wait makes none.
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) return [];
+      if (stat.isDirectory()) return savesUnder(path);
       return SAVE.test(name) ? [path] : [];
     });
 }

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -190,14 +190,45 @@ describe("the answer key as the tools read it, amendments applied (Qodo on PR 28
   it("reports an entry an amendment made unsound, though each line alone fits", () => {
     for (const change of [{ validated: false }, { createdAt: "yesterday" }, { note: "an unknown field" }]) {
       expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change }]))).toEqual([
-        expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended: /),
+        expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended \(1 of 1\): /),
       ]);
     }
   });
 
-  it("names a line by its place in the file, blank lines counted", () => {
+  it("reports an unsound version even when a later amendment puts it right", () => {
+    const broken = { ...AMENDMENT, change: { validated: false } };
+    const mended = { ...AMENDMENT, at: "2026-11-14T04:00:00.000Z", change: { validated: true } };
+    expect(answerKeyProblems(file([BUG, broken, mended]))).toEqual([
+      expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended \(1 of 2\): /),
+    ]);
+  });
+
+  it("names a line by its place in the file, blank lines counted, and the unexpected field itself", () => {
     expect(answerKeyProblems(file([BUG, { ...CONTROL, extra: 1 }], true))).toEqual([
-      expect.stringMatching(/^ground-truth\.jsonl line 3: /),
+      expect.stringMatching(/^ground-truth\.jsonl line 3: .*\(extra\)$/),
+    ]);
+  });
+
+  it("judges a line by its own kind only, so its real fault is the one named", () => {
+    expect(answerKeyEntryProblem({ ...AMENDMENT, at: "soon" })).toMatch(/^\/at must match pattern/);
+    expect(answerKeyEntryProblem({ ...BUG, kind: "planted" })).toBe(
+      "/kind must be one of sabotage, control, amendment",
+    );
+  });
+});
+
+describe("saved reviews under a link (Qodo on PR 289)", () => {
+  it("never follows a link, so one pointing back up can't make the check run forever", (context) => {
+    const reviews = mkdtempSync(join(tmpdir(), "schemas-link-"));
+    mkdirSync(join(reviews, "target-pr7"));
+    writeFileSync(join(reviews, "target-pr7", "bbbbbbb.review.json"), JSON.stringify({ state: "done" }));
+    try {
+      symlinkSync(reviews, join(reviews, "target-pr7", "loop"), "junction");
+    } catch {
+      context.skip(); // a link can't be made here
+    }
+    expect(savedReviewProblems(reviews)).toEqual([
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.review\.json: /),
     ]);
   });
 });
