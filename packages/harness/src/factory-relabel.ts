@@ -14,18 +14,20 @@ export function isLabelAlreadyGone(error: unknown): boolean {
   return /HTTP 404/.test(error.stderr) && /label does not exist/i.test(error.stderr);
 }
 
-/** What went wrong removing or adding a ticket's labels, or null for either that didn't. A failed removal
- * just leaves an old label lingering - cosmetic, safe to log and move on from. A failed add means the
- * ticket's new state was never recorded at all, which the caller must never treat as if it had been. */
+/** What went wrong adding or removing a ticket's labels, or null for either that didn't. A failed add means
+ * the ticket's new state was never recorded, so nothing was removed either: the ticket still shows its old
+ * state, where a later tick (or recovery) finds it. A failed removal after a good add only leaves an old
+ * label beside the new one, safe to log and retry: never a ticket with no factory label at all. */
 export interface RelabelProblems {
   removeFailed: unknown;
   addFailed: unknown;
 }
 
 /**
- * Removes each label with `removeOne`, then adds `add` with `addAll` - always, even when a removal
- * failed. Never throws: both failures (a removal other than `isLabelAlreadyGone`, or the add itself) are
- * returned, so the caller can treat them differently rather than one masking the other.
+ * Adds `add` with `addAll` first, and only once that worked removes each of `remove` with `removeOne`
+ * (AUD-M19). The other order left a ticket with no factory label when the add failed after a removal, and
+ * nothing looks for such a ticket. A label in both lists is kept. Never throws: both failures (a removal
+ * other than `isLabelAlreadyGone`, or the add itself) are returned, so the caller can treat them differently.
  */
 export function relabelWith(
   remove: string[],
@@ -33,21 +35,20 @@ export function relabelWith(
   removeOne: (label: string) => void,
   addAll: (labels: string[]) => void,
 ): RelabelProblems {
+  if (add.length) {
+    try {
+      addAll(add);
+    } catch (error) {
+      return { removeFailed: null, addFailed: error };
+    }
+  }
   let removeFailed: unknown = null;
-  for (const label of remove) {
+  for (const label of remove.filter((l) => !add.includes(l))) {
     try {
       removeOne(label);
     } catch (error) {
       if (!isLabelAlreadyGone(error)) removeFailed ??= error;
     }
   }
-  let addFailed: unknown = null;
-  if (add.length) {
-    try {
-      addAll(add);
-    } catch (error) {
-      addFailed = error;
-    }
-  }
-  return { removeFailed, addFailed };
+  return { removeFailed, addFailed: null };
 }

@@ -6,37 +6,72 @@
  *
  * Runs `ledgerProblems` (see `ledger.ts`) on both files, then asks the private repo's git history,
  * including merge commits, and its uncommitted state, whether any commit (or anything not yet
- * committed) removed or changed a line of either file: every commit may only add lines.
+ * committed) removed or changed a line of either file: every commit may only add lines. Last, it
+ * recomputes the `inputHash` of every tool-written injection and verdict event (`ledger-hashes.ts`): a
+ * template, proof or saved review changed after its event is reported.
  *
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run ledger:check` runs `ledger-check-cli.ts`.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { ledgerProblems, ledgerProblemsIn } from "./ledger.ts";
+import { eachGitLine } from "./git-stream.ts";
+import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
+import { readEventProblems } from "./ledger-append.ts";
+import { hashProblems } from "./ledger-hashes.ts";
+import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
 const FILES = ["ground-truth.jsonl", "audit-events.jsonl"];
 
 const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
 
-/** True when a unified diff's hunk lines (after `@@`) contain a real removal, never a header line. */
-function removesALine(diffText: string): boolean {
-  let inHunk = false;
-  for (const line of diffText.split("\n")) {
-    if (line.startsWith("@@")) {
-      inHunk = true;
-      continue;
+/**
+ * How a unified diff breaks "only appended", read one line at a time so a diff of any size is never held
+ * (AUD-N6): `removed` when a hunk removes or changes a line, `inserted` when an added line is followed by an
+ * old one, in its hunk or a later hunk of the same file, so it went in before the end (AUD-M10). Header lines
+ * and "\ No newline at end of file" carry no content.
+ */
+export class AppendOnlyScanner {
+  private inHunk = false;
+  private added = false;
+  private inserted = false;
+  private removed = false;
+
+  line(line: string): void {
+    if (this.removed) return;
+    if (line.startsWith("diff --git")) {
+      this.inHunk = false;
+      this.added = false;
+      return;
     }
-    if (DIFF_HEADER.test(line)) continue;
-    if (!inHunk) continue;
-    // A real removal or change; "\ No newline at end of file" is neither and carries no content.
-    if (line.startsWith("-") && !line.startsWith("\\")) return true;
+    if (line.startsWith("@@")) {
+      if (this.added) this.inserted = true;
+      this.inHunk = true;
+      return;
+    }
+    if (DIFF_HEADER.test(line) || !this.inHunk || line.startsWith("\\")) return;
+    if (line.startsWith("-")) this.removed = true;
+    else if (line.startsWith("+")) this.added = true;
+    else if (line.startsWith(" ") && this.added) this.inserted = true;
   }
-  return false;
+
+  result(): "removed" | "inserted" | undefined {
+    return this.removed ? "removed" : this.inserted ? "inserted" : undefined;
+  }
 }
+
+/** `AppendOnlyScanner` over a whole diff held as text. */
+export function appendOnlyBreak(diffText: string): "removed" | "inserted" | undefined {
+  const scanner = new AppendOnlyScanner();
+  for (const line of diffText.split("\n")) scanner.line(line);
+  return scanner.result();
+}
+
+const BREAK_WORDS = { removed: "removed or changed a line", inserted: "inserted a line before the end" };
 
 /** The private repo's own root for `repoRoot`, or throws when it isn't inside its own git repository. */
 function ownRepoRoot(repoRoot: string): string {
@@ -56,8 +91,8 @@ function ownRepoRoot(repoRoot: string): string {
 
 /**
  * Problems from a file's git history and working tree: one entry per commit (including a merge's own
- * resolution, via `-m`) whose diff for `relPath` removed or changed a line instead of only adding
- * them, plus one entry if the working tree or index holds an uncommitted removal or change.
+ * resolution, via `-m`) whose diff for `relPath` removed or changed a line, or added one before the end,
+ * instead of only appending, plus one entry if the working tree or index holds such a change uncommitted.
  * `--follow` so a rename doesn't hide older history.
  */
 export function appendOnlyProblems(repoRoot: string, relPath: string): string[] {
@@ -73,43 +108,88 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
   }
 
   if (headExists) {
-    let log: string;
+    // `-m` shows a merge once per parent, one right after another. A merge of two branches that each appended
+    // puts one side's lines before the other's against one parent, but is a plain append against the other:
+    // two appends meeting, not an insertion. So a commit is an insertion only when it inserts against every
+    // parent it is shown against; a removal against any parent is always a problem (Qodo on PR 269).
+    // Read as a stream, one line at a time, and judged as each commit ends: neither the history nor one
+    // commit's diff is ever held, so there is no size or time ceiling to outgrow (AUD-N6, Qodo on PR 280).
+    let sha: string | null = null;
+    let breaks: ("removed" | "inserted" | undefined)[] = [];
+    let scanner: AppendOnlyScanner | null = null;
+    const endDiff = () => {
+      if (scanner) breaks.push(scanner.result());
+      scanner = null;
+    };
+    const endCommit = () => {
+      endDiff();
+      if (sha === null) return;
+      const broken = breaks.includes("removed")
+        ? "removed"
+        : breaks.length > 0 && breaks.every((b) => b === "inserted")
+          ? "inserted"
+          : undefined;
+      if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
+      breaks = [];
+    };
     try {
-      log = execFileSync("git", ["-C", repoRoot, "log", "--no-color", "--follow", "-p", "-m", "--", relPath], {
-        encoding: "utf8",
-        timeout: 60_000,
-        maxBuffer: 64 * 1024 * 1024,
+      eachGitLine(repoRoot, ["log", "--no-color", "--follow", "-p", "-m", "--", relPath], (line) => {
+        if (line.startsWith("commit ")) {
+          const next = (line.match(/^commit ([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
+          if (next !== sha) endCommit();
+          else endDiff();
+          sha = next;
+          scanner = new AppendOnlyScanner();
+        }
+        scanner?.line(line);
       });
     } catch (error) {
       throw new Error(`git log failed for ${relPath}: ${(error as Error).message}`);
     }
-    for (const commitDiff of log.split(/^commit /m).slice(1)) {
-      const sha = (commitDiff.match(/^([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
-      if (removesALine(commitDiff)) problems.push(`${relPath}: commit ${sha} removed or changed a line`);
-    }
+    endCommit();
 
-    let uncommitted: string;
+    const uncommitted = new AppendOnlyScanner();
     try {
-      uncommitted = execFileSync("git", ["-C", repoRoot, "diff", "--no-color", "HEAD", "--", relPath], {
-        encoding: "utf8",
-        timeout: 60_000,
-      });
+      eachGitLine(repoRoot, ["diff", "--no-color", "HEAD", "--", relPath], (line) => uncommitted.line(line));
     } catch (error) {
       throw new Error(`git diff failed for ${relPath}: ${(error as Error).message}`);
     }
-    if (removesALine(uncommitted)) problems.push(`${relPath}: uncommitted changes removed or changed a line`);
+    const broken = uncommitted.result();
+    if (broken) problems.push(`${relPath}: uncommitted changes ${BREAK_WORDS[broken]}`);
   }
 
   return problems;
 }
 
-/** Every problem with the private ledger: unsound amendments plus any non-append-only history. */
+/**
+ * Every problem with the private ledger: unsound amendments, any non-append-only history, and any tool's
+ * `inputHash` that no longer recomputes from today's template, proofs or saved review (AUD-M26).
+ */
 export function ledgerCheckProblems(privateRoot: string): string[] {
   const problems: string[] = [];
   for (const file of FILES) {
     problems.push(...ledgerProblems(join(privateRoot, file)));
     problems.push(...appendOnlyProblems(privateRoot, file));
   }
+  // Every event readable as an event: the lenient check every shape on disk passes (AUD-M5).
+  const auditPath = join(privateRoot, FILES[1] as string);
+  if (existsSync(auditPath)) {
+    for (const event of readAuditLog(auditPath)) {
+      const problem = readEventProblems(event);
+      if (problem) problems.push(`${FILES[1]}: ${problem}`);
+    }
+  }
+  const env = { ...process.env, FAULTFORGE_PRIVATE_DIR: privateRoot };
+  problems.push(
+    ...hashProblems(
+      {
+        groundTruthPath: join(privateRoot, FILES[0] as string),
+        auditEventsPath: join(privateRoot, FILES[1] as string),
+        reviewsDir: savedReviewsDir(env),
+      },
+      env,
+    ),
+  );
   return problems;
 }
 
@@ -142,22 +222,20 @@ export function ledgerProblemsWithHistory(paths: string[]): string[] {
   return problems;
 }
 
-function main() {
+/** The command: `ledger-check-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(): number {
   const root = privateDir();
   let problems: string[];
   try {
     problems = ledgerCheckProblems(root);
   } catch (error) {
     console.error(`[ledger:check] could not read a file or the private repo's history: ${(error as Error).message}`);
-    process.exit(2);
+    return 2;
   }
   if (problems.length) {
     console.log(`[ledger:check] problems found:\n${problems.map((p) => `- ${p}`).join("\n")}`);
-    process.exit(1);
+    return 1;
   }
   console.log("[ledger:check] both files are sound: amendments check out, history is append-only");
-  process.exit(0);
+  return 0;
 }
-
-// Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();

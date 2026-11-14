@@ -9,6 +9,7 @@ import {
   type MatchFinding,
   type MatchRuleResult,
   overlaps,
+  RULE_VERSION,
 } from "./match-rule.ts";
 
 const root = join(import.meta.dirname, "../../..");
@@ -231,5 +232,24 @@ describe("applyMatchRule: behaviour pinned after the 13 November audit (#188)", 
     expect(only(result).lines.pass).toBe(false);
     expect(only(result).lineWidth).toBeNull();
     expect(result.caught).toBe(false);
+  });
+});
+
+describe("applyMatchRule: one finding must meet all three criteria (M06, M08b, AUD-M11)", () => {
+  it("doesn't combine criteria met by different findings into a catch", () => {
+    const placedButWrongKind = finding({ id: "qodo:1", title: "Naming", summary: "A name", category: "Style" });
+    const rightKindElsewhere = finding({ id: "qodo:2", file: "src/other.ts" });
+    const result = applyMatchRule(injection, [placedButWrongKind, rightKindElsewhere], kindTerms);
+    expect(result.caught).toBe(false);
+    expect(result.matchedFindingIds).toEqual([]);
+  });
+
+  it("fails the kind criterion when no terms are given, rather than pass every finding", () => {
+    expect(only(applyMatchRule(injection, [finding()], [])).kind.pass).toBe(false);
+  });
+
+  it("records the rule's version in every result", () => {
+    expect(applyMatchRule(injection, [], kindTerms).ruleVersion).toBe(RULE_VERSION);
+    expect(RULE_VERSION).toBe("1");
   });
 });

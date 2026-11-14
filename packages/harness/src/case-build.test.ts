@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,8 @@ import { parseCliArgs, run } from "./case-build.ts";
 import { type BuildInputs, buildCaseRecord, type Overlay, repoSlug } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { validateCaseRecord } from "./case-record.ts";
-import type { LedgerEntry } from "./ledger.ts";
+import { type LedgerEntry, readLedger } from "./ledger.ts";
+import { verdictInputHash } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
@@ -347,11 +348,12 @@ describe("printRecord", () => {
 
 describe("parseCliArgs", () => {
   it("parses a bare case id", () => {
-    expect(parseCliArgs(["FF-0002"])).toEqual({ caseId: "FF-0002", write: false });
+    expect(parseCliArgs(["FF-0002"])).toEqual({ caseId: "FF-0002", write: false, save: false });
   });
 
-  it("parses --write", () => {
-    expect(parseCliArgs(["FF-0002", "--write"])).toEqual({ caseId: "FF-0002", write: true });
+  it("parses --write and --save", () => {
+    expect(parseCliArgs(["FF-0002", "--write"])).toEqual({ caseId: "FF-0002", write: true, save: false });
+    expect(parseCliArgs(["FF-0002", "--save"])).toEqual({ caseId: "FF-0002", write: false, save: true });
   });
 
   it("rejects no arguments", () => {
@@ -764,5 +766,242 @@ describe("run: a control case (#162)", () => {
     const { code, err } = await build(fixture(null));
     expect(code).toBe(2);
     expect(err).toContain("the adjudication stage is missing");
+  });
+});
+
+describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26, #244)", () => {
+  const CASE_ID = "FF-9003";
+  const COMMIT = "c".repeat(40);
+  const TEMPLATE_TEXT = JSON.stringify({ match: { kindTerms: ["off by one"] } });
+
+  /** A bug case adjudicated by verdict (tool-written, with its inputHash) on a finished review of PR 7. */
+  function fixture(opts: { state?: string; disposition?: string } = {}) {
+    const root = mkdtempSync(join(tmpdir(), "case-build-gate-"));
+    const groundTruthPath = join(root, "ground-truth.jsonl");
+    const auditEventsPath = join(root, "audit-events.jsonl");
+    mkdirSync(join(root, "templates", "t9"), { recursive: true });
+    writeFileSync(join(root, "templates", "t9", "template.json"), TEMPLATE_TEXT);
+    const entry = {
+      caseId: CASE_ID,
+      kind: "sabotage",
+      templateId: "t9",
+      invariantId: "INV-1",
+      defectClass: "off-by-one",
+      targetRepo: "https://github.com/Owner/target.git",
+      targetCommit: "a".repeat(40),
+      injectionCommit: COMMIT,
+      injectedFile: "src/x.ts",
+      injectedLines: [1, 2],
+    };
+    writeFileSync(groundTruthPath, `${JSON.stringify(entry)}\n`);
+    const reviewDir = join(root, "raw-artifacts", "reviews", "target-pr7");
+    mkdirSync(reviewDir, { recursive: true });
+    const savePath = join(reviewDir, `${COMMIT.slice(0, 7)}.review.json`);
+    const saveText = JSON.stringify({
+      repo: "Owner/target",
+      pr: 7,
+      headSha: COMMIT,
+      state: opts.state ?? "complete",
+      reviewSeenCompleteAt: "2026-11-01T00:04:00.000Z",
+      findings: [],
+    });
+    writeFileSync(savePath, saveText);
+    const read = readLedger(groundTruthPath)[0] as LedgerEntry;
+    const events = [
+      { eventId: "e0", type: "pr.opened", caseId: CASE_ID, at: "2026-11-01T00:01:00.000Z", pr: 7 },
+      { eventId: "e1", type: "sabotage.injected", caseId: CASE_ID, at: "2026-11-01T00:00:00.000Z" },
+      {
+        eventId: "e2",
+        type: "review.recorded",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:05:00.000Z",
+        pr: { repo: "Owner/target", number: 7, url: "https://github.com/Owner/target/pull/7" },
+        review: {
+          reviewer: "qodo-code-review[bot]",
+          path: "pr-comments",
+          configVersion: "v1",
+          reviewedCommit: COMMIT,
+          reviewedAt: "2026-11-01T00:05:00.000Z",
+          url: "https://github.com/Owner/target/pull/7#issuecomment-1",
+        },
+      },
+      {
+        eventId: "e3",
+        type: "case.adjudicated",
+        caseId: CASE_ID,
+        at: "2026-11-01T00:10:00.000Z",
+        commit: COMMIT,
+        by: "Owner",
+        tool: "faultforge-harness@1.0.0",
+        inputHash: verdictInputHash(read, TEMPLATE_TEXT, saveText),
+        disposition: opts.disposition ?? "confirmed_missed",
+        reason: "r",
+        judgements: [],
+      },
+    ];
+    writeFileSync(auditEventsPath, events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    return { root, groundTruthPath, auditEventsPath, savePath, saveText };
+  }
+
+  async function build(fx: ReturnType<typeof fixture>, extra: { overlay?: object; save?: boolean } = {}) {
+    const overlayPath = join(fx.root, extra.overlay ? "overlay.json" : "no-overlay.json");
+    if (extra.overlay) writeFileSync(overlayPath, JSON.stringify(extra.overlay));
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await run(CASE_ID, {
+      env: { FAULTFORGE_PRIVATE_DIR: fx.root },
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+      groundTruthPath: fx.groundTruthPath,
+      auditEventsPath: fx.auditEventsPath,
+      reviewsDir: join(fx.root, "raw-artifacts", "reviews"),
+      overlayPath,
+      examplesDir: join(fx.root, "examples"),
+      casesDir: join(fx.root, "cases"),
+      save: extra.save ?? false,
+    });
+    return { code, out: out.join("\n"), err: err.join("\n") };
+  }
+
+  it("builds from the save the verdict judged", async () => {
+    const { code, err } = await build(fixture());
+    expect(err).toBe("");
+    expect(code).toBe(0);
+  });
+
+  it("refuses, exit 2, a saved review changed after the verdict", async () => {
+    const fx = fixture();
+    writeFileSync(fx.savePath, fx.saveText.replace('"findings":[]', '"findings": []'));
+    const { code, err } = await build(fx);
+    expect(code).toBe(2);
+    expect(err).toContain("the verdict's inputs changed since it was recorded");
+  });
+
+  it("refuses, exit 2, a template changed after the verdict", async () => {
+    const fx = fixture();
+    writeFileSync(join(fx.root, "templates", "t9", "template.json"), TEMPLATE_TEXT.replace("one", "two"));
+    expect((await build(fx)).code).toBe(2);
+  });
+
+  it("still builds when the answer key gains an amendment after the verdict", async () => {
+    const fx = fixture();
+    const amendment = { kind: "amendment", amends: CASE_ID, at: "2026-11-02T00:00:00.000Z", change: { note: "n" } };
+    appendFileSync(fx.groundTruthPath, `${JSON.stringify({ ...amendment, reason: "r", evidence: "e" })}\n`);
+    expect((await build(fx)).code).toBe(0);
+  });
+
+  it("refuses, exit 2, a final verdict on a save that never finished", async () => {
+    const { code, err } = await build(fixture({ state: "review incomplete" }));
+    expect(code).toBe(2);
+    expect(err).toContain("only review_incomplete can");
+  });
+
+  it("never uses a save of the same commit on another PR (M44b)", async () => {
+    const fx = fixture();
+    const other = join(fx.root, "raw-artifacts", "reviews", "target-pr8");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, `${COMMIT.slice(0, 7)}.review.json`), fx.saveText.replace('"pr":7', '"pr":8'));
+    rmSync(fx.savePath);
+    const { code, err } = await build(fx);
+    expect(code).toBe(2);
+    expect(err).toContain("on PR 7");
+  });
+
+  it("refuses, exit 1, a record that leaks a private path or fails the schema (M44, M44c)", async () => {
+    const leak = await build(fixture(), { overlay: { detection: { notes: ["see private/raw-artifacts/x"] } } });
+    expect(leak.code).toBe(1);
+    expect(leak.out).toContain("problems found");
+    const invalid = await build(fixture(), { overlay: { challenge: { verdict: "maybe", note: "n" } } });
+    expect(invalid.code).toBe(1);
+    expect(invalid.out).toContain("/challenge/verdict");
+  });
+
+  it("--save writes private/cases/<id>.json, and never replaces a different record there (#249)", async () => {
+    const fx = fixture();
+    expect((await build(fx, { save: true })).code).toBe(0);
+    const saved = readFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "utf8");
+    expect(JSON.parse(saved)).toMatchObject({ caseId: CASE_ID, human: { disposition: "confirmed_missed" } });
+    expect((await build(fx, { save: true })).code).toBe(0);
+    writeFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "{}\n");
+    const again = await build(fx, { save: true });
+    expect(again.code).toBe(2);
+    expect(again.err).toContain("already holds a different record");
+    expect(readFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "utf8")).toBe("{}\n");
+  });
+});
+
+describe("run: a review stage whose PR can't be read (Qodo on PR 264)", () => {
+  it("refuses, exit 2, rather than fall back to an overlay's legacy findings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "case-build-pr-"));
+    const commit = "9".repeat(40);
+    writeFileSync(
+      join(root, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9004", kind: "sabotage", templateId: "t", injectionCommit: commit })}\n`,
+    );
+    const events = [
+      { eventId: "a", type: "review.recorded", caseId: "FF-9004", at: "2026-11-01T00:00:00Z", pr: { repo: "o/t" } },
+      { eventId: "b", type: "case.adjudicated", caseId: "FF-9004", at: "2026-11-01T00:01:00Z", disposition: "x" },
+    ];
+    writeFileSync(join(root, "audit-events.jsonl"), events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    writeFileSync(join(root, "overlay.json"), JSON.stringify({ legacyFindingsPath: "nowhere.json" }));
+    const err: string[] = [];
+    const code = await run("FF-9004", {
+      env: { FAULTFORGE_PRIVATE_DIR: root },
+      log: () => {},
+      error: (l) => err.push(l),
+      overlayPath: join(root, "overlay.json"),
+      reviewsDir: join(root, "reviews"),
+    });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("names no readable PR");
+  });
+});
+
+describe("run: the findings come from the file the verdict judged (Qodo on PR 264)", () => {
+  it("refuses, exit 2, when the verdict names another file than the save found", async () => {
+    const root = mkdtempSync(join(tmpdir(), "case-build-file-"));
+    const commit = "8".repeat(40);
+    mkdirSync(join(root, "templates", "t8"), { recursive: true });
+    writeFileSync(join(root, "templates", "t8", "template.json"), '{"match":{"kindTerms":["x"]}}');
+    writeFileSync(
+      join(root, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9005", kind: "sabotage", templateId: "t8", targetRepo: "https://github.com/o/t.git", targetCommit: "a".repeat(40), injectionCommit: commit, injectedFile: "src/x.ts", injectedLines: [1, 1] })}\n`,
+    );
+    const dir = join(root, "reviews", "target-pr3");
+    mkdirSync(dir, { recursive: true });
+    const save = { pr: 3, headSha: commit, state: "complete", reviewSeenCompleteAt: null, findings: [] };
+    writeFileSync(join(dir, `${commit.slice(0, 7)}.review.json`), JSON.stringify(save));
+    writeFileSync(join(root, "judged.review.json"), JSON.stringify({ ...save, findings: [] }));
+    const events = [
+      { eventId: "a", type: "sabotage.injected", caseId: "FF-9005", at: "2026-11-01T00:00:00Z" },
+      {
+        eventId: "b",
+        type: "review.recorded",
+        caseId: "FF-9005",
+        at: "2026-11-01T00:01:00Z",
+        pr: { repo: "o/t", number: 3, url: "https://github.com/o/t/pull/3" },
+        review: { reviewer: "q", path: "p", configVersion: "v", reviewedCommit: commit, reviewedAt: "t", url: "u" },
+      },
+      {
+        eventId: "c",
+        type: "case.adjudicated",
+        caseId: "FF-9005",
+        at: "2026-11-01T00:02:00Z",
+        disposition: "confirmed_missed",
+        by: "o",
+        reviewFile: "judged.review.json",
+      },
+    ];
+    writeFileSync(join(root, "audit-events.jsonl"), events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    const err: string[] = [];
+    const code = await run("FF-9005", {
+      env: { FAULTFORGE_PRIVATE_DIR: root },
+      log: () => {},
+      error: (l) => err.push(l),
+      overlayPath: join(root, "none.json"),
+      reviewsDir: join(root, "reviews"),
+    });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("the verdict judged");
   });
 });

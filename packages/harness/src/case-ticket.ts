@@ -25,20 +25,28 @@
  *
  * Exit codes: 0 the issue was created (or, with `--dry-run`, printed); 1 refused — the ticket text
  * gives the case away or links to a GitHub issue or PR, the template's `ticket` field is missing or
- * incomplete, the case id isn't a plain token, or this case already has a ticket; 2 could not run —
- * the template wasn't found or unreadable, the audit log couldn't be read, `gh` failed to create the
+ * incomplete, the case id isn't a plain token, the case planted another template (or, outside a dry run,
+ * isn't in the answer key yet), the template changed since the case was planted (its injection hash no
+ * longer holds), or this case already has a ticket; 2 could not run — the template wasn't
+ * found or unreadable, the answer key or audit log couldn't be read or has an amendment or history
+ * problem (`ledgerProblemsWithHistory`), `gh` failed to create the
  * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
  * check GitHub before retrying rather than risk a duplicate issue), or an earlier run's attempt left its
  * marker without the event: it may have created the issue, so this refuses until a human has checked.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:ticket` runs `case-ticket-cli.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
-import { readAuditLog } from "./ledger.ts";
+import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
+import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { injectionHashProblem, isToolWritten } from "./ledger-hashes.ts";
 import { templateTelltales } from "./neutral.ts";
 import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
@@ -77,7 +85,7 @@ export function ticketFieldProblems(ticket: Ticket | undefined): string[] {
 }
 
 /** A link GitHub turns into a "mentioned in" event: a full issue/PR URL, or a short `repo#N` reference. */
-const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|\b[\w.-]+#\d+\b/i;
+export const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|\b[\w.-]+#\d+\b/i;
 
 /**
  * The reasons a ticket's text links to a GitHub issue or PR, as `field: reason`, over every field that
@@ -138,6 +146,7 @@ export interface RunOptions {
   error?: (line: string) => void;
   dryRun?: boolean;
   auditEventsPath?: string;
+  groundTruthPath?: string;
   evidenceDir?: string;
   factory?: FactoryConfig;
   /** Stands in for the real `gh` call; a test fakes this instead of spawning the binary. */
@@ -150,7 +159,6 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   if (!isSafeId(caseId)) {
     error(`case:ticket: refused, case id must be a plain token (letters, digits, dot, dash, underscore): ${caseId}`);
@@ -159,6 +167,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
+  const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const evidenceDir = options.evidenceDir ?? join(root, "raw-artifacts", caseId);
   const gh = options.gh ?? ((args: string[]) => execFileSync("gh", args, { encoding: "utf8", timeout: 30_000 }));
   const now = options.now ?? (() => new Date().toISOString());
@@ -190,13 +199,46 @@ export async function run(templateId: string, caseId: string, options: RunOption
     return 1;
   }
 
+  // Nothing is posted next to a broken answer key or audit log, as with every other case command (AUD-M24).
+  const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
+  if (ledgerIssues.length) {
+    error(`case:ticket: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
+    return 2;
+  }
   let events: Record<string, unknown>[] = [];
-  if (existsSync(auditEventsPath)) {
-    try {
-      events = readAuditLog(auditEventsPath);
-    } catch (e) {
-      error(`case:ticket: can't read ${auditEventsPath}: ${message(e)}`);
-      return 2;
+  let entry: Record<string, unknown> | undefined;
+  try {
+    if (existsSync(auditEventsPath)) events = readAuditLog(auditEventsPath);
+    if (existsSync(groundTruthPath)) entry = readLedger(groundTruthPath).find((e) => e.caseId === caseId);
+  } catch (e) {
+    error(`case:ticket: can't read ${auditEventsPath} or ${groundTruthPath}: ${message(e)}`);
+    return 2;
+  }
+  // The ticket must be for the template the case actually planted: a wrong id would post a wrong public
+  // ticket. A real run comes after inject, so the case must be in the answer key by then (AUD-M24).
+  if (entry ? entry.templateId !== templateId : !options.dryRun) {
+    error(
+      entry
+        ? `case:ticket: refused, ${caseId} planted template ${String(entry.templateId)}, not ${templateId}`
+        : `case:ticket: refused, ${caseId} is not in the answer key yet: run inject first`,
+    );
+    return 1;
+  }
+  // The ticket text is read from the template file now: it must be the file the case was planted from, not
+  // one edited since (Qodo on PR 264). Checked through the injection event's hash, like ledger:check does.
+  const injected = events.find(
+    (e) => e.caseId === caseId && (e.type === "sabotage.injected" || e.type === "control.injected"),
+  );
+  // A real ticket needs the case's planting on record, not only its answer-key line (Qodo on PR 264).
+  if (!options.dryRun && !injected) {
+    error(`case:ticket: refused, ${caseId} has no injection event: its planting wasn't recorded`);
+    return 1;
+  }
+  if (entry && injected && isToolWritten(injected) && typeof injected.inputHash === "string") {
+    const problem = injectionHashProblem(injected as LedgerEntry, [entry as LedgerEntry], env);
+    if (problem) {
+      error(`case:ticket: refused, ${caseId}'s template isn't the one it was planted from (${problem})`);
+      return 1;
     }
   }
   if (alreadyTicketed(events, caseId)) {
@@ -264,10 +306,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   const issue = { repo: target.github, number, url, title: ticket.title, body };
   writeFileSync(join(evidenceDir, "ticket.json"), `${JSON.stringify(issue, null, 2)}\n`);
-  appendFileSync(
-    auditEventsPath,
-    `${JSON.stringify({ eventId: eventId(), type: "case.ticket-created", at: now(), caseId, issue })}\n`,
-  );
+  appendEvent(auditEventsPath, { eventId: eventId(), type: "case.ticket-created", at: now(), caseId, issue });
 
   log(`[case:ticket] created ${target.github}#${number}: ${url}`);
   log(`Closes #${number}`);
@@ -279,21 +318,17 @@ function usage(): never {
   process.exit(2);
 }
 
-// Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const { values } = parseArgs({
-    options: {
-      template: { type: "string" },
-      case: { type: "string" },
-      "dry-run": { type: "boolean" },
-    },
-  });
+/** The command: `case-ticket-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): Promise<number> {
+  let values: { template?: string; case?: string; "dry-run"?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      options: { template: { type: "string" }, case: { type: "string" }, "dry-run": { type: "boolean" } },
+    }));
+  } catch {
+    usage();
+  }
   if (!values.template || !values.case) usage();
-  run(values.template, values.case, { dryRun: values["dry-run"] ?? false }).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`case:ticket: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(2);
-    },
-  );
+  return run(values.template, values.case, { dryRun: values["dry-run"] ?? false });
 }

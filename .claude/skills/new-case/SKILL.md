@@ -13,7 +13,7 @@ Read `CLAUDE.md` first. Every step below obeys it.
 
 - `private/` and `../faultforge-target` both have clean working trees, and the target is on `main` and in sync with `origin/main`.
 - The template exists in `private/templates/<id>/` (preferred) or `templates/seed/<id>/`, with `template.json` and its proof test.
-- Ask the owner to confirm that Qodo → Repositories → Relationships shows **no active relationship** for faultforge-target. Qodo discovers relationships in the background, and an active one lets it read FaultForge during the review. Record the answer in the `pr.opened` event (section 3) as `relationships`, with the configuration version as `qodoConfiguration`: `case:review` reads the version from there.
+- Ask the owner to confirm that Qodo → Repositories → Relationships shows **no active relationship** for faultforge-target. Qodo discovers relationships in the background, and an active one lets it read FaultForge during the review. Pass the answer to `case:pr` (section 3) as `--relationships`; it records it in the `pr.opened` event with the configuration version, which `case:review` reads from there.
 - Run `npm run qodo:check` from this repository's root, never from `private/` (the script lives in the root `package.json`), with `QODO_KEY_FILE` set. Exit 0: Qodo matches the highest-numbered snapshot in `private/config/qodo-vN/` (rules on every page, review skills, no relationship on the target); the live answers are saved under `private/raw-artifacts/qodo-state/<timestamp>/`, so name that folder in the case record as its `qodo-state`. Exit 1 with a printed list of differences: the reviewer changed; stop and tell the owner. A non-zero exit without that list (npm reporting a missing script, a crash) is a tooling problem, not drift: treat it like exit 2. Exit 2: the check could not run (key, snapshot, API); fix the setup before any case. Never work around a difference by editing the snapshot: that is the owner's decision, recorded in the decision log.
 - `inject` picks the branch: the template's `publish.branch` when that name is free, otherwise the base name with the smallest free numeric suffix (`tidy-replay-lookup-2`), checked locally and on origin, and it prints the name it used. Use that name in every later step. Never delete or rename old case branches: they are evidence.
 
@@ -32,18 +32,24 @@ This writes the ledger entry, an audit event and artefacts under `private/raw-ar
 In this order, each command on its own:
 
 1. **Create the target ticket.** `npm run case:ticket -- --template <id> --case <FF-NNNN>`, run in this repository and never chained with a target-repo command. It, the push and the PR need the GitHub token with write access to issues and pull requests (the default `gh` login lacks it). It prints the issue number `<N>`, records a `case.ticket-created` audit event and saves the raw `gh` output. Do this before pushing anything: if it refuses (exit 1), nothing has left the machine. Exit 2 means it could not tell whether the issue was created: check GitHub before retrying, never retry blindly.
-2. **Push the branch,** then
-3. **open the PR** with `Closes #<N>` in the body:
+2. **Push the branch,** on its own:
 
 ```bash
 git -C ../faultforge-target push -u origin <branch>
-gh pr create --repo AJBeumer/faultforge-target --base main --head <branch> --title "<commit message>" --body "<one plain sentence>. Closes #<N>"
 ```
 
-- The title equals the commit message. The body is one ordinary sentence about the change, never about bugs, tests or reviews, followed by `Closes #<N>`.
-- If `gh pr create` fails with a permission error, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body, and wait for the PR number.
+3. **Open and record the PR** with `case:pr`, in this repository, never chained with the push. Start with `--dry-run`:
+
+```bash
+npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>" --dry-run
+npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>"
+```
+
+- The title is the template's commit message; the body is your sentence followed by `Closes #<N>` from the case's ticket. The sentence is about the change, never about bugs, tests or reviews. `case:pr` refuses (exit 1) giveaway words, links to an issue or PR, a branch whose pushed head isn't the injected commit, a missing ticket, or a case that already has a PR; nothing has left the machine then.
+- It checks that the template and proofs are still the ones the case was planted from, runs the Qodo configuration check itself (with `QODO_KEY_FILE` set) and refuses unless Qodo matches its snapshot, records that version and the folder the check saved, checks the opened PR's head against the answer key, and appends the `pr.opened` event itself. Never type that event by hand.
+- Exit 2 means it couldn't finish: an earlier attempt's marker exists, `gh` failed, or the opened PR's head is wrong. Check GitHub before anything else; never retry blindly.
+- If `gh` lacks permission, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body. Once the owner has opened it, record it with the same command plus `--existing <pr number>`: every check runs again and nothing is opened. The same applies when a run stopped (exit 2) after GitHub had opened the PR.
 - Not a draft. No reviewers, labels or assignees.
-- Record the PR: append an audit event `pr.opened` with `pr` (the number), `headCommit`, `qodoConfiguration` and `relationships`, and check that the head commit equals the ledger's `injectionCommit`.
 
 ## 4. Capture the review
 
@@ -52,7 +58,7 @@ npm run review:wait -- target <pr> --commit <injectionCommit> --timeout 25
 npm run case:review -- <FF-NNNN>
 ```
 
-- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run; 3 Qodo skipped the review (zero findings then does **not** mean clean).
+- `review:wait` waits until the PR head is the injection commit and Qodo's review of it is complete, saving every version of Qodo's comments and its raw API answer under `private/raw-artifacts/reviews/target-pr<pr>/`. Exit 0 complete; 1 not complete in time, or the head moved; 2 could not run, or a complete save of that commit already exists (a save is evidence and is never overwritten; an unfinished one is kept under another name when you wait again); 3 Qodo skipped the review (zero findings then does **not** mean clean).
 - `case:review` appends the `review.recorded` event `case:build` needs, from that save: the PR, the review comment's URL and time, the configuration version from `pr.opened`. It refuses a save for another commit or PR, and a case that already has the event (exit 1). Run it whatever `review:wait` said: an inconclusive case needs its review stage too.
 - Any review by another bot (e.g. Copilot) is saved but doesn't count. Note who posted first.
 
@@ -73,10 +79,10 @@ npm run verdict -- <FF-NNNN>
 ## 6. Build the record
 
 ```bash
-npm run case:build -- <FF-NNNN>
+npm run case:build -- <FF-NNNN> --save
 ```
 
-`case:build` builds the record from the answer key, the audit events and the saved review, checks it against the schema and for private text, and prints it. Save the printed record (the JSON, without the `[case:build]` lines before it) as `private/cases/<FF-NNNN>.json`. `private/cases/<FF-NNNN>.overlay.json` is only for prose no event holds; a case with none needs no overlay. Publishing (`--write`, into `examples/`) stays behind the owner's go-ahead.
+`case:build` builds the record from the answer key, the audit events and the saved review, checks it against the schema and for private text, prints it, and with `--save` writes it to `private/cases/<FF-NNNN>.json` itself. Never copy a record by hand. It refuses (exit 2) when the saved review, the template or the answer-key entry changed after the verdict, when a final verdict stands on a review that didn't finish, or when `private/cases/` already holds a different record: report it to the owner, never work around it. `private/cases/<FF-NNNN>.overlay.json` is only for prose no event holds; a case with none needs no overlay. Publishing (`--write`, into `examples/`) stays behind the owner's go-ahead.
 
 ## 7. Close out
 

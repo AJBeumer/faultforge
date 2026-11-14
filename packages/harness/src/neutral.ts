@@ -22,9 +22,90 @@ const TELLTALES: [RegExp, string][] = [
   [/\bff[\s_-]?\d{3,}\b/i, "contains a case id"],
 ];
 
-/** Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. */
+/** Cyrillic and Greek letters that look like Latin ones, mapped to the Latin letter a reader sees. */
+const LOOKALIKES: Record<string, string> = {
+  а: "a",
+  в: "b",
+  е: "e",
+  ё: "e",
+  к: "k",
+  м: "m",
+  н: "h",
+  о: "o",
+  р: "p",
+  с: "c",
+  т: "t",
+  у: "y",
+  х: "x",
+  і: "i",
+  ї: "i",
+  ј: "j",
+  ѕ: "s",
+  ԁ: "d",
+  ԛ: "q",
+  ԝ: "w",
+  ɡ: "g",
+  ı: "i",
+  А: "A",
+  В: "B",
+  Е: "E",
+  К: "K",
+  М: "M",
+  Н: "H",
+  О: "O",
+  Р: "P",
+  С: "C",
+  Т: "T",
+  У: "Y",
+  Х: "X",
+  І: "I",
+  Ј: "J",
+  Ѕ: "S",
+  α: "a",
+  ο: "o",
+  ρ: "p",
+  ν: "v",
+  τ: "t",
+  ι: "i",
+  κ: "k",
+  υ: "u",
+  ε: "e",
+  Α: "A",
+  Β: "B",
+  Ε: "E",
+  Ζ: "Z",
+  Η: "H",
+  Ι: "I",
+  Κ: "K",
+  Μ: "M",
+  Ν: "N",
+  Ο: "O",
+  Ρ: "P",
+  Τ: "T",
+  Υ: "Y",
+  Χ: "X",
+};
+
+/**
+ * The text as a reader sees it: compatibility forms folded (NFKC: full-width letters, ligatures), invisible
+ * characters removed (zero-width spaces and joiners, the soft hyphen, the word joiner, the byte-order mark),
+ * every kind of dash read as `-`, and Cyrillic or Greek look-alike letters read as the Latin letter.
+ */
+export function normalizeLookalikes(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/[​-‍⁠﻿­᠎]/g, "")
+    .replace(/[‐-―−﹘﹣－]/g, "-")
+    .replace(/[Ͱ-ϿЀ-ԯɡı]/g, (ch) => LOOKALIKES[ch] ?? ch);
+}
+
+/**
+ * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
+ * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242).
+ */
 export function telltales(text: string): string[] {
-  return TELLTALES.filter(([pattern]) => pattern.test(text)).map(([, reason]) => reason);
+  const seen = normalizeLookalikes(text);
+  return TELLTALES.filter(([pattern]) => pattern.test(seen)).map(([, reason]) => reason);
 }
 
 /**

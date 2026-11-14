@@ -13,7 +13,8 @@
  * findings were fixed or dismissed.
  *
  * The staged tree comes from `git write-tree`, which adds the tree to the object store but changes no
- * branch, index, file, review or label. Nothing else is written.
+ * branch, index, file, review or label. The only other write is a cache of what each saved review held, under
+ * `node_modules/.cache/` (`review-gate-cache.ts`), so a commit parses only the reviews saved since the last one.
  *
  * Exit codes: 0 covered; 1 not covered (the output names the nearest reviewed tree and its age);
  * 2 could not read the evidence or the tree (a bad option, no such commit, an unreadable folder).
@@ -24,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { evidenceDir, ROOT } from "./paths.ts";
+import { defaultCacheFile, ReviewCache } from "./review-gate-cache.ts";
 import { HASH, LINE_BREAK, type ReviewRecord, readReviewRecords } from "./review-gate-records.ts";
 
 export { extractReviewRecord, type ReviewRecord, readReviewRecords, type Sidecar } from "./review-gate-records.ts";
@@ -183,7 +185,9 @@ function main(): number {
     console.error(`could not read the tree: git answered "${tree}"`);
     return 2;
   }
-  const { records, problems } = readReviewRecords(evidence);
+  const cache = ReviewCache.load(defaultCacheFile(evidence, ROOT));
+  const { records, problems } = readReviewRecords(evidence, cache);
+  cache.save();
 
   const what = args.commit !== null ? `the tree of ${args.commit}` : "the staged tree";
   // One git call per distinct base commit, not one per saved review: the evidence folder only grows, and

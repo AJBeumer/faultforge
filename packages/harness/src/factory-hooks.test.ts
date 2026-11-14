@@ -17,8 +17,8 @@ import {
 describe("hookProblems", () => {
   const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });
   const both = [
-    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' },
-    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"' },
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" guard-target.ts' },
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" factory-policy.ts' },
   ];
 
   it("accepts this repo's own settings", () => {
@@ -28,7 +28,9 @@ describe("hookProblems", () => {
 
   it("refuses settings without the policy hook, as on a main from before it existed", () => {
     expect(
-      hookProblems(settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: [both[0]] }])),
+      hookProblems(
+        settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: [both[0]] }]),
+      ),
     ).toEqual([
       "factory-policy.ts doesn't run before Bash",
       "factory-policy.ts doesn't run before PowerShell",
@@ -36,11 +38,20 @@ describe("hookProblems", () => {
       "factory-policy.ts doesn't run before Edit",
       "factory-policy.ts doesn't run before MultiEdit",
       "factory-policy.ts doesn't run before NotebookEdit",
+      "factory-policy.ts doesn't run before mcp__any__tool",
+    ]);
+  });
+
+  it("refuses a matcher that leaves out MCP tools (Qodo on PR 265)", () => {
+    const noMcp = settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: both }]);
+    expect(hookProblems(noMcp)).toEqual([
+      "guard-target.ts doesn't run before mcp__any__tool",
+      "factory-policy.ts doesn't run before mcp__any__tool",
     ]);
   });
 
   it("refuses a matcher that leaves out file edits, and unreadable settings", () => {
-    expect(hookProblems(settings([{ matcher: "Bash", hooks: both }]))).toHaveLength(10);
+    expect(hookProblems(settings([{ matcher: "Bash", hooks: both }]))).toHaveLength(12);
     expect(hookProblems("")).toEqual(["its settings.json is missing or unreadable"]);
   });
 
@@ -159,7 +170,11 @@ describe("hook self-test (#104)", () => {
     expect(
       hookTimeoutSeconds(
         JSON.stringify({
-          hooks: { PreToolUse: [{ hooks: [{ command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' }] }] },
+          hooks: {
+            PreToolUse: [
+              { hooks: [{ command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" guard-target.ts' }] },
+            ],
+          },
         }),
       ),
     ).toBe(60);
