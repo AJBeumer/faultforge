@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { savedReviewProblem } from "./ledger-schemas.ts";
 import { evidenceDir } from "./paths.ts";
 import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
 import {
@@ -867,6 +868,7 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     const h = harness([pr1]);
     expect(await h.wait()).toBe(0);
     expect(h.saved()).toMatchObject({ state: "complete", headSha: PR1_HEAD, findings: [{ lines: [33, 33] }] });
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("saves a timeout as review incomplete, never complete, and exits 1", async () => {
@@ -874,12 +876,14 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     expect(await h.wait()).toBe(1);
     expect(h.saved().state).toBe("review incomplete");
     expect(h.saved().reviewSeenCompleteAt).toBeNull();
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("saves a skip as skipped by Qodo, never complete, and exits 3", async () => {
     const h = harness([skipped]);
     expect(await h.wait()).toBe(3);
     expect(h.saved().state).toBe("skipped by Qodo");
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("refuses, exit 2, a complete review it can't read, and saves no review (M21)", async () => {

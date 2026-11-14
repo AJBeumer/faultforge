@@ -6,9 +6,10 @@
  *
  * Runs `ledgerProblems` (see `ledger.ts`) on both files, then asks the private repo's git history,
  * including merge commits, and its uncommitted state, whether any commit (or anything not yet
- * committed) removed or changed a line of either file: every commit may only add lines. Last, it
- * recomputes the `inputHash` of every tool-written injection and verdict event (`ledger-hashes.ts`): a
- * template, proof or saved review changed after its event is reported.
+ * committed) removed or changed a line of either file: every commit may only add lines. Every answer-key
+ * line and every saved review must fit its JSON schema (`ledger-schemas.ts`). Last, it recomputes the
+ * `inputHash` of every tool-written injection and verdict event (`ledger-hashes.ts`): a template, proof or
+ * saved review changed after its event is reported.
  *
  * Exit codes: 0 both files are sound; 1 problems found, listed on stdout; 2 a file or the private
  * repo's git history could not be read.
@@ -22,6 +23,7 @@ import { eachGitLine } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
 import { readEventProblems } from "./ledger-append.ts";
 import { hashProblems } from "./ledger-hashes.ts";
+import { answerKeyProblems, savedReviewProblems } from "./ledger-schemas.ts";
 import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
@@ -180,6 +182,11 @@ export function ledgerCheckProblems(privateRoot: string): string[] {
     }
   }
   const env = { ...process.env, FAULTFORGE_PRIVATE_DIR: privateRoot };
+  // Every answer-key line and every saved review in the shape its schema describes (AUD-N5).
+  problems.push(
+    ...answerKeyProblems(join(privateRoot, FILES[0] as string)),
+    ...savedReviewProblems(savedReviewsDir(env)),
+  );
   problems.push(
     ...hashProblems(
       {

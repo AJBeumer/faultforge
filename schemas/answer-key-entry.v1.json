@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "answer-key-entry.v1.json",
+  "title": "One line of the answer key (private/ground-truth.jsonl)",
+  "description": "A planted bug (kind sabotage), a control (kind control), or an amendment to one of them. Checked by ledger:check over every line on disk. Every field of an entry is described; nothing else may appear.",
+  "oneOf": [{ "$ref": "#/$defs/sabotage" }, { "$ref": "#/$defs/control" }, { "$ref": "#/$defs/amendment" }],
+  "$defs": {
+    "caseId": { "type": "string", "pattern": "^FF-\\d{4}$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "text": { "type": "string", "minLength": 1 },
+    "lines": {
+      "type": "array",
+      "prefixItems": [{ "type": "integer", "minimum": 1 }, { "type": "integer", "minimum": 1 }],
+      "items": false,
+      "minItems": 2
+    },
+    "outcome": { "enum": ["pass", "fail", "not_run"] },
+    "pinnedProof": { "type": "string", "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$" },
+    "proofRun": {
+      "type": "object",
+      "required": ["invariantId", "proofTest", "proofOnBase", "proofOnVariant"],
+      "properties": {
+        "invariantId": { "$ref": "#/$defs/text" },
+        "proofTest": { "$ref": "#/$defs/pinnedProof" },
+        "proofOnBase": { "$ref": "#/$defs/outcome" },
+        "proofOnVariant": { "$ref": "#/$defs/outcome" }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "proofOnBase": { "$ref": "#/$defs/outcome" },
+        "proofOnVariant": { "$ref": "#/$defs/outcome" },
+        "typecheck": { "$ref": "#/$defs/outcome" },
+        "publicTests": { "$ref": "#/$defs/outcome" },
+        "proofs": { "type": "array", "items": { "$ref": "#/$defs/proofRun" } },
+        "corpus": { "type": "array", "items": { "$ref": "#/$defs/proofRun" } },
+        "corpusSkipped": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "located": {
+      "type": "object",
+      "required": [
+        "caseId",
+        "kind",
+        "templateId",
+        "targetRepo",
+        "targetCommit",
+        "injectionCommit",
+        "branch",
+        "injectedFile",
+        "injectedLines",
+        "validation",
+        "validated",
+        "createdAt"
+      ],
+      "properties": {
+        "caseId": { "$ref": "#/$defs/caseId" },
+        "templateId": { "$ref": "#/$defs/text" },
+        "targetRepo": { "$ref": "#/$defs/text" },
+        "targetCommit": { "$ref": "#/$defs/commit" },
+        "injectionCommit": { "$ref": "#/$defs/commit" },
+        "branch": { "$ref": "#/$defs/text" },
+        "injectedFile": { "$ref": "#/$defs/text" },
+        "injectedLines": { "$ref": "#/$defs/lines" },
+        "validation": { "$ref": "#/$defs/validation" },
+        "validated": { "const": true },
+        "createdAt": { "$ref": "#/$defs/time" }
+      }
+    },
+    "sabotage": {
+      "type": "object",
+      "$ref": "#/$defs/located",
+      "required": ["invariantId", "defectClass"],
+      "properties": {
+        "kind": { "const": "sabotage" },
+        "invariantId": { "$ref": "#/$defs/text" },
+        "defectClass": { "$ref": "#/$defs/text" },
+        "proofTest": { "$ref": "#/$defs/pinnedProof" }
+      },
+      "unevaluatedProperties": false
+    },
+    "control": {
+      "type": "object",
+      "$ref": "#/$defs/located",
+      "properties": { "kind": { "const": "control" } },
+      "unevaluatedProperties": false
+    },
+    "amendment": {
+      "type": "object",
+      "required": ["kind", "amends", "at", "change", "reason", "evidence"],
+      "properties": {
+        "kind": { "const": "amendment" },
+        "amends": { "$ref": "#/$defs/caseId" },
+        "at": { "$ref": "#/$defs/time" },
+        "change": { "type": "object" },
+        "reason": { "$ref": "#/$defs/text" },
+        "evidence": { "$ref": "#/$defs/text" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
