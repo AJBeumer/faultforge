@@ -3,6 +3,7 @@
  * factory-policy.ts, which may not pass 400 lines (CLAUDE.md, module size rule); it exports them again.
  */
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
+import { NETWORK_CODE, onlyLocalCalls } from "./shell-exec.ts";
 import { joinedWords, MAX_COMMAND_CHARS, quotedMask } from "./shell-scan.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
@@ -93,19 +94,9 @@ const BUILT_NAMES: [RegExp, string][] = [
   ],
 ];
 
-/** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
-
-/** Shell tools that send requests. */
+/** Shell tools that send requests. Network calls from code (`NETWORK_CODE`) are shared with the guard. */
 const HTTP_TOOLS =
   /\b(curl|wget|nc|ncat|netcat|socat|ssh|scp|sftp|telnet|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i;
-
-/**
- * Network calls from a program written into the command (#243): `fetch(`, Node's `http.request` and its
- * modules, Python's `urllib`, `requests` and `socket`, a browser-style request or socket.
- */
-const NETWORK_CODE =
-  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`]?(node:)?(https?|net|tls|dgram|undici)\b|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket|httpx|aiohttp)\b|\bfrom\s+(requests|socket|httpx|aiohttp|urllib[\w.]*|http\.client)\s+import\b|\bsocket\s*\.\s*(socket|create_connection)\b|\b(require|import)\s*\(\s*["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bfrom\s+["'`](axios|node-fetch|got|superagent|ky|needle)["'`]|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
 
 /**
  * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
@@ -222,13 +213,10 @@ function violationsIn(command: string, ticket?: string): string[] {
   // A request, by a tool or by code, may only name the app on localhost, and must name it: a URL built at
   // run time (a variable, a decoded string) can't be checked, so it is refused (#243).
   if (HTTP_TOOLS.test(command) || NETWORK_CODE.test(command)) {
-    const hosts = [...command.matchAll(/\b(?:https?|ftp|wss?):\/\/([^/\s:'"`]+|\[[^\]]+\])/gi)].map((m) =>
-      (m[1] ?? "").toLowerCase(),
-    );
     // Each call from code needs a local URL of its own: one localhost URL beside a second call whose address
     // is built at run time doesn't vouch for that one (Qodo on PR 270).
     const calls = [...command.matchAll(new RegExp(NETWORK_CODE.source, "g"))].length;
-    if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h)) || calls > hosts.length) {
+    if (!onlyLocalCalls(command, calls)) {
       reasons.push("HTTP tools and network calls may only reach the app on localhost; GitHub goes through gh");
     }
   }
