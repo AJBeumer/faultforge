@@ -5,6 +5,7 @@
  *   npm run verdict -- FF-0001
  *   npm run verdict -- FF-0001 --dry-run           # prints the event it would append, writes nothing
  *   npm run verdict -- FF-0001 --review <path>     # read findings from this file instead of discovering one
+ *   npm run verdict -- FF-0001 --supersede <id>    # replace the case's latest verdict, event <id>
  *
  * Reads the case's ground-truth entry (`readLedger`, #10) for the injected file, lines and template,
  * and the saved review (one of the `*.review.json` files `review:wait` writes) of the entry's
@@ -16,14 +17,19 @@
  * unfinished review proves nothing. A save with no findings list is refused.
  *
  * It then asks the owner, on the terminal: the verdict on the planted bug (`detected`, `missed` or
- * `review incomplete`, with a nonblank reason — retried, then refused, if left blank), and a judgement
- * on every other finding — every one Qodo raised that did not match the planted bug — as `real`,
- * `false alarm` or `open`, each with a nonblank reason. A blank answer instead leaves a finding `open`
- * at once, unjudged, with no reason asked; it is never recorded as a false alarm. Nothing is written
- * until every question is answered. The event — case id, commit reviewed, owner's login, UTC time, an
- * `inputHash` of the ground truth, the template and the review (so its exact inputs can be checked
- * later), the disposition, its reason and the judgements — is appended to `private/audit-events.jsonl`
- * as one `case.adjudicated` line, or printed instead of written with `--dry-run`.
+ * `review incomplete`, with a nonblank reason of the case's own — retried, then refused, if left blank or
+ * if it is the reason, or amended reason, of another case's verdict), and a judgement on every finding:
+ * one the rule matched as `real` or `false alarm`, with a reason, never left open; every other one as
+ * `real`, `false alarm` or `open`, each with a nonblank reason. A blank answer leaves an unmatched finding
+ * `open` at once, unjudged, with no reason asked; it is never recorded as a false alarm. Nothing is
+ * written until every question is answered. The event — case id, commit reviewed, owner's login, UTC
+ * time, an `inputHash` of the ground truth, the template and the review (so its exact inputs can be
+ * checked later), the rule's version, the disposition, its reason and the judgements — is appended to
+ * `private/audit-events.jsonl` as one `case.adjudicated` line, or printed instead with `--dry-run`.
+ *
+ * A case that already has a verdict is refused unless `--supersede` names that verdict's event id; the
+ * new event then records it as `supersedes`. To add a better reason without replacing a verdict, use
+ * `verdict:amend`.
  *
  * An answer the match rule contradicts (`detected` for a computed miss, `missed` for a computed catch) is
  * recorded only after the owner confirms it. It is then the owner's judgement on record, but `case:build`
@@ -33,8 +39,10 @@
  * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
  * answer key or audit log has an amendment or history problem (`ledgerProblemsWithHistory`); the case, its
  * PR, its review or its template can't be read or found; the review doesn't match the injected commit or
- * holds no findings list; an answer couldn't be parsed after retrying;
- * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
+ * holds no findings list; the case already has a verdict and `--supersede` doesn't name it (or names one
+ * that doesn't exist); an answer couldn't be parsed or was another case's reason after retrying; a matched
+ * finding was left unjudged; an answer the rule contradicts wasn't confirmed; or the event couldn't be
+ * appended.
  */
 import { randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -44,6 +52,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
+import { readAuditLog } from "./ledger.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
@@ -53,13 +62,23 @@ import { privateDir } from "./templates.ts";
 import {
   type AskFn,
   askJudgement,
+  askMatchedJudgement,
   askNonBlank,
   askOneOf,
+  askOwnReason,
   defaultAsk,
   printControlFindings,
   printReport,
 } from "./verdict-ask.ts";
-import { type AdjudicationEvent, BUG_VERDICTS, CONTROL_VERDICTS, type Judgement } from "./verdict-event.ts";
+import {
+  type AdjudicationEvent,
+  BUG_VERDICTS,
+  CONTROL_VERDICTS,
+  type Judgement,
+  latestVerdict,
+  normalReason,
+  reasonsOfOtherCases,
+} from "./verdict-event.ts";
 import { loadVerdictInputs } from "./verdict-inputs.ts";
 
 export interface RunOptions {
@@ -74,6 +93,8 @@ export interface RunOptions {
   groundTruthPath?: string;
   auditEventsPath?: string;
   reviewsDir?: string;
+  /** The event id of the case's latest verdict, which this one replaces; required when there is one. */
+  supersede?: string;
   ask?: AskFn;
   ownerLogin?: () => string;
   now?: () => string;
@@ -111,6 +132,25 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
   const { entry, review, reviewText, templateText, kindTerms, isControl, injectedFile, injectedLines } = loaded;
+
+  // A second verdict silently winning would change the record (AUD-H4): it must name the one it supersedes.
+  const earlier = latestVerdict(loaded.caseEvents);
+  if (earlier && typeof earlier.eventId !== "string") {
+    error(`verdict: ${caseId}'s verdict has no event id, so nothing can name it to supersede; ask the owner`);
+    return 2;
+  }
+  if (earlier && options.supersede !== earlier.eventId) {
+    error(
+      options.supersede
+        ? `verdict: --supersede ${options.supersede} isn't ${caseId}'s latest verdict, ${String(earlier.eventId)}; nothing recorded`
+        : `verdict: ${caseId} already has a verdict (${String(earlier.eventId)}). To replace it, run again with --supersede ${String(earlier.eventId)}; to add a reason, use verdict:amend`,
+    );
+    return 2;
+  }
+  if (!earlier && options.supersede) {
+    error(`verdict: --supersede ${options.supersede}, but ${caseId} has no verdict to supersede; nothing recorded`);
+    return 2;
+  }
 
   const findings = review.findings.map(toMatchFinding);
   const result = isControl
@@ -169,23 +209,33 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       return 2;
     }
   }
-  const bugReason = await askNonBlank(ask, "Reason: ");
-  if (bugReason === undefined) {
-    error(`verdict: no reason given for ${subject}'s verdict`);
+  // A reason belongs to its case: one pasted from another case's verdict is refused (AUD-H4).
+  const bugReason = await askOwnReason(ask, "Reason: ", reasonsOfOtherCases(loaded.allEvents, caseId));
+  if (typeof bugReason !== "string") {
+    error(
+      bugReason.taken
+        ? `verdict: the reason is the same as another case's verdict; write this case's own reason. Nothing recorded`
+        : `verdict: no reason given for ${subject}'s verdict`,
+    );
     return 2;
   }
 
   const judgements: Judgement[] = [];
-  // On a control every finding is judged: none can be a catch.
+  // Every finding is judged. One the rule matched must be judged real or a false alarm, never left open: the
+  // verdict rests on it (AUD-H4). On a control none can be a catch.
   for (const finding of result?.findings ?? findings) {
-    if (result?.matchedFindingIds.includes(finding.id)) continue;
+    const matched = result?.matchedFindingIds.includes(finding.id) ?? false;
     const source = findings.find((f) => f.id === finding.id);
-    const judged = await askJudgement(
-      ask,
-      `Judge ${finding.id}${source?.title ? ` "${source.title}"` : ""} (real/false alarm/open, blank = open): `,
-    );
+    const title = `${finding.id}${source?.title ? ` "${source.title}"` : ""}`;
+    const judged = matched
+      ? await askMatchedJudgement(ask, `Judge ${title}, which the rule matched (real/false alarm): `)
+      : await askJudgement(ask, `Judge ${title} (real/false alarm/open, blank = open): `);
     if (judged === undefined) {
-      error(`verdict: no valid answer (real, false alarm or open) for finding ${finding.id}`);
+      error(
+        matched
+          ? `verdict: finding ${finding.id} matched the rule and was not judged real or a false alarm; nothing recorded`
+          : `verdict: no valid answer (real, false alarm or open) for finding ${finding.id}`,
+      );
       return 2;
     }
     let reason = "";
@@ -213,6 +263,21 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error("verdict: a false alarm needs every finding judged a false alarm; one was left open, so nothing recorded");
     return 2;
   }
+  // The verdict rests on the matched findings' judgements, so it must agree with them (Qodo on PR 267):
+  // detected needs one judged real (a matched one when the rule matched any; any one when the owner overruled
+  // a computed miss); missed can't have a matched one judged real.
+  const matched = result?.matchedFindingIds ?? [];
+  const realAmong = (ids: string[] | undefined) =>
+    judgements.some((j) => j.verdict === "real" && (ids === undefined || ids.includes(j.id)));
+  const detectedHolds = realAmong(matched.length ? matched : undefined);
+  if ((bugAnswer === "detected" && !detectedHolds) || (bugAnswer === "missed" && realAmong(matched))) {
+    error(
+      bugAnswer === "detected"
+        ? "verdict: detected, but no finding that could be the catch is judged real; nothing recorded"
+        : "verdict: missed, but a finding the rule matched is judged real; nothing recorded",
+    );
+    return 2;
+  }
 
   const event: AdjudicationEvent = {
     eventId: randomUUID(),
@@ -230,6 +295,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     disposition: verdicts[bugAnswer] as string,
     reason: bugReason,
     judgements,
+    ...(earlier ? { supersedes: earlier.eventId as string } : {}),
   };
 
   if (options.dryRun) {
@@ -238,12 +304,24 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 0;
   }
   try {
+    // Read again just before writing: another run may have recorded a verdict while the owner answered.
+    const fresh = readAuditLog(auditEventsPath);
+    const now = latestVerdict(fresh.filter((e) => e.caseId === caseId));
+    if (now?.eventId !== earlier?.eventId) {
+      error(`verdict: another verdict for ${caseId} (${String(now?.eventId)}) was recorded meanwhile; nothing written`);
+      return 2;
+    }
+    // And another case may have taken this reason meanwhile.
+    if (reasonsOfOtherCases(fresh, caseId).has(normalReason(bugReason))) {
+      error("verdict: another case's verdict was given the same reason meanwhile; nothing written");
+      return 2;
+    }
     (options.append ?? defaultAppend)(auditEventsPath, event);
   } catch (e) {
     error(`verdict: can't append to ${auditEventsPath}: ${message(e)}`);
     return 2;
   }
-  log(`recorded: ${caseId} ${event.disposition}, ${judgements.length} other finding(s) judged`);
+  log(`recorded: ${caseId} ${event.disposition}, ${judgements.length} finding(s) judged`);
   return 0;
 }
 
@@ -251,16 +329,17 @@ interface CliArgs {
   caseId: string;
   dryRun: boolean;
   reviewPath?: string;
+  supersede?: string;
 }
 
 /** The command line, or null when it's wrong. */
 export function parseCliArgs(argv: string[]): CliArgs | null {
-  let values: { "dry-run"?: boolean; review?: string };
+  let values: { "dry-run"?: boolean; review?: string; supersede?: string };
   let positionals: string[];
   try {
     ({ values, positionals } = parseNodeArgs({
       args: argv,
-      options: { "dry-run": { type: "boolean" }, review: { type: "string" } },
+      options: { "dry-run": { type: "boolean" }, review: { type: "string" }, supersede: { type: "string" } },
       allowPositionals: true,
     }));
   } catch {
@@ -268,16 +347,16 @@ export function parseCliArgs(argv: string[]): CliArgs | null {
   }
   const [caseId] = positionals;
   if (!caseId) return null;
-  return { caseId, dryRun: values["dry-run"] ?? false, reviewPath: values.review };
+  return { caseId, dryRun: values["dry-run"] ?? false, reviewPath: values.review, supersede: values.supersede };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const parsed = parseCliArgs(process.argv.slice(2));
   if (!parsed) {
-    console.error("usage: npm run verdict -- <caseId> [--dry-run] [--review <path>]");
+    console.error("usage: npm run verdict -- <caseId> [--dry-run] [--review <path>] [--supersede <eventId>]");
     process.exit(2);
   }
-  run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath }).then(
+  run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath, supersede: parsed.supersede }).then(
     (code) => process.exit(code),
     (e) => {
       console.error(`verdict: ${e instanceof Error ? e.message : String(e)}`);

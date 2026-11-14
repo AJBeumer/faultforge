@@ -103,6 +103,9 @@ export function loadVerdictInputs(
   }
   // No findings list is not "no findings": it is a save this can't judge (AUD-M1).
   if (!Array.isArray(review.findings)) return { problem: `${reviewPath} holds no findings list` };
+  // One finding per id, or a judgement could land on another finding than the one the rule matched.
+  const ids = review.findings.map((f) => f.id);
+  if (new Set(ids).size !== ids.length) return { problem: `${reviewPath} holds two findings with the same id` };
 
   const dir = templateDir(templateId, env);
   if (!dir) return { problem: `template ${templateId} not found in private/templates or templates/seed` };
