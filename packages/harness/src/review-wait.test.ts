@@ -14,7 +14,7 @@ import {
 } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "./review-feeds.ts";
 import { sameCommit, waitForHead, waitForReview } from "./review-poll.ts";
-import { liveDeps, parseArgs, run, type WaitScriptDeps } from "./review-wait-run.ts";
+import { liveDeps, main, parseArgs, run, type WaitScriptDeps } from "./review-wait-run.ts";
 import { archiveUnfinished, writeSavedReview } from "./saved-review.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
@@ -962,5 +962,12 @@ describe("run: waiting again after an unfinished save keeps all its evidence (Qo
       if (before === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
       else process.env.FAULTFORGE_PRIVATE_DIR = before;
     }
+  });
+});
+
+describe("main: the command line (#252)", () => {
+  it("reads a usage problem as could not run, 2", async () => {
+    expect(await main(["target"])).toBe(2);
+    expect(await main(["target", "0"])).toBe(2);
   });
 });
