@@ -4,7 +4,7 @@
  * Its own private worktree sits inside the run's folder; the agent may read back only the evidence its own
  * tools saved there. Folders are made up under the temp folder.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -135,5 +135,31 @@ describe("a lab ticket's run still does its work (#299)", () => {
   it("allows a Glob from the checkout only while Glob skips git-ignored files, as the runner sets it", () => {
     expect(verdict("Glob", { pattern: "**/*.ts" }, LAB, { CLAUDE_CODE_GLOB_NO_IGNORE: "false" })).toBeUndefined();
     expect(verdict("Glob", { pattern: "**/template.json" })).toMatch(/holds the private worktree/);
+  });
+});
+
+describe("a run folder named through a link still meets itself (#299, the Windows runner's short temp names)", () => {
+  it("allows Grep from the checkout and refuses its private worktree when the run root is a link", () => {
+    const linked = join(BASE, "linked-runs");
+    try {
+      symlinkSync(RUNS, linked, "junction");
+    } catch {
+      return; // no links on this machine: nothing to show
+    }
+    const env = {
+      ...ENV,
+      FAULTFORGE_RUN_ROOT: join(linked, "r1"),
+      FAULTFORGE_PRIVATE_CHECKOUTS: [OWNER_PRIVATE, linked, join(linked, "r1", "lab", "private")].join(delimiter),
+    };
+    const ask = (tool: string, input: object) => {
+      const decision = decide(
+        JSON.stringify({ tool_name: tool, cwd: join(linked, "r1", "lab"), tool_input: input }),
+        env,
+      );
+      return decision.kind === "deny" ? decision.reason : undefined;
+    };
+    expect(ask("Grep", { pattern: "x" })).toBeUndefined();
+    expect(ask("Read", { file_path: join(linked, "r1", "lab", "private", "BACKLOG.md") })).toBeDefined();
+    expect(ask("Read", { file_path: join(OWN_PRIVATE, "ground-truth.jsonl") })).toBeDefined();
   });
 });

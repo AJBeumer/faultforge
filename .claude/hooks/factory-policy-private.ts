@@ -110,9 +110,13 @@ function pathViolation(path: string, env: NodeJS.ProcessEnv, holderOk: boolean):
   const { own, nested, outer } = runFolders(env);
   const hit = nested.find((c) => inside(path, c) || inside(path, real(c)));
   if (hit) return evidenceRead(path, inside(path, hit) ? hit : real(hit)) ? undefined : REASON;
-  if (own && inside(path, own)) return !holderOk && nested.some((c) => inside(c, path)) ? HOLDER_REASON : undefined;
+  // Each folder in both spellings, as named and through links (Windows' short names, a junction): a path the read
+  // tools resolved through links must still meet its own folder (seen on the Windows CI runner).
+  const holds = (c: string) => inside(c, path) || inside(real(c), path);
+  if (own && (inside(path, own) || inside(path, real(own))))
+    return !holderOk && nested.some(holds) ? HOLDER_REASON : undefined;
   // In a checkout, or a folder that holds one (a search from a parent reads it too; Qodo on PR 288).
-  if (outer.some((c) => inside(path, c) || inside(path, real(c)) || inside(c, path))) return REASON;
+  if (outer.some((c) => inside(path, c) || inside(path, real(c)) || holds(c))) return REASON;
   return undefined;
 }
 
