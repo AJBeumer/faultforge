@@ -24,6 +24,7 @@
     "revert:check": "tsx packages/harness/src/revert-check.ts",
     "ledger:anchor": "tsx packages/harness/src/ledger-anchor-cli.ts",
     "ledger:check": "tsx packages/harness/src/ledger-check-cli.ts",
+    "ledger:revision": "tsx packages/harness/src/ledger-revise-cli.ts",
     "qodo:check": "tsx packages/harness/src/qodo-check.ts",
     "verdict": "tsx packages/harness/src/verdict-cli.ts",
     "verdict:amend": "tsx packages/harness/src/verdict-amend-cli.ts",

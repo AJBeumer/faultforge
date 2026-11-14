@@ -22,7 +22,7 @@ import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
 import { readJsonLines } from "./jsonl.ts";
 import { readLedger } from "./ledger.ts";
-import { evidenceDir, privateDir } from "./paths.ts";
+import { evidenceDir, evidenceKindDir, privateDir } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
 import { isComplete } from "./saved-review.ts";
 
@@ -276,7 +276,7 @@ function main(): void {
     prs: casePrs(join(priv, "cases")),
     commits: groundTruthCommits(join(priv, "ground-truth.jsonl")),
   };
-  const table = buildTable(readSavedReviews(join(evidence, "reviews")), excluded);
+  const table = buildTable(readSavedReviews(evidenceKindDir(evidence, "reviews")), excluded);
 
   const checkFile = values.check;
   if (checkFile) {

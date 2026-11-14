@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { killTree } from "./factory-kill.ts";
+import { prEvidenceDir } from "./paths.ts";
 import { parseArgs } from "./review-wait-run.ts";
 import { buildTrustedCheckout, removeTrustedCheckout } from "./trusted-checkout.ts";
 
@@ -284,9 +285,8 @@ export function reviewBroker(options: {
         exitCode: 2,
         output: `review:wait: this run works on ${options.repoKey}, so only its reviews are served.`,
       };
-    const sub = `${argv[0]}-pr${argv[1]}`;
-    const kept = join(evidenceRoot, "reviews", sub);
-    const saves = join(trusted, evidence, "reviews", sub);
+    const kept = prEvidenceDir(evidenceRoot, "reviews", String(argv[0]), String(argv[1]));
+    const saves = prEvidenceDir(join(trusted, evidence), "reviews", String(argv[0]), String(argv[1]));
     try {
       if (existsSync(kept)) cpSync(kept, saves, { recursive: true, filter: notLink });
     } catch (error) {

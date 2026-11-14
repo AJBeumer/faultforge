@@ -22,7 +22,7 @@ import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
 import { gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
-import { evidenceDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
+import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
 import { checkTicket } from "./ticket-ready.ts";
 import { ghSnapshot } from "./ticket-snapshot.ts";
@@ -238,7 +238,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       // runner now carries into the private repo: only `reviews/`, and first, so nothing the agent wrote there can
       // stand in for the runner's own logs below; links are left behind (AUD-H2; Qodo on PR 288).
       if (ws && !ws.private)
-        copyEvidence(join(ws.lab, factory.evidence, "reviews"), join(priv, evidenceInPrivate, "reviews"));
+        copyEvidence(
+          evidenceKindDir(join(ws.lab, factory.evidence), "reviews"),
+          evidenceKindDir(join(priv, evidenceInPrivate), "reviews"),
+        );
       const dir = join(priv, evidenceInPrivate, "factory-runs");
       mkdirSync(dir, { recursive: true });
       for (const suffix of [".jsonl", ".agent.jsonl"]) {

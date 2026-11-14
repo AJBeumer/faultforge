@@ -88,7 +88,23 @@ npm run case:build -- <FF-NNNN> --save
 
 - Never click **Dismiss** on a Qodo finding and never chat with Qodo on a case PR. Qodo's PR history indexing learns from both, which would bias later cases.
 - Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue). They close the PR.
-- Commit and push `private/`: `Add <case>: <template id>, <verdict>`.
+- Commit and push `private/`: `Add <case>: <template id>, <verdict>`. Then anchor it straight away (section 8).
 - Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
 - If the template is now adjudicated and not held back for the benchmark, ask whether to copy it to `templates/seed/`.
 - Tick off related items in `private/BACKLOG.md`.
+
+## 8. Anchor the private history
+
+After every case whose record was saved, once `private/` is pushed (`case:build --save` ends by reminding you), anchor its history in this public repository, so a later rewrite of the answer key or audit log can't pass as append-only. From this repository's root, on a fresh branch:
+
+```bash
+git -C . fetch -q origin
+git -C . switch -c anchor-<YYYY-MM-DD> origin/main
+npm run ledger:anchor
+npm run check
+```
+
+- `ledger:anchor` appends one line, the date and the private HEAD's commit id, to `docs/ledger-anchors.txt`. Exit 0: anchored, or HEAD is already the last anchor (then there is nothing to commit and you are done). Exit 2: it couldn't read the private HEAD or the anchors file; fix that before anything else.
+- Commit only `docs/ledger-anchors.txt`, as `Anchor the private history (<YYYY-MM-DD>)`, push the branch and open a PR for it. Name no case, template or verdict in the branch, commit or PR: a held-back case may be among the commits anchored.
+- The owner merges it, as any other PR. Never commit the anchor straight to `main`.
+- `npm run ledger:check` warns when the private HEAD has run more than a set number of commits past the last anchor: a sign this step was skipped.

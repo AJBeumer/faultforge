@@ -27,7 +27,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { eachGitLine, ownRepoRoot } from "./git-stream.ts";
 import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
-import { ANCHORS_FILE, anchorProblems, LEDGER_FILES as FILES } from "./ledger-anchor.ts";
+import { ANCHORS_FILE, anchorLagWarning, anchorProblems, LEDGER_FILES as FILES } from "./ledger-anchor.ts";
 import { readEventProblems } from "./ledger-append.ts";
 import { hashProblems } from "./ledger-hashes.ts";
 import { answerKeyProblems, savedReviewProblems } from "./ledger-schemas.ts";
@@ -286,6 +286,9 @@ export function main(): number {
     console.error(`[ledger:check] could not read a file or the private repo's history: ${(error as Error).message}`);
     return 2;
   }
+  // A warning only: it never changes the exit code.
+  const lag = anchorLagWarning(root, ANCHORS_FILE);
+  if (lag) console.log(`[ledger:check] warning: ${lag}`);
   if (problems.length) {
     console.log(`[ledger:check] problems found:\n${problems.map((p) => `- ${p}`).join("\n")}`);
     return 1;

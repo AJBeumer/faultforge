@@ -40,7 +40,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { ghJson } from "./github.ts";
-import { ROOT } from "./paths.ts";
+import { prEvidenceDir, ROOT } from "./paths.ts";
 import { parseVitestReport } from "./run-outcome.ts";
 
 export interface Change {
@@ -386,7 +386,7 @@ async function main() {
   console.log(`${["Caught", "Not proven", "Can't judge"][result.exit]}: ${result.message}.`);
 
   const record = { repo: config.github, pr, head, base, ...result, recordedAt: new Date().toISOString() };
-  const dir = join(lab, factory.evidence, "revert-checks", `${repoKey}-pr${pr}`);
+  const dir = prEvidenceDir(join(lab, factory.evidence), "revert-checks", repoKey, pr);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${head.slice(0, 7)}.revert-check.json`), `${JSON.stringify(record, null, 2)}\n`);
   process.exit(result.exit);

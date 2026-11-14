@@ -110,6 +110,32 @@ export function anchorProblems(privateRoot: string, anchorsPath: string): string
 }
 
 /**
+ * How many commits the private HEAD may run past the last anchor before `ledger:check` warns. Each case adds
+ * a few commits (injection, PR, review, verdict, record), so this is about two cases left unanchored.
+ */
+export const ANCHOR_LAG_LIMIT = 10;
+
+/**
+ * A warning when the private HEAD is more than `limit` commits past the last anchor, or none. Only a warning:
+ * an unanchored stretch is not yet a broken history, but anything in it could be rewritten unseen. An anchors
+ * file that can't be read, or an anchor that isn't an ancestor of HEAD, is `anchorProblems`'s to report.
+ */
+export function anchorLagWarning(
+  privateRoot: string,
+  anchorsPath: string,
+  limit = ANCHOR_LAG_LIMIT,
+): string | undefined {
+  if (!existsSync(anchorsPath)) return undefined;
+  const last = readAnchors(anchorsPath).anchors.at(-1);
+  if (!last) return undefined;
+  const count = git(privateRoot, "rev-list", "--count", `${last.commit}..HEAD`);
+  if (count.status !== 0) return undefined;
+  const behind = Number(count.stdout.trim());
+  if (!(behind > limit)) return undefined;
+  return `the private HEAD is ${behind} commits past the last anchor (${last.date}), more than ${limit}: run \`npm run ledger:anchor\` and commit the anchor through a PR`;
+}
+
+/**
  * Appends today's anchor for the private repository's HEAD to `anchorsPath`, unless HEAD is already the last
  * anchor. Returns the commit and whether a line was added.
  */
