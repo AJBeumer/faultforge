@@ -320,6 +320,20 @@ export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
 
 // Run only when called as a script, not when the tests import it.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  // In an unattended run the agent has no Qodo key: the runner runs this for it and hands back its output
+  // and exit code, which keep the meanings above (factory-review-broker.ts, #243).
+  const broker = process.env.FAULTFORGE_REVIEW_BROKER;
+  if (broker) {
+    try {
+      const { askRunner } = await import("./factory-review-broker.ts");
+      const answer = await askRunner(broker, process.argv.slice(2));
+      process.stdout.write(answer.output);
+      process.exit(answer.exitCode);
+    } catch (e) {
+      console.error(`review:wait could not ask the runner: ${message(e)}`);
+      process.exit(2);
+    }
+  }
   const args = parseArgs(process.argv.slice(2));
   if (!args) {
     console.error(

