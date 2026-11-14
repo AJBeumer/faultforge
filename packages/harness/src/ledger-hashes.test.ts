@@ -172,3 +172,20 @@ describe("hashProblems: what Qodo found on PR 264", () => {
     expect(problems[0]).toContain("can't be recomputed");
   });
 });
+
+describe("verdictHashProblem: a template named by a later amendment (Qodo on PR 264)", () => {
+  it("still holds with the template the verdict read", () => {
+    const fx = fixture();
+    const other = join(fx.root, "templates", "x-other-v1");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "template.json"), '{"kind":"control"}');
+    const amendment = {
+      kind: "amendment",
+      amends: "FF-9200",
+      at: "2026-11-05T00:00:00.000Z",
+      change: { templateId: "x-other-v1" },
+    };
+    appendFileSync(fx.paths.groundTruthPath, `${JSON.stringify({ ...amendment, reason: "r", evidence: "e" })}\n`);
+    expect(hashProblems(fx.paths, fx.env).filter((p) => p.includes("event ver"))).toEqual([]);
+  });
+});

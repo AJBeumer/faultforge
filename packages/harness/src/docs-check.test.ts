@@ -85,3 +85,10 @@ describe("docsProblems: a malformed id in the answer key (Qodo on PR 264)", () =
     ]);
   });
 });
+
+describe("docsProblems: a colour is not a case id (Qodo on PR 264)", () => {
+  it("doesn't read #ff5733 as a case above the highest, but still reads FF-5733", () => {
+    expect(check("color: #ff5733;")).toEqual([]);
+    expect(check("see FF-5733")).toEqual(["docs/x.md: names FF-5733, above the highest case in the answer key"]);
+  });
+});

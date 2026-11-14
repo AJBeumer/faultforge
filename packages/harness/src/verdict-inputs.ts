@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { casePr, findSavedReview, type SavedReview } from "./saved-review.ts";
@@ -32,8 +33,6 @@ export interface VerdictPaths {
   /** Read findings from this file instead of discovering the case's save. */
   reviewPath?: string;
 }
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** The inputs, or the reason none can be used (every reason is an exit 2: nothing is written). */
 export function loadVerdictInputs(

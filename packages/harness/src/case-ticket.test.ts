@@ -166,6 +166,8 @@ describe("issueNumberFromUrl", () => {
   });
 });
 
+const INJECTED_LINE = `${JSON.stringify({ eventId: "inj", type: "sabotage.injected", at: "2026-11-10T00:00:00.000Z", caseId: "FF-0009" })}\n`;
+
 function setup() {
   const base = mkdtempSync(join(tmpdir(), "faultforge-case-ticket-"));
   const privateDir = join(base, "private");
@@ -177,6 +179,8 @@ function setup() {
     join(privateDir, "ground-truth.jsonl"),
     `${JSON.stringify({ caseId: "FF-0009", kind: "sabotage", templateId: "a-template" })}\n`,
   );
+  // And its planting is on record (a hand-written event, so no hash to check here).
+  writeFileSync(join(privateDir, "audit-events.jsonl"), INJECTED_LINE);
   return {
     env: { FAULTFORGE_PRIVATE_DIR: privateDir },
     auditEventsPath: join(privateDir, "audit-events.jsonl"),
@@ -231,7 +235,8 @@ describe("run", () => {
     const events = readFileSync(auditEventsPath, "utf8")
       .trim()
       .split("\n")
-      .map((l) => JSON.parse(l));
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.type === "case.ticket-created");
     expect(events).toEqual([
       {
         eventId: "event-1",
@@ -265,7 +270,7 @@ describe("run", () => {
     expect(ghCalled).toBe(false);
     expect(log.join("\n")).toContain(TICKET.title);
     expect(log.join("\n")).toContain("### Acceptance criteria");
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
     expect(() => readFileSync(join(evidenceDir, "ticket.json"), "utf8")).toThrow();
   });
 
@@ -360,7 +365,7 @@ describe("run", () => {
     expect(code).toBe(2);
     expect(readFileSync(join(evidenceDir, "gh-issue-create.raw.txt"), "utf8")).toContain("not a url");
     // Nothing recorded as ticketed, since the issue number was never confirmed.
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
   });
 
   it("refuses a template with no ticket field", async () => {
@@ -436,7 +441,7 @@ describe("run", () => {
     });
 
     expect(code).toBe(2);
-    expect(() => readFileSync(auditEventsPath, "utf8")).toThrow();
+    expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
   });
 
   it("refuses a rerun after a call that may have created the issue, and never calls gh again (#216)", async () => {
@@ -537,5 +542,17 @@ describe("run: a template changed after its case was planted (Qodo on PR 264)", 
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("isn't the one it was planted from");
     expect(ghCalled).toBe(false);
+  });
+});
+
+describe("run: a case whose planting wasn't recorded (Qodo on PR 264)", () => {
+  it("is refused for a real ticket, and a dry run still prints", async () => {
+    const { env, auditEventsPath, evidenceDir } = setup();
+    writeFileSync(auditEventsPath, "");
+    const errors: string[] = [];
+    const options = { env, auditEventsPath, evidenceDir, factory: FACTORY, log: () => {}, gh: () => "" };
+    expect(await run("a-template", "FF-0009", { ...options, error: (l) => errors.push(l) })).toBe(1);
+    expect(errors.join("\n")).toContain("has no injection event");
+    expect(await run("a-template", "FF-0009", { ...options, error: () => {}, dryRun: true })).toBe(0);
   });
 });
