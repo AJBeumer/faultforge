@@ -83,7 +83,8 @@ const INTERPRETER = /\b(node|nodejs|deno|bun|tsx|ts-node|python\d*(\.\d+)?|py|pe
  */
 const BUILT_NAMES: [RegExp, string][] = [
   [
-    /\bprocess\b(?!\s*\.\s*(?!env\b)[A-Za-z_$])/,
+    // Not a word in a file name: `scripts/process-data.mjs` (Qodo on PR 288).
+    /(?<![\w/\\-])process\b(?![-/\\])(?!\s*\.\s*(?!env\b)[A-Za-z_$])/,
     "no reading the whole environment: in code, use process only as process.<name> (process.env.FAULTFORGE_TICKET_FILE is fine)",
   ],
   [

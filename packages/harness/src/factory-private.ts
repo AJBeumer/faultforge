@@ -58,6 +58,17 @@ export function privateCheckoutsFor(
   return [...new Set(paths)];
 }
 
+/**
+ * Where a target ticket's guard hook finds the private template ids, so its posts are still checked for them
+ * (AUD-H1; Qodo on PR 288): the owner's `<lab>/private` when it holds templates. The agent's policy keeps its
+ * tools out of that folder. In CI there is none: nothing private is on disk, so no id can be learned there.
+ * Undefined for a lab ticket, whose guard reads its own `private/` worktree.
+ */
+export function guardPrivateDir(factory: FactoryConfig, repoKey: string): string | undefined {
+  const dir = join(LAB_ROOT, "private");
+  return isReviewedTicket(factory, repoKey) && existsSync(join(dir, "templates")) ? dir : undefined;
+}
+
 /** The runner's way to the private repo in one mode. */
 export interface PrivateAccess {
   /** A checkout the runner may add worktrees from: `<lab>/private`, or in CI a clone made on demand. */

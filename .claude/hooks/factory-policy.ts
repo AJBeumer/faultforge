@@ -185,7 +185,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       if (command.length <= MAX_COMMAND_CHARS) {
         for (const reason of [
           guardrailWriteViolation(command, cwd),
-          privateCommandViolation(command, env),
+          privateCommandViolation(command, env, cwd),
           scriptViolation(command, cwd, env),
         ])
           if (reason && !reasons.includes(reason)) reasons.push(reason);

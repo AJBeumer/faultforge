@@ -223,22 +223,28 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         priv = join(temporary, "private");
         mkdirSync(temporary, { recursive: true });
         source = access.source();
-        gitLong(source, "fetch", "--quiet", "origin", "main");
-        gitLong(source, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        // A copy saved earlier whose push failed left its worktree: the next copy goes through it, not a second
+        // branch of the same name (Qodo on PR 288).
+        if (!existsSync(join(priv, ".git"))) {
+          gitLong(source, "fetch", "--quiet", "origin", "main");
+          gitLong(source, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        }
       }
       // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
       // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
       if (!existsSync(join(priv, ".git")))
         throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
+      // A target ticket's run kept the reviews review:wait saved in a plain folder of its lab worktree, which the
+      // runner now carries into the private repo: only `reviews/`, and first, so nothing the agent wrote there can
+      // stand in for the runner's own logs below; links are left behind (AUD-H2; Qodo on PR 288).
+      if (ws && !ws.private)
+        copyEvidence(join(ws.lab, factory.evidence, "reviews"), join(priv, evidenceInPrivate, "reviews"));
       const dir = join(priv, evidenceInPrivate, "factory-runs");
       mkdirSync(dir, { recursive: true });
       for (const suffix of [".jsonl", ".agent.jsonl"]) {
         const file = join(runs, `${runId}${suffix}`);
         if (existsSync(file)) copyFileSync(file, join(dir, `${runId}${suffix}`));
       }
-      // A target ticket's run kept its evidence (the saved reviews) in a plain folder of its lab worktree,
-      // which the runner now carries into the private repo; links are left behind (AUD-H2).
-      if (ws && !ws.private) copyEvidence(join(ws.lab, factory.evidence), join(priv, evidenceInPrivate));
       const result = commitAndPublish(priv, evidenceInPrivate, runId, git, gitLong);
       // Torn down once the evidence reached origin, whether that's main or a blocked run's own branch;
       // only when even that push failed is the worktree the owner's sole remaining copy (Qodo on PR 141).
@@ -280,7 +286,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       // The workflow checks no private repo out (AUD-H2). A lab ticket's agent saves evidence in <lab>/private,
       // so the runner clones it there; a target ticket's agent starts only with no private content on disk.
       const reviewed = isReviewedTicket(factory, repoKey);
-      access.drop();
+      // The clone goes, unless a Qodo-state worktree kept after a failed push still needs its objects: that
+      // evidence stays, and a target ticket then doesn't start (Qodo on PR 288).
+      if (!access.leftovers().some((p) => basename(dirname(p)).startsWith("qodo-check-"))) access.drop();
       if (reviewed) {
         const left = access.leftovers();
         if (left.length)

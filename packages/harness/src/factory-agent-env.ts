@@ -81,6 +81,8 @@ export const AGENT_RUN_VARIABLES: readonly string[] = [
   "FAULTFORGE_REVIEW_BROKER",
   "FAULTFORGE_PRIVATE_CHECKOUTS",
   "FAULTFORGE_RUN_BASES",
+  // Only in a target ticket's run on the owner's PC, for its guard hook's template-id check (AUD-H1).
+  "FAULTFORGE_GUARD_PRIVATE_DIR",
 ];
 
 /** The variables Claude Code signs in with, in the order it is given one. */

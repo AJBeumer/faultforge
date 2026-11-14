@@ -138,12 +138,41 @@ describe("ledgerCheckProblems: both files together", () => {
 
   it("is empty for two clean, append-only files", () => {
     const dir = repo();
-    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
+    commit(dir, "ground-truth.jsonl", `${JSON.stringify(CONTROL_ENTRY)}\n`, "first case");
     const event = '{"eventId":"evt-1","type":"pr.opened","at":"2026-11-01T00:00:00Z","caseId":"FF-0001"}\n';
     commit(dir, "audit-events.jsonl", event, "first event");
     expect(ledgerCheckProblems(dir)).toEqual([]);
   });
+
+  it("reports an answer-key line, or a saved review, that doesn't fit its schema (AUD-N5)", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", `${JSON.stringify(CONTROL_ENTRY)}\n{"caseId":"FF-0002"}\n`, "two cases");
+    commit(dir, "audit-events.jsonl", "", "no events");
+    const reviews = join(dir, "raw-artifacts", "reviews", "target-pr1");
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "abcdef0.review.json"), '{"state":"complete"}');
+    const problems = ledgerCheckProblems(dir);
+    expect(problems).toContainEqual(expect.stringMatching(/^ground-truth\.jsonl line 2: /));
+    expect(problems).toContainEqual(expect.stringMatching(/^reviews\/target-pr1\/abcdef0\.review\.json: /));
+    expect(problems.filter((p) => p.includes("line 1:"))).toEqual([]);
+  });
 });
+
+/** A control as `inject` writes it, which the answer-key schema accepts. */
+const CONTROL_ENTRY = {
+  caseId: "FF-0001",
+  kind: "control",
+  templateId: "x-control-v1",
+  targetRepo: "https://github.com/Owner/target.git",
+  targetCommit: "a".repeat(40),
+  injectionCommit: "b".repeat(40),
+  branch: "tidy",
+  injectedFile: "src/x.ts",
+  injectedLines: [1, 1],
+  validation: { typecheck: "pass", publicTests: "pass", corpus: [] },
+  validated: true,
+  createdAt: "2026-11-01T00:00:00.000Z",
+};
 
 describe("ledgerProblemsWithHistory: what the case commands check first (#224)", () => {
   it("finds a rewritten line in the committed history of a file at its repository's root", () => {
@@ -284,5 +313,29 @@ describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N
     expect(scanner.result()).toBeUndefined();
     scanner.line("-gone");
     expect(scanner.result()).toBe("removed");
+  });
+});
+
+describe("AppendOnlyScanner: a last line without a line break, appended after (Qodo on PR 286)", () => {
+  const NO_BREAK = "\\ No newline at end of file";
+
+  it("reads the last line shown as removed and added back unchanged as an append", () => {
+    expect(appendOnlyBreak(`@@ -1,2 +1,3 @@\n a\n-b\n${NO_BREAK}\n+b\n+c\n`)).toBeUndefined();
+  });
+
+  it("still reads that line coming back changed, or not at all, as a removal", () => {
+    expect(appendOnlyBreak(`@@ -1,2 +1,3 @@\n a\n-b\n${NO_BREAK}\n+B\n+c\n`)).toBe("removed");
+    expect(appendOnlyBreak(`@@ -1,2 +1,1 @@\n a\n-b\n${NO_BREAK}\n`)).toBe("removed");
+    // Without the marker, a removed line added back is still a change of place, never let through.
+    expect(appendOnlyBreak("@@ -1,2 +1,3 @@\n a\n-b\n+b\n+c\n")).toBe("removed");
+  });
+
+  it("passes such an append in a real history, committed and uncommitted", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-9001"}', "first line, no line break");
+    writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-9001"}\n{"caseId":"FF-9002"}\n');
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+    sh(dir, "commit", "--quiet", "-am", "append");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
   });
 });

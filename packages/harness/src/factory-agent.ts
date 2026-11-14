@@ -8,7 +8,7 @@ import { basename, delimiter, join, resolve } from "node:path";
 import { agentEnv } from "./factory-agent-env.ts";
 import { type FactoryConfig, repoConfig } from "./factory-config.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
-import { privateCheckoutsFor } from "./factory-private.ts";
+import { guardPrivateDir, privateCheckoutsFor } from "./factory-private.ts";
 import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
@@ -223,6 +223,8 @@ export function runAgent(
   // Only what the agent's own tools need: no Qodo key, no private-repo token (factory-agent-env.ts). In a target
   // ticket's run, the policy hook is told which private checkouts it keeps the agent out of (AUD-H2).
   const checkouts = privateCheckoutsFor(factory, repoKey, runs);
+  // Its guard hook still needs the template ids to check posts against (AUD-H1).
+  const guardDir = guardPrivateDir(factory, repoKey);
   const agent = agentEnv(process.env, {
     FAULTFORGE_FACTORY_RUN: runId,
     FAULTFORGE_RUN_ROOT: ws.root,
@@ -235,6 +237,7 @@ export function runAgent(
       .join(","),
     [BROKER_ENV]: broker.dir,
     ...(checkouts.length ? { FAULTFORGE_PRIVATE_CHECKOUTS: checkouts.join(delimiter) } : {}),
+    ...(guardDir ? { FAULTFORGE_GUARD_PRIVATE_DIR: guardDir } : {}),
   });
   log("agent-env", { names: Object.keys(agent.env).sort(), agentToken: agent.agentToken });
   if (agent.warning) log("warning", { message: agent.warning });

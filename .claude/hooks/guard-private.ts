@@ -30,6 +30,9 @@ function folders(dir: string): string[] {
 
 /** Private storage, resolved as paths.ts does, without importing it (the hook keeps its imports small). */
 export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string {
+  // A target ticket's run names the owner's private folder for this hook alone: project scripts read
+  // FAULTFORGE_PRIVATE_DIR, and must not reach it (Qodo on PR 288).
+  if (env.FAULTFORGE_GUARD_PRIVATE_DIR) return resolve(env.FAULTFORGE_GUARD_PRIVATE_DIR);
   if (env.FAULTFORGE_PRIVATE_DIR) return resolve(env.FAULTFORGE_PRIVATE_DIR);
   let evidence = "private/raw-artifacts";
   try {

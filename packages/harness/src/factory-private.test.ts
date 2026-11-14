@@ -1,10 +1,28 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
-import { copyEvidence, isReviewedTicket, privateAccess, privateCheckoutsFor, privateUrl } from "./factory-private.ts";
+import {
+  copyEvidence,
+  guardPrivateDir,
+  isReviewedTicket,
+  privateAccess,
+  privateCheckoutsFor,
+  privateUrl,
+} from "./factory-private.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
+
+describe("guardPrivateDir: a target run's guard still knows the template ids (AUD-H1, Qodo on PR 288)", () => {
+  it("names the owner's private folder for a target ticket when it holds templates, never for a lab ticket", () => {
+    const factory = {
+      repos: { lab: { guard: "lab" }, target: { guard: "reviewed" } },
+    } as unknown as FactoryConfig;
+    expect(guardPrivateDir(factory, "lab")).toBeUndefined();
+    const expected = existsSync(join(LAB_ROOT, "private", "templates")) ? join(LAB_ROOT, "private") : undefined;
+    expect(guardPrivateDir(factory, "target")).toBe(expected);
+  });
+});
 
 const FACTORY = {
   evidence: "private/raw-artifacts",

@@ -311,14 +311,21 @@ Picked up.`,
       }
       return "";
     });
+    // The agent can write here: a forged run log must not stand in for the runner's (Qodo on PR 288).
+    mkdirSync(join(ws.lab, "private", "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(ws.lab, "private", "raw-artifacts", "factory-runs", "run-t.jsonl"), "forged\n");
+    writeFileSync(join(runs, "run-t.jsonl"), "runner\n");
     let carried = false;
+    let log = "";
     vi.mocked(commitAndPublish).mockImplementationOnce((dir) => {
       carried = existsSync(join(dir, "raw-artifacts", "reviews", "target-pr19", "review.json"));
+      log = readFileSync(join(dir, "raw-artifacts", "factory-runs", "run-t.jsonl"), "utf8");
       return { pushed: true, blocked: [] };
     });
     try {
       realDeps(FACTORY, OPTIONS).saveEvidence("run-t", ws);
       expect(carried).toBe(true);
+      expect(log).toBe("runner\n");
     } finally {
       vi.mocked(gitLong).mockImplementation(() => "");
     }
@@ -328,6 +335,27 @@ Picked up.`,
     // Published, so the runner's own worktree is removed, never the run folder the cleanup still needs.
     expect(existsSync(join(runs, "run-t-evidence"))).toBe(false);
     expect(existsSync(ws.lab)).toBe(true);
+  });
+
+  it("saves a target run's next copy through the worktree a failed push left, not a second branch (Qodo on PR 288)", () => {
+    const ws = { ...workspace(join(runs, "run-u")), private: "" };
+    const temp = join(runs, "run-u-evidence", "private");
+    vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
+      if (args[0] === "worktree") {
+        mkdirSync(temp, { recursive: true });
+        writeFileSync(join(temp, ".git"), "gitdir: elsewhere\n");
+      }
+      return "";
+    });
+    vi.mocked(commitAndPublish).mockReturnValueOnce({ pushed: false, blocked: [] });
+    try {
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+    } finally {
+      vi.mocked(gitLong).mockImplementation(() => "");
+    }
+    expect(vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "worktree")).toHaveLength(1);
+    expect(vi.mocked(commitAndPublish)).toHaveBeenCalledTimes(2);
   });
 
   it("copies the run log and transcript into the workspace's private worktree, then publishes them", () => {
@@ -476,6 +504,17 @@ describe("realDeps in CI: no private checkout where a target ticket's agent runs
   });
 
   const clones = () => vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "clone");
+
+  it("keeps the clone a failed Qodo-state push still needs, and doesn't start a target ticket (Qodo on PR 288)", () => {
+    for (const tree of [join(runs, "private-source"), join(runs, "qodo-check-r", "private")]) {
+      mkdirSync(tree, { recursive: true });
+      writeFileSync(join(tree, ".git"), "gitdir: x\n");
+    }
+    expect(() => realDeps(FACTORY, OPTIONS, "ci").workspace("r", "target")).toThrow(
+      /private checkout is still on disk/,
+    );
+    expect(existsSync(join(runs, "private-source", ".git"))).toBe(true);
+  });
 
   it("clones the private repo for the runner's own steps from its name, and removes the clone after", async () => {
     vi.mocked(git).mockImplementation(() => "abc\trefs/heads/main");

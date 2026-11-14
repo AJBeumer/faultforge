@@ -45,7 +45,7 @@ const SHELL_WRITE = new RegExp(
     String.raw`\bperl\b[^|;&\n]*\s-[a-zA-Z]*i`,
     String.raw`\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|cpSync|rename|renameSync|rmSync|unlink|unlinkSync|truncateSync|openSync|symlink|symlinkSync|write_text|write_bytes|shutil)\b`,
     String.raw`\bopen\s*\([^)]*["'][wa]`,
-    String.raw`\bgit\b[^|;&\n]*\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)\b`,
+    String.raw`\bgit\b[^|;&\n]*\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)(?![\w-])`,
   ].join("|"),
   "i",
 );
@@ -101,7 +101,10 @@ export function readViolation(args: Record<string, unknown>, cwd: string, env: N
   const paths = [...named, ...(pattern && globBase(pattern) ? [globBase(pattern)] : [])].map((p) => resolve(cwd, p));
   const all = [...new Set([...paths, ...roots.map((p) => resolve(cwd, p))])];
   const resolved = all.flatMap((p) => [p, real(p)]);
-  if ([...texts, ...resolved].some((t) => PROC.test(asPath(t)))) return "no reading process files under /proc";
+  // A search from a folder that holds /proc reads it too (Qodo on PR 288); Windows has none.
+  const holdsProc = process.platform !== "win32" && all.some((p) => inside("/proc", p));
+  if ([...texts, ...resolved].some((t) => PROC.test(asPath(t))) || holdsProc)
+    return "no reading process files under /proc";
   if ([...texts, ...resolved].some((t) => ANSWER_FILES.test(t)))
     return "no run reads the answer key, the audit log or the templates";
   const checkouts = privateCheckouts(env);
@@ -118,7 +121,7 @@ export function readViolation(args: Record<string, unknown>, cwd: string, env: N
 }
 
 /** Why a shell command may not run because it names the private repo's files or checkouts, or undefined. */
-export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv): string | undefined {
+export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv, cwd?: string): string | undefined {
   const readings = [command, spokenWords(command)];
   if (readings.some((r) => ANSWER_FILES.test(r))) return "no run reads the answer key, the audit log or the templates";
   const checkouts = privateCheckouts(env);
@@ -132,6 +135,18 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv)
   };
   if (readings.some((r) => PRIVATE_NAMES.test(r) || named(r)))
     return "a target ticket's run doesn't read or change the private repo";
+  // Paths as the shell would resolve them (Qodo on PR 288): one that climbs out of the run's folder with `..`,
+  // or whose fixed start (before a wildcard) is a private checkout or a folder that holds one.
+  const root = env.FAULTFORGE_RUN_ROOT ? resolve(env.FAULTFORGE_RUN_ROOT) : undefined;
+  for (const word of spokenWords(command).split(/[\s;&|<>()=]+/)) {
+    if (!/[/\\]/.test(word) && !/^\.\.?$/.test(word)) continue;
+    const base = resolve(cwd ?? root ?? ".", globBase(word) || word);
+    if (root && /(^|[/\\])\.\.([/\\]|$)/.test(word) && !inside(base, root))
+      return "a target ticket's run stays in its own folder: no `..` out of it";
+    if (root && inside(base, root)) continue;
+    if (checkouts.some((c) => inside(base, c) || (inside(c, base) && /[/\\]/.test(word))))
+      return "a target ticket's run doesn't read or change the private repo";
+  }
   return undefined;
 }
 
@@ -159,6 +174,8 @@ const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)$/i;
 const INLINE = /^(-e|-c|-p|-pe|-ne|--eval|--print|-Command|-EncodedCommand)$/i;
 /** Flags whose value, the next word, is a file the interpreter loads before the script. */
 const PRELOAD = /^(-r|--require|--import|--loader|--experimental-loader|-File)$/i;
+/** Interpreter flags that take the next word as their value (python, perl, node). */
+const VALUE_FLAG = /^(-W|-X|--env-file|--input-type|--conditions|--title)$/;
 /** Words that run the next word as a program: `timeout 5 node x.js`, `env A=b node x.js`, `xargs node`. */
 const PREFIX =
   /^(sudo|env|exec|time|nice|nohup|command|stdbuf|xargs|timeout|setsid|ionice|taskset|strace|ltrace|valgrind|\(|\{)$/i;
@@ -227,19 +244,40 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
       } else break;
     }
     const program = words[i] ?? "";
-    if (/^(cd|pushd|Set-Location|sl)$/i.test(program)) {
+    if (/^(cd|pushd|popd|Set-Location|sl)$/i.test(program)) {
       const to = words[i + 1];
-      dir = to && dir && !/[$`%~]/.test(to) ? resolve(dir, to) : undefined;
+      // In a subshell, or back through popd, the folder that follows can't be known from the text (Qodo on PR 288).
+      const unknown = /^popd$/i.test(program) || /^\s*[({]/.test(step) || !to || /[$`%~]/.test(to);
+      dir = !unknown && dir ? resolve(dir, to) : undefined;
       continue;
     }
     let at = i;
     let name = basename(program).replace(/\.exe$/i, "");
-    if (/^(npx|pnpx|bunx)$/i.test(name) || (/^(deno|bun)$/i.test(name) && /^run$/i.test(words[i + 1] ?? ""))) {
-      at++;
+    // Package runners and find run the next program: `npm exec`, `pnpm dlx`, `yarn node`, `find -exec` (Qodo on PR 288).
+    const runner =
+      /^(npx|pnpx|bunx)$/i.test(name) ||
+      (/^(npm|pnpm|yarn)$/i.test(name) && /^(exec|x|dlx|node)$/i.test(words[i + 1] ?? ""));
+    if (/^find$/i.test(name)) {
+      const exec = words.findIndex((w) => /^-(exec|execdir|ok|okdir)$/.test(w));
+      if (exec < 0) continue;
+      at = exec;
+      name = basename(words[exec + 1] ?? "");
+      if (!INTERPRETER.test(name)) {
+        if (/[/\\]/.test(words[exec + 1] ?? "")) found.push({ file: words[exec + 1] ?? "", dir });
+        continue;
+      }
+      at = exec + 1;
+    } else if (runner || (/^(deno|bun)$/i.test(name) && /^run$/i.test(words[i + 1] ?? ""))) {
+      at += /^(npm|pnpm|yarn)$/i.test(name) ? 2 : 1;
       while (at < words.length && (words[at] ?? "").startsWith("-")) at++;
-      if (/^(deno|bun)$/i.test(name)) name = "node";
-      else name = basename(words[at] ?? "");
-      if (/^(npx|pnpx|bunx)$/i.test(basename(program)) && !INTERPRETER.test(name)) continue;
+      if (/^(deno|bun)$/i.test(name) || /^node$/i.test(words[i + 1] ?? "")) {
+        name = "node";
+        at--;
+      } else name = basename(words[at] ?? "");
+      if (runner && !INTERPRETER.test(name)) {
+        if (/[/\\]/.test(words[at] ?? "")) found.push({ file: words[at] ?? "", dir });
+        continue;
+      }
     }
     if (!INTERPRETER.test(name)) {
       // A path run as a program, with or without an extension; installed tools under node_modules excepted.
@@ -273,6 +311,11 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
       }
       if (PRELOAD.test(word)) {
         found.push({ file: words[j + 1] ?? "", dir });
+        j++;
+        continue;
+      }
+      // A flag whose value is the next word, not the script: `python3 -W ignore x.py` (Qodo on PR 288).
+      if (VALUE_FLAG.test(word)) {
         j++;
         continue;
       }

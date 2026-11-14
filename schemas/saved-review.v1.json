@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "saved-review.v1.json",
+  "title": "One saved review (<evidence>/reviews/<repo>-pr<N>/<commit>.review.json)",
+  "description": "What review:wait records about Qodo's review of one commit. Checked by ledger:check over every save on disk. The fields some early saves lack are optional; nothing else may appear.",
+  "type": "object",
+  "required": ["repo", "pr", "headSha", "state", "recordedAt", "ci", "abTest", "findings"],
+  "properties": {
+    "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+    "pr": { "type": "integer", "minimum": 1 },
+    "headSha": { "$ref": "#/$defs/commit" },
+    "state": { "enum": ["complete", "skipped by Qodo", "review incomplete", "head moved during the review"] },
+    "headMovedTo": { "anyOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+    "pushSeenAt": { "$ref": "#/$defs/timeOrNull" },
+    "pushedAt": { "$ref": "#/$defs/timeOrNull" },
+    "reviewEffort": { "type": ["string", "null"] },
+    "reviewSeenCompleteAt": { "$ref": "#/$defs/timeOrNull" },
+    "reviewSeenCompleteNote": { "type": "string" },
+    "reviewStartedAt": { "type": ["string", "null"] },
+    "recordedAt": { "$ref": "#/$defs/time" },
+    "ci": { "type": "string" },
+    "abTest": {
+      "type": "object",
+      "required": ["name", "arm"],
+      "properties": { "name": { "type": ["string", "null"] }, "arm": { "type": ["string", "null"] } },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "items": { "type": "object", "$ref": "#/$defs/finding", "unevaluatedProperties": false }
+    },
+    "openFindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$ref": "#/$defs/finding",
+        "required": ["commit"],
+        "properties": { "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" } },
+        "unevaluatedProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "time": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "timeOrNull": { "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] },
+    "finding": {
+      "type": "object",
+      "required": ["id", "file", "lines", "severity", "category", "title", "description"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "file": { "type": ["string", "null"] },
+        "lines": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [{ "type": "integer", "minimum": 1 }, { "type": "integer", "minimum": 1 }],
+              "items": false,
+              "minItems": 2
+            },
+            { "type": "null" }
+          ]
+        },
+        "severity": { "type": ["string", "null"] },
+        "category": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

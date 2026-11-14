@@ -3,8 +3,8 @@
  * the inline unified diff Qodo's local review wants to see.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { sha256 } from "./provenance.ts";
 
 export interface WorkingTreeSplit {
   staged: string[];
@@ -205,5 +205,5 @@ export function buildLocalDiff(repoRoot: string, baseSha: string, split: Working
 
 /** A stable, opaque identity for a worktree: Qodo keys finding carryover by this, never a path it can read. */
 export function streamId(worktreeRoot: string): string {
-  return createHash("sha256").update(resolve(worktreeRoot)).digest("hex");
+  return sha256(resolve(worktreeRoot));
 }

@@ -1,5 +1,5 @@
 /**
- * One tick of the unattended factory. A Windows scheduled task runs it every 10 minutes:
+ * One tick of the unattended factory. GitHub Actions runs it every 15 minutes (`.github/workflows/factory.yml`):
  *
  *   npm run factory:tick                     # take the oldest ready-for-agent ticket, if any
  *   npm run factory:tick -- --minutes 120 --budget 25
@@ -27,6 +27,12 @@
  *
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  *
+ * Split along its seams (#109): `factory-tick-deps.ts` (what a tick needs from the world), `factory-tick-pick.ts`
+ * (steps 2 and 3), `factory-workspace.ts` (step 6), `factory-tick-run.ts` (step 7, and step 8's audit and
+ * verification, which `factory-settle.ts` turns into an outcome), `factory-finish.ts` (step 9),
+ * `factory-tick-failure.ts` (a tick that throws) and `factory-tick-setup.ts` (the command's own checks). This
+ * module runs the steps in order.
+ *
  * Exit codes: 0 the tick ended and its ticket, if any, doesn't need the owner (a run delivered `agent-done`,
  * or nothing to take: busy, idle, or a ticket refused, each logged); 1 the ticket it took now carries
  * `agent-needs-help`: a run stopped, or the ticket isn't ready; 2 the command line or the environment was
@@ -35,42 +41,34 @@
  * is labelled `agent-needs-help` and the log says so), or an unexpected error anywhere, even while loading:
  * `npm run factory:tick` runs `factory-tick-cli.ts`, which loads this module inside `cli-entry.ts`.
  */
-import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import type { AgentRun } from "./factory-agent.ts";
 import { claimMarker } from "./factory-comments.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { type EvidencePush, evidenceFile } from "./factory-evidence.ts";
 import { finishRun } from "./factory-finish.ts";
-import { HooksCheckError, type HooksReport, hooksEvent } from "./factory-hooks.ts";
+import { hooksEvent } from "./factory-hooks.ts";
 import { recoverStranded } from "./factory-recovery.ts";
-import type { RelabelProblems } from "./factory-relabel.ts";
 import {
   type Candidate,
-  earlierPrsNote,
   exitCodeFor,
-  type Finish,
-  type IssueEvent,
   LABELS,
-  lastLabelled,
   oldest,
-  parseAgentResult,
-  prNumber,
   QODO_CHECK_COMMENT,
-  RunnerStop,
   redact,
   runIdFor,
   safeText,
-  settle,
   type TickOutcome,
 } from "./factory-settle.ts";
-import type { Verification } from "./factory-verify.ts";
+import type { Logger, TickDeps, TickOptions, Workspace } from "./factory-tick-deps.ts";
+import { failTick } from "./factory-tick-failure.ts";
+import { admissionRefusal, readyCandidates } from "./factory-tick-pick.ts";
+import { checkRun, runOnTicket } from "./factory-tick-run.ts";
+import { positiveOption, setupRefusal, tokenFrom } from "./factory-tick-setup.ts";
 import type { RunMode } from "./factory-workspace.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
-import { type Difference, summarizeDifference } from "./qodo-check.ts";
+import { summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
-import { provenanceProblems, type TicketSnapshot, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 export {
   type AgentResult,
@@ -93,86 +91,8 @@ export {
   type TickOutcome,
 } from "./factory-settle.ts";
 
-// ---------------------------------------------------------------------------------------------
-// The tick, with every side effect behind `TickDeps` so the stop paths can be tested with fakes.
-
-export interface Workspace {
-  /** Folder holding this run's worktrees. */
-  root: string;
-  /** This repo's worktree, where the agent starts. */
-  lab: string;
-  /** The private repo's worktree, on its own branch; empty in a target ticket's run, which has none (AUD-H2). */
-  private: string;
-  /** Each repo's `main` commit when the run started. */
-  mainAtStart: Record<string, string>;
-  /** Fingerprints taken before the agent starts, compared after it stops: the owner's checkouts and the guardrail files. */
-  fingerprints: Record<string, string>;
-  /** What the hook self-test saw, logged as `hooks-checked` before the agent starts. */
-  hooks?: HooksReport;
-}
-
-/** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
- * one in `differences`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error).
- * Kept structured, not pre-formatted: a difference's full detail (a rule's name and `content`, its field
- * values) can hold text from private storage, so it never goes to a ticket comment (Qodo on PR 145) or to
- * the run log, which CI prints and uploads from a public repository (#187). Both use `summarizeDifference`;
- * the full detail is in the private `qodo-state` evidence. */
-export interface QodoCheckOutcome {
-  exitCode: 0 | 1 | 2;
-  message: string;
-  differences: Difference[];
-}
-
-export interface TickDeps {
-  now(): Date;
-  print(line: string): void;
-  lock(): { acquired: boolean; release(): void; refresh?(): void; note?: string };
-  /** Actions or the owner's PC: the claim comment records it, and recovery leaves the other's claims alone. */
-  mode?: RunMode;
-  claimMode?(github: string, number: number): RunMode | null;
-  /** The owner's reviewed checkouts without the git-level guard; a local tick refuses to start beside them (#242). */
-  unguarded?(): string[];
-  /** Open issues (not PRs) with the label, in one repo. */
-  labelled(github: string, label: string): { number: number; title: string }[];
-  events(github: string, number: number): IssueEvent[];
-  ready(repoKey: string, number: number): { title: string; problems: string[] };
-  /** The ticket's full text and who wrote, edited and commented on it: its text becomes the agent's instructions. */
-  snapshot(github: string, number: number): TicketSnapshot;
-  /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
-  writeTicket(ws: Workspace, text: string): string;
-  /** Open pull requests of the ticket's repo that close it: an earlier run's work. */
-  openPrs?(github: string, number: number): string[];
-  relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
-  comment(github: string, number: number, body: string): void;
-  /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
-   * is built: a drift in the reviewer is caught before an agent is ever started on it. */
-  qodoCheck(runId: string): Promise<QodoCheckOutcome>;
-  /** `repoKey` is the ticket's repo: a target ticket's run gets no private worktree (AUD-H2). */
-  workspace(runId: string, repoKey: string): Workspace;
-  runAgent(
-    ws: Workspace,
-    runId: string,
-    repoKey: string,
-    number: number,
-    ticketFile: string,
-    log: Logger,
-  ): Promise<AgentRun>;
-  verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
-  /** What actually changed while the agent ran: anything here is a stop for the owner. */
-  audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
-  /** Saves the run log (and the agent's transcript) to the private repo, and publishes what's allowed. */
-  saveEvidence(runId: string, ws: Workspace | null): EvidencePush & { file: string };
-  cleanup(ws: Workspace): void;
-  /** Appends one event to the live run log. */
-  record(runId: string, event: object): void;
-}
-
-export type Logger = (event: string, detail?: Record<string, unknown>) => void;
-
-export interface TickOptions {
-  minutes: number;
-  budget: number;
-}
+export type { Logger, QodoCheckOutcome, TickDeps, TickOptions, Workspace } from "./factory-tick-deps.ts";
+export { setupRefusal, tokenFrom } from "./factory-tick-setup.ts";
 
 export async function tick(factory: FactoryConfig, deps: TickDeps, options: TickOptions): Promise<TickOutcome> {
   const lock = deps.lock();
@@ -213,25 +133,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     if (lock.note) log("lock", { note: lock.note });
     const recovery = recoverStranded(Object.values(factory.repos), deps);
     if (recovery.recovered.length || recovery.failed.length || recovery.otherMode) log("recovered", recovery);
-    const candidates: Candidate[] = [];
-    for (const [repoKey, repo] of Object.entries(factory.repos)) {
-      // Still agent-working after recovery: a live run's, here or in the other mode, even with a leftover
-      // ready-for-agent beside it. Never picked again (Qodo on PR 268).
-      const busy = new Set(deps.labelled(repo.github, LABELS.working).map((t) => t.number));
-      for (const issue of deps.labelled(repo.github, LABELS.ready)) {
-        if (busy.has(issue.number)) continue;
-        const added = lastLabelled(deps.events(repo.github, issue.number), LABELS.ready);
-        if (!added) continue;
-        candidates.push({
-          repoKey,
-          github: repo.github,
-          number: issue.number,
-          title: issue.title,
-          labelledAt: added.at,
-          labelledBy: added.by,
-        });
-      }
-    }
+    const candidates = readyCandidates(factory, deps);
     const pick = oldest(candidates);
     if (!pick) {
       log("idle", { labelled: 0 });
@@ -288,35 +190,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       waiting: candidates.length - 1,
     });
 
+    const refusal = admissionRefusal(pick, deps);
+    if (refusal) return turnAway(refusal.outcome, refusal.add, refusal.body, refusal.detail);
     const owner = pick.github.split("/")[0] ?? "";
-    if (pick.labelledBy.toLowerCase() !== owner.toLowerCase()) {
-      return turnAway(
-        "refused",
-        [],
-        `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
-        { reason: `label added by ${pick.labelledBy}, not the owner ${owner}` },
-      );
-    }
-
-    const authors = provenanceProblems(deps.snapshot(pick.github, pick.number).provenance, owner);
-    if (authors.length) {
-      return turnAway(
-        "refused",
-        [],
-        `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
-        { reason: authors.join("; ") },
-      );
-    }
-
-    const readiness = deps.ready(pick.repoKey, pick.number);
-    if (readiness.problems.length) {
-      return turnAway(
-        "not-ready",
-        [LABELS.help],
-        `Not started: this ticket isn't ready yet.\n\n${readiness.problems.map((p) => `- ${p}`).join("\n")}\n\nFix the ticket and add \`${LABELS.ready}\` again.`,
-        { problems: readiness.problems },
-      );
-    }
 
     claimed = pick;
     // An earlier run's result label goes too: a ticket carries one state at a time (#197).
@@ -348,62 +224,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
-    // The agent works from this exact text, taken after the claim, so nothing added later can steer it.
-    const snapshot = deps.snapshot(pick.github, pick.number);
-    const late = provenanceProblems(snapshot.provenance, owner);
-    if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
-    // A retried ticket continues the pull request an earlier run left open, rather than open a second.
-    // Only a hint: a lookup that fails is logged and the run goes on without it (Qodo on PR 268).
-    let found: string[] = [];
-    try {
-      found = deps.openPrs?.(pick.github, pick.number) ?? [];
-    } catch (error) {
-      log("error", { message: `couldn't list open pull requests: ${error instanceof Error ? error.message : error}` });
-    }
-    const earlier = found.filter((url) => prNumber(url, pick.github));
-    if (earlier.length) log("earlier-prs", { prs: earlier });
-    const ticketFile = deps.writeTicket(ws, earlier.length ? snapshot.text + earlierPrsNote(earlier) : snapshot.text);
-    log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
-
-    const agentFrom = deps.now().toISOString();
-    log("agent-started", { command: `/factory ${pick.repoKey} ${pick.number}` });
-    const agent = await deps.runAgent(ws, id, pick.repoKey, pick.number, ticketFile, log);
-    const agentTo = deps.now().toISOString();
-    const result = parseAgentResult(agent.resultText);
-    log("agent-finished", {
-      exitCode: agent.exitCode,
-      timedOut: agent.timedOut,
-      subtype: agent.subtype,
-      costUsd: agent.costUsd,
-      turns: agent.turns,
-      result,
-    });
-
     const workspace = ws;
-    // Effects, not just commands: the policy hook reads command text, which can't catch everything.
-    const audit = [
-      ...deps.audit(workspace, pick, agentFrom, agentTo),
-      ...ticketChangeProblems(snapshot, deps.snapshot(pick.github, pick.number), owner),
-    ];
-    log("audited", { from: agentFrom, to: agentTo, problems: audit });
-    const settled = settle(
-      agent,
-      result,
-      (pr) => {
-        const verification = deps.verifyPr(workspace, pick.repoKey, pr);
-        log("verified", {
-          pr,
-          problems: verification.problems,
-          revertCheckRecord: verification.revertCheckRecord ?? null,
-        });
-        return verification;
-      },
-      pick.github,
-      options.minutes,
-    );
-    const finish: Finish = audit.length
-      ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
-      : settled;
+    const run = { deps, ws: workspace, pick, owner, runId: id, log };
+    const finish = checkRun(run, await runOnTicket(run), options.minutes);
     const label = finishRun({
       factory,
       deps,
@@ -423,104 +246,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     });
     return label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    if (error instanceof HooksCheckError) log("hooks-checked", hooksEvent(error.report));
-    log("error", { message, afterLabel: finalLabel });
-    // Once the ticket has its final label, a later failure (saving, cleanup) must not add a second one.
-    // The relabel and the comment are tried independently: one failing must never also swallow the other,
-    // or the ticket is left agent-working with nothing alive to say why.
-    if (claimed && !finalLabel) {
-      // ready-for-agent too: the claim may have left it in place (logged there, not fatal), and this is
-      // the last chance to strip it before a later tick could otherwise pick the same ticket up again.
-      const { removeFailed, addFailed } = deps.relabel(
-        claimed.github,
-        claimed.number,
-        [LABELS.working, LABELS.ready],
-        [LABELS.help],
-      );
-      if (removeFailed) {
-        log("error", {
-          message: `couldn't remove a label from the ticket: ${removeFailed instanceof Error ? removeFailed.message : removeFailed}`,
-        });
-      }
-      if (addFailed) {
-        log("error", {
-          message: `couldn't update the ticket's label: ${addFailed instanceof Error ? addFailed.message : addFailed}`,
-        });
-      } else finalLabel = LABELS.help;
-      try {
-        const reviewed = repoConfig(factory, claimed.repoKey).guard === "reviewed";
-        deps.comment(
-          claimed.github,
-          claimed.number,
-          // Only the runner's own words reach the ticket; any other error stays in the run log, since it can
-          // name private paths or URLs (Qodo on PR 262).
-          safeText(
-            error instanceof RunnerStop
-              ? `Agent run \`${runId}\` stopped and needs help: ${message}.`
-              : `Agent run \`${runId}\` stopped and needs help: the runner failed; the run log has the error.`,
-            reviewed,
-          ),
-        );
-      } catch (inner) {
-        log("error", { message: `couldn't report on the ticket: ${inner instanceof Error ? inner.message : inner}` });
-      }
-    }
-    // The saved log ends with how the run ended: the label the ticket now shows (AUD-M18). A copy that
-    // failed after the outcome was logged is tried once more here (Qodo on PR 262).
-    if (runId && !copied) {
-      if (!finishedLogged)
-        log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });
-      try {
-        const saved = deps.saveEvidence(runId, ws);
-        if (saved.blocked.length)
-          log("evidence-blocked", { files: saved.blocked.length, savedAt: saved.savedAt ?? null });
-        logSaved(saved, runId);
-      } catch {
-        // The live log under the runs folder still has everything.
-      }
-    }
-    return "failed";
+    return failTick(error, { factory, deps, log, runId, claimed, ws, finalLabel, finishedLogged, copied, logSaved });
   } finally {
     lock.release();
   }
-}
-
-/** `--minutes` and `--budget`, each a positive number, falling back to the given default; exits 2
- * naming whichever one isn't. */
-function positiveOption(values: Record<string, unknown>, name: "minutes" | "budget", fallback: number): number {
-  const value = values[name] === undefined ? fallback : Number(values[name]);
-  if (!Number.isFinite(value) || value <= 0) {
-    console.error(
-      `usage: npm run factory:tick -- [--ci] [--minutes N] [--budget USD]   (--${name} must be a positive number)`,
-    );
-    process.exit(2);
-  }
-  return value;
-}
-
-/**
- * GH_TOKEN, or the content of the file GH_TOKEN_FILE names, or why neither can be had. A token file that is
- * missing or empty is the environment being wrong (exit 2), never a crash that reads as a failed run.
- */
-export function tokenFrom(
-  env: Record<string, string | undefined>,
-  read: (path: string) => string = (path) => readFileSync(path, "utf8"),
-): { token: string } | { problem: string } {
-  if (env.GH_TOKEN) return { token: env.GH_TOKEN };
-  if (!env.GH_TOKEN_FILE) return { problem: "factory:tick needs GH_TOKEN or GH_TOKEN_FILE." };
-  try {
-    const token = read(env.GH_TOKEN_FILE).trim();
-    return token ? { token } : { problem: "factory:tick: the file GH_TOKEN_FILE names is empty." };
-  } catch (error) {
-    return { problem: `factory:tick can't read GH_TOKEN_FILE (${(error as NodeJS.ErrnoException).code ?? "error"}).` };
-  }
-}
-
-/** Why no tick may run on this machine as it is (exit 2), or null. Read through the deps, so it is tested. */
-export function setupRefusal(deps: Pick<TickDeps, "unguarded">): string | null {
-  const unguarded = deps.unguarded?.() ?? [];
-  return unguarded.length ? `factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.` : null;
 }
 
 /** The command: `factory-tick-cli.ts` runs it, so an unexpected error, even while loading, is exit 3. */

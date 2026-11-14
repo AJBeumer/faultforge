@@ -19,6 +19,11 @@ describe("helpers that live in one module (AUD-N1)", () => {
     expect(filesMatching(/function sha256\(/)).toEqual(["provenance.ts"]);
   });
 
+  it("hashes only through it: no other module builds a hash of its own", () => {
+    const inline = filesMatching(/createHash\(/);
+    expect(inline).toEqual(["provenance.ts"]);
+  });
+
   it("builds the tool name once", () => {
     expect(filesMatching(/faultforge-harness@/)).toEqual(["provenance.ts"]);
   });

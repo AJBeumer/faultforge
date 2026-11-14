@@ -6,6 +6,7 @@ import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
 import { loadTemplates, type Proof, proofCorpus } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
+import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
 
 const BASE = "b".repeat(40);
@@ -134,6 +135,7 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     });
     const [event] = auditFile(w);
     expect(eventProblems(event)).toEqual([]);
+    expect(answerKeyEntryProblem(w.lines("ground-truth.jsonl")[1])).toBeUndefined();
     expect(readFileSync(join(w.target, "src", "sum.ts"), "utf8")).toContain("total + 1");
   });
 
@@ -151,6 +153,23 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     const notRun = world({ base: ["not_run"] });
     expect(notRun.inject()).toBe(1);
     expect(notRun.errors.join("\n")).toContain("did not finish, or ran no test, on the base commit");
+  });
+
+  it("refuses to plant, or validate, next to an answer key or audit log with problems, and touches nothing (#224)", () => {
+    for (const validateOnly of [false, true]) {
+      const w = world();
+      const checked: string[][] = [];
+      w.deps.ledgerProblems = (paths) => {
+        checked.push(paths);
+        return ["amendment amending FF-9500: changes injectedLines"];
+      };
+      expect(w.inject(validateOnly ? { validateOnly, caseId: undefined } : {})).toBe(1);
+      expect(checked).toEqual([[join(w.priv, "ground-truth.jsonl"), join(w.priv, "audit-events.jsonl")]]);
+      expect(w.errors.join("\n")).toContain("the answer key or audit log has problems: amendment amending FF-9500");
+      expect(w.gitCalls).toEqual([]);
+      expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
+      expect(auditFile(w)).toEqual([]);
+    }
   });
 
   it("refuses a case id already in the answer key (I06), and a malformed one", () => {
@@ -220,6 +239,7 @@ describe("inject run(deps): a control must pass the whole proof corpus (AUD-M8, 
       kind: "control",
       validation: { corpus: [{ proofTest, proofOnBase: "pass", proofOnVariant: "pass" }] },
     });
+    expect(answerKeyEntryProblem(w.lines("ground-truth.jsonl")[1])).toBeUndefined();
     expect(eventProblems(auditFile(w)[0])).toEqual([]);
   });
 
