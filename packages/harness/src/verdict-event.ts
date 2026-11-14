@@ -22,6 +22,29 @@ export interface AdjudicationEvent {
   disposition: string;
   reason: string;
   judgements: Judgement[];
+  /** The event id of the earlier verdict this one replaces, given with `--supersede`. */
+  supersedes?: string;
+}
+
+/** A reason as compared across cases: case, spacing and a closing full stop don't make it another reason. */
+export function normalReason(reason: string): string {
+  return reason.trim().toLowerCase().replace(/\s+/g, " ").replace(/\.$/, "");
+}
+
+/**
+ * Every reason already given for a verdict on another case, and every amended reason, normalised: a reason
+ * that fits one case is the wrong reason for another (AUD-H4).
+ */
+export function reasonsOfOtherCases(events: Record<string, unknown>[], caseId: string): Set<string> {
+  const reasons = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "case.adjudicated" || e.caseId === caseId) continue;
+    for (const field of ["reason", "amendedReason"]) {
+      const value = e[field];
+      if (typeof value === "string" && value.trim()) reasons.add(normalReason(value));
+    }
+  }
+  return reasons;
 }
 
 export const BUG_VERDICTS: Record<string, string> = {

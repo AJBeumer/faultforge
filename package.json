@@ -24,6 +24,7 @@
     "ledger:check": "tsx packages/harness/src/ledger-check.ts",
     "qodo:check": "tsx packages/harness/src/qodo-check.ts",
     "verdict": "tsx packages/harness/src/verdict.ts",
+    "verdict:amend": "tsx packages/harness/src/verdict-amend.ts",
     "case:build": "tsx packages/harness/src/case-build.ts",
     "case:ticket": "tsx packages/harness/src/case-ticket.ts",
     "case:review": "tsx packages/harness/src/case-review.ts",
