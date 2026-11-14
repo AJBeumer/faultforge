@@ -4,6 +4,7 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { benchmarkOf, benchmarkProblems, changedLines } from "./benchmark-rules.ts";
 import { templateTelltales } from "./neutral.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
 
@@ -26,6 +27,8 @@ export interface Template {
   proofTest?: string;
   match?: { kindTerms?: string[] };
   alsoBreaks?: AlsoBreaks[];
+  /** The benchmark version whose rules it follows (`benchmark-rules.ts`); 1 when absent. */
+  benchmark?: number;
 }
 
 export interface Proof {
@@ -40,7 +43,12 @@ export function loadTemplate(templateDir: string): Template {
 }
 
 /** Why the template must be refused before anything is planted, or undefined when it may be used. */
-export function templateRefusal(template: Template, templateId: string, templateDir: string): string | undefined {
+export function templateRefusal(
+  template: Template,
+  templateId: string,
+  templateDir: string,
+  others: Template[] = [],
+): string | undefined {
   // Checked before anything else: a template that fails the schema is refused without planting anything.
   const schemaProblems = templateProblems(template);
   if (schemaProblems.length) {
@@ -60,6 +68,9 @@ export function templateRefusal(template: Template, templateId: string, template
       return error instanceof Error ? error.message : String(error);
     }
   }
+  // A template declaring benchmark version 2 follows its rules, checked against every other template (#257).
+  const ruleProblems = benchmarkProblems(template, others);
+  if (ruleProblems.length) return `template ${templateId} breaks the benchmark v2 rules: ${ruleProblems.join("; ")}`;
   return undefined;
 }
 
@@ -73,7 +84,10 @@ export function proofsOf(template: Template): Proof[] {
     : [];
 }
 
-/** Replaces the template's `find` text, which must occur exactly once. Returns the new lines. */
+/**
+ * Replaces the template's `find` text, which must occur exactly once. Returns the lines recorded as injected:
+ * for benchmark version 1 the whole replaced block, for version 2 only the lines the change touched.
+ */
 export function applyMutation(targetDir: string, template: Template): [number, number] {
   const path = join(targetDir, template.file);
   const source = readFileSync(path, "utf8");
@@ -81,7 +95,10 @@ export function applyMutation(targetDir: string, template: Template): [number, n
   if (at === -1 || source.indexOf(template.find, at + 1) !== -1) {
     throw new Error(`find text must occur exactly once in ${template.file}`);
   }
-  writeFileSync(path, source.slice(0, at) + template.replace + source.slice(at + template.find.length));
+  const changed = source.slice(0, at) + template.replace + source.slice(at + template.find.length);
+  writeFileSync(path, changed);
+  // Version 2 records the lines the change touched; version 1 keeps the replaced block, as its cases did (#257).
+  if (benchmarkOf(template) >= 2) return changedLines(source, changed);
   const start = source.slice(0, at).split("\n").length;
   const lineCount = template.replace.replace(/\n$/, "").split("\n").length;
   return [start, start + lineCount - 1];
@@ -126,4 +143,23 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
     }
   }
   return corpus;
+}
+
+/** Every readable template under `templateRoots`, private storage first (one per id); unreadable ones are left out. */
+export function loadTemplates(templateRoots: string[]): Template[] {
+  const seen = new Set<string>();
+  const templates: Template[] = [];
+  for (const root of templateRoots) {
+    if (!existsSync(root)) continue;
+    for (const id of readdirSync(root).sort()) {
+      if (seen.has(id) || !existsSync(join(root, id, "template.json"))) continue;
+      seen.add(id);
+      try {
+        templates.push(loadTemplate(join(root, id)));
+      } catch {
+        // A template still being written is no template to compare with.
+      }
+    }
+  }
+  return templates;
 }

@@ -17,6 +17,7 @@ import { git as gitIn, readJsonl, run as runCommand, runProof, runStep, type Ste
 import {
   applyMutation,
   loadTemplate,
+  loadTemplates,
   type Proof,
   proofCorpus,
   proofsOf,
@@ -45,6 +46,8 @@ export interface InjectDeps {
   findTemplateDir: (id: string) => string | undefined;
   /** Every proof a control's variant must pass. */
   corpus: () => Proof[];
+  /** Every template, for the benchmark v2 rules that compare a template with the others. */
+  allTemplates?: () => Template[];
   ledgerProblems: (paths: string[]) => string[];
   git: (targetDir: string, ...args: string[]) => string;
   /** The local `origin/main`, or "" when there is none. */
@@ -77,6 +80,7 @@ export function liveInjectDeps(env: NodeJS.ProcessEnv = process.env): InjectDeps
       proofCorpus([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")], (id, why) =>
         console.error(`[inject] corpus: skipped ${id}, because ${why}`),
       ),
+    allTemplates: () => loadTemplates([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")]),
     ledgerProblems: ledgerProblemsWithHistory,
     git: gitIn,
     originMain: (dir) => runCommand("git", ["rev-parse", "--verify", "--quiet", "origin/main"], dir).stdout.trim(),
@@ -122,7 +126,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
     deps.findTemplateDir(args.template) ??
     refuse(`template ${args.template} not found in private/templates or templates/seed`);
   const template: Template = loadTemplate(templateDir);
-  const refusal = templateRefusal(template, args.template, templateDir);
+  const refusal = templateRefusal(template, args.template, templateDir, deps.allTemplates?.() ?? []);
   if (refusal) refuse(refusal);
 
   // A bug's own proofs must break; a control must break none of the corpus (AUD-M8).
