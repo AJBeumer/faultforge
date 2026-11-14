@@ -123,6 +123,23 @@ describe("factory workflow", () => {
     expect(workflow).toContain("--branch unsaved-${{ github.run_id }}-${{ github.run_attempt }}");
   });
 
+  it("installs the git-level guard before the agent can commit, after the dependencies (AUD-M17)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const install = steps.findIndex((step) => step.includes("npm run -s guard:install"));
+    const deps = steps.findIndex((step) => step.startsWith("name: Install dependencies"));
+    const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
+    expect(install).toBeGreaterThan(deps);
+    expect(install).toBeLessThan(tick);
+    expect(steps[install]).toContain("working-directory: FaultForge");
+    expect(steps[install]).not.toMatch(/if:|continue-on-error/);
+  });
+
+  it("gives the tick the agent's own narrower token, which the agent gets as GH_TOKEN (AUD-H2)", () => {
+    const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
+    expect(tick).toContain("FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}");
+  });
+
   it("pins every action to a full commit", () => {
     for (const [, ref] of workflow.matchAll(/uses: [\w./-]+@(\S+)/g)) expect(ref).toMatch(/^[0-9a-f]{40}$/);
   });

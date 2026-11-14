@@ -504,9 +504,9 @@ describe("tick: stop paths", () => {
       "save with workspace",
       "cleanup",
     ]);
-    expect(f.comments.at(-1)?.body).toMatch(
-      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
-    );
+    // A count, never the paths: they can name private files, and the comment can be public (AUD-M2).
+    expect(f.comments.at(-1)?.body).toMatch(/changed 1 file in the private repository outside `raw-artifacts\/`/);
+    expect(f.comments.at(-1)?.body).not.toMatch(/qodo-rules/);
     expect(f.comments.at(-1)?.body).toMatch(/blocked-20261109-093001-target-18/);
   });
 
@@ -522,9 +522,9 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).not.toContain("cleanup");
-    expect(f.comments.at(-1)?.body).toMatch(
-      /outside `raw-artifacts\/` and `factory-log\/` \(config\/qodo-rules\.yaml\)/,
-    );
+    // A count, never the paths: they can name private files, and the comment can be public (AUD-M2).
+    expect(f.comments.at(-1)?.body).toMatch(/changed 1 file in the private repository outside `raw-artifacts\/`/);
+    expect(f.comments.at(-1)?.body).not.toMatch(/qodo-rules/);
     expect(f.comments.at(-1)?.body).toMatch(/run folder \(`\/runs\/r`\), kept for inspection/);
   });
 
@@ -1700,5 +1700,26 @@ describe("tick: a ticket still agent-working is never picked, and the earlier-PR
     expect(f.events.find((e) => e.event === "error")).toMatchObject({
       message: expect.stringMatching(/open pull requests/),
     });
+  });
+});
+
+describe("tick: no private path reaches the log or a comment (AUD-M2)", () => {
+  it("a blocked save logs and reports how many files, never which", async () => {
+    const f = fake(
+      { "owner/lab#5": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => ({
+          file: "",
+          pushed: false,
+          blocked: ["templates/x-secret-v1/template.json", "cases/FF-9001.json"],
+          savedAt: `blocked-${runId}`,
+        }),
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    const shown = [...f.printed, ...f.events.map((e) => JSON.stringify(e)), ...f.comments.map((c) => c.body)];
+    expect(shown.join("\n")).not.toMatch(/x-secret-v1|FF-9001/);
+    expect(f.events.find((e) => e.event === "evidence-blocked")).toMatchObject({ files: 2 });
+    expect(f.comments.at(-1)?.body).toMatch(/changed 2 files in the private repository/);
   });
 });

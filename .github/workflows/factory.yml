@@ -125,6 +125,11 @@ jobs:
           gh auth setup-git
           git config --global user.name "$(gh api user --jq .login)"
           git config --global user.email "$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"')"
+      # The git-level guard, as on the owner's PC: a commit or push in the target that would give the lab
+      # away is refused by git itself, whatever ran it (AUD-M17). Before the agent can make one.
+      - name: Install the git-level guard
+        working-directory: FaultForge
+        run: npm run -s guard:install
       - name: Run one tick
         working-directory: FaultForge
         # Ten minutes inside the job's own limit: a tick stopped here still leaves the job time to keep its logs.
@@ -134,6 +139,9 @@ jobs:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
           QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The agent's own, narrower token (the target and this repo only, no private repo): it becomes the
+          # agent's GH_TOKEN. Unset, the agent gets FACTORY_GH_TOKEN and the run log warns (AUD-H2).
+          FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}
           FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs
         run: npm run -s factory:tick -- --ci --minutes 120 --budget 25
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
