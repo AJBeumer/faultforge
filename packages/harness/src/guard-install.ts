@@ -10,12 +10,14 @@
  * the same files. A hook file this command didn't write is never overwritten.
  *
  * Exit codes: 0 installed in every reviewed checkout; 1 refused somewhere: a hook file that isn't ours is
- * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, or git failed.
+ * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
+ * unexpected error (`entry.ts`).
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runEntry } from "./entry.ts";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { ROOT } from "./paths.ts";
 
@@ -143,4 +145,5 @@ function main(): number {
   return code;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) process.exit(main());
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
+  await runEntry(import.meta.url, main);

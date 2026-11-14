@@ -32,12 +32,14 @@
  * `agent-needs-help`: a run stopped, or the ticket isn't ready; 2 the command line or the environment was
  * wrong (a bad option, no token, a token file that can't be read, a config that doesn't load), so no tick
  * ran; 3 the tick itself failed (an error in the runner, before or after it picked a ticket; a claimed ticket
- * is labelled `agent-needs-help` and the log says so).
+ * is labelled `agent-needs-help` and the log says so), or an unexpected error anywhere in the script, caught by
+ * `entry.ts`.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { runEntry } from "./entry.ts";
 import type { AgentRun } from "./factory-agent.ts";
 import { claimMarker } from "./factory-comments.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
@@ -574,4 +576,5 @@ async function main() {
   process.exit(exitCodeFor(outcome));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
+  await runEntry(import.meta.url, main);

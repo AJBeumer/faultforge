@@ -6,11 +6,13 @@
  *
  * Reads `<runs>/<run id>.jsonl` (the live log), or the copy under `<evidence>/factory-runs/`.
  *
- * Exit codes: 0 the timeline was printed; 2 no run id was given, or no log for it was found.
+ * Exit codes: 0 the timeline was printed; 2 no run id was given, no log for it was found, or an unexpected
+ * error stopped it (`entry.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runEntry } from "./entry.ts";
 import { parseJsonLines } from "./jsonl.ts";
 import { evidenceDir, runsDir } from "./paths.ts";
 
@@ -136,4 +138,5 @@ function main() {
   console.log(summarize(events));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
+  await runEntry(import.meta.url, main);

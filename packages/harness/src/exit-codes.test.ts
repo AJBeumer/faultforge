@@ -8,6 +8,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { COULD_NOT_RUN } from "./entry.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const SOURCES = [join(ROOT, "packages/harness/src"), join(ROOT, ".claude/hooks")];
@@ -16,20 +17,15 @@ const LIBRARIES = new Set(["hook-io.ts"]);
 
 /**
  * Scripts npm runs whose uncaught errors still end as Node's default exit 1, which their headers use for
- * something else. Known on 14 November (AUD-N3); this list may only shrink, and a script leaves it once its entry catches. The fix is the one in
- * `rules-propose.ts`: catch around the entry, exit with the "could not run" code.
+ * something else. Known on 14 November (AUD-N3); this list may only shrink, and a script leaves it once its entry
+ * catches. The fix: adopt `entry.ts` (see its header), which also catches errors while the script loads.
  */
 const UNHANDLED_KNOWN = new Set([
   "case-build.ts",
   "case-review.ts",
   "case-ticket.ts",
-  "docs-check.ts",
-  "factory-tick.ts",
-  "factory-timeline.ts",
-  "guard-install.ts",
   "ledger-check.ts",
   "match.ts",
-  "ticket-ready.ts",
   "verdict.ts",
 ]);
 
@@ -66,7 +62,14 @@ function handlesUnexpectedErrors(text: string): boolean {
   if (/process\.on\("uncaughtException"/.test(text)) return true;
   const guard = text.lastIndexOf("process.argv[1] &&");
   const entry = guard === -1 ? text : text.slice(guard);
-  return /\bcatch\b/.test(entry);
+  return /\bcatch\b|\brunEntry\(import\.meta\.url\b/.test(entry);
+}
+
+/** The part of a header's "Exit codes:" section that says what `code` means, up to the next code. */
+function meaningOf(text: string, code: number): string {
+  const top = header(text);
+  const section = top.slice(top.indexOf("Exit codes:"));
+  return section.match(new RegExp(`\\b${code}\\b(?:(?!\\b\\d\\b)[\\s\\S])*`))?.[0] ?? "";
 }
 
 describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
@@ -103,5 +106,34 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
     expect(handlesUnexpectedErrors(`try {} catch {}\n${guard} main();`)).toBe(false);
     expect(handlesUnexpectedErrors(`${guard} {\n  try { main(); } catch { process.exit(2); }\n}`)).toBe(true);
     expect(handlesUnexpectedErrors(`process.on("uncaughtException", () => process.exit(2));\nrun();`)).toBe(true);
+    expect(handlesUnexpectedErrors(`${guard} await runEntry(import.meta.url, main);`)).toBe(true);
+    expect(handlesUnexpectedErrors(`runEntry(import.meta.url, main);\n${guard} main();`)).toBe(false);
+  });
+
+  it("guards every script in entry.ts's table fully: entry, npm script and header (AUD-N3)", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    const problems: string[] = [];
+    for (const [file, code] of Object.entries(COULD_NOT_RUN)) {
+      const text = readFileSync(join(ROOT, "packages/harness/src", file), "utf8");
+      if (!/process\.argv\[1\][^;]*\brunEntry\(import\.meta\.url, main\)/.test(text))
+        problems.push(`${file}: its entry doesn't call runEntry`);
+      const commands = Object.values(pkg.scripts).filter((c) => c.includes(`packages/harness/src/${file}`));
+      if (!commands.length || commands.some((c) => !c.includes(`--import ./packages/harness/src/entry.ts`)))
+        problems.push(`${file}: npm doesn't load entry.ts first`);
+      if (!/entry\.ts/.test(meaningOf(text, code)))
+        problems.push(`${file}: its header doesn't say ${code} is entry.ts's`);
+    }
+    // And the other way: a script calling runEntry without a code would throw at its first run.
+    for (const { file, text } of npmScripts())
+      if (/\brunEntry\(/.test(text) && file !== "entry.ts" && !(file in COULD_NOT_RUN))
+        problems.push(`${file}: calls runEntry but has no code in entry.ts`);
+    expect(problems).toEqual([]);
+  });
+
+  it("reads a code's meaning up to the next code", () => {
+    const text = "/**\n * Exit codes: 0 fine; 2 broken (`entry.ts`); 3 other.\n */";
+    expect(meaningOf(text, 2)).toContain("entry.ts");
+    expect(meaningOf(text, 0)).not.toContain("entry.ts");
+    expect(meaningOf(text, 3)).not.toContain("entry.ts");
   });
 });
