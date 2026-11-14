@@ -47,3 +47,23 @@ export function npm(
       : spawnSync("npm", args, { cwd, encoding: "utf8", timeout: timeoutMs, env });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
+
+/** Blocks for `ms` without spinning: the runner's own steps are synchronous. */
+export function pauseSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * A read-only call, tried up to `tries` times with a pause between: one transient GitHub failure must not
+ * cost a run or a tick (AUD-N10). Only for reads: a write that may have landed is never repeated blindly.
+ */
+export function retried<T>(read: () => T, tries = 3, pauseMs = 3000, pause: (ms: number) => void = pauseSync): T {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return read();
+    } catch (error) {
+      if (attempt >= tries) throw error;
+      pause(pauseMs * attempt);
+    }
+  }
+}

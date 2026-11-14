@@ -3,7 +3,10 @@
  * (AUD-M5).
  *
  *   npm run case:pr -- --case FF-NNNN --body "<one ordinary sentence>" --relationships "<what the owner saw>" \
- *     [--benchmark v1] [--dry-run]
+ *     [--benchmark v1] [--dry-run] [--existing <pr number>]
+ *
+ * `--existing` records a PR already open for the case (opened by hand from the compare link, or by a run
+ * that stopped after GitHub created it) with every check below, and opens nothing.
  *
  * Reads the case's answer-key entry (branch, injected commit, template) and its `case.ticket-created` event (the
  * target ticket the PR closes), and checks that the template and proofs are still the ones the case was
@@ -53,6 +56,8 @@ export interface PrArgs {
   relationships: string;
   benchmark?: string;
   dryRun: boolean;
+  /** A PR already opened for the case (by hand, or by a run that stopped): record it, open nothing. */
+  existing?: number;
 }
 
 /** The command line, or null when it's wrong. */
@@ -66,11 +71,21 @@ export function parseCliArgs(argv: string[]): PrArgs | null {
         relationships: { type: "string" },
         benchmark: { type: "string" },
         "dry-run": { type: "boolean" },
+        existing: { type: "string" },
       },
     });
     const { case: caseId, body, relationships } = values;
     if (!caseId || !/^FF-\d{4}$/.test(caseId) || !body?.trim() || !relationships?.trim()) return null;
-    return { caseId, body: body.trim(), relationships, benchmark: values.benchmark, dryRun: !!values["dry-run"] };
+    const existing = values.existing === undefined ? undefined : Number(values.existing);
+    if (existing !== undefined && !(Number.isInteger(existing) && existing > 0)) return null;
+    return {
+      caseId,
+      body: body.trim(),
+      relationships,
+      benchmark: values.benchmark,
+      dryRun: !!values["dry-run"],
+      ...(existing ? { existing } : {}),
+    };
   } catch {
     return null;
   }
@@ -134,10 +149,17 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   }
   const { branch, injectionCommit } = entry as unknown as { branch: string; injectionCommit: string };
   if (events.some((e) => e.type === "pr.opened")) return refuse(`${caseId} already has a pr.opened event`);
-  const ticket = (events.find((e) => e.type === "case.ticket-created")?.issue as { number?: unknown } | undefined)
-    ?.number;
+  const target = repoConfig(options.factory ?? loadFactory(), "target").github;
+  const issue = events.find((e) => e.type === "case.ticket-created")?.issue as
+    | { number?: unknown; repo?: unknown }
+    | undefined;
+  const ticket = issue?.number;
   if (!Number.isInteger(ticket) || (ticket as number) < 1) {
     return refuse(`${caseId} has no target ticket with a whole issue number: run case:ticket first`);
+  }
+  // `Closes #N` names an issue in the PR's own repository, so the ticket must be there (Qodo on PR 269).
+  if (issue?.repo !== undefined && issue.repo !== target) {
+    return refuse(`${caseId}'s ticket is on ${String(issue.repo)}, not ${target}`);
   }
   // The template and proofs must be the ones the case was planted from (Qodo on PR 269).
   const injected = events.find((e) => e.type === "sabotage.injected" || e.type === "control.injected");
@@ -165,10 +187,10 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   ]);
   if (giveaways.length) return refuse(`the PR text would give the case away (${giveaways.join("; ")})`);
 
-  const target = repoConfig(options.factory ?? loadFactory(), "target").github;
   let pushed: string;
   try {
-    pushed = gh(["api", `repos/${target}/branches/${branch}`, "--jq", ".commit.sha"]).trim();
+    // One path segment, even for a branch name with a slash (Qodo on PR 269).
+    pushed = gh(["api", `repos/${target}/branches/${encodeURIComponent(branch)}`, "--jq", ".commit.sha"]).trim();
   } catch (e) {
     return refuse(`the branch ${branch} isn't on ${target} (${message(e)}): push it first`);
   }
@@ -189,28 +211,33 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
     return 0;
   }
 
-  // Marked before the call: a PR GitHub created during a timed-out call must never get a twin (#216).
   const evidenceDir = join(root, "raw-artifacts", caseId);
-  const marker = join(evidenceDir, "gh-pr-create.attempt.txt");
   mkdirSync(evidenceDir, { recursive: true });
-  try {
-    writeFileSync(marker, `${now()} gh pr create --repo ${target} --head ${branch}\n`, { flag: "wx" });
-  } catch (e) {
-    error(
-      (e as NodeJS.ErrnoException).code === "EEXIST"
-        ? `case:pr: an earlier run tried to open this PR (${marker}) and recorded no event. Check ${target}'s PRs first`
-        : `case:pr: can't write ${marker}, so gh was not called: ${message(e)}`,
-    );
-    return 2;
-  }
   let url: string;
-  try {
-    url = gh(command).trim();
-  } catch (e) {
-    error(`case:pr: gh pr create failed (check GitHub before retrying; marker kept at ${marker}): ${message(e)}`);
-    return 2;
+  if (args.existing) {
+    // A PR opened by hand (no permission for gh) or by a run that stopped: recorded, never opened again.
+    url = `https://github.com/${target}/pull/${args.existing}`;
+  } else {
+    // Marked before the call: a PR GitHub created during a timed-out call must never get a twin (#216).
+    const marker = join(evidenceDir, "gh-pr-create.attempt.txt");
+    try {
+      writeFileSync(marker, `${now()} gh pr create --repo ${target} --head ${branch}\n`, { flag: "wx" });
+    } catch (e) {
+      error(
+        (e as NodeJS.ErrnoException).code === "EEXIST"
+          ? `case:pr: an earlier run tried to open this PR (${marker}). Check ${target}'s PRs; if it is open, record it with --existing <number>`
+          : `case:pr: can't write ${marker}, so gh was not called: ${message(e)}`,
+      );
+      return 2;
+    }
+    try {
+      url = gh(command).trim();
+    } catch (e) {
+      error(`case:pr: gh pr create failed (check GitHub; if it opened, record it with --existing): ${message(e)}`);
+      return 2;
+    }
+    writeFileSync(join(evidenceDir, "gh-pr-create.raw.txt"), `${url}\n`);
   }
-  writeFileSync(join(evidenceDir, "gh-pr-create.raw.txt"), `${url}\n`);
   const pr = Number(/\/pull\/(\d+)$/.exec(url)?.[1]);
   if (!Number.isInteger(pr) || pr < 1) {
     error(`case:pr: gh pr create did not print a PR URL (saved in ${evidenceDir}): ${url}`);
@@ -261,7 +288,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const parsed = parseCliArgs(process.argv.slice(2));
   if (!parsed) {
     console.error(
-      'usage: npm run case:pr -- --case FF-NNNN --body "<sentence>" --relationships "<text>" [--benchmark v1] [--dry-run]',
+      'usage: npm run case:pr -- --case FF-NNNN --body "<sentence>" --relationships "<text>" [--benchmark v1] [--dry-run] [--existing <pr>]',
     );
     process.exit(1);
   }

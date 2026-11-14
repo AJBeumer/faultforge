@@ -244,3 +244,97 @@ describe("acquireLock: the release belongs to this run (Qodo on PR 211)", () => 
     expect(existsSync(join(dir, "factory.lock"))).toBe(false);
   });
 });
+
+describe("acquireLock: a runner killed outright leaves no agent behind (AUD-M19)", () => {
+  const recent = () => new Date(Date.now() - 5 * 60_000).toISOString();
+  const AGENT_START = "ticks:52000";
+  /** A lock held by a runner with `held.pid`, whose heartbeat records its agent's pid and start. */
+  const lockWith = (held: { pid: number; agentPid: number; agentStarted?: string }) => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-agent-"));
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: held.pid, since: recent(), token: "t1" }));
+    writeFileSync(
+      beatFile(d, "t1"),
+      JSON.stringify({ at: recent(), agentPid: held.agentPid, agentStarted: held.agentStarted }),
+    );
+    return d;
+  };
+  const beatOf = (d: string) => {
+    const token = JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).token;
+    return JSON.parse(readFileSync(beatFile(d, token), "utf8"));
+  };
+  /** The runner (pid 1111) is gone; the agent's pid (4242) is alive, and reads now as `startNow`. */
+  const takeOver = (d: string, startNow: string | null, killed: number[], kill?: () => void) =>
+    acquireLock(d, (pid) => pid === 4242, {
+      startIdOf: () => startNow,
+      killAgent: kill ?? ((pid) => killed.push(pid)),
+    });
+
+  it("records the agent's pid and start with the heartbeat while it runs, and forgets them when it ends", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-rec-"));
+    const lock = acquireLock(d);
+    lock.recordAgent(4242, AGENT_START);
+    expect(beatOf(d)).toMatchObject({ agentPid: 4242, agentStarted: AGENT_START });
+    lock.refresh();
+    expect(beatOf(d)).toMatchObject({ agentPid: 4242, agentStarted: AGENT_START });
+    lock.recordAgent(null);
+    expect(beatOf(d).agentPid).toBeUndefined();
+    lock.release();
+  });
+
+  it("kills the dead runner's agent tree before taking the lock over, when the pid is still that agent", () => {
+    const killed: number[] = [];
+    const lock = takeOver(lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START }), AGENT_START, killed);
+    expect(lock.acquired).toBe(true);
+    expect(killed).toEqual([4242]);
+    expect(lock.note).toMatch(/ended its agent, pid 4242/);
+    lock.release();
+  });
+
+  it("kills nothing when the agent's pid is now another process, and takes the lock over", () => {
+    const killed: number[] = [];
+    const lock = takeOver(lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START }), "ticks:9", killed);
+    expect(lock.acquired).toBe(true);
+    expect(killed).toEqual([]);
+    lock.release();
+  });
+
+  it("kills nothing and keeps the lock when it can't tell whether the pid is the agent (Qodo on PR 268)", () => {
+    const killed: number[] = [];
+    const noStart = takeOver(lockWith({ pid: 1111, agentPid: 4242 }), AGENT_START, killed);
+    const unreadable = takeOver(lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START }), null, killed);
+    for (const lock of [noStart, unreadable]) {
+      expect(lock.acquired).toBe(false);
+      expect(lock.note).toMatch(/may still be running and can't be told from another process, so the lock stays/);
+    }
+    expect(killed).toEqual([]);
+  });
+
+  it("keeps the lock where it is when the kill fails (Qodo on PR 268)", () => {
+    const d = lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START });
+    const lock = takeOver(d, AGENT_START, [], () => {
+      throw new Error("access denied");
+    });
+    expect(lock.acquired).toBe(false);
+    expect(lock.note).toMatch(/couldn't be ended \(access denied\), so the lock stays/);
+    expect(JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).token).toBe("t1");
+  });
+
+  it("kills nothing when the agent is gone", () => {
+    const killed: number[] = [];
+    const d = lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START });
+    acquireLock(d, () => false, { startIdOf: () => AGENT_START, killAgent: (pid) => killed.push(pid) }).release();
+    expect(killed).toEqual([]);
+  });
+
+  it("never kills the agent of a running tick", () => {
+    const killed: number[] = [];
+    const d = lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START });
+    const lock = acquireLock(d, () => true, {
+      isSame: () => true,
+      startIdOf: () => AGENT_START,
+      killAgent: (pid) => killed.push(pid),
+    });
+    expect(lock.acquired).toBe(false);
+    expect(killed).toEqual([]);
+  });
+});

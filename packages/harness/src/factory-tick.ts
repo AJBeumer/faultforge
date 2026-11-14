@@ -39,6 +39,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentRun } from "./factory-agent.ts";
+import { claimMarker } from "./factory-comments.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { type EvidencePush, evidenceFile } from "./factory-evidence.ts";
@@ -48,6 +49,7 @@ import { recoverStranded } from "./factory-recovery.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
 import {
   type Candidate,
+  earlierPrsNote,
   exitCodeFor,
   type Finish,
   type IssueEvent,
@@ -55,6 +57,7 @@ import {
   lastLabelled,
   oldest,
   parseAgentResult,
+  prNumber,
   QODO_CHECK_COMMENT,
   RunnerStop,
   redact,
@@ -65,7 +68,6 @@ import {
 } from "./factory-settle.ts";
 import type { Verification } from "./factory-verify.ts";
 import type { RunMode } from "./factory-workspace.ts";
-import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
@@ -126,6 +128,11 @@ export interface TickDeps {
   now(): Date;
   print(line: string): void;
   lock(): { acquired: boolean; release(): void; refresh?(): void; note?: string };
+  /** Actions or the owner's PC: the claim comment records it, and recovery leaves the other's claims alone. */
+  mode?: RunMode;
+  claimMode?(github: string, number: number): RunMode | null;
+  /** The owner's reviewed checkouts without the git-level guard; a local tick refuses to start beside them (#242). */
+  unguarded?(): string[];
   /** Open issues (not PRs) with the label, in one repo. */
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
@@ -134,6 +141,8 @@ export interface TickDeps {
   snapshot(github: string, number: number): TicketSnapshot;
   /** Writes the checked ticket text into the workspace for the agent, and returns its path. */
   writeTicket(ws: Workspace, text: string): string;
+  /** Open pull requests of the ticket's repo that close it: an earlier run's work. */
+  openPrs?(github: string, number: number): string[];
   relabel(github: string, number: number, remove: string[], add: string[]): RelabelProblems;
   comment(github: string, number: number, body: string): void;
   /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
@@ -203,10 +212,14 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   try {
     if (lock.note) log("lock", { note: lock.note });
     const recovery = recoverStranded(Object.values(factory.repos), deps);
-    if (recovery.recovered.length || recovery.failed.length) log("recovered", recovery);
+    if (recovery.recovered.length || recovery.failed.length || recovery.otherMode) log("recovered", recovery);
     const candidates: Candidate[] = [];
     for (const [repoKey, repo] of Object.entries(factory.repos)) {
+      // Still agent-working after recovery: a live run's, here or in the other mode, even with a leftover
+      // ready-for-agent beside it. Never picked again (Qodo on PR 268).
+      const busy = new Set(deps.labelled(repo.github, LABELS.working).map((t) => t.number));
       for (const issue of deps.labelled(repo.github, LABELS.ready)) {
+        if (busy.has(issue.number)) continue;
         const added = lastLabelled(deps.events(repo.github, issue.number), LABELS.ready);
         if (!added) continue;
         candidates.push({
@@ -308,8 +321,10 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     claimed = pick;
     // An earlier run's result label goes too: a ticket carries one state at a time (#197).
     relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
+    // The claim says which way of running took it, so the other's recovery leaves it alone (AUD-M19).
+    const mark = deps.mode ? `\n\n${claimMarker(deps.mode)}` : "";
     say(
-      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
+      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.${mark}`,
     );
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
@@ -337,7 +352,17 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const snapshot = deps.snapshot(pick.github, pick.number);
     const late = provenanceProblems(snapshot.provenance, owner);
     if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
-    const ticketFile = deps.writeTicket(ws, snapshot.text);
+    // A retried ticket continues the pull request an earlier run left open, rather than open a second.
+    // Only a hint: a lookup that fails is logged and the run goes on without it (Qodo on PR 268).
+    let found: string[] = [];
+    try {
+      found = deps.openPrs?.(pick.github, pick.number) ?? [];
+    } catch (error) {
+      log("error", { message: `couldn't list open pull requests: ${error instanceof Error ? error.message : error}` });
+    }
+    const earlier = found.filter((url) => prNumber(url, pick.github));
+    if (earlier.length) log("earlier-prs", { prs: earlier });
+    const ticketFile = deps.writeTicket(ws, earlier.length ? snapshot.text + earlierPrsNote(earlier) : snapshot.text);
     log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
 
     const agentFrom = deps.now().toISOString();
@@ -491,6 +516,12 @@ export function tokenFrom(
   }
 }
 
+/** Why no tick may run on this machine as it is (exit 2), or null. Read through the deps, so it is tested. */
+export function setupRefusal(deps: Pick<TickDeps, "unguarded">): string | null {
+  const unguarded = deps.unguarded?.() ?? [];
+  return unguarded.length ? `factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.` : null;
+}
+
 async function main() {
   let values: { ci?: boolean; minutes?: string; budget?: string };
   try {
@@ -521,10 +552,9 @@ async function main() {
     console.error(`factory:tick couldn't set up: ${error instanceof Error ? error.message : error}`);
     process.exit(2);
   }
-  // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
-  const unguarded = mode === "local" ? unguardedCheckouts(factory, LAB_ROOT) : [];
-  if (unguarded.length) {
-    console.error(`factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.`);
+  const refusal = setupRefusal(deps);
+  if (refusal) {
+    console.error(refusal);
     process.exit(2);
   }
   const outcome = await tick(factory, deps, options);

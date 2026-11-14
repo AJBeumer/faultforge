@@ -11,6 +11,7 @@
     "review:gate": "tsx packages/harness/src/review-gate.ts",
     "factory:tick": "tsx packages/harness/src/factory-tick.ts",
     "factory:timeline": "tsx packages/harness/src/factory-timeline.ts",
+    "factory:keep": "tsx packages/harness/src/factory-keep.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx packages/harness/src/vitest-run.ts run --project unit",
     "test:integration": "tsx packages/harness/src/vitest-run.ts run --project integration",

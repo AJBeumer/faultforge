@@ -23,7 +23,7 @@ import {
   type Template,
   templateRefusal,
 } from "./inject-template.ts";
-import { appendAnswerKeyEntry, appendEvent } from "./ledger-append.ts";
+import { appendAnswerKeyEntry, appendEvent, eventProblems } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { injectionInputHash } from "./ledger-hashes.ts";
 import { telltales } from "./neutral.ts";
@@ -293,8 +293,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
           validated: true,
           createdAt,
         };
-  appendAnswerKeyEntry(ledgerPath, entry);
-  appendEvent(auditPath, {
+  const event = {
     eventId: randomUUID(),
     type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
     at: createdAt,
@@ -307,7 +306,13 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
       ownProofs.map((p) => readFileSync(join(templateDir, p.proofTest))),
       baseCommit,
     ),
-  });
+  };
+  // Checked before the answer key is written: an event refused after it would leave a case id with no
+  // injection event, which no rerun could repair (Qodo on PR 269).
+  const eventIssues = eventProblems(event);
+  if (eventIssues.length) refuse(`the injection event would be refused: ${eventIssues.join("; ")}`);
+  appendAnswerKeyEntry(ledgerPath, entry);
+  appendEvent(auditPath, event);
   deps.log(
     template.kind === "bug"
       ? `validated: proof(s) pass on base, fail on variant; public tests ${publicTests}`
