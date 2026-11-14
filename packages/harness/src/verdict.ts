@@ -35,7 +35,7 @@
  * can't be read; the review doesn't match the injected commit; an answer couldn't be parsed after retrying;
  * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join, resolve } from "node:path";
@@ -46,6 +46,7 @@ import { readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
+import { sha256, TOOL } from "./provenance.ts";
 import { findSavedReview, type SavedReview, toMatchFinding } from "./saved-review.ts";
 import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
 import {
@@ -58,8 +59,6 @@ import {
   printReport,
 } from "./verdict-ask.ts";
 import { type AdjudicationEvent, BUG_VERDICTS, CONTROL_VERDICTS, type Judgement } from "./verdict-event.ts";
-
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 export interface RunOptions {
   env?: NodeJS.ProcessEnv;
@@ -85,10 +84,6 @@ function defaultOwnerLogin(): string {
 
 function defaultAppend(path: string, value: object): void {
   appendFileSync(path, `${JSON.stringify(value)}\n`);
-}
-
-function sha256(data: string): string {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 export async function run(caseId: string, options: RunOptions = {}): Promise<number> {

@@ -10,8 +10,8 @@
  * counts. Read-only throughout.
  *
  * Exit codes: 0 Qodo's review of the head (with `--commit`, of that commit) is complete; 1 there is no
- * complete review of it within the time limit, whether Qodo didn't finish or, with `--commit`, the head
- * never became that commit or moved past it; 2 it couldn't run (usage, a missing key, or every poll
+ * complete review of it within the time limit, whether Qodo didn't finish, its API answered on every poll but
+ * never with a review, or, with `--commit`, the head never became that commit or moved past it; 2 it couldn't run (usage, a missing key, or every poll
  * failed); 3 Qodo finished the run but skipped reviewing it.
  *
  * After a push, pass `--commit`: right after a push GitHub can still show the previous head, and
