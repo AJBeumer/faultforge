@@ -35,8 +35,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
-    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
+    // A live holder keeps it however long it runs; a restart frees it (AUD-M19).
+    lock: () => acquireLock(runs, pidAlive),
     labelled: (github, label) =>
       ghAll<{ number: number; title: string; pull_request?: unknown }>(
         `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,
@@ -167,6 +167,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         gitLong(privateRepo, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         temporary = true;
       }
+      // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
+      // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
+      if (!existsSync(join(priv, ".git")))
+        throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
       const dir = join(priv, evidenceInPrivate, "factory-runs");
       mkdirSync(dir, { recursive: true });
       for (const suffix of [".jsonl", ".agent.jsonl"]) {

@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { run as buildCase } from "../src/case-build.ts";
 import { validateCaseRecord } from "../src/case-record.ts";
 import { run as reviewCase } from "../src/case-review.ts";
+import { installHooks } from "../src/guard-install.ts";
 import { readLedger } from "../src/ledger.ts";
 import { run as verdict } from "../src/verdict.ts";
 
@@ -69,6 +70,8 @@ function world() {
   for (const branch of git("for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n")) {
     if (branch && branch !== "main") git("branch", "-q", "-D", branch);
   }
+  // inject refuses a target without git's own guard (#242), as the owner's checkout has it.
+  installHooks(target, join(root, ".claude", "hooks", "git-guard.ts"));
   const priv = tempDir("pipeline-private-");
   mkdirSync(join(priv, "templates", CONTROL_TEMPLATE.id), { recursive: true });
   writeFileSync(join(priv, "templates", CONTROL_TEMPLATE.id, "template.json"), JSON.stringify(CONTROL_TEMPLATE));
