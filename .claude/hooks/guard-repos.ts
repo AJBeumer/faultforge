@@ -29,8 +29,9 @@ const TARGET: Reviewed = {
 };
 
 /** Git's global options that may stand before `-C` (`--no-pager`, `-c key=value`): skipped, so `-C` is still seen (Qodo on PR 265). */
-// Case matters here even inside a case-blind pattern: `-c` sets config, `-C` moves.
-const GIT_OPTIONS = String.raw`(?:(?-i:-c\s+\S+|(?!-C)--?[\w-]+(?:=\S+)?)\s+)*`;
+// `-c key=value` is told from `-C path` by its `=`: the patterns that use this ignore case, and inline
+// case modifiers need Node 23 (Qodo on PR 266).
+const GIT_OPTIONS = String.raw`(?:(?:-c\s+[^\s=]+=\S*|(?!-C)--?[\w-]+(?:=\S+)?)\s+)*`;
 
 /** A string as a literal inside a regular expression. */
 export const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

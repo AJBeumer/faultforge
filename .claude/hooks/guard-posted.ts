@@ -106,8 +106,12 @@ export function postedRanges(command: string): [number, number][] {
   const pattern = new RegExp(postedFlagValue().source, "dg");
   return [...command.matchAll(pattern)].flatMap((m) => {
     const value = m.indices?.[1] ?? m.indices?.[2] ?? m.indices?.[3];
-    // The quote before a quoted value belongs to it.
-    return value ? [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), value[1] + 1] as [number, number]] : [];
+    if (!value) return [];
+    // The quote before a quoted value belongs to it, and so does whatever the shell joins on after its closing
+    // quote, up to the next blank or operator: `--body="a"$(cat f)` posts f too (Qodo on PR 266).
+    let end = value[1] + 1;
+    while (end < command.length && !/[\s;&|]/.test(command[end] ?? "")) end++;
+    return [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), end] as [number, number]];
   });
 }
 

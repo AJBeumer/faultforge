@@ -57,8 +57,25 @@ describe("text built from a file is read and checked (#242)", () => {
     expect(bash(`node gen.js | gh pr create ${R} --title Tidy --body-file -`)).toMatch(/piped in/);
   });
 
-  it("leaves a substitution outside the posted text alone", () => {
-    expect(bash(`gh pr create ${R} --head "$(echo tidy-list)" --title Tidy --body "Small cleanup."`)).toBeUndefined();
+  it("refuses a program's output wherever it sits in a post to a reviewed repo (Qodo on PR 266)", () => {
+    expect(bash(`gh pr create ${R} --head "$(echo tidy-list)" --title Tidy --body "Small cleanup."`)).toMatch(
+      /can't check/,
+    );
+    expect(bash(`gh label create "$(node -e 'x')" ${R}`)).toMatch(/can't check/);
+    expect(bash(`gh pr create ${R} --title Tidy --body="Notes"$(cat ${giveaway})`)).toMatch(/says planted|can't check/);
+    expect(bash(`node gen.js | cat | gh pr comment 1 ${R} --body-file -`)).toMatch(/piped in/);
+    expect(bash(`cat <(node gen.js) | gh pr comment 1 ${R} --body-file -`)).toMatch(/program/);
+    expect(powershell(`gh pr comment 1 ${R} --body (node -e "x")`)).toMatch(/program/);
+  });
+
+  it("reads past a redirect after a piped file, and leaves PowerShell's escaped text alone (Qodo on PR 266)", () => {
+    expect(bash(`cat ${clean} 2>/dev/null | gh pr comment 12 ${R} --body-file -`)).toBeUndefined();
+    expect(powershell(`gh pr comment 12 ${R} --body "Write \`$(node) in the docs"`)).toBeUndefined();
+  });
+
+  it("counts only the GraphQL keyword as harmless, not a body's own word (Qodo on PR 266)", () => {
+    const body = file('{"query":"mutation { addComment(input: {body: \\"mutation testing\\"}) { x } }"}');
+    expect(bash(`gh api graphql --input ${body}`)).toMatch(/says mutation/);
   });
 
   it("reads a substituted file in a lab post for a link to the target", () => {
@@ -107,6 +124,10 @@ describe("git's own guard can't be switched off in a reviewed checkout (#242)", 
     "git -c core.hooksPath=/dev/null push origin tidy",
     "git config core.hooksPath .nothing",
     'git "--no-verify" commit -m Tidy',
+    'git commit "-n" -m Tidy',
+    "git commit --no-veri -m Tidy",
+    "git push --no-verif origin tidy",
+    'git -c "$KEY=/dev/null" push origin tidy',
   ])("denies %s", (command) => {
     expect(bash(command, TARGET)).toMatch(/guard hooks must run/);
   });

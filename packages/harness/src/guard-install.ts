@@ -13,8 +13,8 @@
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, or git failed.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { ROOT } from "./paths.ts";
@@ -94,9 +94,15 @@ export function guardProblem(checkout: string): string | undefined {
       const ours =
         existsSync(file) && !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8") === hookText(stage);
       if (!ours) return `${checkout} has no guard ${stage} hook`;
+      // Git skips a hook it can't run, without a word (Qodo on PR 266).
+      if (process.platform !== "win32" && !(statSync(file).mode & 0o111)) return `${file} is not executable`;
     }
     const script = setting(CONFIG_KEY);
     if (!script || !existsSync(script)) return `${checkout}'s guard hooks name no script that exists (${CONFIG_KEY})`;
+    // The script must be the guard itself, not any file that happens to exist (Qodo on PR 266).
+    const guard =
+      basename(script) === "git-guard.ts" && /export function check\(stage/.test(readFileSync(script, "utf8"));
+    if (!guard) return `${checkout}'s guard hooks run ${script}, which is not the git-level guard`;
     return undefined;
   } catch (error) {
     return `${checkout} can't be read by git (${(error as Error).message.split("\n")[0]})`;

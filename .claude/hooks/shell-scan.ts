@@ -227,6 +227,11 @@ export function substitutions(command: string, backticks: boolean): Substitution
       i++;
       continue;
     }
+    // In PowerShell a backtick escapes the next character: `$( is literal text (Qodo on PR 266).
+    if (c === "`" && !backticks) {
+      i++;
+      continue;
+    }
     if (c === "$" && command[i + 1] === "(") {
       open.push(i);
       depth++;

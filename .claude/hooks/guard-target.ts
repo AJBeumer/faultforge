@@ -169,7 +169,9 @@ function postedPieces(ctx: Context, command: string, strict = false): string[] {
     pieces.push([...commitMessages(commit), ...referencedFiles(ctx.cwd, commit)].join("\n"));
   }
   // A GraphQL mutation names itself with the keyword `mutation`, which is not a hint; the text it posts is.
-  return graphqlMutation(command) ? pieces.map((piece) => piece.replace(/\bmutation(?=\s*[\w({])/, " ")) : pieces;
+  // Only the operation keyword, where a query starts: a body's own "mutation" still counts (Qodo on PR 266).
+  const keyword = /((?:\bquery["']?\s*[=:]\s*["']?|^["']?)\s*)mutation(?=\s*[\w({])/;
+  return graphqlMutation(command) ? pieces.map((piece) => piece.replace(keyword, "$1 ")) : pieces;
 }
 
 /**

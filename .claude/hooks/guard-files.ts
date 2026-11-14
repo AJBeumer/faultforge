@@ -117,7 +117,9 @@ export function stdinFiles(cwd: string, command: string): string[] {
   for (const m of command.matchAll(redirect)) if (!quoted[m.index]) named.push(m[1] ?? m[2] ?? m[3] ?? "");
   for (const m of command.matchAll(reader)) {
     if (quoted[m.index]) continue;
-    const words = [...(m[1] ?? "").matchAll(new RegExp(value, "g"))].map((w) => w[1] ?? w[2] ?? w[3] ?? "");
+    // A descriptor number before a redirect (`2>/dev/null`) is not a file (Qodo on PR 266).
+    const args = (m[1] ?? "").replace(/\s\d+\s*$/, "");
+    const words = [...args.matchAll(new RegExp(value, "g"))].map((w) => w[1] ?? w[2] ?? w[3] ?? "");
     for (let i = 0; i < words.length; i++) {
       if (/^-Encoding$/i.test(words[i] ?? "")) i++;
       else named.push(words[i] ?? "");
@@ -160,7 +162,9 @@ function fileRead(inner: string): string | undefined {
 export function builtText(cwd: string, command: string, strict: boolean, backticks: boolean): string[] {
   const stdin = STDIN_BODY.test(command);
   const ranges = postedRanges(command);
-  const posted = (at: number) => stdin || ranges.some(([start, end]) => at >= start && at < end);
+  // In a post to a reviewed repo every substitution counts, wherever it sits: a label's name or a homepage is
+  // posted text too (Qodo on PR 266). Elsewhere only those in posted values are read.
+  const posted = (at: number) => strict || stdin || ranges.some(([start, end]) => at >= start && at < end);
   const texts: string[] = [];
   for (const sub of substitutions(command, backticks)) {
     if (!posted(sub.start)) continue;
@@ -181,9 +185,18 @@ export function builtText(cwd: string, command: string, strict: boolean, backtic
     }
     texts.push(...read);
   }
+  // A process substitution runs a program as a file, and a PowerShell `(…)` or `@(…)` argument runs one too.
+  const blank = blankQuoted(command);
+  if (strict && (/[<>]\(/.test(blank) || (!backticks && /(?:^|\s)@?\(/.test(blank)))) {
+    throw new BuiltText(
+      "This post's text may come from a program the guard can't check before it runs. Write the text to a file and pass it with --body-file.",
+    );
+  }
   if (strict && stdin) {
     const producer = pipedInto(command);
-    if (producer !== undefined && !/^(?:cat|type|Get-Content|gc|echo|printf|Write-Output)\b/i.test(producer)) {
+    // A reader must name its files: a bare `cat` passes on whatever is piped into it (Qodo on PR 266).
+    const reads = /^(?:cat|type|Get-Content|gc)\s+\S/i.test(producer ?? "");
+    if (producer !== undefined && !reads && !/^(?:echo|printf|Write-Output)\b/i.test(producer)) {
       throw new BuiltText(
         `This post's body is piped in from "${producer.slice(0, 40)}", which the guard can't check before it runs. Write the text to a file and pass it with --body-file.`,
       );

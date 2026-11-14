@@ -55,7 +55,9 @@ export function urlDestinations(outside: string): string[] {
  * raw write to GitHub's GraphQL endpoint, whose payload may sit in a file the guard doesn't read (Qodo on PR 265).
  */
 export function graphqlMutation(command: string): boolean {
-  if (/\bgh\s+api\s+graphql\b/i.test(command) && /\bmutation\b/i.test(command)) return true;
+  // A query read from a file (`--input f`, `-F query=@f`) may be a mutation the command text doesn't show.
+  const fromFile = /--input\b|\s-F\s*\w+=@/.test(command);
+  if (/\bgh\s+api\s+graphql\b/i.test(command) && (fromFile || /\bmutation\b/i.test(command))) return true;
   return rawApiWrite(command) && /api\.github\.com\/graphql\b/i.test(joinedWords(command));
 }
 
@@ -113,8 +115,13 @@ export function rewritesHistory(command: string): boolean {
  */
 export function skipsGitGuard(command: string): boolean {
   const words = joinedWords(command);
-  if (/--no-verify\b|\bcore\.hookspath\b|\bGIT_CONFIG_(?:PARAMETERS|COUNT)\b/i.test(words)) return true;
-  return gitSteps(blankQuoted(command), /\bcommit\b/).some((step) =>
+  // Git takes any unambiguous start of a long option (`--no-ver`), and a `-c` whose key the shell builds could
+  // be core.hooksPath (Qodo on PR 266).
+  if (/--no-v\w*|\bcore\.hookspath\b|\bGIT_CONFIG_(?:PARAMETERS|COUNT)\b/i.test(words)) return true;
+  if (/\bgit\b[^|;&\n]*\s-c\s*["']?[^\s"']*[$%`]/.test(command)) return true;
+  // A quoted option is still an option: `"-n"` reaches git as -n (Qodo on PR 266).
+  const flags = command.replace(/(["'])(-[A-Za-z-]+)\1/g, "$2");
+  return gitSteps(blankQuoted(flags), /\bcommit\b/).some((step) =>
     /\s-[a-zA-Z]*n[a-zA-Z]*\b/.test(step.text.slice(step.text.search(/\bcommit\b/))),
   );
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -68,7 +68,7 @@ describe("installHooks: what counts as its own hook (Qodo on PR 213)", () => {
 describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
   /** A real file to name as the guard script, so only the hooks decide. */
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
-  writeFileSync(script, "// stands in for the guard script\n");
+  writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
 
   it("is missing before guard:install and present after it", () => {
     const { dir } = repo();
@@ -97,6 +97,19 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
     installHooks(elsewhere.dir, script);
     elsewhere.git("config", "core.hooksPath", ".nothing");
     expect(guardProblem(elsewhere.dir)).toMatch(/core.hooksPath/);
+  });
+
+  it("is missing when the script is some other file, or a hook can't be run (Qodo on PR 266)", () => {
+    const noop = repo();
+    const other = join(mkdtempSync(join(tmpdir(), "guard-noop-")), "git-guard.ts");
+    writeFileSync(other, "process.exit(0);\n");
+    installHooks(noop.dir, other);
+    expect(guardProblem(noop.dir)).toMatch(/not the git-level guard/);
+    if (process.platform !== "win32") {
+      const plain = repo();
+      chmodSync(join(installHooks(plain.dir, script), "pre-push"), 0o644);
+      expect(guardProblem(plain.dir)).toMatch(/not executable/);
+    }
   });
 
   it("is missing for a folder git can't read", () => {
