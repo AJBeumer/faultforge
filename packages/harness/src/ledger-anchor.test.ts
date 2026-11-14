@@ -184,5 +184,23 @@ describe("anchorsFileProblems: an anchor can't be swapped for another (Qodo on P
     const other = join(lab, "other-anchors.txt");
     writeFileSync(other, readFileSync(w.anchors, "utf8"));
     expect(anchorsFileProblems(other)).toEqual([expect.stringContaining("not committed")]);
+    // Staged but never committed: no history to check it against (Qodo on PR 286).
+    sh(lab, "add", "other-anchors.txt");
+    expect(anchorsFileProblems(other)).toEqual([expect.stringContaining("not committed")]);
+  });
+});
+
+describe("an anchors file whose last line has no line break (Qodo on PR 286)", () => {
+  it("takes a new anchor on a line of its own, and the file still only grew, before and after the commit", () => {
+    const w = world();
+    recordAnchor(w.repo, w.anchors);
+    writeFileSync(w.anchors, readFileSync(w.anchors, "utf8").trimEnd());
+    const lab = labRepo(w.anchors);
+    w.add('{"caseId":"FF-9003"}');
+    recordAnchor(w.repo, w.anchors);
+    expect(readAnchors(w.anchors)).toMatchObject({ problems: [], anchors: [{}, {}] });
+    expect(anchorsFileProblems(w.anchors)).toEqual([]);
+    sh(lab, "commit", "--quiet", "-am", "anchor");
+    expect(anchorsFileProblems(w.anchors)).toEqual([]);
   });
 });

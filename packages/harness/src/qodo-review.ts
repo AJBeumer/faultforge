@@ -27,6 +27,10 @@ export interface QodoReview {
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isLine(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 1;
 }
@@ -70,13 +74,15 @@ function findingProblem(finding: unknown, index: number): string | undefined {
  */
 export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
-  // Read below and by `reviewState`: anything but a list of objects would throw there instead (Qodo on PR 286).
+  // Read below and by `reviewState`: a run must be an object naming its commit, never a list or a bare value,
+  // which would throw there or be read as no run at all (Qodo on PR 286).
   const runs: unknown = review.review_runs;
-  if (runs !== undefined && (!Array.isArray(runs) || runs.some((r) => typeof r !== "object" || r === null))) {
+  const isRun = (r: unknown) => isPlainObject(r) && typeof r.commit_sha === "string";
+  if (runs !== undefined && (!Array.isArray(runs) || !runs.every(isRun))) {
     return "Qodo's complete review lists its runs in something other than a list of runs";
   }
   const session: unknown = review.review_session;
-  if (session !== undefined && session !== null && typeof session !== "object") {
+  if (session !== undefined && session !== null && !isPlainObject(session)) {
     return "Qodo's complete review has a review session that isn't an object";
   }
   if (typeof review.finding_count === "number" && review.finding_count !== review.findings.length) {

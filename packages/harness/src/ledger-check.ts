@@ -38,33 +38,60 @@ const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
  * How a unified diff breaks "only appended", read one line at a time so a diff of any size is never held
  * (AUD-N6): `removed` when a hunk removes or changes a line, `inserted` when an added line is followed by an
  * old one, in its hunk or a later hunk of the same file, so it went in before the end (AUD-M10). Header lines
- * and "\ No newline at end of file" carry no content.
+ * carry no content. One removal is not a change: a last line that had no line break ("\ No newline at end of
+ * file") shown as removed and added back unchanged, which is how git shows lines appended after it (Qodo on
+ * PR 286). Any other removal is, as is that one when the line comes back different, or doesn't.
  */
 export class AppendOnlyScanner {
   private inHunk = false;
   private added = false;
   private inserted = false;
   private removed = false;
+  /** A removed line not yet judged: it may be a last line without a line break, about to come back. */
+  private pending: string | null = null;
+  private pendingHadNoBreak = false;
+
+  /** A pending removal that didn't come back unchanged is a removal. */
+  private settlePending(): void {
+    if (this.pending !== null) this.removed = true;
+    this.pending = null;
+  }
 
   line(line: string): void {
     if (this.removed) return;
     if (line.startsWith("diff --git")) {
+      this.settlePending();
       this.inHunk = false;
       this.added = false;
       return;
     }
     if (line.startsWith("@@")) {
+      this.settlePending();
       if (this.added) this.inserted = true;
       this.inHunk = true;
       return;
     }
-    if (DIFF_HEADER.test(line) || !this.inHunk || line.startsWith("\\")) return;
-    if (line.startsWith("-")) this.removed = true;
-    else if (line.startsWith("+")) this.added = true;
-    else if (line.startsWith(" ") && this.added) this.inserted = true;
+    if (DIFF_HEADER.test(line) || !this.inHunk) return;
+    if (line.startsWith("\\")) {
+      if (this.pending !== null) this.pendingHadNoBreak = true;
+      return;
+    }
+    if (line.startsWith("-")) {
+      this.settlePending();
+      this.pending = line.slice(1);
+      this.pendingHadNoBreak = false;
+    } else if (line.startsWith("+")) {
+      if (this.pending !== null && this.pendingHadNoBreak && line.slice(1) === this.pending) this.pending = null;
+      else if (this.pending !== null) this.settlePending();
+      else this.added = true;
+    } else if (line.startsWith(" ")) {
+      this.settlePending();
+      if (this.added) this.inserted = true;
+    }
   }
 
   result(): "removed" | "inserted" | undefined {
+    this.settlePending();
     return this.removed ? "removed" : this.inserted ? "inserted" : undefined;
   }
 }
@@ -164,10 +191,9 @@ export function anchorsFileProblems(anchorsPath: string): string[] {
   const relPath = relative(realpathSync.native(repoRoot), realpathSync.native(resolve(anchorsPath)))
     .split(sep)
     .join("/");
-  const tracked = spawnSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relPath], {
-    encoding: "utf8",
-  });
-  if (tracked.status !== 0) return [`${relPath}: not committed, so an anchor in it could be changed unseen`];
+  // In HEAD itself: a file only staged would have no history, and every line of it would read as added (Qodo on PR 286).
+  const committed = spawnSync("git", ["-C", repoRoot, "cat-file", "-e", `HEAD:${relPath}`], { encoding: "utf8" });
+  if (committed.status !== 0) return [`${relPath}: not committed, so an anchor in it could be changed unseen`];
   return appendOnlyProblems(repoRoot, relPath);
 }
 
