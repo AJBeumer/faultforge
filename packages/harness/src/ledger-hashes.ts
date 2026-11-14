@@ -4,17 +4,15 @@
  * answer-key entry, the template and the saved review it judged. A template or a saved review changed
  * after the event no longer gives the recorded hash, and `ledger:check` and `case:build` say so.
  */
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { errorText as message } from "./error-text.ts";
 import { entryVersions, type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { sha256, TOOL } from "./provenance.ts";
 import { casePr, findSavedReview } from "./saved-review.ts";
 import { templateDir } from "./templates.ts";
 
-export function sha256(data: string | Buffer): string {
-  return createHash("sha256").update(data).digest("hex");
-}
+export { sha256 };
 
 /** `verdict`'s hash: the entry as it read it (amendments applied, list attached), the template and the save. */
 export function verdictInputHash(entry: LedgerEntry, templateText: string, reviewText: string): string {
@@ -38,7 +36,7 @@ export function ownProofFiles(template: {
 
 /** True for an event a FaultForge tool wrote; a hand-written one (`manual-session`, or none) has no hash to check. */
 export function isToolWritten(event: Record<string, unknown>): boolean {
-  return typeof event.tool === "string" && event.tool.startsWith("faultforge-harness@");
+  return typeof event.tool === "string" && event.tool.startsWith(`${TOOL.split("@")[0]}@`);
 }
 
 /**
@@ -133,8 +131,11 @@ export function hashProblems(
   const entries = readLedger(paths.groundTruthPath);
   const events = readAuditLog(paths.auditEventsPath);
   const problems: string[] = [];
+  // A verdict a later one superseded no longer stands, so its inputs may have moved on (Qodo on PR 264).
+  const superseded = new Set(events.map((e) => e.supersedes).filter((id): id is string => typeof id === "string"));
   for (const event of events) {
     if (!isToolWritten(event) || typeof event.inputHash !== "string") continue;
+    if (superseded.has(String(event.eventId))) continue;
     const label = `${String(event.caseId)} ${String(event.type)} event ${String(event.eventId)}`;
     if (event.type === "case.adjudicated") {
       const caseEvents = events.filter((e) => e.caseId === event.caseId);

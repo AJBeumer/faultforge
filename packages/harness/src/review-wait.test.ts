@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { evidenceDir } from "./paths.ts";
 import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
 import {
   findingsFor,
@@ -13,8 +14,8 @@ import {
 } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "./review-feeds.ts";
 import { sameCommit, waitForHead, waitForReview } from "./review-poll.ts";
-import { parseArgs, run, type WaitScriptDeps } from "./review-wait.ts";
-import { writeSavedReview } from "./saved-review.ts";
+import { liveDeps, parseArgs, run, type WaitScriptDeps } from "./review-wait.ts";
+import { archiveUnfinished, writeSavedReview } from "./saved-review.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
@@ -912,7 +913,7 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     writeFileSync(join(h.dir, `${PR1_HEAD.slice(0, 7)}.review.json`), '{"state":"review incomplete"}');
     expect(await h.wait()).toBe(0);
     expect(h.saved().state).toBe("complete");
-    const kept = join(h.dir, `${PR1_HEAD.slice(0, 7)}.unfinished-1.json`);
+    const kept = join(h.dir, `${PR1_HEAD.slice(0, 7)}.unfinished-1`, `${PR1_HEAD.slice(0, 7)}.review.json`);
     expect(readFileSync(kept, "utf8")).toBe('{"state":"review incomplete"}');
   });
 });
@@ -934,5 +935,32 @@ describe("writeSavedReview", () => {
     expect(JSON.parse(readFileSync(join(dir, "abc1234.unfinished-1.json"), "utf8")).n).toBe(1);
     expect(JSON.parse(readFileSync(join(dir, "abc1234.unfinished-2.json"), "utf8")).n).toBe(2);
     expect(JSON.parse(readFileSync(path, "utf8")).n).toBe(3);
+  });
+});
+
+describe("run: waiting again after an unfinished save keeps all its evidence (Qodo on PR 264)", () => {
+  it("moves the save and every raw file of the commit into a folder of their own", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "review-wait-")), "target-pr1");
+    mkdirSync(dir, { recursive: true });
+    const short = PR1_HEAD.slice(0, 7);
+    writeFileSync(join(dir, `${short}.review.json`), '{"state":"review incomplete"}');
+    writeFileSync(join(dir, `${short}.qodo-api.raw.json`), "old answer");
+    writeFileSync(join(dir, "other.review.json"), "another commit");
+    const kept = archiveUnfinished(dir, PR1_HEAD);
+    expect(kept).toBe(join(dir, `${short}.unfinished-1`));
+    expect(readFileSync(join(dir, `${short}.unfinished-1`, `${short}.qodo-api.raw.json`), "utf8")).toBe("old answer");
+    expect(readdirSync(dir).sort()).toEqual([`${short}.unfinished-1`, "other.review.json"]);
+    expect(archiveUnfinished(dir, PR1_HEAD)).toBeUndefined();
+  });
+
+  it("writes its saves under its own checkout, whatever FAULTFORGE_PRIVATE_DIR says", () => {
+    const before = process.env.FAULTFORGE_PRIVATE_DIR;
+    process.env.FAULTFORGE_PRIVATE_DIR = mkdtempSync(join(tmpdir(), "elsewhere-"));
+    try {
+      expect(liveDeps("faultforge", 1).dir).toBe(join(evidenceDir(), "reviews", "faultforge-pr1"));
+    } finally {
+      if (before === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+      else process.env.FAULTFORGE_PRIVATE_DIR = before;
+    }
   });
 });
