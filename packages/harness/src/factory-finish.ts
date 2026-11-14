@@ -95,10 +95,23 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   // blocked, and that evidence reached its own branch: then the folder holds nothing the branch doesn't.
   const blockedButSaved = finish.label === LABELS.done && saved?.blocked.length && saved.savedAt;
   const keep = !finalSaved || (label === LABELS.help && !blockedButSaved);
-  if (keep) log("kept", { root: ws.root });
-  else {
+  if (keep) {
+    log("kept", { root: ws.root });
+    return label;
+  }
+  try {
     deps.cleanup(ws);
     log("cleanup", { root: ws.root });
+  } catch (error) {
+    // Not the run's failure, so the outcome stands; but the saved log must say it, so it gets one more copy
+    // (Qodo on PR 262), from a fresh worktree, since the run's own may be half removed.
+    log("error", { message: `couldn't clean up the run's worktrees: ${message(error)}` });
+    try {
+      const copy = deps.saveEvidence(runId, null);
+      if (copy.pushed || copy.savedAt) log("saved", { evidence: evidenceFile(c.factory, runId) });
+    } catch (inner) {
+      log("error", { message: `couldn't save the log once more: ${message(inner)}` });
+    }
   }
   return label;
 }

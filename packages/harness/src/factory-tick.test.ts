@@ -741,7 +741,8 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/pull\/42/);
   });
 
-  it("never gives a ticket a second final label when cleanup fails after the label", async () => {
+  it("a cleanup that fails after the label adds no second label, and the saved log says so (Qodo on PR 262)", async () => {
+    const copies: string[][] = [];
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -750,14 +751,23 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    await tick(FACTORY, f.deps, OPTIONS);
+    const save = f.deps.saveEvidence;
+    f.deps.saveEvidence = (runId, w) => {
+      copies.push(f.events.map((e) => String(e.event)));
+      return save(runId, w);
+    };
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
       `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
     ]);
     expect(f.comments).toHaveLength(2);
-    expect(f.events.at(-1)).toMatchObject({ event: "error", message: "worktree busy", afterLabel: LABELS.done });
     expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
+    // The last copy holds the cleanup failure.
+    expect(copies.at(-1)?.at(-1)).toBe("error");
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({
+      message: expect.stringMatching(/worktree busy/),
+    });
   });
 
   describe("the saved run log ends with the label the ticket shows (AUD-M18)", () => {
