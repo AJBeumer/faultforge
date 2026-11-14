@@ -15,8 +15,17 @@ const root = resolve(import.meta.dirname, "../../..");
 const other = otherDriveSpelling(root);
 const testFile = "packages/harness/src/drive-spelling.test.ts";
 
-const run = (cwd: string, args: string[]) =>
-  spawnSync(process.execPath, args, { cwd, encoding: "utf8", timeout: 120_000 });
+// Colour off, and any colour codes stripped anyway: CI forces colour, which splits "Tests  5 passed" with codes.
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const run = (cwd: string, args: string[]) => {
+  const result = spawnSync(process.execPath, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 120_000,
+    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+  });
+  return { status: result.status, stdout: result.stdout.replace(ANSI, ""), stderr: result.stderr.replace(ANSI, "") };
+};
 
 describe.runIf(process.platform === "win32" && other)("both drive spellings", () => {
   const spellings = [root, other as string];

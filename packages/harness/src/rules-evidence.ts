@@ -100,13 +100,16 @@ export function casePrs(casesDir: string): Set<string> {
  * is an error, for the same reason as `casePrs`.
  */
 export function groundTruthCommits(groundTruthFile: string): Set<string> {
-  // Each entry as first written and as amended (AUD-N1): a commit an amendment replaced stays excluded, and
-  // so does the one it names. `readLedger` applies only amendments whose target is one entry, so an amendment
-  // that names no entry, or an ambiguous one, excludes nothing (Qodo on PR 260).
+  // Every value an entry's commit has had (AUD-N1): as first written, each applied amendment's change, and the
+  // result. A commit an amendment replaced stays excluded, even after a later one replaced it again.
+  // `readLedger` applies only amendments whose target is one entry, so an amendment that names no entry, or an
+  // ambiguous one, excludes nothing (Qodo on PR 260).
   let entries: Record<string, unknown>[];
   try {
     const asWritten = readJsonLines(groundTruthFile).filter((line) => line.kind !== "amendment");
-    entries = [...asWritten, ...readLedger(groundTruthFile)];
+    const amended = readLedger(groundTruthFile);
+    const changes = amended.flatMap((entry) => entry.amendments.map((a) => a.change ?? {}));
+    entries = [...asWritten, ...changes, ...amended];
   } catch (error) {
     throw new Error(`cannot read the answer key at ${groundTruthFile}: ${(error as Error).message}`);
   }

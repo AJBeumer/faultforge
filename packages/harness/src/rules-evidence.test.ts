@@ -190,6 +190,24 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["old1111", "new2222"]));
   });
 
+  it("keeps a commit two amendments passed through excluded (Qodo on PR 260)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
+    dirs.push(dir);
+    const amend = (sha: string) => ({
+      kind: "amendment",
+      amends: "FF-9001",
+      change: { injectionCommit: sha },
+      reason: "r",
+    });
+    writeFileSync(
+      join(dir, "ground-truth.jsonl"),
+      [{ caseId: "FF-9001", injectionCommit: "aaa1111" }, amend("bbb2222"), amend("ccc3333")]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(""),
+    );
+    expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["aaa1111", "bbb2222", "ccc3333"]));
+  });
+
   it("ignores the commit of an amendment that names no entry, so it can't hide an unrelated PR (Qodo on PR 260)", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);
