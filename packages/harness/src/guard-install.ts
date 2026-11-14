@@ -11,13 +11,11 @@
  *
  * Exit codes: 0 installed in every reviewed checkout; 1 refused somewhere: a hook file that isn't ours is
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
- * unexpected error (`entry.ts`).
+ * unexpected error, even while loading (`npm run guard:install` runs `guard-install-cli.ts`).
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { runEntry } from "./entry.ts";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { ROOT } from "./paths.ts";
 
@@ -125,7 +123,8 @@ export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT):
     .flatMap((repo) => guardProblem(resolve(root, repo.path)) ?? []);
 }
 
-function main(): number {
+/** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(): number {
   const script = resolve(ROOT, ".claude", "hooks", "git-guard.ts");
   let code = 0;
   for (const [key, repo] of Object.entries(loadFactory().repos)) {
@@ -144,6 +143,3 @@ function main(): number {
   }
   return code;
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
-  await runEntry(import.meta.url, main);

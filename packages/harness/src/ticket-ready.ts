@@ -10,12 +10,10 @@
  * The repo key, its GitHub name, checkout path and ticket sections come from `factory.json`.
  * Exit codes: 0 the ticket is ready; 1 it isn't, with the list of problems; 2 the ticket or the checkout
  * could not be read (a missing checkout is never reported as "not ready"), or an unexpected error stopped the
- * check (`entry.ts`).
+ * check, even while loading (`npm run ticket:ready` runs `ticket-ready-cli.ts`).
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { runEntry } from "./entry.ts";
 import { type FactoryConfig, loadFactory, type RepoConfig, repoConfig } from "./factory-config.ts";
 import { gh } from "./github.ts";
 import { ROOT } from "./paths.ts";
@@ -131,9 +129,10 @@ export function ticketReadyReport(
   return { code: 0, stream: "log", message: `${repoKey} #${number} is ready: ${result.title}` };
 }
 
-function main() {
+/** The command: `ticket-ready-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): number {
   const factory = loadFactory();
-  const [repoKey, number] = process.argv.slice(2);
+  const [repoKey, number] = argv;
   if (!repoKey || !factory.repos[repoKey] || !number) {
     console.error(`usage: npm run ticket:ready -- <${Object.keys(factory.repos).join("|")}> <issue number>`);
     process.exit(2);
@@ -146,9 +145,5 @@ function main() {
   }
   const report = ticketReadyReport(repoKey, Number(number), result);
   console[report.stream](report.message);
-  process.exit(report.code);
+  return report.code;
 }
-
-// Run only when called as a script, not when the tests import it.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
-  await runEntry(import.meta.url, main);

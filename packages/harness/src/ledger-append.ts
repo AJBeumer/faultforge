@@ -130,6 +130,8 @@ export function appendEvent(path: string, event: Record<string, unknown>, option
 export function appendAmendment(
   path: string,
   amendment: { amends: string; at: string; change: Record<string, unknown>; reason: string; evidence: string },
+  /** Run under the lock, just before writing; it throws to refuse, so a check can't race another writer. */
+  check?: () => void,
 ): void {
   const { change } = amendment;
   if (typeof change !== "object" || change === null || Array.isArray(change) || !Object.keys(change).length) {
@@ -141,7 +143,7 @@ export function appendAmendment(
   // A locked field written once would make every reader refuse the file for good (Qodo on PR 269).
   const locked = LOCKED_FIELDS.filter((field) => Object.hasOwn(change, field));
   if (locked.length) throw new Error(`refusing an amendment that changes ${locked.join(", ")}, which is locked`);
-  appendLine(path, { kind: "amendment", ...amendment });
+  appendLine(path, { kind: "amendment", ...amendment }, check);
 }
 
 /** Appends one answer-key entry, re-checking under the lock that no entry holds its case id yet (C-14). */

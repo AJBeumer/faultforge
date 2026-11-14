@@ -8,7 +8,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COULD_NOT_RUN } from "./entry.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const SOURCES = [join(ROOT, "packages/harness/src"), join(ROOT, ".claude/hooks")];
@@ -17,8 +16,8 @@ const LIBRARIES = new Set(["hook-io.ts"]);
 
 /**
  * Scripts npm runs whose uncaught errors still end as Node's default exit 1, which their headers use for
- * something else. Known on 14 November (AUD-N3); this list may only shrink, and a script leaves it once its entry
- * catches. The fix: adopt `entry.ts` (see its header), which also catches errors while the script loads.
+ * something else. Known on 14 November (AUD-N3); this list may only shrink, and a script leaves it once its entry catches. The fix is the one in
+ * `rules-propose.ts`: catch around the entry, exit with the "could not run" code.
  */
 const UNHANDLED_KNOWN = new Set([
   "case-build.ts",
@@ -62,14 +61,7 @@ function handlesUnexpectedErrors(text: string): boolean {
   if (/process\.on\("uncaughtException"/.test(text)) return true;
   const guard = text.lastIndexOf("process.argv[1] &&");
   const entry = guard === -1 ? text : text.slice(guard);
-  return /\bcatch\b|\brunEntry\(import\.meta\.url\b/.test(entry);
-}
-
-/** The part of a header's "Exit codes:" section that says what `code` means, up to the next code. */
-function meaningOf(text: string, code: number): string {
-  const top = header(text);
-  const section = top.slice(top.indexOf("Exit codes:"));
-  return section.match(new RegExp(`\\b${code}\\b(?:(?!\\b\\d\\b)[\\s\\S])*`))?.[0] ?? "";
+  return /\bcatch\b/.test(entry);
 }
 
 describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
@@ -106,34 +98,30 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
     expect(handlesUnexpectedErrors(`try {} catch {}\n${guard} main();`)).toBe(false);
     expect(handlesUnexpectedErrors(`${guard} {\n  try { main(); } catch { process.exit(2); }\n}`)).toBe(true);
     expect(handlesUnexpectedErrors(`process.on("uncaughtException", () => process.exit(2));\nrun();`)).toBe(true);
-    expect(handlesUnexpectedErrors(`${guard} await runEntry(import.meta.url, main);`)).toBe(true);
-    expect(handlesUnexpectedErrors(`runEntry(import.meta.url, main);\n${guard} main();`)).toBe(false);
   });
 
-  it("guards every script in entry.ts's table fully: entry, npm script and header (AUD-N3)", () => {
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
+  it("catches load-time errors too: an entry on cli-entry.ts imports nothing else statically (AUD-N3)", () => {
     const problems: string[] = [];
-    for (const [file, code] of Object.entries(COULD_NOT_RUN)) {
-      const text = readFileSync(join(ROOT, "packages/harness/src", file), "utf8");
-      if (!/process\.argv\[1\][^;]*\brunEntry\(import\.meta\.url, main\)/.test(text))
-        problems.push(`${file}: its entry doesn't call runEntry`);
-      const commands = Object.values(pkg.scripts).filter((c) => c.includes(`packages/harness/src/${file}`));
-      if (!commands.length || commands.some((c) => !c.includes(`--import ./packages/harness/src/entry.ts`)))
-        problems.push(`${file}: npm doesn't load entry.ts first`);
-      if (!/entry\.ts/.test(meaningOf(text, code)))
-        problems.push(`${file}: its header doesn't say ${code} is entry.ts's`);
+    const entries = npmScripts().filter(({ text }) => /from "\.\/cli-entry\.ts"/.test(text));
+    for (const { file, text } of entries) {
+      const imports = [...text.matchAll(/^import [^;]*? from "(.+)";$/gm)].map((m) => m[1]);
+      if (imports.join() !== "./cli-entry.ts") problems.push(`${file} imports ${imports.join(", ")}`);
+      if (!/await runEntry\(\s*"[\w:]+",\s*async \(\) =>[^;]*\(await import\("\.\/[\w-]+\.ts"\)\)/.test(text))
+        problems.push(`${file} doesn't load its body inside runEntry`);
     }
-    // And the other way: a script calling runEntry without a code would throw at its first run.
-    for (const { file, text } of npmScripts())
-      if (/\brunEntry\(/.test(text) && file !== "entry.ts" && !(file in COULD_NOT_RUN))
-        problems.push(`${file}: calls runEntry but has no code in entry.ts`);
+    // The scripts moved behind cli-entry.ts for AUD-N3 stay there, and each body's header says where its
+    // could-not-run code comes from, so a reader of either file finds it.
+    const moved = { "docs-check": 2, "factory-tick": 3, "factory-timeline": 2, "guard-install": 2, "ticket-ready": 2 };
+    for (const [name, code] of Object.entries(moved)) {
+      const cli = entries.find(({ file }) => file === `${name}-cli.ts`);
+      if (!cli) problems.push(`npm doesn't run ${name}-cli.ts`);
+      else if (!new RegExp(`process\\.argv\\.slice\\(2\\),\\s*${code},?\\s*\\)`).test(cli.text))
+        problems.push(`${name}-cli.ts doesn't pass ${code} to runEntry`);
+      const top = header(readFileSync(join(ROOT, "packages/harness/src", `${name}.ts`), "utf8"));
+      const section = top.slice(top.indexOf("Exit codes:"));
+      if (!new RegExp(`\\b${code}\\b[\\s\\S]*${name}-cli\\.ts`).test(section))
+        problems.push(`${name}.ts's header doesn't say ${code} is also an unexpected error (${name}-cli.ts)`);
+    }
     expect(problems).toEqual([]);
-  });
-
-  it("reads a code's meaning up to the next code", () => {
-    const text = "/**\n * Exit codes: 0 fine; 2 broken (`entry.ts`); 3 other.\n */";
-    expect(meaningOf(text, 2)).toContain("entry.ts");
-    expect(meaningOf(text, 0)).not.toContain("entry.ts");
-    expect(meaningOf(text, 3)).not.toContain("entry.ts");
   });
 });

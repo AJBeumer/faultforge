@@ -15,13 +15,11 @@
  *
  * Exit codes: 0 nothing found, or no private storage to check against; 1 a public file names a case or
  * template it may not, listed on stdout; 2 a file could not be read, or an unexpected error stopped it
- * (`entry.ts`).
+ * (`npm run docs:check` runs `docs-check-cli.ts`, so even while loading).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { runEntry } from "./entry.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
 import { privateDir } from "./templates.ts";
@@ -156,7 +154,8 @@ export function docsFacts(priv: string): DocsFacts | undefined {
   return { adjudicated, caseTemplates, privateTemplates, heldOut };
 }
 
-function main(): number {
+/** The command: `docs-check-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(): number {
   let facts: DocsFacts | undefined;
   let files: { path: string; text: string }[];
   try {
@@ -178,6 +177,3 @@ function main(): number {
   console.log(`docs:check: ${files.length} public files name no case or template before its time`);
   return 0;
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
-  await runEntry(import.meta.url, main);

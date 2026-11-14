@@ -7,12 +7,10 @@
  * Reads `<runs>/<run id>.jsonl` (the live log), or the copy under `<evidence>/factory-runs/`.
  *
  * Exit codes: 0 the timeline was printed; 2 no run id was given, no log for it was found, or an unexpected
- * error stopped it (`entry.ts`).
+ * error stopped it, even while loading (`npm run factory:timeline` runs `factory-timeline-cli.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { runEntry } from "./entry.ts";
+import { join } from "node:path";
 import { parseJsonLines } from "./jsonl.ts";
 import { evidenceDir, runsDir } from "./paths.ts";
 
@@ -109,10 +107,11 @@ export function summarize(events: RunEvent[]): string {
   );
 }
 
-function main() {
+/** The command: `factory-timeline-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): number {
   const runs = runsDir();
   const saved = join(evidenceDir(), "factory-runs");
-  const [arg] = process.argv.slice(2);
+  const [arg] = argv;
   if (!arg) {
     console.error("usage: npm run factory:timeline -- <run id | latest>");
     process.exit(2);
@@ -136,7 +135,5 @@ function main() {
   console.log(timeline(events));
   console.log("");
   console.log(summarize(events));
+  return 0;
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]))
-  await runEntry(import.meta.url, main);

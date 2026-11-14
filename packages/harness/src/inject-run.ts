@@ -25,7 +25,7 @@ export function runProof(places: StepPlaces, stage: "base" | "variant", proof: P
   try {
     const dest = join(scratch, proof.proofTest);
     mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(join(places.templateDir, proof.proofTest), dest);
+    copyFileSync(join(proof.dir ?? places.templateDir, proof.proofTest), dest);
     // The JSON report says whether a test ran and failed; an exit code alone can't tell that from a
     // proof that failed to load (#217).
     const report = join(scratch, "proof-report.json");
