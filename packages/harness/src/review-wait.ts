@@ -25,10 +25,26 @@
  */
 import { runEntry } from "./cli-entry.ts";
 
+// In an unattended run the agent has no Qodo key: the runner runs this for it and hands back its output and
+// exit code, which keep the meanings above (factory-review-broker.ts, #243). Loaded the same way as the body,
+// so an error while loading it is exit 2 too.
+const broker = process.env.FAULTFORGE_REVIEW_BROKER;
+const viaBroker = async (argv: string[]) => {
+  const { askRunner } = await import("./factory-review-broker.ts");
+  const answer = await askRunner(broker as string, argv);
+  // Exit once the output is written: a pipe would otherwise lose the end of the findings (Qodo on PR 270).
+  await new Promise<void>((written) => process.stdout.write(answer.output, () => written()));
+  return answer.exitCode;
+};
+
 // The body is loaded here with a dynamic import, so an error even while it loads is exit 2 (cli-entry.ts).
 try {
   process.exit(
-    await runEntry("review:wait", async () => (await import("./review-wait-run.ts")).main, process.argv.slice(2)),
+    await runEntry(
+      "review:wait",
+      async () => (broker ? viaBroker : (await import("./review-wait-run.ts")).main),
+      process.argv.slice(2),
+    ),
   );
 } catch {
   process.exit(2);
