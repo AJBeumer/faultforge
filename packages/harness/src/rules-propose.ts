@@ -195,7 +195,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     main();
   } catch (error) {
-    console.error(`rules:propose could not run: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(2);
+    // The stack, so the failing step can be found; and exitCode, not exit(), so every "Opened <url>" line
+    // already printed for a ticket reaches the output before the process ends (Qodo on PR 260).
+    console.error(
+      `rules:propose could not run: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+    );
+    process.exitCode = 2;
   }
 }

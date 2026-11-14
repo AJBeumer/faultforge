@@ -47,7 +47,10 @@ import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 // is a usage error, so it is 1 like the usage message below.
 process.on("uncaughtException", (error) => {
   const usage = (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") ?? false;
-  console.error(`${usage ? "refused" : "inject stopped on an unexpected error"}: ${error.message}`);
+  // The stack for an unexpected error, so the failing step can be found (Qodo on PR 260).
+  console.error(
+    usage ? `refused: ${error.message}` : `inject stopped on an unexpected error: ${error.stack ?? error.message}`,
+  );
   process.exit(usage ? 1 : 2);
 });
 
