@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { claimMarker } from "./factory-comments.ts";
 import { loadFactory } from "./factory-config.ts";
 
 const root = join(import.meta.dirname, "../../..");
@@ -40,6 +41,14 @@ describe("factory workflow", () => {
 
   it("starts a tick when a ticket is left agent-working, so an interrupted run is recovered (#197)", () => {
     expect(workflow).toMatch(/for label in ready-for-agent agent-working; do/);
+  });
+
+  it("doesn't count a ticket a run on the owner's PC claimed and that shows no result yet (Qodo on PR 268)", () => {
+    // The look job reads the same mark the claim comment carries.
+    expect(claimMarker("local")).toBe("<!-- scheduled-run claim mode=local -->");
+    expect(workflow).toContain('capture(\\"<!-- scheduled-run claim mode=(?<m>ci|local) -->\\").m');
+    expect(workflow).toMatch(/if \[ "\$mode" = local \]; then[\s\S]*?continue/);
+    expect(workflow).toContain('select(. == "agent-done" or . == "agent-needs-help")');
   });
 
   it("checks every repo out in the owner's folder layout", () => {

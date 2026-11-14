@@ -40,9 +40,27 @@ jobs:
         run: |
           ready=0
           for repo in $(node -e 'for (const r of Object.values(require("./factory.json").repos)) console.log(r.github)'); do
-            # agent-working too: a tick is what recovers a ticket an interrupted run left behind (#197).
+            owner="${repo%%/*}"
+            # agent-working too: a tick is what recovers a ticket an interrupted run left behind (#197). Not one
+            # a run on the owner's PC claimed and that shows no result yet: that one is the PC's to recover, and
+            # counting it would start a tick that does nothing every 15 minutes (Qodo on PR 268).
             for label in ready-for-agent agent-working; do
-              n=$(gh api "repos/$repo/issues?state=open&labels=$label&per_page=100" --jq '[.[] | select(.pull_request | not)] | length')
+              if [ "$label" = ready-for-agent ]; then
+                n=$(gh api "repos/$repo/issues?state=open&labels=$label&per_page=100" --jq '[.[] | select(.pull_request | not)] | length')
+              else
+                n=0
+                for item in $(gh api "repos/$repo/issues?state=open&labels=$label&per_page=100" --jq '.[] | select(.pull_request | not) | "\(.number):\([.labels[].name | select(. == "agent-done" or . == "agent-needs-help")] | length)"'); do
+                  num="${item%%:*}"
+                  if [ "${item##*:}" = 0 ]; then
+                    mode=$(gh api --paginate "repos/$repo/issues/$num/comments?per_page=100" --jq ".[] | select(.user.login == \"$owner\") | .body | capture(\"<!-- scheduled-run claim mode=(?<m>ci|local) -->\").m" | tail -n 1)
+                    if [ "$mode" = local ]; then
+                      echo "$repo#$num: claimed by a run on the owner's PC, left to it"
+                      continue
+                    fi
+                  fi
+                  n=$((n + 1))
+                done
+              fi
               echo "$repo: $n labelled $label"
               ready=$((ready + n))
             done

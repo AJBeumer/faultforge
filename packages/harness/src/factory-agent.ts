@@ -171,7 +171,8 @@ export function runAgent(
   number: number,
   ticketFile: string,
   log: Logger,
-  onStart: (pid: number) => void = () => {},
+  /** Told the agent's pid when it starts, and null once it has ended, so the lock only ever names a live agent. */
+  onAgent: (pid: number | null) => void = () => {},
 ): Promise<AgentRun> {
   const { github } = repoConfig(factory, repoKey);
   const settingsFile = join(ws.root, "agent-settings.json");
@@ -207,7 +208,7 @@ export function runAgent(
     });
     // Stopping the runner stops the agent, and the lock learns its pid for a kill the runner can't catch.
     const unguard = child.pid ? killOnExit(child.pid) : () => {};
-    if (child.pid) onStart(child.pid);
+    if (child.pid) onAgent(child.pid);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -269,6 +270,7 @@ export function runAgent(
       settled = true;
       clearTimeout(timer);
       unguard();
+      onAgent(null);
       done({
         exitCode: null,
         timedOut: false,
@@ -284,6 +286,7 @@ export function runAgent(
       settled = true;
       clearTimeout(timer);
       unguard();
+      onAgent(null);
       if (buffer) onLine(buffer);
       const result = final as Record<string, unknown> | null;
       done({

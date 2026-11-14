@@ -4,7 +4,7 @@
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { killTree } from "./factory-kill.ts";
-import { ownStartId, sameProcess } from "./factory-process.ts";
+import { ownStartId, processStartId, sameProcess } from "./factory-process.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 export interface Lock {
@@ -14,7 +14,7 @@ export interface Lock {
   refresh(): void;
   /** Records the agent's pid and start with the heartbeat, so a tick that takes over after this runner was
    * killed can end the agent it left behind (AUD-M19). */
-  recordAgent(pid: number, started?: string): void;
+  recordAgent(pid: number | null, started?: string): void;
   note?: string;
 }
 
@@ -87,12 +87,15 @@ export function acquireLock(
     heartbeatMs?: number;
     isSame?: (pid: number, started: string | undefined) => boolean;
     killAgent?: (pid: number) => void;
+    /** Reads a live process's start id now (`processStartId`), to tell the recorded agent from a reused pid. */
+    startIdOf?: (pid: number) => string | null;
   } = {},
 ): Lock {
   const {
     heartbeatMs = HEARTBEAT_MS,
     isSame = (pid, started) => sameProcess(pid, started),
     killAgent = killTree,
+    startIdOf = processStartId,
   } = options;
   let agent: { agentPid: number; agentStarted?: string } | undefined;
   const file = join(dir, "factory.lock");
@@ -140,8 +143,8 @@ export function acquireLock(
     refresh();
     timer = setInterval(refresh, heartbeatMs);
     timer.unref();
-    const recordAgent = (pid: number, started?: string) => {
-      agent = { agentPid: pid, ...(started ? { agentStarted: started } : {}) };
+    const recordAgent = (pid: number | null, started?: string) => {
+      agent = pid ? { agentPid: pid, ...(started ? { agentStarted: started } : {}) } : undefined;
       refresh();
     };
     return { acquired: true, release, refresh, recordAgent, ...(note ? { note } : {}) };
@@ -166,17 +169,24 @@ export function acquireLock(
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${at}` };
   // The gone runner's agent is ended before the lock changes hands; one that can't be ended keeps the lock
   // where it is, so no second run starts beside it (Qodo on PR 268).
+  // Killed only on proof that the pid is still the agent (its start id read now equals the recorded one);
+  // when that can't be told either way, nothing is killed and the lock stays, for the owner (Qodo on PR 268).
   let ended = "";
   const { agentPid, agentStarted } = beatNow;
-  if (agentPid && agentStarted && isAlive(agentPid) && isSame(agentPid, agentStarted)) {
-    try {
-      killAgent(agentPid);
-      ended = `; ended its agent, pid ${agentPid}`;
-    } catch (error) {
-      return {
-        ...NOT_ACQUIRED,
-        note: `the stale lock's agent, pid ${agentPid}, couldn't be ended, so the lock stays: ${(error as Error).message}`,
-      };
+  if (agentPid && isAlive(agentPid)) {
+    const now = startIdOf(agentPid);
+    const keep = (why: string) => ({
+      ...NOT_ACQUIRED,
+      note: `the stale lock's agent, pid ${agentPid}, ${why}, so the lock stays`,
+    });
+    if (!agentStarted || now === null) return keep("may still be running and can't be told from another process");
+    if (now === agentStarted) {
+      try {
+        killAgent(agentPid);
+        ended = `; ended its agent, pid ${agentPid}`;
+      } catch (error) {
+        return keep(`couldn't be ended (${(error as Error).message})`);
+      }
     }
   }
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };

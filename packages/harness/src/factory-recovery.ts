@@ -75,7 +75,9 @@ export function recoverStranded(
     for (const { number } of stranded) {
       const ref = `${github}#${number}`;
       try {
-        const claimedBy = deps.mode && deps.claimMode ? deps.claimMode(github, number) : null;
+        // A ticket that already shows a result only lost its last removal, whichever way ran it: finishing that
+        // removal can't disturb a live run (Qodo on PR 268). Only a bare claim is the other way's to recover.
+        const claimedBy = !helped.has(number) && deps.mode && deps.claimMode ? deps.claimMode(github, number) : null;
         if (claimedBy && claimedBy !== deps.mode) {
           otherMode.push(`${ref} (claimed by a ${claimedBy} run)`);
           continue;

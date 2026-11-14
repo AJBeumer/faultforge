@@ -182,7 +182,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     audit: (ws, ticket, from, to) => auditRun(factory, privateRepo, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) =>
       runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log, (pid) =>
-        held?.recordAgent(pid, processStartId(pid) ?? undefined),
+        held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
       ),
     verifyPr(ws, repoKey, pr) {
       return verifyPrWith(

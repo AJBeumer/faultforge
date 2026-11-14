@@ -160,3 +160,13 @@ describe("recoverStranded: a ticket that already shows agent-done (Qodo on PR 26
     expect(w.on("o/t#7")).toEqual(["agent-done"]);
   });
 });
+
+describe("recoverStranded: a finished ticket of the other mode still loses agent-working (Qodo on PR 268)", () => {
+  it("removes agent-working from a ticket that already shows agent-done, whichever mode claimed it", () => {
+    const w = world({ "o/t#7": [WORKING, "agent-done"] });
+    const deps: RecoveryDeps = { ...w.deps, mode: "ci", claimMode: () => "local" };
+    expect(recoverStranded([{ github: "o/t" }], deps).recovered).toEqual(["o/t#7"]);
+    expect(w.on("o/t#7")).toEqual(["agent-done"]);
+    expect(w.calls.filter((c) => c.startsWith("comment"))).toEqual([]);
+  });
+});
