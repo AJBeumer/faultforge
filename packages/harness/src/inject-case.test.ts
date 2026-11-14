@@ -290,3 +290,16 @@ describe("proofCorpus: a template still being written (Qodo on PR 271)", () => {
     expect(skipped.sort()).toEqual(["broken", "unproven"]);
   });
 });
+
+describe("proofCorpus: a broken private copy (Qodo on PR 271)", () => {
+  it("never hides a good published copy of the same template", () => {
+    const priv = mkdtempSync(join(tmpdir(), "corpus-priv-"));
+    const seed = mkdtempSync(join(tmpdir(), "corpus-seed-"));
+    mkdirSync(join(priv, "same"));
+    writeFileSync(join(priv, "same", "template.json"), "{ half");
+    mkdirSync(join(seed, "same"));
+    writeFileSync(join(seed, "same", "template.json"), JSON.stringify({ ...BUG, id: "same" }));
+    writeFileSync(join(seed, "same", "proof.test.ts"), "// p\n");
+    expect(proofCorpus([priv, seed]).map((p) => p.dir)).toEqual([join(seed, "same")]);
+  });
+});
