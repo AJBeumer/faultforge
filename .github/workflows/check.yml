@@ -7,10 +7,12 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch or PR cancels the run it replaces.
+# A newer push to the same branch or PR cancels the run it replaces. Never on main: every merge's run must
+# finish, so a red main shows on the commit that turned it red. Each main commit gets its own group, because
+# within one group GitHub replaces a queued run with a newer one even when nothing in progress is cancelled.
 concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: true
+  group: check-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   check:
@@ -18,8 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # Pinned to exact commits; the comment says which release.
+      # Pinned to exact commits; the comment says which release. No job keeps the checkout's token: none pushes,
+      # and `npm ci` runs install scripts that could read it from .git/config.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -35,6 +40,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24

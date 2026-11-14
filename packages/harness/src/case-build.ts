@@ -54,7 +54,7 @@
  * wrong PR). The message names which.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,7 @@ import { findLeaks, validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
+import { sha256 } from "./provenance.ts";
 import { type Finding, findingsFor, type QodoReview } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
 import { findSavedReview } from "./saved-review.ts";
@@ -106,10 +107,6 @@ export interface RunOptions {
   overlayPath?: string;
   examplesDir?: string;
   write?: boolean;
-}
-
-function sha256(data: string): string {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 /**

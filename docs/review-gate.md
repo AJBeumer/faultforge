@@ -49,43 +49,45 @@ still saw them.
 ## Reading only
 
 The command changes no branch, file, review or label. Reading the staged tree uses `git write-tree`,
-which adds that tree to git's object store and nothing else. It does not block a commit. The hook that runs
-it after every commit is described below.
+which adds that tree to git's object store and nothing else. It does not block a commit, and nothing runs
+it automatically any more (see below).
 
-## The warning after a commit
+## What the saved evidence shows (14 November)
 
-Two small hooks (both `.claude/hooks/review-gate-note.ts`, registered in `.claude/settings.json`) work
-together around every Bash or PowerShell command in Claude Code. Before the command, one records git's
-HEAD. After it, the other asks git, not the command text, whether a commit was made during it: HEAD moved
-since the recording and the newest reflog entry is a commit. If so it runs `review:gate` on that commit
-and, when no finished local review saw those exact files, shows a short note to the person and the agent.
-Because it reads git and not the command, `git commit -a`, `git add … && git commit` in one command, `-q`,
-an amend or an alias are all judged on what was really committed. If one command makes several commits,
-the last is judged. The judging hook also runs when a command fails, so a commit followed by a
-failing command is still checked.
+Every saved local review was read with the gate's own rules (#254).
 
-A commit that several parallel commands all see is claimed by the first to judge it (an exclusive file in
-the same folder), so it is warned about once; the claim is given back when the check could not be made.
-Each record belongs to one tool call (Claude Code's `tool_use_id`), so commands running in parallel are
-each compared against their own starting point.
+| Saved local reviews | Checkpoint kept | Coverage complete | Finding list complete | Covers a tree |
+|---|---|---|---|---|
+| 5 from the Qodo toolbox CLI (12 November) | yes | yes | yes | yes |
+| 12 from `review:local` (the API key) | no, `checkpoint_unavailable` | yes | no | no |
+| 17 others from Day 8 experiments | no (`checkpoint_unavailable` or `superseded`) | yes | no | no |
 
-Recording before the command is what keeps it honest about who made the commit. A commit made between
-commands, in an IDE or a plain terminal, is already recorded when the next command starts, so it is never
-blamed on that command. It also looks at the repository the command ran in, so a commit in a linked
-worktree of this repository (`git worktree add`) is checked too, and a nested repository such as
-`private/` is not.
+So Qodo's "finding list complete" flag follows whether it kept a checkpoint for the review. The API key that
+`review:local` uses has never got one. That is a measured pattern, not a documented rule: Qodo doesn't say
+what the flag means, and we have not tested it further. Testing it means sending new reviews to Qodo, which
+is the owner's decision.
 
-It only warns. It never blocks or undoes a commit, and any failure of a hook ends in silence or a note.
-It stays silent when HEAD did not move (a failed or dry-run commit, any other command), when it moved for
-another reason (a checkout, a pull), in other repositories, in unattended factory runs, and when
-`FAULTFORGE_GATE=off` is set. The records are small files in the git folder (`faultforge-gate-heads/`), one
-per call and cleared once judged (an untouched record is removed after a day), so they are never committed. A commit that was only reviewed on its pull request, or a docs-only commit Qodo
-skips, shows the note too: the note says what it knows.
+What follows from it:
 
-What it does not see: a commit made in an IDE or terminal is never warned about, because it is recorded
-as already seen. If the check takes longer than the hook's limit (the gate takes about a second today), the
-note says it could not check; if the hook process itself is killed mid-check, that commit's claim stays and it
-is not warned about again. A git post-commit hook would cover commits made anywhere. Blocking a commit
-would need a git pre-commit hook, not a Claude Code hook, because a Claude Code hook runs before the command
-and cannot see what `git commit -a` will stage. Git runs its own pre-commit hook after staging. Both are
-separate decisions.
+- **No `review:local` run has ever been accepted**, by the gate or by `review:local` itself (it ends with
+  exit 3 for the same reason). Only reviews made with the toolbox CLI with a checkpoint have covered a tree.
+- **The gate still refuses those runs.** Treating a review that Qodo marks as incomplete as complete would
+  be a guess about what Qodo meant. When the gate says "not covered" for such a review, it now gives Qodo's
+  reason (`checkpoint_unavailable: it kept no checkpoint`), not "incomplete coverage", because the coverage
+  was complete.
+
+## The warning after a commit was retired
+
+From #184 to #254, a Claude Code hook (`.claude/hooks/review-gate-note.ts`) ran `review:gate` after every
+commit made through Claude Code in this repository. It showed a note when no finished local review had seen
+the committed files. It never blocked anything.
+
+It was removed (#254) because it told nobody anything. Agents can only make local reviews with
+`review:local`, and the gate has never accepted one of those. The toolbox CLI that can make an acceptable
+review is the owner's to run. So the note appeared after every commit, whether or not a review had run. A
+warning that always fires carries no information, and it teaches people to ignore warnings.
+
+The `review:gate` command stays. It is still the way to check a commit by hand against a saved toolbox
+review. If a way is found for `review:local` to get a checkpoint, wire the gate in again, and this time as a
+git pre-commit hook, which sees what is really staged. A Claude Code hook runs before the command and can't
+see what `git commit -a` will stage.
