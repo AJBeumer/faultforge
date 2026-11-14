@@ -167,21 +167,26 @@ export function runIdFor(now: Date, repoKey: string, number: number): string {
   return `${stamp}-${repoKey}-${number}`;
 }
 
-/** How one tick ended. Its exit code follows from the ticket's final label (`exitCodeFor`). */
-export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-help";
+/**
+ * How one tick ended. `failed` is the runner itself failing (an exception, before or after a pick), kept
+ * apart from a run that stopped for the owner, so a red Actions run for a runner fault stands out (AUD-M18).
+ */
+export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-help" | "failed";
 
 /**
- * The tick's exit code for each outcome, as factory-tick.ts's header states it: 1 exactly when the ticket it
- * took now carries `agent-needs-help` (a run that stopped, or a ticket that isn't ready), 0 otherwise. A
- * refused ticket gets no label, so it is 0.
+ * The tick's exit code for each outcome, as factory-tick.ts's header states it: 1 when the run or the ticket
+ * stopped for the owner with `agent-needs-help` (a run that stopped, or a ticket that isn't ready), 3 when the
+ * tick itself failed (the ticket, if one was claimed, is labelled `agent-needs-help` too), 0 otherwise. A
+ * refused ticket gets no label, so it is 0. 2 is the command line or the environment, before any tick.
  */
-export const EXIT_CODES: Record<TickOutcome, 0 | 1> = {
+export const EXIT_CODES: Record<TickOutcome, 0 | 1 | 3> = {
   busy: 0,
   idle: 0,
   refused: 0,
   "not-ready": 1,
   done: 0,
   "needs-help": 1,
+  failed: 3,
 };
 
 export function exitCodeFor(outcome: TickOutcome): number {

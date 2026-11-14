@@ -310,7 +310,7 @@ describe("tick: stop paths", () => {
             : { text: "x", provenance: { ...ownerOnly, commenters: ["owner", "mallory"] } };
         },
       });
-      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
       expect(f.calls).not.toContain("agent");
       expect(f.comments.at(-1)?.body).toMatch(/changed before the run started/);
     });
@@ -565,7 +565,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(addAttempts).toBe(2);
     expect(f.comments.at(-1)?.body).toMatch(/runner failed \(add failed\)/);
     expect(f.events.map((e) => e.event)).toContain("evidence-blocked");
@@ -665,7 +665,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     // The agent must never have been started on a ticket whose claim didn't actually land.
     expect(f.calls).not.toContain("agent");
     // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again.
@@ -687,7 +687,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     // The fallback relabel is still tried, even though the finish-step one failed.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
       `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
@@ -706,7 +706,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
     expect(f.comments.at(-1)?.body).toMatch(/runner failed \(git ls-remote timed out\)/);
   });
@@ -720,7 +720,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
     expect(f.comments.at(-1)?.body).toMatch(/runner failed \(npm review:wait timed out\)/);
   });
@@ -819,7 +819,7 @@ describe("tick: stop paths", () => {
         },
       },
     );
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
     expect(f.comments[1]?.body).toMatch(/runner failed \(npm ci failed\)/);
     expect(f.released()).toBe(true);
@@ -1239,7 +1239,7 @@ describe("hooks-checked: the run log records the hook self-test (#126)", () => {
         throw new HooksCheckError("the workspace's hooks failed their self-test: x", failed);
       },
     });
-    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     const names = f.events.map((e) => e.event);
     expect(names).not.toContain("agent-started");
     expect(names.indexOf("hooks-checked")).toBeLessThan(names.indexOf("error"));
@@ -1384,14 +1384,56 @@ describe("factory:tick exit codes (#245)", () => {
   const codes = header.slice(header.indexOf("Exit codes:"));
 
   it("gives each outcome the code its header states, following the ticket's final label", () => {
-    expect(EXIT_CODES).toEqual({ busy: 0, idle: 0, refused: 0, "not-ready": 1, done: 0, "needs-help": 1 });
+    expect(EXIT_CODES).toEqual({
+      busy: 0,
+      idle: 0,
+      refused: 0,
+      "not-ready": 1,
+      done: 0,
+      "needs-help": 1,
+      failed: 3,
+    });
     for (const outcome of ["busy", "idle", "refused", "done"] as const) {
       expect(exitCodeFor(outcome)).toBe(0);
       expect(codes).toMatch(new RegExp(`0 [^;]*\\b${outcome === "done" ? "agent-done" : outcome}\\b`));
     }
     for (const outcome of ["needs-help", "not-ready"] as const) expect(exitCodeFor(outcome)).toBe(1);
     expect(codes).toMatch(/1 the ticket it took now carries\s+(\*\s+)?`agent-needs-help`[^;]*isn't ready/);
-    expect(codes).toMatch(/2 the command line or the\s+(\*\s+)?environment was wrong/);
+    expect(codes).toMatch(/2 the command line or the\s+(\*\s+)?environment was\s+(\*\s+)?wrong/);
+    expect(codes).toMatch(/3 the tick itself failed/);
+  });
+
+  it("a tick failure and a ticket that needs the owner exit with different codes (AUD-M18)", async () => {
+    // Before any pick: GitHub can't be read. No ticket was touched, so it is no ticket's needs-help.
+    const early = fake(
+      {},
+      {
+        labelled: () => {
+          throw new Error("HTTP 502");
+        },
+      },
+    );
+    const failed = await tick(FACTORY, early.deps, OPTIONS);
+    expect(failed).toBe("failed");
+    // After the claim: the ticket gets agent-needs-help, but the exit code still says the runner failed.
+    const late = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("gh api: HTTP 502");
+        },
+      },
+    );
+    expect(await tick(FACTORY, late.deps, OPTIONS)).toBe("failed");
+    expect(late.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`);
+    const stopped = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      { runAgent: async () => ({ ...AGENT_OK, timedOut: true, resultText: null }) },
+    );
+    const help = await tick(FACTORY, stopped.deps, OPTIONS);
+    expect(help).toBe("needs-help");
+    expect(exitCodeFor(failed)).toBe(3);
+    expect(exitCodeFor(help)).toBe(1);
   });
 
   it("each outcome the tick returns is the one its final label calls for", async () => {
@@ -1418,5 +1460,58 @@ describe("factory:tick exit codes (#245)", () => {
     expect(tokenFrom({ GH_TOKEN: "env", GH_TOKEN_FILE: "f" }, missing)).toEqual({ token: "env" });
     // The header names it under 2.
     expect(codes).toMatch(/a token file that can't be read/);
+  });
+});
+
+describe("tick: saved means saved (Qodo on PR 262)", () => {
+  it("a runner failure whose log reached neither main nor a branch logs no saved event", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        audit: () => {
+          throw new Error("HTTP 502");
+        },
+        saveEvidence: () => ({ file: "", pushed: false, blocked: ["config/x"], savedAt: undefined }),
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
+    expect(f.events.map((e) => e.event)).not.toContain("saved");
+    expect(f.events.at(-1)).toMatchObject({ event: "error", message: expect.stringMatching(/reached neither/) });
+  });
+
+  it("when the final copy fails, the run folder is kept: the saved copy lacks the outcome", async () => {
+    let copies = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        saveEvidence: (runId) => {
+          copies++;
+          if (copies === 2) throw new Error("push rejected");
+          return { file: `x/${runId}.jsonl`, pushed: true, blocked: [] };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.calls).not.toContain("cleanup");
+    expect(f.events.map((e) => e.event)).not.toContain("saved");
+    expect(f.events.at(-1)).toMatchObject({ event: "kept" });
+  });
+
+  it("every logged step is a heartbeat for the lock", async () => {
+    let beats = 0;
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        lock: () => ({
+          acquired: true,
+          release: () => {},
+          refresh: () => {
+            beats++;
+          },
+        }),
+      },
+    );
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(beats).toBe(f.events.length);
   });
 });

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acquireLock } from "./factory-lock.ts";
+import { acquireLock, HEARTBEAT_MS, STALE_HEARTBEAT_MS } from "./factory-lock.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
 describe("acquireLock (#107)", () => {
@@ -76,34 +76,52 @@ describe("acquireLock (#107)", () => {
   });
 });
 
-describe("acquireLock: a live holder keeps its lock however old; a restart frees it (AUD-M19)", () => {
+describe("acquireLock: a running tick keeps its lock however old; a stopped heartbeat frees it (AUD-M19)", () => {
   const dir = () => mkdtempSync(join(tmpdir(), "ff-lock-live-"));
-  const BOOT = Date.parse("2026-11-10T00:00:00.000Z");
+  const NOW = Date.parse("2026-11-14T12:00:00.000Z");
+  const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 
-  it("never takes over a lock whose pid is alive, however old it is", () => {
+  it("never takes over a live pid's lock taken days ago, while its heartbeat moves", () => {
     const d = dir();
-    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-10T01:00:00.000Z" }));
-    // Days later: the old age limit would have taken it over.
-    const result = acquireLock(d, () => true, BOOT);
+    const held = { pid: 12345, since: "2026-11-10T01:00:00.000Z", at: minutesAgo(2) };
+    writeFileSync(join(d, "factory.lock"), JSON.stringify(held));
+    // The old rule took over any lock older than the run's limit plus an hour.
+    const result = acquireLock(d, () => true, { nowMs: NOW });
     expect(result.acquired).toBe(false);
-    expect(result.note).toMatch(/pid 12345/);
+    expect(result.note).toMatch(/pid 12345 since 2026-11-10T01:00:00.000Z/);
   });
 
-  it("takes over a lock last refreshed before the machine started, even when its pid now names a live process", () => {
+  it("keeps it through a long synchronous step: a heartbeat an hour old is still a running tick", () => {
     const d = dir();
-    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-09T23:00:00.000Z" }));
-    const taken = acquireLock(d, () => true, BOOT);
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: minutesAgo(60) }));
+    expect(acquireLock(d, () => true, { nowMs: NOW }).acquired).toBe(false);
+  });
+
+  it("takes over a live pid's lock whose heartbeat stopped: the pid is another program's, or the tick hung", () => {
+    const d = dir();
+    writeFileSync(
+      join(d, "factory.lock"),
+      JSON.stringify({ pid: 12345, at: minutesAgo(STALE_HEARTBEAT_MS / 60_000 + 1) }),
+    );
+    const taken = acquireLock(d, () => true, { nowMs: NOW });
     expect(taken.acquired).toBe(true);
-    expect(taken.note).toMatch(/machine restarted/);
+    expect(taken.note).toMatch(/heartbeat stopped/);
     taken.release();
   });
 
-  it("decides staleness from the pid and the machine's start only", () => {
-    expect(lockIsStale({ pid: 1, at: "2026-11-01T00:00:00.000Z" }, () => true, Date.parse("2026-10-01"))).toBe(false);
-    expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, BOOT)).toBe(false);
-    expect(lockIsStale({ pid: 1, at: "2026-11-01T00:00:00.000Z" }, () => true, BOOT)).toBe(true);
-    expect(lockIsStale({ pid: 1, at: "2026-11-11T00:00:00.000Z" }, () => false, BOOT)).toBe(true);
-    expect(lockIsStale({}, () => true, BOOT)).toBe(true);
+  it("decides staleness from the pid and the heartbeat only", () => {
+    const stale = STALE_HEARTBEAT_MS;
+    expect(lockIsStale({ pid: 1, at: minutesAgo(5) }, () => true, NOW, stale)).toBe(false);
+    expect(lockIsStale({ pid: 1, at: minutesAgo(5) }, () => false, NOW, stale)).toBe(true);
+    expect(lockIsStale({ pid: 1, at: minutesAgo(91) }, () => true, NOW, stale)).toBe(true);
+    expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, NOW, stale)).toBe(true);
+    expect(lockIsStale({}, () => true, NOW, stale)).toBe(true);
+  });
+
+  it("allows more than the longest synchronous step the heartbeat timer can't run through", () => {
+    // review:wait (10 minutes), an install (10) and revert:check (25), back to back in the verify step.
+    expect(STALE_HEARTBEAT_MS).toBeGreaterThan((10 + 10 + 25) * 60_000);
+    expect(HEARTBEAT_MS).toBeLessThan(STALE_HEARTBEAT_MS / 10);
   });
 
   it("reads a permission error as a live process, and only 'no such process' as gone", () => {
@@ -134,7 +152,7 @@ describe("acquireLock: the heartbeat (AUD-M19)", () => {
   it("a running tick refreshes it on a timer, and stops when it releases", async () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-timer-"));
     const file = join(d, "factory.lock");
-    const lock = acquireLock(d, () => true, 0, 20);
+    const lock = acquireLock(d, () => true, { heartbeatMs: 20 });
     const first = Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
     const heartbeat = () => Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
     // Waits for a beat, up to two seconds: a busy machine can delay a 20 ms timer, never skip it.

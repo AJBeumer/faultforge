@@ -80,15 +80,21 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   }
   log("finished", { label, reason, pr: finish.pr });
   c.finished();
+  // The final copy: the one that ends with `finished`. When it doesn't reach the private repo, the saved
+  // copy lacks the outcome, so the run's folder is kept as the only full record (Qodo on PR 262).
+  let finalSaved = false;
   try {
-    deps.saveEvidence(runId, ws);
-    log("saved", { evidence: evidenceFile(c.factory, runId) });
+    const copy = deps.saveEvidence(runId, ws);
+    finalSaved = Boolean(copy.pushed || copy.savedAt);
   } catch (error) {
     log("error", { message: `couldn't save the final copy of the run log: ${message(error)}` });
   }
+  if (finalSaved) log("saved", { evidence: evidenceFile(c.factory, runId) });
+  else log("error", { message: "the final copy of the run log didn't reach the private repo; the run folder is kept" });
   // A run that needs help keeps its worktrees (#197), unless it was done and only its evidence was
   // blocked, and that evidence reached its own branch: then the folder holds nothing the branch doesn't.
-  const keep = label === LABELS.help && !(finish.label === LABELS.done && saved?.blocked.length && saved.savedAt);
+  const blockedButSaved = finish.label === LABELS.done && saved?.blocked.length && saved.savedAt;
+  const keep = !finalSaved || (label === LABELS.help && !blockedButSaved);
   if (keep) log("kept", { root: ws.root });
   else {
     deps.cleanup(ws);

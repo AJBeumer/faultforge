@@ -2,7 +2,6 @@
  * The tick's lock file, so only one run happens at a time. Split from factory-tick.ts (#227).
  */
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { uptime } from "node:os";
 import { join } from "node:path";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
@@ -14,10 +13,16 @@ export interface Lock {
   note?: string;
 }
 
-/** When this machine last started, in epoch milliseconds: a lock last refreshed before it has no live holder. */
-export function bootTime(): number {
-  return Date.now() - uptime() * 1000;
-}
+/** How often a running tick refreshes its heartbeat, on a timer and at every step it logs. */
+export const HEARTBEAT_MS = 60_000;
+
+/**
+ * How long a heartbeat may go unrefreshed before its holder is taken for gone. The timer can't fire while a
+ * synchronous step runs, so this is well over the longest one: verifying a PR runs `review:wait` (10 minutes),
+ * an install (10) and `revert:check` (25) back to back. Not a limit on the run: a live tick's heartbeat
+ * moves on at every step, however long the run takes.
+ */
+export const STALE_HEARTBEAT_MS = 90 * 60_000;
 
 const NOT_ACQUIRED = { acquired: false, release: () => {}, refresh: () => {} } as const;
 
@@ -29,9 +34,11 @@ const NOT_ACQUIRED = { acquired: false, release: () => {}, refresh: () => {} } a
  * created only if nothing is there yet, and it appears with its content, so a tick reading it at that
  * instant never sees an empty file (AUD-N10) and two ticks racing for an unheld lock can never both get it.
  *
- * A lock is taken over only when its holder can't be running: its pid is dead, or its last heartbeat is
- * older than this machine's start, so the pid now belongs to another program (`lockIsStale`). A live pid
- * keeps it however old the lock is (AUD-M19): a long run is never mistaken for a dead one.
+ * A lock is taken over only when its holder can't be a running tick: its pid is dead, or its heartbeat has
+ * not moved for `STALE_HEARTBEAT_MS`, so the pid now belongs to another program or the tick hung
+ * (`lockIsStale`). A running tick keeps it however old the lock is (AUD-M19): the lock's age no longer
+ * counts, only the heartbeat. The machine's uptime is no guide (Qodo on PR 262): a clock correction moves a
+ * boot time computed from it, and Windows Fast Startup doesn't reset it.
  *
  * Taking over a stale one is not naturally atomic - removing the old file and writing the new one are two
  * steps - so it goes through `renameSync` instead of `rmSync`: moving a file away is exclusive on its
@@ -43,9 +50,9 @@ const NOT_ACQUIRED = { acquired: false, release: () => {}, refresh: () => {} } a
 export function acquireLock(
   dir: string,
   isAlive: (pid: number) => boolean = pidAlive,
-  bootMs: number = bootTime(),
-  heartbeatMs = 60_000,
+  options: { nowMs?: number; heartbeatMs?: number; staleMs?: number } = {},
 ): Lock {
+  const { nowMs = Date.now(), heartbeatMs = HEARTBEAT_MS, staleMs = STALE_HEARTBEAT_MS } = options;
   const file = join(dir, "factory.lock");
   const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const since = new Date().toISOString();
@@ -111,7 +118,7 @@ export function acquireLock(
   } catch {
     // An unreadable lock has no pid, so it is stale below; heldText stays "" and won't match anything real.
   }
-  if (!lockIsStale(held, isAlive, bootMs))
+  if (!lockIsStale(held, isAlive, nowMs, staleMs))
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${held.at}` };
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${Math.random().toString(36).slice(2)}`);
@@ -140,6 +147,7 @@ export function acquireLock(
   } catch {
     return lost;
   }
-  const why = held.pid && isAlive(held.pid) ? "the machine restarted since its last heartbeat" : "its pid is gone";
+  const why =
+    held.pid && isAlive(held.pid) ? "its heartbeat stopped, so that pid is no running tick" : "its pid is gone";
   return won(`took over a stale lock from pid ${held.pid ?? "?"} (${held.at ?? "unknown time"}): ${why}`);
 }

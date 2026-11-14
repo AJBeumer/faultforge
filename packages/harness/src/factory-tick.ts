@@ -29,9 +29,10 @@
  *
  * Exit codes: 0 the tick ended and its ticket, if any, doesn't need the owner (a run delivered `agent-done`,
  * or nothing to take: busy, idle, or a ticket refused, each logged); 1 the ticket it took now carries
- * `agent-needs-help`: a run stopped, the runner failed, or the ticket isn't ready; 2 the command line or the
- * environment was wrong (a bad option, no token, a token file that can't be read, a config that doesn't
- * load), so no tick ran.
+ * `agent-needs-help`: a run stopped, or the ticket isn't ready; 2 the command line or the environment was
+ * wrong (a bad option, no token, a token file that can't be read, a config that doesn't load), so no tick
+ * ran; 3 the tick itself failed (an error in the runner, before or after it picked a ticket; a claimed ticket
+ * is labelled `agent-needs-help` and the log says so).
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -122,7 +123,7 @@ export interface QodoCheckOutcome {
 export interface TickDeps {
   now(): Date;
   print(line: string): void;
-  lock(): { acquired: boolean; release(): void; note?: string };
+  lock(): { acquired: boolean; release(): void; refresh?(): void; note?: string };
   /** Open issues (not PRs) with the label, in one repo. */
   labelled(github: string, label: string): { number: number; title: string }[];
   events(github: string, number: number): IssueEvent[];
@@ -179,12 +180,16 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const shown = Object.keys(detail).length ? ` ${redact(JSON.stringify(detail))}` : "";
     deps.print(`${entry.t} ${event}${shown}`);
     if (runId) deps.record(runId, entry);
+    // Every step is a heartbeat too: the lock's timer can't fire while a long synchronous step runs.
+    lock.refresh?.();
+  };
+  /** `saved` only once the copy reached the private repo, on `main` or on a branch of its own. */
+  const logSaved = (saved: EvidencePush, id: string) => {
+    if (saved.pushed || saved.savedAt) log("saved", { evidence: evidenceFile(factory, id), savedAt: saved.savedAt });
+    else log("error", { message: "the run log reached neither the private repo's main nor a branch of its own" });
   };
   /** Copies the run log to private storage, after its outcome is logged; `saved` is logged after the push. */
-  const saveLog = (id: string) => {
-    deps.saveEvidence(id, null);
-    log("saved", { evidence: evidenceFile(factory, id) });
-  };
+  const saveLog = (id: string) => logSaved(deps.saveEvidence(id, null), id);
   try {
     if (lock.note) log("lock", { note: lock.note });
     const recovery = recoverStranded(Object.values(factory.repos), deps);
@@ -415,12 +420,12 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       try {
         const saved = deps.saveEvidence(runId, ws);
         if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
-        log("saved", { evidence: evidenceFile(factory, runId) });
+        logSaved(saved, runId);
       } catch {
         // The live log under the runs folder still has everything.
       }
     }
-    return "needs-help";
+    return "failed";
   } finally {
     lock.release();
   }
