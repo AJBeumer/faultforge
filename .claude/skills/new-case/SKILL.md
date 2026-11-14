@@ -41,12 +41,12 @@ git -C ../faultforge-target push -u origin <branch>
 3. **Open and record the PR** with `case:pr`, in this repository, never chained with the push. Start with `--dry-run`:
 
 ```bash
-npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>" --qodo-state <qodo:check's folder> --dry-run
-npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>" --qodo-state <qodo:check's folder>
+npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>" --dry-run
+npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationships "<what the owner confirmed>"
 ```
 
 - The title is the template's commit message; the body is your sentence followed by `Closes #<N>` from the case's ticket. The sentence is about the change, never about bugs, tests or reviews. `case:pr` refuses (exit 1) giveaway words, links to an issue or PR, a branch whose pushed head isn't the injected commit, a missing ticket, or a case that already has a PR; nothing has left the machine then.
-- It takes the configuration version from the highest `private/config/qodo-vN` (the one `qodo:check` just matched), checks the opened PR's head against the answer key, and appends the `pr.opened` event itself. Never type that event by hand.
+- It checks that the template and proofs are still the ones the case was planted from, runs the Qodo configuration check itself (with `QODO_KEY_FILE` set) and refuses unless Qodo matches its snapshot, records that version and the folder the check saved, checks the opened PR's head against the answer key, and appends the `pr.opened` event itself. Never type that event by hand.
 - Exit 2 means it couldn't finish: an earlier attempt's marker exists, `gh` failed, or the opened PR's head is wrong. Check GitHub before anything else; never retry blindly.
 - If `gh` lacks permission, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body, and stop: the owner decides how the event gets recorded.
 - Not a draft. No reviewers, labels or assignees.

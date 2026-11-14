@@ -208,3 +208,27 @@ describe("appendOnlyProblems: a line inserted before the end (AUD-M10, #251)", (
     expect(appendOnlyBreak("@@ -1,2 +1,1 @@\n a\n-b\n")).toBe("removed");
   });
 });
+
+describe("appendOnlyProblems: two branches that each appended, merged (Qodo on PR 269)", () => {
+  it("accepts the merge, though against one parent the other side's lines come first", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "one case");
+    sh(dir, "switch", "--quiet", "-c", "side");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0003"}\n', "side appends");
+    sh(dir, "switch", "--quiet", "main");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n', "main appends");
+    try {
+      sh(dir, "merge", "--quiet", "--no-edit", "side");
+    } catch {
+      // The two appends meet at the end of the file; resolved by keeping both, main's first.
+    }
+    writeFileSync(
+      join(dir, "ground-truth.jsonl"),
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n{"caseId":"FF-0003"}\n',
+    );
+    sh(dir, "add", "ground-truth.jsonl");
+    sh(dir, "commit", "--quiet", "-m", "merge side");
+    expect(sh(dir, "rev-list", "--parents", "-n", "1", "HEAD").split(" ")).toHaveLength(3);
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
+  });
+});
