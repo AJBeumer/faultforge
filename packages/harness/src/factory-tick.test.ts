@@ -939,7 +939,7 @@ describe("audit helpers", () => {
         ],
       },
     });
-    expect(hookProblems(fake)).toHaveLength(12);
+    expect(hookProblems(fake)).toHaveLength(14);
   });
 
   it("lists only action-required findings as blocking", () => {

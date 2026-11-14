@@ -69,8 +69,10 @@ function main(): number {
     if (!checkout) throw new Error("usage: git-guard.ts <pre-commit|commit-msg|pre-push> <checkout> [message file]");
     const found = check(stage, checkout, arg, stage === "pre-push" ? readFileSync(0, "utf8") : "");
     if (!found) return 0;
+    // A branch named after a private template would be printed in `where`: never print it (Qodo on PR 265).
+    const where = found.reasons.includes("names a private template") ? "what this would send" : found.where;
     console.error(
-      `review guard: refused. ${found.where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,
+      `review guard: refused. ${where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,
     );
     return 1;
   } catch (error) {

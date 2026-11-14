@@ -30,7 +30,8 @@ export function hookProblems(settingsText: string): string[] {
   }
   const problems: string[] = [];
   for (const hook of ["guard-target.ts", "factory-policy.ts"]) {
-    for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+    // An MCP tool can post too, so the guard hooks must run before those as well (Qodo on PR 265).
+    for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "mcp__any__tool"]) {
       const covered = hooks.some(
         (h) =>
           (!h.matcher || h.matcher === "*" || new RegExp(`^(${h.matcher})$`).test(tool)) &&

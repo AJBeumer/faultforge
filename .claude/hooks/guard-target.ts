@@ -64,6 +64,7 @@ import {
   navigationTargets,
   type Reviewed,
   reviewedRepos,
+  within,
 } from "./guard-repos.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 import { blankQuoted, joinedWords, MAX_COMMAND_CHARS } from "./shell-scan.ts";
@@ -98,6 +99,7 @@ export function guardBudget(env: NodeJS.ProcessEnv): number {
  * non-blocking error and runs the tool anyway. `env` supplies `FAULTFORGE_CONFIG` and `FAULTFORGE_PRIVATE_DIR`.
  */
 export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Decision {
+  let names: ((text: string) => boolean) | undefined;
   try {
     // A word list that finds nothing in its own example has been emptied or broken: nothing can be checked.
     if (!telltales("a planted bug").length) throw new Error("the giveaway word list finds nothing; it is broken");
@@ -105,7 +107,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     const tool = String(input.tool_name ?? "");
     const args: ToolInput = input.tool_input ?? {};
     const cwd = String(input.cwd ?? process.cwd());
-    const names = privateIdMatcher(privateTemplateIds(env));
+    names = privateIdMatcher(privateTemplateIds(env));
     const ctx: Context = { cwd, reviewed: reviewedRepos(env.FAULTFORGE_CONFIG), env, names };
     // One deadline for the whole decision, every scan in it included (audit N-4).
     // Pending content may not carry a private id either (Qodo on PR 265).
@@ -122,7 +124,10 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     );
     return ALLOW;
   } catch (error) {
-    if (error instanceof Denied || error instanceof Unreadable) return { kind: "deny", reason: error.message };
+    if (error instanceof Denied || error instanceof Unreadable) {
+      // A reason that quotes a file or branch name could repeat a private id: it never does (Qodo on PR 265).
+      return { kind: "deny", reason: names?.(error.message) ? PRIVATE_ID_REASON : error.message };
+    }
     return failed(error);
   }
 }
@@ -299,8 +304,6 @@ function existingFolder(path: string): string {
 
 function checkFileEdit(ctx: Context, args: ToolInput) {
   const path = resolve(ctx.cwd, String(args.file_path ?? args.notebook_path ?? ""));
-  const repo = ctx.reviewed.find((r) => inCheckout(path, r)) ?? locate(existingFolder(path), ctx.reviewed);
-  if (!repo) return;
   const text = [
     args.content,
     args.new_string,
@@ -309,7 +312,11 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
-  if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
+  // A private id belongs only in private storage: a file anywhere else could be committed and pushed under a
+  // clean message (Qodo on PR 265).
+  if (ctx.names?.(text) && !within(path, privateRoot(ctx.env))) deny(PRIVATE_ID_REASON);
+  const repo = ctx.reviewed.find((r) => inCheckout(path, r)) ?? locate(existingFolder(path), ctx.reviewed);
+  if (!repo) return;
   const found = telltales(text);
   if (found.length) {
     deny(

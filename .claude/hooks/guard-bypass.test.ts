@@ -350,3 +350,81 @@ describe("holes Qodo found in the first version (PR 265)", () => {
     expect(bash('git commit --allow-empty -m "Fix the planted bug"', clone, extra)).toMatch(/says planted/);
   });
 });
+
+describe("holes Qodo found in the second version (PR 265)", () => {
+  /** Private storage that is its own git checkout, with the private repo as its remote. */
+  function privateCheckout(): string {
+    const priv = privateFolder();
+    execFileSync("git", ["init", "-q", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-private.git"]);
+    return priv;
+  }
+  const at = (dir: string) => dir.replace(/\\/g, "/");
+
+  it("doesn't take a push from private storage to a public URL, or a GIT_DIR elsewhere, as private", () => {
+    const priv = privateCheckout();
+    const extra = { FAULTFORGE_PRIVATE_DIR: priv };
+    const url = `git -C "${at(priv)}" push https://github.com/AJBeumer/faultforge.git x-secret-v1`;
+    expect(bash(url, LAB, extra)).toMatch(/still private/);
+    expect(bash(`cd "${at(priv)}" && GIT_DIR=../.git git commit -m "x-secret-v1"`, LAB, extra)).toMatch(
+      /still private/,
+    );
+    expect(bash(`git -C "${at(priv)}" commit -m "Document x-secret-v1 for gh"`, LAB, extra)).toBeUndefined();
+  });
+
+  it("doesn't let a plain private folder borrow the lab's remote", () => {
+    const lab = tempRepo();
+    lab.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge.git");
+    const priv = join(lab.dir, "private");
+    mkdirSync(join(priv, "templates", "x-secret-v1"), { recursive: true });
+    const post = 'gh pr create --repo AJBeumer/faultforge --title Tidy --body "x-secret-v1"';
+    expect(bash(post, lab.dir, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private/);
+  });
+
+  it("keeps a private id out of lab files, but not out of private storage", () => {
+    const lab = join(LAB, "docs", "notes.md");
+    expect(verdict("Write", { file_path: lab, content: "x-secret-v1" })).toMatch(/still private/);
+    expect(verdict("Write", { file_path: join(PRIVATE, "notes.md"), content: "x-secret-v1" })).toBeUndefined();
+  });
+
+  it("never prints a private id in a refusal, such as a missing body file's name", () => {
+    const reason = bash("gh pr create --title Tidy --body-file x-secret-v1.md");
+    expect(reason).toMatch(/still private/);
+    expect(reason).not.toMatch(/secret/);
+  });
+
+  it("refuses when the private templates folder exists but can't be read", () => {
+    const priv = mkdtempSync(join(tmpdir(), "guard-unreadable-"));
+    writeFileSync(join(priv, "templates"), "a file where a folder should be\n");
+    const payload = JSON.stringify({ tool_name: "Bash", cwd: LAB, tool_input: { command: "gh pr create -t x -b y" } });
+    const decision = decide(payload, { ...process.env, FAULTFORGE_CONFIG: CONFIG, FAULTFORGE_PRIVATE_DIR: priv });
+    expect(decision.kind).toBe("error");
+  });
+
+  it("finds a clone through repeated -C options, through ~, and a bare clone", () => {
+    const clone = tempRepo();
+    clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
+    const parent = at(join(clone.dir, ".."));
+    const name = at(clone.dir).split("/").pop() ?? "";
+    expect(bash(`git -C "${parent}" -C ${name} push --force origin main`)).toMatch(/Force pushes/);
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = parent;
+    process.env.USERPROFILE = parent;
+    try {
+      expect(bash(`cd ~/${name} && git push --force origin main`)).toMatch(/Force pushes/);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    const alias = tempRepo();
+    alias.git("config", "url.https://github.com/.insteadOf", "gh:");
+    alias.git("remote", "add", "origin", "gh:AJBeumer/faultforge-target.git");
+    expect(bash("git push --force origin main", alias.dir)).toMatch(/Force pushes/);
+    const bare = mkdtempSync(join(tmpdir(), "guard-bare-"));
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    execFileSync("git", ["-C", bare, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git"]);
+    expect(bash("git push --force origin main", bare)).toMatch(/Force pushes/);
+  });
+});

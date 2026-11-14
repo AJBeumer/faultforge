@@ -10,22 +10,22 @@
  * folder (public CI, a fresh clone) there is nothing to protect, so the check is skipped.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
-import { checkoutAt } from "./guard-repos.ts";
-import { gitSteps } from "./shell-scan.ts";
+import { checkoutAt, within } from "./guard-repos.ts";
+import { blankQuoted, gitSteps } from "./shell-scan.ts";
 
 const LAB_ROOT = join(import.meta.dirname, "../..");
 
-/** Folder names directly under `dir`, or none when it doesn't exist or can't be read. */
+/**
+ * Folder names directly under `dir`, or none when it doesn't exist. A folder that exists but can't be read
+ * throws: the guard then refuses, rather than treat unreadable ids as none (Qodo on PR 265).
+ */
 function folders(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
 }
 
 /** Private storage, resolved as paths.ts does, without importing it (the hook keeps its imports small). */
@@ -71,13 +71,6 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
 export const PRIVATE_ID_REASON =
   "This would name a bug template that is still private, in a post anyone (the reviewer included) can read. Leave the template's name out; describe the work instead.";
 
-/** True when `dir` is `root` or inside it. Case-blind on Windows, where folder names are. */
-function inside(dir: string, root: string): boolean {
-  const fold = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
-  const rel = relative(fold(root), fold(dir));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
 /**
  * True when every write in the command stays in private storage, where template ids belong: each git
  * commit, push, tag or note runs there (its `-C`, or the folder the command has moved to), and any gh or
@@ -86,10 +79,17 @@ function inside(dir: string, root: string): boolean {
  * knows; Qodo on PR 265). Anything else, or anything unclear, is a public post.
  */
 export function onlyPrivateRepo(command: string, cwd: string, root: string, destinations: string[]): boolean {
-  if (/\b(?:gh|curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b/i.test(command)) {
-    const own = checkoutAt(root)?.remotes ?? [];
-    if (!destinations.length || destinations.some((d) => !own.includes(d.toLowerCase()))) return false;
-  }
+  // Only the private folder's own checkout counts: a plain folder would borrow the lab's remotes (Qodo on PR 265).
+  const found = checkoutAt(root);
+  const own = found && within(found.root, root) ? found.remotes : [];
+  // Every destination named anywhere, a URL given to git included, must be the private repo (Qodo on PR 265).
+  if (destinations.some((d) => !own.includes(d.toLowerCase()))) return false;
+  // Words in a message don't run: only a tool outside quoted text needs a destination (Qodo on PR 265).
+  const tools = blankQuoted(command);
+  if (/\b(?:gh|curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b/i.test(tools) && !destinations.length)
+    return false;
+  // Anything that points git at another folder or repository makes the step's target unclear.
+  if (/\bGIT_(?:DIR|WORK_TREE)\b|--git-dir|--work-tree/i.test(tools)) return false;
   let here = cwd;
   let wrote = false;
   for (const step of command.split(/&&|\|\||[;|\n]/).map((s) => s.trim())) {
@@ -101,9 +101,13 @@ export function onlyPrivateRepo(command: string, cwd: string, root: string, dest
     }
     if (!gitSteps(step, /\b(?:commit|push|tag|notes)\b/).length) continue;
     wrote = true;
-    const at = /\bgit\s+-C\s*["']?([^"'\s]+)/.exec(step)?.[1];
-    if (at && /[$`%]|^~/.test(at)) return false;
-    if (!inside(at ? resolve(here, at) : here, root)) return false;
+    // Each `-C` is resolved from the one before, as git does (Qodo on PR 265).
+    let dir = here;
+    for (const m of step.matchAll(/\s-C\s*["']?([^"'\s]+)/g)) {
+      if (/[$`%]|^~/.test(m[1] ?? "")) return false;
+      dir = resolve(dir, m[1] ?? "");
+    }
+    if (!within(dir, root)) return false;
   }
   return wrote || destinations.length > 0;
 }

@@ -2,7 +2,9 @@
  * Which repositories the guard protects, and how it recognises one in a command or a path: the target,
  * always, plus every repo marked reviewed in `factory.json`. Used by guard-target.ts.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export interface Reviewed {
@@ -121,6 +123,9 @@ export interface Checkout {
 export function checkoutAt(path: string): Checkout | undefined {
   let dir = resolve(path);
   for (;;) {
+    // A bare clone keeps its config at its own top, beside HEAD and objects (Qodo on PR 265).
+    const bare = ["config", "HEAD", "objects"].every((name) => existsSync(join(dir, name)));
+    if (bare) return { root: dir, remotes: remotesOf(dir) };
     const gitDir = basename(dir) === ".git" && existsSync(join(dir, "config")) ? dir : join(dir, ".git");
     if (existsSync(gitDir)) {
       const root = gitDir === dir ? dirname(dir) : dir;
@@ -144,6 +149,8 @@ function remotesOf(dotGit: string): string[] {
       if (existsSync(common)) gitDir = resolve(gitDir, readFileSync(common, "utf8").trim());
     }
     const config = readFileSync(join(gitDir, "config"), "utf8");
+    // A URL rewrite or an included file changes what the remote really is: ask git then (Qodo on PR 265).
+    if (/insteadof|^\s*\[include/im.test(config) || globalRewrites()) return gitRemotes(gitDir);
     return [...config.matchAll(/^\s*(?:push)?url\s*=\s*(.+?)\s*$/gim)].flatMap((m) => {
       const repo = /github\.com[/:]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(m[1] ?? "")?.[1];
       return repo ? [repo.toLowerCase()] : [];
@@ -153,8 +160,30 @@ function remotesOf(dotGit: string): string[] {
   }
 }
 
+/** True when the user's own git config rewrites URLs or includes other files; read once per process. */
+let rewrites: boolean | undefined;
+function globalRewrites(): boolean {
+  if (rewrites === undefined) {
+    try {
+      rewrites = /insteadof|^\s*\[include/im.test(readFileSync(join(homedir(), ".gitconfig"), "utf8"));
+    } catch {
+      rewrites = false;
+    }
+  }
+  return rewrites;
+}
+
+/** The GitHub repos git itself reports as a git folder's remotes, URL rewrites applied. */
+function gitRemotes(gitDir: string): string[] {
+  const result = spawnSync("git", ["--git-dir", gitDir, "remote", "-v"], { encoding: "utf8", timeout: 5000 });
+  return (result.stdout ?? "").split("\n").flatMap((line) => {
+    const repo = /github\.com[/:]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?\s/i.exec(`${line} `)?.[1];
+    return repo ? [repo.toLowerCase()] : [];
+  });
+}
+
 /** True when `path` is `folder` or inside it, compared case-blind on Windows. */
-function within(path: string, folder: string): boolean {
+export function within(path: string, folder: string): boolean {
   const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
   const rel = relative(fold(folder), fold(path));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -196,10 +225,23 @@ export function navigationTargets(command: string, cwd: string): string[] {
   let here = cwd;
   for (const m of [...command.matchAll(MOVE)].slice(0, MAX_MOVES)) {
     const path = m[1] ?? m[2] ?? m[3] ?? "";
-    if (!path || /[$`%]|^~/.test(path) || path === "-") continue;
-    const resolved = resolve(here, path);
+    if (!path || /[$`%]/.test(path) || path === "-") continue;
+    // The home folder is written ~ (Qodo on PR 265).
+    const resolved = path.startsWith("~") ? join(homedir(), path.slice(1)) : resolve(here, path);
     targets.push(resolved);
     if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved;
+    // Each further `-C` of the same git call is resolved from the one before, as git does (Qodo on PR 265).
+    if (/^git\s/i.test(m[0])) {
+      let dir = resolved;
+      const option = /\s+-C\s*(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/y;
+      option.lastIndex = (m.index ?? 0) + m[0].length;
+      for (let c = option.exec(command); c; c = option.exec(command)) {
+        const next = c[1] ?? c[2] ?? c[3] ?? "";
+        if (/[$`%]/.test(next) || targets.length >= MAX_MOVES) break;
+        dir = resolve(dir, next);
+        targets.push(dir);
+      }
+    }
   }
   return targets;
 }
