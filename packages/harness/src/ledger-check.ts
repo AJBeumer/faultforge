@@ -102,15 +102,22 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
     } catch (error) {
       throw new Error(`git log failed for ${relPath}: ${(error as Error).message}`);
     }
+    // `-m` shows a merge once per parent. A merge of two branches that each appended puts one side's lines
+    // before the other's against one parent, but is a plain append against the other: two appends meeting,
+    // not an insertion. So a commit is an insertion only when it inserts against every parent it is shown
+    // against; a removal against any parent is always a problem (Qodo on PR 269).
+    const byCommit = new Map<string, ("removed" | "inserted" | undefined)[]>();
     for (const commitDiff of log.split(/^commit /m).slice(1)) {
       const sha = (commitDiff.match(/^([0-9a-f]+)/)?.[1] ?? "unknown").slice(0, 12);
-      const broken = appendOnlyBreak(commitDiff);
-      // A merge of two branches that each appended shows one side's lines before the other's against one
-      // parent: that is two appends meeting, not an insertion. A removal is never allowed (Qodo on PR 269).
-      const isMerge = /^Merge: /m.test(commitDiff.split("\n\n")[0] ?? "");
-      if (broken && !(isMerge && broken === "inserted")) {
-        problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
-      }
+      byCommit.set(sha, [...(byCommit.get(sha) ?? []), appendOnlyBreak(commitDiff)]);
+    }
+    for (const [sha, breaks] of byCommit) {
+      const broken = breaks.includes("removed")
+        ? "removed"
+        : breaks.every((b) => b === "inserted")
+          ? "inserted"
+          : undefined;
+      if (broken) problems.push(`${relPath}: commit ${sha} ${BREAK_WORDS[broken]}`);
     }
 
     let uncommitted: string;

@@ -232,3 +232,27 @@ describe("appendOnlyProblems: two branches that each appended, merged (Qodo on P
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
   });
 });
+
+describe("appendOnlyProblems: a merge that inserts against every parent (Qodo on PR 269)", () => {
+  it("is still an insertion", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n', "two cases");
+    sh(dir, "switch", "--quiet", "-c", "side");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0011"}\n', "side");
+    sh(dir, "switch", "--quiet", "main");
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0010"}\n', "main");
+    try {
+      sh(dir, "merge", "--quiet", "--no-edit", "side");
+    } catch {
+      // resolved below
+    }
+    const resolved =
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0005"}\n{"caseId":"FF-0009"}\n{"caseId":"FF-0010"}\n{"caseId":"FF-0011"}\n';
+    writeFileSync(join(dir, "ground-truth.jsonl"), resolved);
+    sh(dir, "add", "ground-truth.jsonl");
+    sh(dir, "commit", "--quiet", "-m", "merge with a back-dated line");
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([
+      expect.stringContaining("inserted a line before the end"),
+    ]);
+  });
+});

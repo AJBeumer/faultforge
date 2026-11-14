@@ -18,7 +18,7 @@ function fixture(events: object[] = [PLANTED, TICKET]) {
   mkdirSync(join(root, "templates", "x-secret-v1"), { recursive: true });
   writeFileSync(
     join(root, "templates", "x-secret-v1", "template.json"),
-    JSON.stringify({ publish: { branch: "tidy-lookup", commitMessage: "Tidy the booking lookup" } }),
+    JSON.stringify({ id: "x-secret-v1", publish: { branch: "tidy-lookup", commitMessage: "Tidy the booking lookup" } }),
   );
   mkdirSync(join(root, "config", "qodo-v3"), { recursive: true });
   mkdirSync(join(root, "config", "qodo-v10"), { recursive: true });
@@ -194,5 +194,22 @@ describe("case:pr: what Qodo found on PR 269", () => {
     expect(code).toBe(1);
     expect(err).toContain("isn't the one it was planted from");
     expect(calls).toEqual([]);
+  });
+});
+
+describe("case:pr: round two on PR 269", () => {
+  it("refuses a ticket number that isn't a whole positive number, before gh pr create", async () => {
+    for (const number of [0, 1.5]) {
+      const { code, calls } = await open(fixture([PLANTED, { type: "case.ticket-created", issue: { number } }]));
+      expect(code).toBe(1);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("refuses a body that names the template", async () => {
+    const { code, err, calls } = await open(fixture(), { body: "Follows up on x-secret-v1." });
+    expect(code).toBe(1);
+    expect(err).toContain("names the template");
+    expect(calls.some((c) => c[0] === "pr")).toBe(false);
   });
 });
