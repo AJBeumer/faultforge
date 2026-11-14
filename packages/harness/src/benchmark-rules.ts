@@ -18,6 +18,7 @@ export interface RuleTemplate {
   invariantId?: string;
   match?: { kindTerms?: string[] };
   ticket?: { criteria?: string[] };
+  alsoBreaks?: { invariantId: string }[];
 }
 
 /** The benchmark version a template follows: 1 unless it declares another. */
@@ -27,18 +28,33 @@ export function benchmarkOf(template: { benchmark?: unknown }): number {
 
 const normal = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 
+/** True when `term` stands in `text` as words of its own: "race" is not in "trace" (Qodo on PR 274). */
+function names(text: string, term: string): boolean {
+  const escaped = normal(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\w])${escaped}($|[^\\w])`).test(normal(text));
+}
+
 /**
  * Why a version-2 template breaks the version-2 rules, given every other template (any version), or an
  * empty list. A version-1 template always gets an empty list.
  */
 export function benchmarkProblems(template: RuleTemplate, others: RuleTemplate[]): string[] {
   if (benchmarkOf(template) < 2) return [];
+  // The comparison below needs the other templates; with none it would pass every criterion unseen (Qodo on PR 274).
+  if (!others.some((o) => o.id !== template.id)) {
+    return ["no other template was given to compare its ticket wording with"];
+  }
   const problems: string[] = [];
   const criteria = template.ticket?.criteria ?? [];
   if (template.kind === "bug") {
-    const giveaways = [...(template.match?.kindTerms ?? []), ...(template.invariantId ? [template.invariantId] : [])];
+    // Every invariant the change is proven to break, collateral included (Qodo on PR 274).
+    const giveaways = [
+      ...(template.match?.kindTerms ?? []),
+      ...(template.invariantId ? [template.invariantId] : []),
+      ...(template.alsoBreaks ?? []).map((a) => a.invariantId),
+    ];
     for (const [i, criterion] of criteria.entries()) {
-      const named = giveaways.filter((term) => normal(criterion).includes(normal(term)));
+      const named = giveaways.filter((term) => names(criterion, term));
       if (named.length) {
         problems.push(`ticket.criteria[${i}] restates what the change breaks (${named.join(", ")})`);
       }
@@ -64,8 +80,11 @@ export function benchmarkProblems(template: RuleTemplate, others: RuleTemplate[]
  * that now stands where the removed lines were (the last line of the file when they were at its end).
  */
 export function changedLines(before: string, after: string): [number, number] {
-  const oldLines = before.split("\n");
-  const newLines = after.split("\n");
+  // Lines, not the empty piece after a final newline: adding or dropping only that newline changes the last
+  // line itself (Qodo on PR 274).
+  const lines = (text: string) => (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
+  const oldLines = lines(before);
+  const newLines = lines(after);
   let top = 0;
   while (top < oldLines.length && top < newLines.length && oldLines[top] === newLines[top]) top++;
   let bottom = 0;
@@ -79,6 +98,8 @@ export function changedLines(before: string, after: string): [number, number] {
   const first = top + 1;
   const last = newLines.length - bottom;
   if (last >= first) return [first, last];
-  const at = Math.min(first, Math.max(newLines.length - (after.endsWith("\n") ? 1 : 0), 1));
+  // Nothing new to point at: the line where the removed ones were, or the last line when they were at the end,
+  // or (texts equal but for the final newline) the last line, whose ending changed.
+  const at = Math.min(first, Math.max(newLines.length, 1));
   return [at, at];
 }

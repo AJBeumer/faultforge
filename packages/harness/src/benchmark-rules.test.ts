@@ -25,7 +25,7 @@ describe("benchmarkProblems (#257)", () => {
   it("refuses a v2 bug template whose criteria restate its kind terms or invariant", () => {
     const problems = benchmarkProblems(
       bug(["A booking for the last night is accepted at the Boundary.", "Refers to INV-X-001."], 2),
-      [],
+      [control("c9", ["Something else."])],
     );
     expect(problems).toEqual([
       "ticket.criteria[0] restates what the change breaks (boundary)",
@@ -121,5 +121,27 @@ describe("applyMutation and templateRefusal by benchmark version (#257)", () => 
     expect(
       JSON.parse(readFileSync(join(ROOT, "schemas", "template.v2.json"), "utf8")).properties.benchmark.enum,
     ).toEqual([1, 2]);
+  });
+});
+
+describe("benchmarkProblems and changedLines: round two on PR 274", () => {
+  const someone = control("c9", ["Something else."]);
+
+  it("refuses a criterion naming a collateral invariant, and reads terms as whole words", () => {
+    const t = { ...bug(["Mentions INV-Y-002."], 2), alsoBreaks: [{ invariantId: "INV-Y-002" }] };
+    expect(benchmarkProblems(t, [someone])).toEqual(["ticket.criteria[0] restates what the change breaks (INV-Y-002)"]);
+    const raceTerm = { ...bug(["The trace is kept."], 2), match: { kindTerms: ["race"] } };
+    expect(benchmarkProblems(raceTerm, [someone])).toEqual([]);
+  });
+
+  it("refuses to judge a v2 template with no other template to compare its wording with", () => {
+    expect(benchmarkProblems(control("c3", ["x"], 2), [])).toEqual([
+      "no other template was given to compare its ticket wording with",
+    ]);
+  });
+
+  it("records the last line when only its final newline changed", () => {
+    expect(changedLines("a\nb", "a\nb\n")).toEqual([2, 2]);
+    expect(changedLines("a\nb\n", "a\nb")).toEqual([2, 2]);
   });
 });

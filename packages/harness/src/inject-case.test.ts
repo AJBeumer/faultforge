@@ -74,6 +74,7 @@ function world(script: Script = {}) {
     findTemplateDir: (id) => join(priv, "templates", id),
     corpus: () =>
       script.corpus ?? [{ invariantId: "INV-X-001", proofTest: "proof.test.ts", dir: join(priv, "templates", BUG.id) }],
+    allTemplates: () => [BUG, CONTROL] as never,
     ledgerProblems: () => [],
     git: (_dir, ...args) => {
       gitCalls.push(args);

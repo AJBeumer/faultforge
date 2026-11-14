@@ -49,7 +49,7 @@ export interface InjectDeps {
   corpus: () => Proof[];
   corpusSkipped?: () => string[];
   /** Every template, for the benchmark v2 rules that compare a template with the others. */
-  allTemplates?: () => Template[];
+  allTemplates: () => Template[];
   ledgerProblems: (paths: string[]) => string[];
   git: (targetDir: string, ...args: string[]) => string;
   /** The local `origin/main`, or "" when there is none. */
@@ -133,7 +133,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
     deps.findTemplateDir(args.template) ??
     refuse(`template ${args.template} not found in private/templates or templates/seed`);
   const template: Template = loadTemplate(templateDir);
-  const refusal = templateRefusal(template, args.template, templateDir, deps.allTemplates?.() ?? []);
+  const refusal = templateRefusal(template, args.template, templateDir, deps.allTemplates());
   if (refusal) refuse(refusal);
 
   // A bug's own proofs must break; a control must break none of the corpus (AUD-M8).
