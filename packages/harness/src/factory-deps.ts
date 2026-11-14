@@ -223,8 +223,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         priv = join(temporary, "private");
         mkdirSync(temporary, { recursive: true });
         source = access.source();
-        gitLong(source, "fetch", "--quiet", "origin", "main");
-        gitLong(source, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        // A copy saved earlier whose push failed left its worktree: the next copy goes through it, not a second
+        // branch of the same name (Qodo on PR 288).
+        if (!existsSync(join(priv, ".git"))) {
+          gitLong(source, "fetch", "--quiet", "origin", "main");
+          gitLong(source, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
+        }
       }
       // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
       // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).

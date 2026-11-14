@@ -337,6 +337,27 @@ Picked up.`,
     expect(existsSync(ws.lab)).toBe(true);
   });
 
+  it("saves a target run's next copy through the worktree a failed push left, not a second branch (Qodo on PR 288)", () => {
+    const ws = { ...workspace(join(runs, "run-u")), private: "" };
+    const temp = join(runs, "run-u-evidence", "private");
+    vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
+      if (args[0] === "worktree") {
+        mkdirSync(temp, { recursive: true });
+        writeFileSync(join(temp, ".git"), "gitdir: elsewhere\n");
+      }
+      return "";
+    });
+    vi.mocked(commitAndPublish).mockReturnValueOnce({ pushed: false, blocked: [] });
+    try {
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+      realDeps(FACTORY, OPTIONS).saveEvidence("run-u", ws);
+    } finally {
+      vi.mocked(gitLong).mockImplementation(() => "");
+    }
+    expect(vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "worktree")).toHaveLength(1);
+    expect(vi.mocked(commitAndPublish)).toHaveBeenCalledTimes(2);
+  });
+
   it("copies the run log and transcript into the workspace's private worktree, then publishes them", () => {
     const ws = workspace(join(runs, "run-1"));
     writeFileSync(join(runs, "run-1.jsonl"), "{}\n");

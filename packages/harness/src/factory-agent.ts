@@ -237,7 +237,7 @@ export function runAgent(
       .join(","),
     [BROKER_ENV]: broker.dir,
     ...(checkouts.length ? { FAULTFORGE_PRIVATE_CHECKOUTS: checkouts.join(delimiter) } : {}),
-    ...(guardDir ? { FAULTFORGE_PRIVATE_DIR: guardDir } : {}),
+    ...(guardDir ? { FAULTFORGE_GUARD_PRIVATE_DIR: guardDir } : {}),
   });
   log("agent-env", { names: Object.keys(agent.env).sort(), agentToken: agent.agentToken });
   if (agent.warning) log("warning", { message: agent.warning });

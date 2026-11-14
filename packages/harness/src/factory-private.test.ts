@@ -11,6 +11,7 @@ import {
   privateCheckoutsFor,
   privateUrl,
 } from "./factory-private.ts";
+import { ROOT as LAB_ROOT } from "./paths.ts";
 
 describe("guardPrivateDir: a target run's guard still knows the template ids (AUD-H1, Qodo on PR 288)", () => {
   it("names the owner's private folder for a target ticket when it holds templates, never for a lab ticket", () => {
@@ -22,8 +23,6 @@ describe("guardPrivateDir: a target run's guard still knows the template ids (AU
     expect(guardPrivateDir(factory, "target")).toBe(expected);
   });
 });
-
-import { ROOT as LAB_ROOT } from "./paths.ts";
 
 const FACTORY = {
   evidence: "private/raw-artifacts",

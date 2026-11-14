@@ -102,6 +102,16 @@ describe("factory policy: the environment through any interpreter (#284)", () =>
     expect(commandViolations('node -e "console.log(process.env.FAULTFORGE_TICKET_FILE)"')).toEqual([]);
     expect(commandViolations("NODE_ENV=test npm run check")).toEqual([]);
   });
+
+  it("doesn't take a file name or a read-only git command for an env read or a write (Qodo on PR 288)", () => {
+    expect(commandViolations("node scripts/process-data.mjs")).toEqual([]);
+    expect(commandViolations(`node -e "console.log(globalThis.process)"`)).not.toEqual([]);
+    expect(bash("git diff $(git merge-base origin/main HEAD) --stat").kind).toBe("allow");
+  });
+
+  it.skipIf(process.platform === "win32")("denies a search from a folder that holds /proc", () => {
+    expect(ask("Grep", { pattern: "GH_TOKEN", path: "/" }).kind).toBe("deny");
+  });
 });
 
 describe("factory policy: the read tools (#284)", () => {

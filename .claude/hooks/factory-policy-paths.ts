@@ -45,7 +45,7 @@ const SHELL_WRITE = new RegExp(
     String.raw`\bperl\b[^|;&\n]*\s-[a-zA-Z]*i`,
     String.raw`\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|cpSync|rename|renameSync|rmSync|unlink|unlinkSync|truncateSync|openSync|symlink|symlinkSync|write_text|write_bytes|shutil)\b`,
     String.raw`\bopen\s*\([^)]*["'][wa]`,
-    String.raw`\bgit\b[^|;&\n]*\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)\b`,
+    String.raw`\bgit\b[^|;&\n]*\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)(?![\w-])`,
   ].join("|"),
   "i",
 );
@@ -101,7 +101,10 @@ export function readViolation(args: Record<string, unknown>, cwd: string, env: N
   const paths = [...named, ...(pattern && globBase(pattern) ? [globBase(pattern)] : [])].map((p) => resolve(cwd, p));
   const all = [...new Set([...paths, ...roots.map((p) => resolve(cwd, p))])];
   const resolved = all.flatMap((p) => [p, real(p)]);
-  if ([...texts, ...resolved].some((t) => PROC.test(asPath(t)))) return "no reading process files under /proc";
+  // A search from a folder that holds /proc reads it too (Qodo on PR 288); Windows has none.
+  const holdsProc = process.platform !== "win32" && all.some((p) => inside("/proc", p));
+  if ([...texts, ...resolved].some((t) => PROC.test(asPath(t))) || holdsProc)
+    return "no reading process files under /proc";
   if ([...texts, ...resolved].some((t) => ANSWER_FILES.test(t)))
     return "no run reads the answer key, the audit log or the templates";
   const checkouts = privateCheckouts(env);
