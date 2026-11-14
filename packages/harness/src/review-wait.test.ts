@@ -14,7 +14,7 @@ import {
 } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "./review-feeds.ts";
 import { sameCommit, waitForHead, waitForReview } from "./review-poll.ts";
-import { liveDeps, parseArgs, run, type WaitScriptDeps } from "./review-wait.ts";
+import { liveDeps, parseArgs, run, type WaitScriptDeps } from "./review-wait-run.ts";
 import { archiveUnfinished, writeSavedReview } from "./saved-review.ts";
 
 const pr1: QodoReview = JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/qodo-target-pr1.json"), "utf8"));
