@@ -206,7 +206,8 @@ export function runAgent(
     evidenceRoot: resolve(ws.lab, factory.evidence),
   });
   // Built now, before the agent starts: building it at the first request would stop the runner for minutes.
-  broker.prepare();
+  const unbuilt = broker.prepare();
+  if (unbuilt) log("error", { message: `review:wait can't be served in this run: ${unbuilt}` });
   // Only what the agent's own tools need: no Qodo key, no private-repo token (factory-agent-env.ts).
   const agent = agentEnv(process.env, {
     FAULTFORGE_FACTORY_RUN: runId,
@@ -227,7 +228,8 @@ export function runAgent(
     const serving = setInterval(() => broker.serve(), 1000);
     const stopServing = () => {
       clearInterval(serving);
-      broker.close();
+      const left = broker.close();
+      if (left) log("error", { message: left });
     };
     // Stopping the runner stops the agent, and the lock learns its pid for a kill the runner can't catch.
     const unguard = child.pid ? killOnExit(child.pid) : () => {};

@@ -628,3 +628,25 @@ describe("factory policy: quoted separators, extra calls, Python imports (Qodo o
     ).toEqual([]);
   });
 });
+
+describe("factory policy: other spellings of the program and of the environment (Qodo on PR 270, round 2)", () => {
+  it.each([
+    "/usr/bin/git push --force origin x",
+    "\\git push --force origin x",
+    "git.exe push origin main",
+    "$(command -v git) push --force origin x",
+    '"C:/Program Files/Git/cmd/git.exe" push origin main',
+    "/usr/bin/gh api -X POST repos/o/r/labels",
+  ])("sees the program however it is written: %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+
+  it.each([
+    'node -e "const {env}=process;console.log(env)"',
+    "node -e \"console.log(require('process').env)\"",
+    "node -e \"console.log(Reflect.get(process,'env'))\"",
+    "python -c 'import os as o;print(o.environ)'",
+  ])("refuses a whole-environment read under another spelling: %s", (command) => {
+    expect(commandViolations(command)).toContainEqual(expect.stringMatching(/environment/));
+  });
+});

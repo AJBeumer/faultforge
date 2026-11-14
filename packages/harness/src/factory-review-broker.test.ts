@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { askRunner, cleanArgs, reviewBroker, serveReviewRequests } from "./factory-review-broker.ts";
+import { askRunner, cleanArgs, MAX_REQUEST_BYTES, reviewBroker, serveReviewRequests } from "./factory-review-broker.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "ff-broker-"));
 
@@ -196,5 +196,78 @@ describe("the review broker: nothing the agent sends can stall or stop the runne
     writeFileSync(join(b.dir, "y.request.json"), JSON.stringify({ argv: ["target", "9"] }));
     await Promise.all(b.serve());
     expect(seen).toBe('{"state":"complete"}');
+  });
+});
+
+describe("the review broker: one request at a time, small requests, no links (Qodo on PR 270, round 2)", () => {
+  const make = (run: (argv: string[], cwd: string) => Promise<{ exitCode: number; output: string }>) => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-broker3-"));
+    const b = reviewBroker({
+      dir: join(dir, "requests"),
+      trustedRoot: join(dir, "trusted"),
+      labDirName: "lab",
+      remoteUrl: "https://github.com/owner/lab.git",
+      evidence: "private/raw-artifacts",
+      evidenceRoot: join(dir, "kept"),
+      build: (verifyRoot, name) => {
+        const lab = join(verifyRoot, name);
+        mkdirSync(lab, { recursive: true });
+        return lab;
+      },
+      run,
+    });
+    expect(b.prepare()).toBeNull();
+    mkdirSync(b.dir, { recursive: true });
+    return { dir, b };
+  };
+
+  it("starts one review:wait at a time, however many requests the agent writes", async () => {
+    let running = 0;
+    let most = 0;
+    const { b } = make(async () => {
+      running++;
+      most = Math.max(most, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+      return { exitCode: 1, output: "" };
+    });
+    for (let i = 0; i < 20; i++)
+      writeFileSync(join(b.dir, `r${i}.request.json`), JSON.stringify({ argv: ["target", "9"] }));
+    for (let round = 0; round < 25; round++) {
+      await Promise.all([...b.serve(), ...b.serve()]);
+    }
+    expect(most).toBe(1);
+  });
+
+  it("refuses a request file bigger than a command line, unread", async () => {
+    const { b } = make(async () => ({ exitCode: 0, output: "" }));
+    writeFileSync(
+      join(b.dir, "big.request.json"),
+      JSON.stringify({ argv: ["target", "9", "x".repeat(MAX_REQUEST_BYTES)] }),
+    );
+    await Promise.all(b.serve());
+    expect(JSON.parse(readFileSync(join(b.dir, "big.answer.json"), "utf8")).exitCode).toBe(2);
+  });
+
+  it("never carries a symbolic link from the agent's saves into the trusted checkout", async () => {
+    const { dir, b } = make(async (_argv, cwd) => {
+      const saved = join(cwd, "private", "raw-artifacts", "reviews", "target-pr9");
+      mkdirSync(saved, { recursive: true });
+      writeFileSync(join(saved, "abc1234.review.json"), "{}");
+      return { exitCode: 0, output: "" };
+    });
+    const kept = join(dir, "kept", "reviews", "target-pr9");
+    mkdirSync(kept, { recursive: true });
+    writeFileSync(join(dir, "outside.txt"), "runner file");
+    try {
+      symlinkSync(join(dir, "outside.txt"), join(kept, "abc1234.head-wait.json"));
+    } catch {
+      return; // no symlinks without the privilege on this machine
+    }
+    writeFileSync(join(b.dir, "s.request.json"), JSON.stringify({ argv: ["target", "9"] }));
+    await Promise.all(b.serve());
+    const trustedSaves = join(dir, "trusted", "lab", "private", "raw-artifacts", "reviews", "target-pr9");
+    expect(existsSync(join(trustedSaves, "abc1234.head-wait.json"))).toBe(false);
+    expect(readFileSync(join(dir, "outside.txt"), "utf8")).toBe("runner file");
   });
 });

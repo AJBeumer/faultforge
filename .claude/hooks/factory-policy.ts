@@ -70,7 +70,8 @@ const SECRET_RULES: [RegExp, string][] = [
     /\bprocess\s*\.\s*env\b(?!\s*\.\s*[A-Za-z_]\w*)|\bprocess\s*\[\s*["'`]env["'`]\s*\]/,
     "no reading the whole environment (process.env); one variable by name, process.env.FAULTFORGE_TICKET_FILE, is fine",
   ],
-  [/\bos\s*\.\s*environ\b|\bfrom\s+os\s+import\b[^\n]*\benviron\b/, "no reading the environment (os.environ)"],
+  // Python's `environ` under any name (`os.environ`, `import os as o; o.environ`, `from os import environ`).
+  [/\benviron\b/, "no reading the environment (os.environ)"],
 ];
 
 /** Hosts a run may reach with its own HTTP tools: only the app it starts for a live check. */
@@ -127,19 +128,30 @@ function steps(command: string): string[] {
 function stepViolations(command: string): string[] {
   const reasons = new Set<string>();
   const words = (text: string) => joinedWords(text).split(/\s+/).filter(Boolean);
+  /** The program a word names, however it is written: `/usr/bin/git`, `\\git`, `git.exe`, `$(command -v git)` (Qodo on PR 270). */
+  const program = (w: string) =>
+    (
+      w
+        .replace(/^[$({`\\]+/, "")
+        .replace(/[)}`;]+$/, "")
+        .split(/[\\/]/)
+        .pop() ?? ""
+    )
+      .replace(/\.exe$/i, "")
+      .toLowerCase();
   for (const step of steps(command)) {
     const all = words(step);
-    const at = (first: RegExp, second: RegExp) => {
+    const at = (first: string, second: RegExp) => {
       for (let i = 0; i + 1 < all.length; i++)
-        if (first.test(all[i] ?? "") && second.test(all[i + 1] ?? "")) return i + 2;
+        if (program(all[i] ?? "") === first && second.test(all[i + 1] ?? "")) return i + 2;
       return -1;
     };
     const edit = all.findIndex(
-      (w, i) => /^[$({`]*gh$/i.test(w) && /^issue$/i.test(all[i + 1] ?? "") && /^edit$/i.test(all[i + 2] ?? ""),
+      (w, i) => program(w) === "gh" && /^issue$/i.test(all[i + 1] ?? "") && /^edit$/i.test(all[i + 2] ?? ""),
     );
     if (edit >= 0 && all.slice(edit).some((w) => /^--(add|remove)-label(=|$)/i.test(w)))
       reasons.add("the runner sets the ticket's labels");
-    const api = at(/^[$({`]*gh$/i, /^api$/i);
+    const api = at("gh", /^api$/i);
     if (api >= 0) {
       const rest = all.slice(api);
       // A field or an input is a write; so is any method but GET, written `-X POST`, `-XPOST` or `--method=POST`.
@@ -151,7 +163,7 @@ function stepViolations(command: string): string[] {
       });
       if (writes) reasons.add("gh api is read-only here");
     }
-    const git = all.findIndex((w) => /^[$({`]*git$/i.test(w));
+    const git = all.findIndex((w) => program(w) === "git");
     const push = git < 0 ? -1 : all.findIndex((w, i) => i > git && /^push$/i.test(w));
     if (push >= 0) {
       const after = all.slice(push + 1);
@@ -173,6 +185,14 @@ function violationsIn(command: string, ticket?: string): string[] {
     ...[...COMMAND_RULES, ...SECRET_RULES].filter(([pattern]) => pattern.test(command)).map(([, reason]) => reason),
     ...stepViolations(command),
   ];
+  // Node's environment under any spelling (`const {env} = process`, `require("process").env`, `Reflect.get(process,
+  // "env")`): once one variable by name (`process.env.NAME`) is set aside, `process` and `env` together are a
+  // read of the whole environment (Qodo on PR 270).
+  const named = command.replace(/\bprocess\s*\.\s*env\s*\.\s*[A-Za-z_]\w*/g, "");
+  if (/\bprocess\b/.test(named) && /\benv\b/.test(named))
+    reasons.push(
+      "no reading the whole environment (process.env); one variable by name, process.env.FAULTFORGE_TICKET_FILE, is fine",
+    );
   // A request, by a tool or by code, may only name the app on localhost, and must name it: a URL built at
   // run time (a variable, a decoded string) can't be checked, so it is refused (#243).
   if (HTTP_TOOLS.test(command) || NETWORK_CODE.test(command)) {
