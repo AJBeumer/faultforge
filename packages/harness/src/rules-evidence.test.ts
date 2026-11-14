@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -110,6 +110,13 @@ describe("buildTable", () => {
       nothingExcluded,
     );
     expect(table.rows.map((r) => [r.id, r.openAtLastReview])).toEqual([["f-late", true]]);
+  });
+
+  it("reads a save with no state as unfinished, as the verdict does: never citable, never closing a finding", () => {
+    const { state: _, ...noState } = review({ findings: [finding("f-x")], openFindings: [] });
+    const table = buildTable([{ key: "faultforge", review: noState }], nothingExcluded);
+    expect(table.prs).toEqual([]);
+    expect(table.rows.map((r) => [r.id, r.openAtLastReview])).toEqual([["f-x", true]]);
   });
 
   it("does not list a PR as citable on a skipped or timed-out review alone", () => {
@@ -307,5 +314,13 @@ describe("citationProblems", () => {
 
   it("counts nothing when there are no citations", () => {
     expect(citationProblems("no references here", table)).toEqual({ problems: [], cited: 0 });
+  });
+});
+
+describe("one completeness rule for the verdict and the rules evidence (Qodo on PR 280)", () => {
+  it("uses saved-review.ts's isComplete, not a copy", () => {
+    const text = readFileSync(join(import.meta.dirname, "rules-evidence.ts"), "utf8");
+    expect(text).toMatch(/import \{[^}]*\bisComplete\b[^}]*\} from "\.\/saved-review\.ts"/);
+    expect(text).not.toMatch(/\.state\s*(===|\?\?)/);
   });
 });

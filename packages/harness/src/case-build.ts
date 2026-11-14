@@ -60,13 +60,14 @@
  * audit log has an amendment or history problem, the inputs disagree (a missing stage, disagreeing
  * commits, an unfinished review with a final verdict, or inputs changed since the verdict), or a saved
  * record with other content is already there. The message names which.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run case:build` runs `case-build-cli.ts`.
  */
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildCaseRecord, latestEvent, type Overlay, requireField } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
@@ -349,17 +350,12 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const parsed = parseCliArgs(process.argv.slice(2));
+/** The command: `case-build-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export async function main(argv: string[]): Promise<number> {
+  const parsed = parseCliArgs(argv);
   if (!parsed) {
     console.error("usage: npm run case:build -- <caseId> [--save] [--write]");
-    process.exit(2);
+    return 2;
   }
-  run(parsed.caseId, { write: parsed.write, save: parsed.save }).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`case:build: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(2);
-    },
-  );
+  return run(parsed.caseId, { write: parsed.write, save: parsed.save });
 }

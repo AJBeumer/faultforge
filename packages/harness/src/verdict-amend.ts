@@ -19,10 +19,11 @@
  * replaced, while the owner answered), or no acceptable reason was given after retrying; 2 nothing was written because it couldn't run: usage, the answer key or audit log has a
  * problem, the case has no verdict, its saved review can't be found, the owner's login can't be read, or the
  * line couldn't be appended.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run verdict:amend` runs `verdict-amend-cli.ts`.
  */
 import { existsSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
@@ -168,22 +169,18 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+/** The command: `verdict-amend-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): Promise<number> | number {
   let parsed: { values: { "dry-run"?: boolean }; positionals: string[] } | undefined;
   try {
-    parsed = parseArgs({ options: { "dry-run": { type: "boolean" } }, allowPositionals: true });
+    parsed = parseArgs({ args: argv, options: { "dry-run": { type: "boolean" } }, allowPositionals: true });
   } catch {
     parsed = undefined;
   }
   const caseId = parsed?.positionals[0];
   if (!parsed || !caseId || !/^FF-\d{4}$/.test(caseId)) {
     console.error("usage: npm run verdict:amend -- <FF-NNNN> [--dry-run]");
-    process.exit(2);
+    return 2;
   }
-  run(caseId, { dryRun: parsed.values["dry-run"] ?? false })
-    .then((code) => process.exit(code))
-    .catch((e: unknown) => {
-      console.error(`verdict:amend: ${message(e)}`);
-      process.exit(2);
-    });
+  return run(caseId, { dryRun: parsed.values["dry-run"] ?? false });
 }

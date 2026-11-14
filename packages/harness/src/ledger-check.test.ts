@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendOnlyBreak, appendOnlyProblems, ledgerCheckProblems, ledgerProblemsWithHistory } from "./ledger-check.ts";
+import {
+  AppendOnlyScanner,
+  appendOnlyBreak,
+  appendOnlyProblems,
+  ledgerCheckProblems,
+  ledgerProblemsWithHistory,
+} from "./ledger-check.ts";
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-check-"));
@@ -254,5 +260,29 @@ describe("appendOnlyProblems: a merge that inserts against every parent (Qodo on
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([
       expect.stringContaining("inserted a line before the end"),
     ]);
+  });
+});
+
+describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N6, Qodo on PR 280)", () => {
+  const diffs = [
+    "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@\n a\n b\n+c",
+    "diff --git a/f b/f\n@@ -1,2 +1,2 @@\n a\n-b\n+B",
+    "diff --git a/f b/f\n@@ -1,2 +1,3 @@\n a\n+x\n b",
+    "diff --git a/f b/f\n@@ -1 +1,2 @@\n a\n+x\n@@ -9 +10 @@\n z",
+    "diff --git a/f b/f\n@@ -1 +1,2 @@\n a\n+b\n No newline at end of file",
+  ];
+  it.each(diffs)("gives the same answer fed a line at a time as over the whole text", (diff) => {
+    const scanner = new AppendOnlyScanner();
+    for (const line of diff.split("\n")) scanner.line(line);
+    expect(scanner.result()).toBe(appendOnlyBreak(diff));
+  });
+
+  it("judges a million-line append without holding it", () => {
+    const scanner = new AppendOnlyScanner();
+    for (const line of ["diff --git a/f b/f", "@@ -1 +1,1000001 @@", " a"]) scanner.line(line);
+    for (let i = 0; i < 1_000_000; i++) scanner.line(`+{"n":${i}}`);
+    expect(scanner.result()).toBeUndefined();
+    scanner.line("-gone");
+    expect(scanner.result()).toBe("removed");
   });
 });

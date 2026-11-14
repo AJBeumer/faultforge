@@ -10,10 +10,11 @@
  * Exit codes: 0 when the record's own `detection` agrees with the computed result, or the record has none
  * yet; 1 when they disagree, and the output says where; 2 when the record isn't a readable case record, or
  * its template can't be found, read or declares no usable terms.
+ *
+ * An unexpected error, even while loading, is 2 too: `npm run match` runs `match-cli.ts`.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { applyMatchRule, isRange, type MatchFinding, type MatchRuleResult } from "./match-rule.ts";
 import { kindTermsOf, templateDir } from "./templates.ts";
 
@@ -186,11 +187,12 @@ export function run(recordPath: string, options: RunOptions = {}): number {
   return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const recordPath = process.argv[2];
+/** The command: `match-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
+export function main(argv: string[]): number {
+  const recordPath = argv[0];
   if (!recordPath) {
     console.error("usage: npm run match -- <case record path>");
-    process.exit(2);
+    return 2;
   }
-  process.exit(run(recordPath));
+  return run(recordPath);
 }
