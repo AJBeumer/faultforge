@@ -923,11 +923,12 @@ describe("audit helpers", () => {
   });
 
   it("accepts only the exact hook command, not one that merely names the file", () => {
-    expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"', "factory-policy.ts")).toBe(true);
+    const wrapped = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" factory-policy.ts';
+    expect(runsHook(wrapped, "factory-policy.ts")).toBe(true);
+    // Run without the fail-closed wrapper, a crash or a timeout would let the tool through (AUD-M4).
+    expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"', "factory-policy.ts")).toBe(false);
     expect(runsHook("echo factory-policy.ts", "factory-policy.ts")).toBe(false);
-    expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts" || true', "factory-policy.ts")).toBe(
-      false,
-    );
+    expect(runsHook(`${wrapped} || true`, "factory-policy.ts")).toBe(false);
     const fake = JSON.stringify({
       hooks: {
         PreToolUse: [

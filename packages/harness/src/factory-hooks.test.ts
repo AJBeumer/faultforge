@@ -17,8 +17,8 @@ import {
 describe("hookProblems", () => {
   const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });
   const both = [
-    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' },
-    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"' },
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" guard-target.ts' },
+    { command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" factory-policy.ts' },
   ];
 
   it("accepts this repo's own settings", () => {
@@ -159,7 +159,11 @@ describe("hook self-test (#104)", () => {
     expect(
       hookTimeoutSeconds(
         JSON.stringify({
-          hooks: { PreToolUse: [{ hooks: [{ command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts"' }] }] },
+          hooks: {
+            PreToolUse: [
+              { hooks: [{ command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" guard-target.ts' }] },
+            ],
+          },
         }),
       ),
     ).toBe(60);

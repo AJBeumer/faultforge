@@ -440,9 +440,13 @@ describe("guard-target hook fails closed (#104)", () => {
     writeFileSync(join(dir, "secret.txt"), "The planted bug is here\n");
     const commit = "git -C /d/Projects/faultforge-target commit -F secret.txt";
     // A heredoc-looking marker in a comment, with a real heredoc later, must not hide the commit between them.
-    expect(bash(`# <<FAKE\n${commit}\ncat <<FAKE\nx\nFAKE`, dir)).toMatch(/says planted/);
+    // The comment is now read as a comment (AUD-M4), so the `cat` step after the commit is refused first.
+    expect(bash(`# <<FAKE\n${commit}\ncat <<FAKE\nx\nFAKE`, dir)).toMatch(/says planted|must run on its own/);
+    expect(bash(`# <<FAKE\n${commit}\necho <<FAKE\nx\nFAKE`, dir)).toMatch(/says planted/);
     // An escaped quote must not open a quoted span that swallows the real -F option.
-    expect(bash(`printf \\"; ${commit}; printf "ok"`, dir)).toMatch(/says planted/);
+    // With the escape read right, the `printf` steps are refused before the file is read (AUD-M4).
+    expect(bash(`printf \\"; ${commit}; printf "ok"`, dir)).toMatch(/says planted|must run on its own/);
+    expect(bash(`echo \\"; ${commit}; echo "ok"`, dir)).toMatch(/says planted/);
   });
 
   it("still allows and denies as before once the input is well-formed", () => {
@@ -601,7 +605,12 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
   });
 
   it("doesn't count the folder a piped or substituted body comes from as posted text", () => {
-    expect(bash(`cat D:/Projects/FaultForge/private/body.md | ${TO_TARGET} --body-file -`)).toBeUndefined();
+    // A piped file is read now (AUD-M3), so it must exist; its folder still isn't posted text.
+    const folder = join(mkdtempSync(join(tmpdir(), "guard-pipe-")), "FaultForge", "private");
+    mkdirSync(folder, { recursive: true });
+    const piped = join(folder, "body.md").replace(/\\/g, "/");
+    writeFileSync(piped, "Small cleanup.\n");
+    expect(bash(`cat ${piped} | ${TO_TARGET} --body-file -`)).toBeUndefined();
     expect(bash(`${TO_TARGET} --body "$(cat ../FaultForge/notes/body.md)"`)).toBeUndefined();
     expect(bash(`echo "see AJBeumer/faultforge#12" | ${TO_TARGET} --body-file -`)).toMatch(/names the lab/);
     expect(bash(`${TO_TARGET} --body "$(cat $HOME/FaultForge/notes/body.md)"`)).toBeUndefined();

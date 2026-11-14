@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
+import { blankQuoted, quotedSpans } from "./shell-scan.ts";
 
 /** Thrown when git can't answer for a checkout, or can't answer in time: the caller fails closed. */
 export class Uninspectable extends Error {}
@@ -270,13 +271,6 @@ export function pendingPushUpdates(checkout: string, remote: string, updates: Pu
   return { reasons: telltales(texts.join("\n")), where };
 }
 
-/** The command with quoted text and heredoc bodies blanked, so operators inside them don't count. */
-export function blankQuoted(command: string): string {
-  return command
-    .replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\s*(\n|$)/g, " ")
-    .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (/^"[\s\S]*(\$\(|`)/.test(quoted) ? quoted : " "));
-}
-
 /**
  * The steps allowed in one command together with a git step inside a reviewed checkout: moving around,
  * git steps that don't write files from outside git's own history (with `-C` and the other path options
@@ -300,10 +294,8 @@ export function chainProblem(command: string): string | undefined {
   // An unquoted heredoc delimiter means the body expands: a `$(…)` or backtick in it runs a command,
   // unless the shell escape `\$(` or `` \` `` keeps it literal. An escaped backslash (`\\`) is removed
   // first, so `\\$(…)` is seen for what the shell makes of it: a literal backslash and a real substitution.
-  for (const m of command.matchAll(/<<-?\s*(["']?)(\w+)\1[^\n]*\n([\s\S]*?)\n\s*\2\s*(?:\n|$)/g)) {
-    const body = (m[3] ?? "").replace(/\\\\/g, "").replace(/\\\$\(|\\`/g, "");
-    if (!m[1] && /\$\(|`/.test(body)) return "a heredoc body that runs $(…)";
-  }
+  // The scan is linear in the command's length (AUD-M4).
+  if (quotedSpans(command).some((span) => span.kind === "heredoc" && span.runs)) return "a heredoc body that runs $(…)";
   const steps = blankQuoted(command)
     .split(/;|&&|\|\||\||\n|(?<![&>])&(?![&>])/)
     .map((s) => s.trim())

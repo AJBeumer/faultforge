@@ -23,17 +23,17 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-target.ts\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts\" guard-target.ts",
             "timeout": 15,
             "statusMessage": "Checking for hints aimed at the target repo"
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts\" factory-policy.ts",
             "timeout": 15,
             "statusMessage": "Checking the unattended-run policy"
           }
