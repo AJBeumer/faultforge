@@ -63,7 +63,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -72,6 +72,7 @@ import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
 import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { isToolWritten, sha256, verdictHashProblem } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
@@ -334,17 +335,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     log(`[case:build] wrote ${outPath} (already recorded as published with this content)`);
     return 0;
   }
-  appendFileSync(
-    auditEventsPath,
-    `${JSON.stringify({
-      eventId: randomUUID(),
-      type: "case.published",
-      at: new Date().toISOString(),
-      caseId,
-      sha256: hash,
-      path: `examples/${caseId}.json`,
-    })}\n`,
-  );
+  appendEvent(auditEventsPath, {
+    eventId: randomUUID(),
+    type: "case.published",
+    at: new Date().toISOString(),
+    caseId,
+    sha256: hash,
+    path: `examples/${caseId}.json`,
+  });
   log(`[case:build] wrote ${outPath}`);
   return 0;
 }

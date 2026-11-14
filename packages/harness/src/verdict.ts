@@ -45,13 +45,14 @@
  * appended.
  */
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
@@ -104,7 +105,7 @@ function defaultOwnerLogin(): string {
 }
 
 function defaultAppend(path: string, value: object): void {
-  appendFileSync(path, `${JSON.stringify(value)}\n`);
+  appendEvent(path, value as Record<string, unknown>);
 }
 
 export async function run(caseId: string, options: RunOptions = {}): Promise<number> {

@@ -36,13 +36,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { injectionHashProblem, isToolWritten } from "./ledger-hashes.ts";
 import { templateTelltales } from "./neutral.ts";
@@ -83,7 +84,7 @@ export function ticketFieldProblems(ticket: Ticket | undefined): string[] {
 }
 
 /** A link GitHub turns into a "mentioned in" event: a full issue/PR URL, or a short `repo#N` reference. */
-const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|\b[\w.-]+#\d+\b/i;
+export const ISSUE_OR_PR_LINK = /github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|\b[\w.-]+#\d+\b/i;
 
 /**
  * The reasons a ticket's text links to a GitHub issue or PR, as `field: reason`, over every field that
@@ -304,10 +305,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   const issue = { repo: target.github, number, url, title: ticket.title, body };
   writeFileSync(join(evidenceDir, "ticket.json"), `${JSON.stringify(issue, null, 2)}\n`);
-  appendFileSync(
-    auditEventsPath,
-    `${JSON.stringify({ eventId: eventId(), type: "case.ticket-created", at: now(), caseId, issue })}\n`,
-  );
+  appendEvent(auditEventsPath, { eventId: eventId(), type: "case.ticket-created", at: now(), caseId, issue });
 
   log(`[case:ticket] created ${target.github}#${number}: ${url}`);
   log(`Closes #${number}`);

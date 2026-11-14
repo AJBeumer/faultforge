@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendOnlyProblems, ledgerCheckProblems, ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { appendOnlyBreak, appendOnlyProblems, ledgerCheckProblems, ledgerProblemsWithHistory } from "./ledger-check.ts";
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "ledger-check-"));
@@ -133,7 +133,8 @@ describe("ledgerCheckProblems: both files together", () => {
   it("is empty for two clean, append-only files", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
-    commit(dir, "audit-events.jsonl", '{"eventId":"evt-1"}\n', "first event");
+    const event = '{"eventId":"evt-1","type":"pr.opened","at":"2026-11-01T00:00:00Z","caseId":"FF-0001"}\n';
+    commit(dir, "audit-events.jsonl", event, "first event");
     expect(ledgerCheckProblems(dir)).toEqual([]);
   });
 });
@@ -175,5 +176,35 @@ describe("appendOnlyProblems: an amendment line is history like any other (M86)"
     commit(dir, "ground-truth.jsonl", `{"caseId":"FF-0001"}\n${amendment}\n`, "case and amendment");
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "drop the amendment");
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toHaveLength(1);
+  });
+});
+
+describe("appendOnlyProblems: a line inserted before the end (AUD-M10, #251)", () => {
+  it("names the commit that inserted a line between two old ones", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0003"}\n', "two cases");
+    commit(
+      dir,
+      "ground-truth.jsonl",
+      '{"caseId":"FF-0001"}\n{"caseId":"FF-0002"}\n{"caseId":"FF-0003"}\n',
+      "back-date",
+    );
+    const problems = appendOnlyProblems(dir, "ground-truth.jsonl");
+    expect(problems).toEqual([expect.stringContaining("inserted a line before the end")]);
+  });
+
+  it("finds an uncommitted insertion at the top", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "one case");
+    writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-0000"}\n{"caseId":"FF-0001"}\n');
+    expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([
+      "ground-truth.jsonl: uncommitted changes inserted a line before the end",
+    ]);
+  });
+
+  it("still accepts a plain append", () => {
+    expect(appendOnlyBreak("@@ -1,1 +1,2 @@\n a\n+b\n")).toBeUndefined();
+    expect(appendOnlyBreak("@@ -1,1 +1,2 @@\n+a\n b\n")).toBe("inserted");
+    expect(appendOnlyBreak("@@ -1,2 +1,1 @@\n a\n-b\n")).toBe("removed");
   });
 });

@@ -26,7 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
-import { appendJsonl, git as gitIn, log, readJsonl, run, runProof, runStep, sha256 } from "./inject-run.ts";
+import { git as gitIn, log, readJsonl, run, runProof, runStep, sha256 } from "./inject-run.ts";
 import {
   applyMutation,
   loadTemplate,
@@ -35,7 +35,9 @@ import {
   type Template,
   templateRefusal,
 } from "./inject-template.ts";
+import { appendAnswerKeyEntry, appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { injectionInputHash } from "./ledger-hashes.ts";
 import { telltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
 import type { Outcome } from "./run-outcome.ts";
@@ -263,8 +265,8 @@ const entry =
         validated: true,
         createdAt,
       };
-appendJsonl(ledgerPath, entry);
-appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
+appendAnswerKeyEntry(ledgerPath, entry);
+appendEvent(join(PRIVATE_DIR, "audit-events.jsonl"), {
   eventId: randomUUID(),
   type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
   at: createdAt,
@@ -272,10 +274,10 @@ appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
   branch: actualBranch,
   tool: TOOL,
   environment: `${platform()}-${arch()}-node${process.versions.node}`,
-  inputHash: sha256(
-    readFileSync(join(templateDir, "template.json")) +
-      proofs.map((p) => sha256(readFileSync(join(templateDir, p.proofTest)))).join("") +
-      baseCommit,
+  inputHash: injectionInputHash(
+    readFileSync(join(templateDir, "template.json"), "utf8"),
+    proofs.map((p) => readFileSync(join(templateDir, p.proofTest))),
+    baseCommit,
   ),
 });
 

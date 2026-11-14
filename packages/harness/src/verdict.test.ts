@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { eventProblems } from "./ledger-append.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { findSavedReview, type SavedFinding, toMatchFinding } from "./saved-review.ts";
 import { type AskFn, parseCliArgs, printReport, type RunOptions, run } from "./verdict.ts";
@@ -666,5 +667,12 @@ describe("npm run verdict: a reason belongs to its case, every match is judged, 
 
   it("reads --supersede from the command line", () => {
     expect(parseCliArgs(["FF-0001", "--supersede", "abc"])).toMatchObject({ caseId: "FF-0001", supersede: "abc" });
+  });
+});
+
+describe("npm run verdict: its event fits the audit-event schema (#251)", () => {
+  it("passes appendEvent's check for a bug case and a control", async () => {
+    const bug = await runOn("FF-0001", fixture(), { ask: fakeAsk(["detected", "Qodo named it", "real", "r"]).ask });
+    expect(eventProblems(bug.appended[0])).toEqual([]);
   });
 });

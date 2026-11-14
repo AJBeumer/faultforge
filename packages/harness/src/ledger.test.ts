@@ -288,3 +288,40 @@ describe("entryVersions (#249, Qodo on PR 264)", () => {
     expect(entryVersions(path, "FF-0009")).toEqual([]);
   });
 });
+
+describe("ledgerProblems: locked fields and the shape of a change (AUD-M10, #251)", () => {
+  const file = (lines: object[]) => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "audit-events.jsonl");
+    writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+    return path;
+  };
+  const verdict = { eventId: "v", type: "case.adjudicated", caseId: "FF-9001", disposition: "confirmed_missed" };
+  const amend = (change: unknown) => ({ kind: "amendment", amends: "v", change, reason: "r", evidence: "e" });
+
+  it.each(["disposition", "reason", "injectedLines", "injectedFile", "templateId", "inputHash", "commit"])(
+    "reports an amendment that changes %s",
+    (field) => {
+      expect(ledgerProblems(file([verdict, amend({ [field]: "x" })]))).toEqual([
+        `amendment amending v: changes ${field}, which an amendment may not touch`,
+      ]);
+    },
+  );
+
+  it("accepts the kinds of change real amendments made", () => {
+    for (const change of [
+      { by: "Owner" },
+      { pr: {}, review: {} },
+      { qodoState: "s", relationships: "r" },
+      { alsoBreaks: [] },
+    ]) {
+      expect(ledgerProblems(file([verdict, amend(change)]))).toEqual([]);
+    }
+  });
+
+  it("reports a change that is text or a list, not an object of fields", () => {
+    expect(ledgerProblems(file([verdict, amend("disposition")]))).toEqual([
+      "amendment amending v: its change isn't an object of fields",
+    ]);
+    expect(ledgerProblems(file([verdict, amend(["x"])]))).toHaveLength(1);
+  });
+});
