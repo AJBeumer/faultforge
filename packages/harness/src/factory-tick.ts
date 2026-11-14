@@ -28,8 +28,10 @@
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  *
  * Split along its seams (#109): `factory-tick-deps.ts` (what a tick needs from the world), `factory-tick-pick.ts`
- * (steps 2 and 3), `factory-tick-failure.ts` (a tick that throws), `factory-tick-setup.ts` (the command's own
- * checks), `factory-settle.ts` (step 8) and `factory-finish.ts` (step 9). This module runs the steps in order.
+ * (steps 2 and 3), `factory-workspace.ts` (step 6), `factory-tick-run.ts` (step 7, and step 8's audit and
+ * verification, which `factory-settle.ts` turns into an outcome), `factory-finish.ts` (step 9),
+ * `factory-tick-failure.ts` (a tick that throws) and `factory-tick-setup.ts` (the command's own checks). This
+ * module runs the steps in order.
  *
  * Exit codes: 0 the tick ended and its ticket, if any, doesn't need the owner (a run delivered `agent-done`,
  * or nothing to take: busy, idle, or a ticket refused, each logged); 1 the ticket it took now carries
@@ -49,30 +51,24 @@ import { hooksEvent } from "./factory-hooks.ts";
 import { recoverStranded } from "./factory-recovery.ts";
 import {
   type Candidate,
-  earlierPrsNote,
   exitCodeFor,
-  type Finish,
   LABELS,
   oldest,
-  parseAgentResult,
-  prNumber,
   QODO_CHECK_COMMENT,
-  RunnerStop,
   redact,
   runIdFor,
   safeText,
-  settle,
   type TickOutcome,
 } from "./factory-settle.ts";
 import type { Logger, TickDeps, TickOptions, Workspace } from "./factory-tick-deps.ts";
 import { failTick } from "./factory-tick-failure.ts";
 import { admissionRefusal, readyCandidates } from "./factory-tick-pick.ts";
+import { checkRun, runOnTicket } from "./factory-tick-run.ts";
 import { positiveOption, setupRefusal, tokenFrom } from "./factory-tick-setup.ts";
 import type { RunMode } from "./factory-workspace.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
-import { provenanceProblems, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 export {
   type AgentResult,
@@ -228,62 +224,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
-    // The agent works from this exact text, taken after the claim, so nothing added later can steer it.
-    const snapshot = deps.snapshot(pick.github, pick.number);
-    const late = provenanceProblems(snapshot.provenance, owner);
-    if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
-    // A retried ticket continues the pull request an earlier run left open, rather than open a second.
-    // Only a hint: a lookup that fails is logged and the run goes on without it (Qodo on PR 268).
-    let found: string[] = [];
-    try {
-      found = deps.openPrs?.(pick.github, pick.number) ?? [];
-    } catch (error) {
-      log("error", { message: `couldn't list open pull requests: ${error instanceof Error ? error.message : error}` });
-    }
-    const earlier = found.filter((url) => prNumber(url, pick.github));
-    if (earlier.length) log("earlier-prs", { prs: earlier });
-    const ticketFile = deps.writeTicket(ws, earlier.length ? snapshot.text + earlierPrsNote(earlier) : snapshot.text);
-    log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
-
-    const agentFrom = deps.now().toISOString();
-    log("agent-started", { command: `/factory ${pick.repoKey} ${pick.number}` });
-    const agent = await deps.runAgent(ws, id, pick.repoKey, pick.number, ticketFile, log);
-    const agentTo = deps.now().toISOString();
-    const result = parseAgentResult(agent.resultText);
-    log("agent-finished", {
-      exitCode: agent.exitCode,
-      timedOut: agent.timedOut,
-      subtype: agent.subtype,
-      costUsd: agent.costUsd,
-      turns: agent.turns,
-      result,
-    });
-
     const workspace = ws;
-    // Effects, not just commands: the policy hook reads command text, which can't catch everything.
-    const audit = [
-      ...deps.audit(workspace, pick, agentFrom, agentTo),
-      ...ticketChangeProblems(snapshot, deps.snapshot(pick.github, pick.number), owner),
-    ];
-    log("audited", { from: agentFrom, to: agentTo, problems: audit });
-    const settled = settle(
-      agent,
-      result,
-      (pr) => {
-        const verification = deps.verifyPr(workspace, pick.repoKey, pr);
-        log("verified", {
-          pr,
-          problems: verification.problems,
-          revertCheckRecord: verification.revertCheckRecord ?? null,
-        });
-        return verification;
-      },
-      pick.github,
-      options.minutes,
-    );
-    const finish: Finish = audit.length
-      ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
-      : settled;
+    const run = { deps, ws: workspace, pick, owner, runId: id, log };
+    const finish = checkRun(run, await runOnTicket(run), options.minutes);
     const label = finishRun({
       factory,
       deps,
