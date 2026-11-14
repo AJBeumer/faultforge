@@ -26,7 +26,8 @@
  * Exit codes: 0 the issue was created (or, with `--dry-run`, printed); 1 refused — the ticket text
  * gives the case away or links to a GitHub issue or PR, the template's `ticket` field is missing or
  * incomplete, the case id isn't a plain token, the case planted another template (or, outside a dry run,
- * isn't in the answer key yet), or this case already has a ticket; 2 could not run — the template wasn't
+ * isn't in the answer key yet), the template changed since the case was planted (its injection hash no
+ * longer holds), or this case already has a ticket; 2 could not run — the template wasn't
  * found or unreadable, the answer key or audit log couldn't be read or has an amendment or history
  * problem (`ledgerProblemsWithHistory`), `gh` failed to create the
  * issue, or its output couldn't be read as an issue URL (the raw output is still saved, so a human can
@@ -40,8 +41,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
-import { readAuditLog, readLedger } from "./ledger.ts";
+import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { injectionHashProblem, isToolWritten } from "./ledger-hashes.ts";
 import { templateTelltales } from "./neutral.ts";
 import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
@@ -219,6 +221,18 @@ export async function run(templateId: string, caseId: string, options: RunOption
         : `case:ticket: refused, ${caseId} is not in the answer key yet: run inject first`,
     );
     return 1;
+  }
+  // The ticket text is read from the template file now: it must be the file the case was planted from, not
+  // one edited since (Qodo on PR 264). Checked through the injection event's hash, like ledger:check does.
+  const injected = events.find(
+    (e) => e.caseId === caseId && (e.type === "sabotage.injected" || e.type === "control.injected"),
+  );
+  if (entry && injected && isToolWritten(injected) && typeof injected.inputHash === "string") {
+    const problem = injectionHashProblem(injected as LedgerEntry, [entry as LedgerEntry], env);
+    if (problem) {
+      error(`case:ticket: refused, ${caseId}'s template isn't the one it was planted from (${problem})`);
+      return 1;
+    }
   }
   if (alreadyTicketed(events, caseId)) {
     error(`case:ticket: refused, ${caseId} already has a ticket`);

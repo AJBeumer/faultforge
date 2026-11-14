@@ -4,7 +4,7 @@
  * `verdict`, `case:build` and `case:review` read it, all through this module, so the folder can't be
  * computed two ways (AUD-M24).
  */
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { MatchFinding } from "./match-rule.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
@@ -27,21 +27,47 @@ export function savedReviewPath(dir: string, headSha: string): string {
   return join(dir, `${headSha.slice(0, 7)}.review.json`);
 }
 
+/** The state of the save at `path`, or undefined when there is none; "" when it can't be read as a save. */
+function existingState(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const state = (JSON.parse(readFileSync(path, "utf8")) as { state?: unknown }).state;
+    return typeof state === "string" ? state : "";
+  } catch {
+    return "";
+  }
+}
+
 /**
- * Writes a save once. A save is the evidence a verdict judged (its hash is in the verdict), so it is never
- * replaced: an existing file makes this throw, and nothing is written (AUD-M26).
+ * Why a new save at `path` must be refused, or undefined: a complete save is final. An unfinished one
+ * (timed out, skipped, head moved) may be followed by a later wait, which keeps it under another name.
+ */
+export function savedReviewRefusal(path: string): string | undefined {
+  return existingState(path) === "complete"
+    ? `${path} already holds a complete review: a saved review is evidence and is never overwritten`
+    : undefined;
+}
+
+/**
+ * Writes a save, never over another (AUD-M26): a complete save makes this throw. An unfinished save is kept,
+ * renamed `<sha7>.unfinished-<n>.json` (no longer a `.review.json`, so no lookup finds it), and the new save
+ * is created exclusively, so two writers racing can't both succeed. A verdict that judged the unfinished save
+ * names it in its hash, so `case:build` then refuses until the verdict is superseded.
  */
 export function writeSavedReview(path: string, record: object): void {
+  const refusal = savedReviewRefusal(path);
+  if (refusal) throw new Error(refusal);
+  if (existingState(path) !== undefined) {
+    const stem = path.replace(/\.review\.json$/, "");
+    let n = 1;
+    while (existsSync(`${stem}.unfinished-${n}.json`)) n++;
+    renameSync(path, `${stem}.unfinished-${n}.json`);
+  }
   try {
-    writeFileSync(
-      path,
-      `${JSON.stringify(record, null, 2)}
-`,
-      { flag: "wx" },
-    );
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`a saved review already exists at ${path}; it is evidence and is never overwritten`);
+      throw new Error(`a saved review appeared at ${path} while writing; it is evidence and is never overwritten`);
     }
     throw e;
   }

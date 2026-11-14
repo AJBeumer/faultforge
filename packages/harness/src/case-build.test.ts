@@ -806,7 +806,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
       findings: [],
     });
     writeFileSync(savePath, saveText);
-    const read = readLedger(groundTruthPath, "2026-11-01T00:10:00.000Z")[0] as LedgerEntry;
+    const read = readLedger(groundTruthPath)[0] as LedgerEntry;
     const events = [
       { eventId: "e0", type: "pr.opened", caseId: CASE_ID, at: "2026-11-01T00:01:00.000Z", pr: 7 },
       { eventId: "e1", type: "sabotage.injected", caseId: CASE_ID, at: "2026-11-01T00:00:00.000Z" },
@@ -927,5 +927,32 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect(again.code).toBe(2);
     expect(again.err).toContain("already holds a different record");
     expect(readFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "utf8")).toBe("{}\n");
+  });
+});
+
+describe("run: a review stage whose PR can't be read (Qodo on PR 264)", () => {
+  it("refuses, exit 2, rather than fall back to an overlay's legacy findings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "case-build-pr-"));
+    const commit = "9".repeat(40);
+    writeFileSync(
+      join(root, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9004", kind: "sabotage", templateId: "t", injectionCommit: commit })}\n`,
+    );
+    const events = [
+      { eventId: "a", type: "review.recorded", caseId: "FF-9004", at: "2026-11-01T00:00:00Z", pr: { repo: "o/t" } },
+      { eventId: "b", type: "case.adjudicated", caseId: "FF-9004", at: "2026-11-01T00:01:00Z", disposition: "x" },
+    ];
+    writeFileSync(join(root, "audit-events.jsonl"), events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    writeFileSync(join(root, "overlay.json"), JSON.stringify({ legacyFindingsPath: "nowhere.json" }));
+    const err: string[] = [];
+    const code = await run("FF-9004", {
+      env: { FAULTFORGE_PRIVATE_DIR: root },
+      log: () => {},
+      error: (l) => err.push(l),
+      overlayPath: join(root, "overlay.json"),
+      reviewsDir: join(root, "reviews"),
+    });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("names no readable PR");
   });
 });

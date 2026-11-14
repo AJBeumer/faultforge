@@ -6,8 +6,8 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { dirname, join, resolve } from "node:path";
+import { entryVersions, type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { casePr, findSavedReview } from "./saved-review.ts";
 import { templateDir } from "./templates.ts";
 
@@ -62,36 +62,59 @@ function templateText(id: unknown, env: NodeJS.ProcessEnv): { dir: string; text:
   return dir ? { dir, text: readFileSync(join(dir, "template.json"), "utf8") } : undefined;
 }
 
-/** What an injection event's hash recomputes to today, or a reason it can't be recomputed. */
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** What an injection event's hash recomputes to today, or a reason it can't be recomputed. Never throws. */
 export function recomputeInjectionHash(entry: LedgerEntry, env: NodeJS.ProcessEnv): string | { problem: string } {
-  const template = templateText(entry.templateId, env);
-  if (!template) return { problem: `its template ${String(entry.templateId)} is not found` };
-  const files = ownProofFiles(JSON.parse(template.text));
-  const missing = files.find((f) => !existsSync(join(template.dir, f)));
-  if (missing) return { problem: `its proof ${missing} is not found` };
-  return injectionInputHash(
-    template.text,
-    files.map((f) => readFileSync(join(template.dir, f))),
-    String(entry.targetCommit),
-  );
+  try {
+    const template = templateText(entry.templateId, env);
+    if (!template) return { problem: `its template ${String(entry.templateId)} is not found` };
+    const files = ownProofFiles(JSON.parse(template.text));
+    const missing = files.find((f) => typeof f !== "string" || !existsSync(join(template.dir, f)));
+    if (missing !== undefined) return { problem: `its proof ${String(missing)} is not found` };
+    return injectionInputHash(
+      template.text,
+      files.map((f) => readFileSync(join(template.dir, f))),
+      String(entry.targetCommit),
+    );
+  } catch (e) {
+    return { problem: message(e) };
+  }
 }
 
-/** What a verdict's hash recomputes to today, from the save on the case's own PR, or a reason it can't be. */
-export function recomputeVerdictHash(
+/**
+ * Why a verdict's `inputHash` no longer holds, or undefined when it does. The save is the file the verdict
+ * names (`reviewFile`, relative to private storage) or, for an older verdict, the case's own PR's save. The
+ * entry is any version the append-only answer key has held for the case (`entryVersions`): the verdict read
+ * one of them. Never throws.
+ */
+export function verdictHashProblem(
   verdict: LedgerEntry,
   caseEvents: LedgerEntry[],
   groundTruthPath: string,
   reviewsDir: string,
   env: NodeJS.ProcessEnv,
-): string | { problem: string } {
-  const entry = readLedger(groundTruthPath, verdict.at as string).find((e) => e.caseId === verdict.caseId);
-  if (!entry) return { problem: "its answer-key entry is not found" };
-  const template = templateText(entry.templateId, env);
-  if (!template) return { problem: `its template ${String(entry.templateId)} is not found` };
-  const pr = casePr(caseEvents);
-  const save = findSavedReview(reviewsDir, String(entry.injectionCommit), pr);
-  if (!save) return { problem: `no saved review of ${String(entry.injectionCommit)} on PR ${pr} is found` };
-  return verdictInputHash(entry, template.text, save.text);
+): string | undefined {
+  try {
+    const versions = entryVersions(groundTruthPath, String(verdict.caseId));
+    const entry = versions.at(-1);
+    if (!entry) return "its answer-key entry is not found";
+    const template = templateText(entry.templateId, env);
+    if (!template) return `its template ${String(entry.templateId)} is not found`;
+    let saveText: string;
+    if (typeof verdict.reviewFile === "string") {
+      saveText = readFileSync(resolve(dirname(groundTruthPath), verdict.reviewFile), "utf8");
+    } else {
+      const pr = casePr(caseEvents);
+      const save = findSavedReview(reviewsDir, String(entry.injectionCommit), pr);
+      if (!save) return `no saved review of ${String(entry.injectionCommit)} on PR ${pr} is found`;
+      saveText = save.text;
+    }
+    if (versions.some((v) => verdictInputHash(v, template.text, saveText) === verdict.inputHash)) return undefined;
+    return "its inputHash no longer recomputes: the answer-key entry, the template or the saved review changed after it was recorded";
+  } catch (e) {
+    return `its inputHash can't be recomputed: ${message(e)}`;
+  }
 }
 
 /**
@@ -109,18 +132,30 @@ export function hashProblems(
   for (const event of events) {
     if (!isToolWritten(event) || typeof event.inputHash !== "string") continue;
     const label = `${String(event.caseId)} ${String(event.type)} event ${String(event.eventId)}`;
-    let now: string | { problem: string };
-    if (event.type === "sabotage.injected" || event.type === "control.injected") {
-      const entry = entries.find((e) => e.caseId === event.caseId);
-      now = entry ? recomputeInjectionHash(entry, env) : { problem: "its answer-key entry is not found" };
-    } else if (event.type === "case.adjudicated") {
+    if (event.type === "case.adjudicated") {
       const caseEvents = events.filter((e) => e.caseId === event.caseId);
-      now = recomputeVerdictHash(event, caseEvents, paths.groundTruthPath, paths.reviewsDir, env);
-    } else continue;
-    if (typeof now !== "string") problems.push(`${label}: its inputHash can't be recomputed: ${now.problem}`);
-    else if (now !== event.inputHash && drift.get(String(event.eventId))?.hash !== now) {
-      problems.push(`${label}: its inputHash no longer recomputes, so an input changed after it was recorded`);
+      const problem = verdictHashProblem(event, caseEvents, paths.groundTruthPath, paths.reviewsDir, env);
+      if (problem) problems.push(`${label}: ${problem}`);
+      continue;
     }
+    if (event.type !== "sabotage.injected" && event.type !== "control.injected") continue;
+    const problem = injectionHashProblem(event, entries, env, drift);
+    if (problem) problems.push(`${label}: ${problem}`);
   }
   return problems;
+}
+
+/** Why an injection event's `inputHash` no longer holds, or undefined when it does (or drifted as recorded). */
+export function injectionHashProblem(
+  event: LedgerEntry,
+  entries: LedgerEntry[],
+  env: NodeJS.ProcessEnv,
+  drift: ReadonlyMap<string, { hash: string }> = KNOWN_DRIFT,
+): string | undefined {
+  const entry = entries.find((e) => e.caseId === event.caseId);
+  if (!entry) return "its answer-key entry is not found";
+  const now = recomputeInjectionHash(entry, env);
+  if (typeof now !== "string") return `its inputHash can't be recomputed: ${now.problem}`;
+  if (now === event.inputHash || drift.get(String(event.eventId))?.hash === now) return undefined;
+  return "its inputHash no longer recomputes: the template or a proof changed after it was recorded";
 }

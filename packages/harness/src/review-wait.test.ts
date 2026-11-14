@@ -894,24 +894,45 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     expect(h.err.join("\n")).toContain("not a review");
   });
 
-  it("refuses, exit 2, to wait again for a commit it already saved, and leaves the save as it was", async () => {
+  it("refuses, exit 2, to wait again for a commit it saved complete, and leaves the save as it was", async () => {
     const h = harness([pr1]);
     mkdirSync(h.dir, { recursive: true });
     const path = join(h.dir, `${PR1_HEAD.slice(0, 7)}.review.json`);
-    writeFileSync(path, '{"state":"review incomplete"}');
+    writeFileSync(path, '{"state":"complete"}');
     expect(await h.wait()).toBe(2);
     expect(await h.wait(null)).toBe(2);
     expect(h.err.join("\n")).toContain("is never overwritten");
-    expect(readFileSync(path, "utf8")).toBe('{"state":"review incomplete"}');
+    expect(readFileSync(path, "utf8")).toBe('{"state":"complete"}');
     expect(h.fetches()).toBe(0);
+  });
+
+  it("waits again after an unfinished save, and keeps that save under another name (Qodo on PR 264)", async () => {
+    const h = harness([pr1]);
+    mkdirSync(h.dir, { recursive: true });
+    writeFileSync(join(h.dir, `${PR1_HEAD.slice(0, 7)}.review.json`), '{"state":"review incomplete"}');
+    expect(await h.wait()).toBe(0);
+    expect(h.saved().state).toBe("complete");
+    const kept = join(h.dir, `${PR1_HEAD.slice(0, 7)}.unfinished-1.json`);
+    expect(readFileSync(kept, "utf8")).toBe('{"state":"review incomplete"}');
   });
 });
 
 describe("writeSavedReview", () => {
-  it("writes a save once and throws rather than replace it", () => {
+  it("never writes over a complete save", () => {
     const path = join(mkdtempSync(join(tmpdir(), "saved-review-")), "abc1234.review.json");
     writeSavedReview(path, { state: "complete" });
     expect(() => writeSavedReview(path, { state: "review incomplete" })).toThrow(/never overwritten/);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ state: "complete" });
+  });
+
+  it("keeps each unfinished save it follows, numbered", () => {
+    const dir = mkdtempSync(join(tmpdir(), "saved-review-"));
+    const path = join(dir, "abc1234.review.json");
+    writeSavedReview(path, { state: "review incomplete", n: 1 });
+    writeSavedReview(path, { state: "skipped by Qodo", n: 2 });
+    writeSavedReview(path, { state: "complete", n: 3 });
+    expect(JSON.parse(readFileSync(join(dir, "abc1234.unfinished-1.json"), "utf8")).n).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, "abc1234.unfinished-2.json"), "utf8")).n).toBe(2);
+    expect(JSON.parse(readFileSync(path, "utf8")).n).toBe(3);
   });
 });

@@ -72,7 +72,7 @@ import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
-import { isToolWritten, recomputeVerdictHash, sha256 } from "./ledger-hashes.ts";
+import { isToolWritten, sha256, verdictHashProblem } from "./ledger-hashes.ts";
 import { ROOT } from "./paths.ts";
 import { type Finding, findingsFor, type QodoReview } from "./qodo-review.ts";
 import { printRecord } from "./record-print.ts";
@@ -184,7 +184,11 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   let adjudication: LedgerEntry;
   try {
     const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage");
-    reviewPr = prNumberOf(requireField(reviewEvent, "pr", "the review stage"));
+    const recordedPr = requireField(reviewEvent, "pr", "the review stage");
+    reviewPr = prNumberOf(recordedPr);
+    // A PR that can't be read must never send the case down the legacy path (Qodo on PR 264).
+    if (reviewPr === undefined)
+      throw new Error(`the review stage names no readable PR (${JSON.stringify(recordedPr)})`);
     adjudication = latestEvent(events, ["case.adjudicated"], "the adjudication stage");
   } catch (e) {
     error(`case:build: ${message(e)}`);
@@ -194,7 +198,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   // review:wait's wait loop writes: a review.json backfilled by hand (as FF-0001's was, for an unrelated
   // ticket's testing) can't masquerade as one, and the saved review always wins over the overlay's legacy
   // path when it genuinely exists.
-  const foundReview = reviewPr === undefined ? undefined : findSavedReview(reviewsDir, injectionCommit, reviewPr);
+  const foundReview = findSavedReview(reviewsDir, injectionCommit, reviewPr);
   const saved =
     foundReview && isReviewWaitSave(foundReview.review as unknown as Record<string, unknown>) ? foundReview : undefined;
   const isLegacy = !saved;
@@ -209,11 +213,9 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
 
   // The record is built from the review the owner judged, as it was judged (AUD-M26).
   if (isToolWritten(adjudication) && typeof adjudication.inputHash === "string") {
-    const now = recomputeVerdictHash(adjudication, events, groundTruthPath, reviewsDir, env);
-    if (typeof now !== "string" || now !== adjudication.inputHash) {
-      error(
-        `case:build: the verdict's inputs changed since it was recorded (${typeof now === "string" ? "the answer-key entry, the template or the saved review no longer gives its inputHash" : now.problem}); nothing built`,
-      );
+    const problem = verdictHashProblem(adjudication, events, groundTruthPath, reviewsDir, env);
+    if (problem) {
+      error(`case:build: the verdict's inputs changed since it was recorded (${problem}); nothing built`);
       return 2;
     }
   }
@@ -298,13 +300,19 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const text = `${printRecord(record)}\n`;
   if (options.save) {
     const savePath = join(casesDir, `${caseId}.json`);
-    if (existsSync(savePath) && readFileSync(savePath, "utf8") !== text) {
-      error(`case:build: ${savePath} already holds a different record; compare them, nothing saved`);
-      return 2;
-    }
     mkdirSync(casesDir, { recursive: true });
-    writeFileSync(savePath, text);
-    log(`[case:build] saved ${savePath}`);
+    // Created exclusively, so of two builds racing for an absent file only one writes (Qodo on PR 264).
+    try {
+      writeFileSync(savePath, text, { flag: "wx" });
+      log(`[case:build] saved ${savePath}`);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (readFileSync(savePath, "utf8") !== text) {
+        error(`case:build: ${savePath} already holds a different record; compare them, nothing saved`);
+        return 2;
+      }
+      log(`[case:build] ${savePath} already holds this record`);
+    }
   }
   if (!options.write) {
     log(text.trimEnd());

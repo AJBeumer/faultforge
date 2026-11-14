@@ -47,7 +47,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { gh } from "./github.ts";
@@ -114,10 +114,11 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
 
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
+  const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const loaded = loadVerdictInputs(
     caseId,
     {
-      groundTruthPath: options.groundTruthPath ?? join(root, "ground-truth.jsonl"),
+      groundTruthPath,
       auditEventsPath,
       reviewsDir: options.reviewsDir ?? savedReviewsDir(env),
       reviewPath: options.reviewPath,
@@ -267,6 +268,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     tool: TOOL,
     environment: `${platform()}-${arch()}-node${process.versions.node}`,
     inputHash: verdictInputHash(entry, templateText, reviewText),
+    // The file hashed, so the hash is checked against it even when `--review` named another (Qodo on PR 264).
+    reviewFile: relative(dirname(groundTruthPath), loaded.reviewPath).replace(/\\/g, "/"),
     ...(result ? { ruleVersion: result.ruleVersion } : {}),
     disposition: verdicts[bugAnswer] as string,
     reason: bugReason,
