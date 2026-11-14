@@ -1,5 +1,5 @@
 /**
- * One tick of the unattended factory. A Windows scheduled task runs it every 10 minutes:
+ * One tick of the unattended factory. GitHub Actions runs it every 15 minutes (`.github/workflows/factory.yml`):
  *
  *   npm run factory:tick                     # take the oldest ready-for-agent ticket, if any
  *   npm run factory:tick -- --minutes 120 --budget 25
