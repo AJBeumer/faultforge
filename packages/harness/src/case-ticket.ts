@@ -40,6 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
@@ -156,7 +157,6 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   if (!isSafeId(caseId)) {
     error(`case:ticket: refused, case id must be a plain token (letters, digits, dot, dash, underscore): ${caseId}`);
@@ -227,6 +227,11 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const injected = events.find(
     (e) => e.caseId === caseId && (e.type === "sabotage.injected" || e.type === "control.injected"),
   );
+  // A real ticket needs the case's planting on record, not only its answer-key line (Qodo on PR 264).
+  if (!options.dryRun && !injected) {
+    error(`case:ticket: refused, ${caseId} has no injection event: its planting wasn't recorded`);
+    return 1;
+  }
   if (entry && injected && isToolWritten(injected) && typeof injected.inputHash === "string") {
     const problem = injectionHashProblem(injected as LedgerEntry, [entry as LedgerEntry], env);
     if (problem) {

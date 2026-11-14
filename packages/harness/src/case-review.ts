@@ -22,6 +22,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { errorText as message } from "./error-text.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { ROOT } from "./paths.ts";
@@ -71,7 +72,6 @@ export function run(caseId: string, options: RunOptions = {}): number {
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");

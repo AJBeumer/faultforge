@@ -50,6 +50,7 @@ import { arch, platform } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
 import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
@@ -110,7 +111,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const root = privateDir(env);
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");

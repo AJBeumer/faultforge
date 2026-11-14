@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { errorText as message } from "./error-text.ts";
 import { entryVersions, type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { casePr, findSavedReview } from "./saved-review.ts";
 import { templateDir } from "./templates.ts";
@@ -62,8 +63,6 @@ function templateText(id: unknown, env: NodeJS.ProcessEnv): { dir: string; text:
   return dir ? { dir, text: readFileSync(join(dir, "template.json"), "utf8") } : undefined;
 }
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
 /** What an injection event's hash recomputes to today, or a reason it can't be recomputed. Never throws. */
 export function recomputeInjectionHash(entry: LedgerEntry, env: NodeJS.ProcessEnv): string | { problem: string } {
   try {
@@ -99,8 +98,9 @@ export function verdictHashProblem(
     const versions = entryVersions(groundTruthPath, String(verdict.caseId));
     const entry = versions.at(-1);
     if (!entry) return "its answer-key entry is not found";
-    const template = templateText(entry.templateId, env);
-    if (!template) return `its template ${String(entry.templateId)} is not found`;
+    // Each version with its own template: one an amendment named later wasn't the one the verdict read.
+    const templates = new Map(versions.map((v) => [v, templateText(v.templateId, env)]));
+    if (![...templates.values()].some(Boolean)) return `its template ${String(entry.templateId)} is not found`;
     let saveText: string;
     if (typeof verdict.reviewFile === "string") {
       saveText = readFileSync(resolve(dirname(groundTruthPath), verdict.reviewFile), "utf8");
@@ -110,7 +110,11 @@ export function verdictHashProblem(
       if (!save) return `no saved review of ${String(entry.injectionCommit)} on PR ${pr} is found`;
       saveText = save.text;
     }
-    if (versions.some((v) => verdictInputHash(v, template.text, saveText) === verdict.inputHash)) return undefined;
+    const holds = versions.some((v) => {
+      const template = templates.get(v);
+      return template !== undefined && verdictInputHash(v, template.text, saveText) === verdict.inputHash;
+    });
+    if (holds) return undefined;
     return "its inputHash no longer recomputes: the answer-key entry, the template or the saved review changed after it was recorded";
   } catch (e) {
     return `its inputHash can't be recomputed: ${message(e)}`;

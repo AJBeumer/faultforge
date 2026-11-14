@@ -956,3 +956,52 @@ describe("run: a review stage whose PR can't be read (Qodo on PR 264)", () => {
     expect(err.join("\n")).toContain("names no readable PR");
   });
 });
+
+describe("run: the findings come from the file the verdict judged (Qodo on PR 264)", () => {
+  it("refuses, exit 2, when the verdict names another file than the save found", async () => {
+    const root = mkdtempSync(join(tmpdir(), "case-build-file-"));
+    const commit = "8".repeat(40);
+    mkdirSync(join(root, "templates", "t8"), { recursive: true });
+    writeFileSync(join(root, "templates", "t8", "template.json"), '{"match":{"kindTerms":["x"]}}');
+    writeFileSync(
+      join(root, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9005", kind: "sabotage", templateId: "t8", targetRepo: "https://github.com/o/t.git", targetCommit: "a".repeat(40), injectionCommit: commit, injectedFile: "src/x.ts", injectedLines: [1, 1] })}\n`,
+    );
+    const dir = join(root, "reviews", "target-pr3");
+    mkdirSync(dir, { recursive: true });
+    const save = { pr: 3, headSha: commit, state: "complete", reviewSeenCompleteAt: null, findings: [] };
+    writeFileSync(join(dir, `${commit.slice(0, 7)}.review.json`), JSON.stringify(save));
+    writeFileSync(join(root, "judged.review.json"), JSON.stringify({ ...save, findings: [] }));
+    const events = [
+      { eventId: "a", type: "sabotage.injected", caseId: "FF-9005", at: "2026-11-01T00:00:00Z" },
+      {
+        eventId: "b",
+        type: "review.recorded",
+        caseId: "FF-9005",
+        at: "2026-11-01T00:01:00Z",
+        pr: { repo: "o/t", number: 3, url: "https://github.com/o/t/pull/3" },
+        review: { reviewer: "q", path: "p", configVersion: "v", reviewedCommit: commit, reviewedAt: "t", url: "u" },
+      },
+      {
+        eventId: "c",
+        type: "case.adjudicated",
+        caseId: "FF-9005",
+        at: "2026-11-01T00:02:00Z",
+        disposition: "confirmed_missed",
+        by: "o",
+        reviewFile: "judged.review.json",
+      },
+    ];
+    writeFileSync(join(root, "audit-events.jsonl"), events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+    const err: string[] = [];
+    const code = await run("FF-9005", {
+      env: { FAULTFORGE_PRIVATE_DIR: root },
+      log: () => {},
+      error: (l) => err.push(l),
+      overlayPath: join(root, "none.json"),
+      reviewsDir: join(root, "reviews"),
+    });
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("the verdict judged");
+  });
+});

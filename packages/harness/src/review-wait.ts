@@ -27,6 +27,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { gh, ghAll } from "./github.ts";
 import { QodoApi } from "./qodo-api.ts";
@@ -89,8 +90,6 @@ export interface WaitScriptDeps {
   log: (line: string) => void;
   error: (line: string) => void;
 }
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** The saved state for each way a wait ends. Only a complete review is ever saved as "complete". */
 export const SAVED_STATE = {

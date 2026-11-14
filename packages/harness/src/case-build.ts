@@ -64,12 +64,13 @@
 
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildCaseRecord, latestEvent, type Overlay, requireField } from "./case-builder.ts";
 import { overlayFieldsTaken, overlayProblems } from "./case-overlay.ts";
 import { findLeaks, validateCaseRecord } from "./case-record.ts";
+import { errorText as message } from "./error-text.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { isToolWritten, sha256, verdictHashProblem } from "./ledger-hashes.ts";
@@ -135,7 +136,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
@@ -216,6 +216,14 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     const problem = verdictHashProblem(adjudication, events, groundTruthPath, reviewsDir, env);
     if (problem) {
       error(`case:build: the verdict's inputs changed since it was recorded (${problem}); nothing built`);
+      return 2;
+    }
+  }
+  // And the findings and state come from that same file, never another save found for the commit (Qodo on PR 264).
+  if (typeof adjudication.reviewFile === "string") {
+    const judged = resolve(dirname(groundTruthPath), adjudication.reviewFile);
+    if (!saved || resolve(saved.path) !== judged) {
+      error(`case:build: the verdict judged ${judged}, but the save found for this case is ${saved?.path ?? "none"}`);
       return 2;
     }
   }
