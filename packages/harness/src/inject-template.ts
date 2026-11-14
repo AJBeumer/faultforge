@@ -2,7 +2,7 @@
  * A template as `inject` reads it: loading it, the checks that refuse it before anything is planted, the
  * proofs its variant must break, and the mutation itself.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { templateTelltales } from "./neutral.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
@@ -31,6 +31,8 @@ export interface Template {
 export interface Proof {
   invariantId: string;
   proofTest: string;
+  /** The folder holding the proof, when it isn't the planted template's own (a corpus proof). */
+  dir?: string;
 }
 
 export function loadTemplate(templateDir: string): Template {
@@ -83,4 +85,49 @@ export function applyMutation(targetDir: string, template: Template): [number, n
   const start = source.slice(0, at).split("\n").length;
   const lineCount = template.replace.replace(/\n$/, "").split("\n").length;
   return [start, start + lineCount - 1];
+}
+
+/**
+ * Every proof of every bug template, private storage first then `templates/seed` (one copy per template id),
+ * each with its own folder. A control's variant must pass all of them: a "harmless" change that breaks any
+ * known invariant is a real bug labelled as a control (AUD-M8).
+ */
+export function proofCorpus(templateRoots: string[], skipped: (id: string, why: string) => void = () => {}): Proof[] {
+  const seen = new Set<string>();
+  const corpus: Proof[] = [];
+  for (const root of templateRoots) {
+    if (!existsSync(root)) continue;
+    for (const id of readdirSync(root).sort()) {
+      const dir = join(root, id);
+      if (seen.has(id) || !existsSync(join(dir, "template.json"))) continue;
+      // A template still being written can't stand in the corpus: it is skipped, and said so, rather than
+      // stopping every control (Qodo on PR 271). Only a usable copy marks the id as seen, so a broken private
+      // copy never hides a good published one.
+      let template: Template;
+      try {
+        template = loadTemplate(dir);
+      } catch (e) {
+        skipped(id, `template.json can't be read (${e instanceof Error ? e.message : String(e)})`);
+        continue;
+      }
+      if (template.kind !== "bug") {
+        seen.add(id);
+        continue;
+      }
+      const problems = templateProblems(template);
+      if (problems.length) {
+        skipped(id, `it fails the schema (${problems[0]})`);
+        continue;
+      }
+      const proofs = proofsOf(template);
+      const missing = proofs.find((p) => !existsSync(join(dir, p.proofTest)));
+      if (missing) {
+        skipped(id, `its proof ${missing.proofTest} is missing`);
+        continue;
+      }
+      seen.add(id);
+      corpus.push(...proofs.map((proof) => ({ ...proof, dir })));
+    }
+  }
+  return corpus;
 }

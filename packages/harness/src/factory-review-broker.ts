@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { killTree } from "./factory-kill.ts";
-import { parseArgs } from "./review-wait.ts";
+import { parseArgs } from "./review-wait-run.ts";
 import { buildTrustedCheckout, removeTrustedCheckout } from "./trusted-checkout.ts";
 
 /** The environment variable that turns `review:wait` into a request to the runner. */

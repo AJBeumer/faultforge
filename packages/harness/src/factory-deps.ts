@@ -6,6 +6,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileS
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
+import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
 import { git, gitLong, npm, retried } from "./factory-exec.ts";
@@ -98,8 +99,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
         (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
       ),
+    // Every comment the runner posts starts with its mark: it posts as the owner, and the mark is how a later
+    // run's snapshot tells it from the owner's own text (AUD-M21).
     comment: (github, number, body) => {
-      gh("issue", "comment", String(number), "--repo", github, "--body", body);
+      gh("issue", "comment", String(number), "--repo", github, "--body", runnerComment(body));
     },
     async qodoCheck(runId) {
       // Its own short-lived worktree, so the live answers reach the private repo's `main` even when

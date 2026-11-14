@@ -14,7 +14,7 @@
 
 import type { FactoryConfig } from "./factory-config.ts";
 import { evidenceFile } from "./factory-evidence.ts";
-import { type Finish, LABELS, safeText } from "./factory-settle.ts";
+import { type Finish, LABELS } from "./factory-settle.ts";
 import type { Logger, TickDeps, Workspace } from "./factory-tick.ts";
 
 export interface FinishContext {
@@ -53,15 +53,16 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   let reason = finish.reason;
   let note = "";
   if (saved?.blocked.length) {
-    log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+    // A count, never the paths: a private path can name an unreleased template or an unreviewed case, and
+    // this log and comment can be public. The paths are on the branch the commits went to (AUD-M2).
+    const count = saved.blocked.length;
+    log("evidence-blocked", { files: count, savedAt: saved.savedAt ?? null });
     label = LABELS.help;
     const where = saved.savedAt
       ? `the private repository's \`${saved.savedAt}\` branch`
       : `the run folder (\`${ws.root}\`), kept for inspection`;
     reason = `${finish.label === LABELS.done ? `${finish.reason}, but ` : `${finish.reason}; also, `}the run changed files in the private repository outside the evidence folders`;
-    // Sanitised on its own, so a protected word among the paths only blanks this clause (Qodo on PR 141).
-    const paths = safeText(saved.blocked.join(", "), c.reviewed);
-    note = `\n\nThe run changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
+    note = `\n\nThe run changed ${count} file${count === 1 ? "" : "s"} in the private repository outside \`raw-artifacts/\` and \`factory-log/\`. Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}, where the changed files can be seen.`;
   } else if (!saved?.pushed) {
     label = LABELS.help;
     reason = `${finish.reason}; but the run's evidence couldn't be saved to the private repository (the run log has the error), so its folder is kept`;
