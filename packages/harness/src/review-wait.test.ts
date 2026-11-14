@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { savedReviewProblem } from "./ledger-schemas.ts";
 import { evidenceDir } from "./paths.ts";
 import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } from "./qodo-api.ts";
 import {
@@ -749,6 +750,18 @@ describe("findingsShapeProblem: a complete review must hold a readable findings 
     expect(findingsShapeProblem({ ...pr1, finding_count: (pr1.findings?.length ?? 0) + 1 })).toMatch(/counts \d+/);
     expect(findingsShapeProblem({ ...pr1, finding_count: pr1.findings?.length ?? 0 })).toBeUndefined();
   });
+
+  it("refuses runs that aren't a list of runs, or a session that isn't an object, instead of throwing (Qodo on PR 286)", () => {
+    for (const review_runs of [{}, "x", [null], [1], [[]]]) {
+      expect(findingsShapeProblem({ ...pr1, review_runs: review_runs as never }, PR1_HEAD)).toMatch(/list of runs/);
+    }
+    // A run still being filled in, with no commit yet, or no runs at all, is read as before (Qodo on PR 286).
+    const runs = [...(pr1.review_runs ?? []), { review_effort: "standard" }];
+    expect(findingsShapeProblem({ ...pr1, review_runs: runs as never }, PR1_HEAD)).toBeUndefined();
+    expect(findingsShapeProblem({ ...pr1, review_runs: null as never }, PR1_HEAD)).toBeUndefined();
+    expect(findingsShapeProblem({ ...pr1, review_session: [] as never })).toMatch(/isn't an object/);
+    expect(findingsShapeProblem({ ...pr1, review_session: "done" as never })).toMatch(/isn't an object/);
+  });
 });
 
 describe("findingsShapeProblem: every finding is read field by field (AUD-M9, #249)", () => {
@@ -867,6 +880,7 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     const h = harness([pr1]);
     expect(await h.wait()).toBe(0);
     expect(h.saved()).toMatchObject({ state: "complete", headSha: PR1_HEAD, findings: [{ lines: [33, 33] }] });
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("saves a timeout as review incomplete, never complete, and exits 1", async () => {
@@ -874,12 +888,14 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     expect(await h.wait()).toBe(1);
     expect(h.saved().state).toBe("review incomplete");
     expect(h.saved().reviewSeenCompleteAt).toBeNull();
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("saves a skip as skipped by Qodo, never complete, and exits 3", async () => {
     const h = harness([skipped]);
     expect(await h.wait()).toBe(3);
     expect(h.saved().state).toBe("skipped by Qodo");
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
   it("refuses, exit 2, a complete review it can't read, and saves no review (M21)", async () => {

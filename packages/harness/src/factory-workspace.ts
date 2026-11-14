@@ -2,12 +2,13 @@
  * A run's workspace on disk: where each repo's worktree goes, how it is removed again, and the fingerprints
  * of what the agent must not change. Split from factory-tick.ts (#227).
  */
-import { createHash } from "node:crypto";
+
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import type { FactoryConfig } from "./factory-config.ts";
 import { git } from "./factory-exec.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
+import { sha256 } from "./provenance.ts";
 
 /** The key for the private evidence repo in `Workspace.mainAtStart`. */
 export const PRIVATE_KEY = "(private)";
@@ -96,7 +97,7 @@ export function fingerprints(
   const checkouts =
     mode === "ci" ? [] : [LAB_ROOT, privateRepo, ...Object.values(factory.repos).map((r) => resolve(LAB_ROOT, r.path))];
   for (const dir of new Set(checkouts)) {
-    prints[`the owner's checkout ${dir}`] = hash(
+    prints[`the owner's checkout ${dir}`] = sha256(
       `${git(dir, "rev-parse", "HEAD")}\n${git(dir, "branch", "--show-current")}\n${git(dir, "status", "--porcelain")}`,
     );
   }
@@ -106,21 +107,17 @@ export function fingerprints(
     .filter((entry) => entry.isFile())
     .map((entry) => relative(guardrails, join(entry.parentPath, entry.name)).replace(/\\/g, "/"))
     .sort();
-  prints[`the run's guardrail files (${guardrails})`] = hash(
+  prints[`the run's guardrail files (${guardrails})`] = sha256(
     files.map((f) => `${f}\n${readFileSync(join(guardrails, f), "utf8")}`).join("\n"),
   );
   // Outside .claude, every file the hooks import: emptied, the word list would let every hint through
   // (AUD-M4, re-grade). A file that is gone, or appears, changes the print too.
   for (const file of HOOK_IMPORTS) {
     const path = join(lab, file);
-    prints[`the run's guardrail file ${file}`] = hash(existsSync(path) ? readFileSync(path, "utf8") : "(missing)");
+    prints[`the run's guardrail file ${file}`] = sha256(existsSync(path) ? readFileSync(path, "utf8") : "(missing)");
   }
   return prints;
 }
 
 /** The files outside `.claude` that the guard hooks import, relative to the lab's root. */
 export const HOOK_IMPORTS = ["packages/harness/src/neutral.ts"];
-
-function hash(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}

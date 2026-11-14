@@ -1,7 +1,7 @@
 /**
  * A client for Qodo's local/pre-PR review tools (MCP over HTTP): submitting an uncommitted diff for
- * review and reading back its operation status and result. Scoped to exactly these three tools, the
- * same way `QodoApi` is scoped to its read-only ones — a caller can't reach dismiss, mark-implemented
+ * review and reading back its operation status and result, or cancelling it. Scoped to exactly these four
+ * tools, the same way `QodoApi` is scoped to its read-only ones — a caller can't reach dismiss, mark-implemented
  * or any other write tool through this client.
  *
  * `start-pre-pr-review` isn't read-only (it creates a review run), but it isn't destructive either:

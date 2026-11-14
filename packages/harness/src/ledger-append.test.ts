@@ -122,13 +122,15 @@ describe("appendAmendment and appendAnswerKeyEntry", () => {
 describe("one writer (AUD-M5, #251)", () => {
   // These append to their own run logs, never to the answer key or the audit log.
   const RUN_LOG_WRITERS = ["factory-agent.ts", "factory-deps.ts"];
+  // This one appends to this repo's public anchors file (docs/ledger-anchors.txt), never to private storage.
+  const ANCHOR_WRITER = "ledger-anchor.ts";
 
   it("no script appends to a file except through ledger-append.ts, so no event is written as a bare literal", () => {
     const sources = readdirSync(import.meta.dirname).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
     const appending = sources.filter((f) =>
       /\bappendFileSync\b/.test(readFileSync(join(import.meta.dirname, f), "utf8")),
     );
-    expect(appending.sort()).toEqual(["ledger-append.ts", ...RUN_LOG_WRITERS].sort());
+    expect(appending.sort()).toEqual(["ledger-append.ts", ANCHOR_WRITER, ...RUN_LOG_WRITERS].sort());
   });
 
   it("no script opens either ledger for writing by name", () => {

@@ -20,6 +20,9 @@
  * another amendment, has a `change` that isn't an object of fields, or changes a locked field
  * (`LOCKED_FIELDS`: the ones that identify a line and place it in history, and the ones a result
  * stands on). It also flags any id held by more than one entry, whether or not an amendment names it.
+ * `SET_ONCE_FIELDS` (which review, configuration and PR a case stands on, and who judged it) may be added
+ * by an amendment to an entry that lacks them, as FF-0001's events, written before those fields existed,
+ * were; never changed once there, by the entry itself or an earlier amendment (AUD-M10).
  *
  * The audit log's events, one per stage, read by `case-build.ts` (#11):
  *  - `sabotage.injected` / `control.injected`: the case was planted. Carries only `branch`, the name
@@ -84,7 +87,14 @@ export const LOCKED_FIELDS = [
   "disposition",
   "reason",
   "judgements",
+  "ruleVersion",
 ] as const;
+
+/**
+ * Fields an amendment may add to an entry that doesn't hold them, but never change: a review event's `pr`
+ * and `review` (the reviewed commit, configuration version and PR), and a verdict's `by` (AUD-M10).
+ */
+export const SET_ONCE_FIELDS = ["review", "pr", "by"] as const;
 
 function idOf(line: LedgerLine): string | undefined {
   for (const field of ID_FIELDS) {
@@ -190,6 +200,8 @@ export function ledgerProblems(path: string): string[] {
 
   const problems: string[] = [];
   for (const id of ambiguous) problems.push(`${id} is held by more than one entry`);
+  // The set-once fields each entry holds so far: its own, then those each earlier amendment added, in file order.
+  const held = new Map<LedgerLine, Set<string>>();
 
   for (const line of lines) {
     if (!isAmendment(line)) continue;
@@ -216,6 +228,13 @@ export function ledgerProblems(path: string): string[] {
     }
     const touched = LOCKED_FIELDS.filter((field) => line.change && Object.hasOwn(line.change, field));
     if (touched.length) problems.push(`${label}: changes ${touched.join(", ")}, which an amendment may not touch`);
+    const change = line.change;
+    const already = held.get(target) ?? new Set(SET_ONCE_FIELDS.filter((field) => Object.hasOwn(target, field)));
+    held.set(target, already);
+    const rewritten = SET_ONCE_FIELDS.filter((field) => Object.hasOwn(change, field) && already.has(field));
+    if (rewritten.length)
+      problems.push(`${label}: changes ${rewritten.join(", ")}, which the entry already holds and may only be added`);
+    for (const field of SET_ONCE_FIELDS) if (Object.hasOwn(change, field)) already.add(field);
   }
   return problems;
 }

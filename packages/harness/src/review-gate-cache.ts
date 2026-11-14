@@ -11,9 +11,9 @@
  * unreadable or from other code counts as empty, and one that can't be written is skipped: it changes only
  * how fast the answer comes, never the answer.
  */
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, type Stats, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { sha256 } from "./provenance.ts";
 import type { ReviewRecord } from "./review-gate-records.ts";
 
 /** What a saved file held when last read: a review record, or nothing usable (not a review, not JSON). */
@@ -24,10 +24,12 @@ interface Entry {
 
 /** The code whose reading the cache holds: this file and the reader. A change to either starts afresh. */
 function codeVersion(): string {
-  const hash = createHash("sha256");
-  for (const file of ["review-gate-cache.ts", "review-gate-records.ts"])
-    hash.update(readFileSync(join(import.meta.dirname, file)));
-  return hash.digest("hex");
+  // The same digest as hashing each file in turn: one hash over their bytes, one after the other.
+  return sha256(
+    Buffer.concat(
+      ["review-gate-cache.ts", "review-gate-records.ts"].map((f) => readFileSync(join(import.meta.dirname, f))),
+    ),
+  );
 }
 
 /** A file's identity for the cache: size and modification and change times. */
@@ -46,7 +48,7 @@ export function sidecarStamp(path: string): string | null {
 
 /** Where the cache for an evidence folder lives, inside the checkout `checkout`. */
 export function defaultCacheFile(root: string, checkout: string): string {
-  const id = createHash("sha256").update(resolve(root)).digest("hex").slice(0, 16);
+  const id = sha256(resolve(root)).slice(0, 16);
   return join(checkout, "node_modules", ".cache", "review-gate", `${id}.json`);
 }
 

@@ -342,3 +342,49 @@ describe("ledgerProblems: the injection facts are locked too (Qodo on PR 269)", 
     },
   );
 });
+
+describe("ledgerProblems: which review, configuration and PR a case stands on is set once (AUD-M10)", () => {
+  const file = (lines: object[]) => {
+    const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "audit-events.jsonl");
+    writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
+    return path;
+  };
+  const review = {
+    eventId: "r",
+    type: "review.recorded",
+    caseId: "FF-9001",
+    pr: { repo: "Owner/target", number: 7 },
+    review: { reviewedCommit: "a".repeat(40), configVersion: "v1" },
+  };
+  const verdict = { eventId: "v", type: "case.adjudicated", caseId: "FF-9001", by: "Owner" };
+  const amend = (amends: string, change: object) => ({ kind: "amendment", amends, change, reason: "r", evidence: "e" });
+
+  it("reports an amendment that rewrites a review's reviewed commit or configuration version", () => {
+    const change = { review: { reviewedCommit: "b".repeat(40), configVersion: "v2" } };
+    expect(ledgerProblems(file([review, amend("r", change)]))).toEqual([
+      "amendment amending r: changes review, which the entry already holds and may only be added",
+    ]);
+  });
+
+  it("reports an amendment that rewrites a review's PR, or a verdict's judge", () => {
+    expect(ledgerProblems(file([review, amend("r", { pr: { repo: "Owner/target", number: 8 } })]))).toHaveLength(1);
+    expect(ledgerProblems(file([verdict, amend("v", { by: "Someone else" })]))).toEqual([
+      "amendment amending v: changes by, which the entry already holds and may only be added",
+    ]);
+  });
+
+  it("accepts adding them to an event that predates them, once, and reports a second amendment that rewrites them", () => {
+    const bare = { eventId: "r", type: "review.recorded", caseId: "FF-9001" };
+    const added = amend("r", { pr: review.pr, review: review.review });
+    expect(ledgerProblems(file([bare, added]))).toEqual([]);
+    expect(ledgerProblems(file([bare, added, amend("r", { review: { configVersion: "v2" } })]))).toEqual([
+      "amendment amending r: changes review, which the entry already holds and may only be added",
+    ]);
+  });
+
+  it("reports an amendment that adds or changes a verdict's rule version", () => {
+    expect(ledgerProblems(file([verdict, amend("v", { ruleVersion: "2" })]))).toEqual([
+      "amendment amending v: changes ruleVersion, which an amendment may not touch",
+    ]);
+  });
+});

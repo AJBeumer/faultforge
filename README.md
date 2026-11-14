@@ -30,7 +30,7 @@ FaultForge replaces the guessing with evidence.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
 3. **Prove it.** The answer key lives in a private ledger outside the repository, so the reviewer never gets a hint. Every finding is matched against it with a fixed rule: right file, overlapping lines, right kind of problem.
 
-Every case is written to an append-only log, and every number in a report can be traced back to it. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches; three have run so far.
+Every case is written to an append-only log, and every number in a report can be traced back to it. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches. Seven have been published so far: six clean, and one that Qodo skipped, so it counts as neither.
 
 ```mermaid
 flowchart TB
@@ -126,7 +126,7 @@ Progress and decisions for each daily challenge are recorded in [docs/decision-l
 
 ## Try it
 
-Requires Node.js 22 or later.
+Requires Node.js 22.18 or later. The hooks and some scripts run TypeScript files with plain `node`, which earlier versions cannot do.
 
 ```bash
 npm install
@@ -150,7 +150,7 @@ The command applies the template on a new branch in the target (`tidy-replay-loo
 | `packages/harness/` | The inject command, the review capture, the factory runner and their checks |
 | `templates/seed/` | Bug templates and proof tests, published after their case is adjudicated |
 | `examples/` | Sanitized public case records, published after their case is adjudicated |
-| `schemas/` | JSON Schemas for the case record and `factory.json` |
+| `schemas/` | JSON Schemas for the case record (v1 and v2), the bug template and `factory.json` |
 | `factory.json` | The two repositories the factory works in, described once |
 | `docs/CHARTER.md` | The plan: goals, principles, method, roadmap |
 | `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons |
