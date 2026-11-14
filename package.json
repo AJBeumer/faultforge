@@ -28,6 +28,7 @@
     "verdict:amend": "tsx packages/harness/src/verdict-amend.ts",
     "case:build": "tsx packages/harness/src/case-build.ts",
     "case:ticket": "tsx packages/harness/src/case-ticket.ts",
+    "case:pr": "tsx packages/harness/src/case-pr.ts",
     "case:review": "tsx packages/harness/src/case-review.ts",
     "guard:install": "tsx packages/harness/src/guard-install.ts"
   },

@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "audit-event.v1.json",
+  "title": "One audit event as a FaultForge tool writes it",
+  "description": "Checked by appendEvent before every write. Lines written by hand before this schema existed are read by the looser check in ledger-append.ts, never rewritten.",
+  "type": "object",
+  "required": ["eventId", "type", "at", "caseId"],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "sabotage.injected",
+        "control.injected",
+        "case.ticket-created",
+        "pr.opened",
+        "review.recorded",
+        "case.adjudicated",
+        "case.published"
+      ]
+    },
+    "at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "caseId": { "type": "string", "pattern": "^FF-\\d{4}$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "enum": ["sabotage.injected", "control.injected"] } } },
+      "then": {
+        "required": ["branch", "tool", "environment", "inputHash"],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "branch": { "type": "string", "minLength": 1 },
+          "tool": { "$ref": "#/$defs/tool" },
+          "environment": { "type": "string" },
+          "inputHash": { "$ref": "#/$defs/sha256" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "case.ticket-created" } } },
+      "then": {
+        "required": ["issue"],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "issue": {
+            "type": "object",
+            "required": ["repo", "number", "url", "title", "body"],
+            "properties": {
+              "repo": { "type": "string" },
+              "number": { "$ref": "#/$defs/number" },
+              "url": { "type": "string" },
+              "title": { "type": "string" },
+              "body": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "pr.opened" } } },
+      "then": {
+        "required": [
+          "tool",
+          "environment",
+          "repo",
+          "pr",
+          "url",
+          "headCommit",
+          "injectionCommit",
+          "headMatchesInjection",
+          "openedAt",
+          "qodoConfiguration",
+          "qodoState",
+          "relationships",
+          "ticket"
+        ],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "tool": { "$ref": "#/$defs/tool" },
+          "environment": { "type": "string" },
+          "repo": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+          "pr": { "$ref": "#/$defs/number" },
+          "url": { "type": "string" },
+          "headCommit": { "$ref": "#/$defs/commit" },
+          "injectionCommit": { "$ref": "#/$defs/commit" },
+          "headMatchesInjection": { "const": true },
+          "openedAt": { "type": "string" },
+          "qodoConfiguration": { "type": "string", "pattern": "^qodo-v\\d+$" },
+          "qodoState": { "type": "string", "minLength": 1 },
+          "relationships": { "type": "string", "minLength": 1 },
+          "ticket": { "$ref": "#/$defs/number" },
+          "benchmark": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "review.recorded" } } },
+      "then": {
+        "required": ["tool", "environment", "pr", "review", "state"],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "tool": { "$ref": "#/$defs/tool" },
+          "environment": { "type": "string" },
+          "pr": {
+            "type": "object",
+            "required": ["repo", "number", "url"],
+            "properties": {
+              "repo": { "type": "string" },
+              "number": { "$ref": "#/$defs/number" },
+              "url": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "review": {
+            "type": "object",
+            "required": ["reviewer", "path", "configVersion", "reviewedCommit", "reviewedAt", "url"],
+            "properties": {
+              "reviewer": { "type": "string" },
+              "path": { "type": "string" },
+              "configVersion": { "type": "string" },
+              "reviewedCommit": { "$ref": "#/$defs/commit" },
+              "reviewedAt": { "type": "string" },
+              "url": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "state": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "case.adjudicated" } } },
+      "then": {
+        "required": [
+          "commit",
+          "by",
+          "tool",
+          "environment",
+          "inputHash",
+          "reviewFile",
+          "disposition",
+          "reason",
+          "judgements"
+        ],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "commit": { "$ref": "#/$defs/commit" },
+          "by": { "type": "string", "minLength": 1 },
+          "tool": { "$ref": "#/$defs/tool" },
+          "environment": { "type": "string" },
+          "inputHash": { "$ref": "#/$defs/sha256" },
+          "reviewFile": { "type": "string", "minLength": 1 },
+          "ruleVersion": { "type": "string" },
+          "disposition": {
+            "enum": [
+              "confirmed_detected",
+              "confirmed_missed",
+              "confirmed_clean",
+              "confirmed_false_alarm",
+              "review_incomplete"
+            ]
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "judgements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "verdict", "reason"],
+              "properties": {
+                "id": { "type": "string" },
+                "verdict": { "enum": ["real", "false alarm", "open"] },
+                "reason": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "supersedes": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "case.published" } } },
+      "then": {
+        "required": ["sha256", "path"],
+        "properties": {
+          "eventId": true,
+          "type": true,
+          "at": true,
+          "caseId": true,
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "path": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "$defs": {
+    "tool": { "type": "string", "pattern": "^faultforge-harness@" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "number": { "type": "integer", "minimum": 1 }
+  }
+}

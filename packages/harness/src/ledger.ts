@@ -17,9 +17,9 @@
  *
  * `ledgerProblems` refuses an amendment that: names an entry the file doesn't hold or that more than
  * one entry holds, has no `reason` or `evidence` (blank or whitespace-only counts as none), amends
- * another amendment, or changes `caseId`, `eventId`, `kind` or `at` — the fields that identify a line
- * and place it in history. It also flags any id held by more than one entry, whether or not an
- * amendment names it.
+ * another amendment, has a `change` that isn't an object of fields, or changes a locked field
+ * (`LOCKED_FIELDS`: the ones that identify a line and place it in history, and the ones a result
+ * stands on). It also flags any id held by more than one entry, whether or not an amendment names it.
  *
  * The audit log's events, one per stage, read by `case-build.ts` (#11):
  *  - `sabotage.injected` / `control.injected`: the case was planted. Carries only `branch`, the name
@@ -56,7 +56,35 @@ export type LedgerEntry = LedgerLine & { amendments: Amendment[] };
 // eventId first: an audit event carries both fields, and only eventId is unique among its siblings
 // that share a caseId. A ground-truth entry has no eventId, so it falls back to caseId.
 const ID_FIELDS = ["eventId", "caseId"] as const;
-const LOCKED_FIELDS = ["caseId", "eventId", "kind", "at"] as const;
+/**
+ * Fields no amendment may change. The first four identify a line and place it in history. The rest are
+ * what a result stands on (AUD-M10): what was planted and where (`templateId`, `injectedFile`,
+ * `injectedLines`, the commits), what was reviewed and hashed, and the owner's verdict and its original
+ * reason. A wrong verdict is replaced by a new `verdict --supersede`, a wrong location by a new case.
+ */
+export const LOCKED_FIELDS = [
+  "caseId",
+  "eventId",
+  "kind",
+  "at",
+  "type",
+  "templateId",
+  "invariantId",
+  "defectClass",
+  "targetRepo",
+  "branch",
+  "validation",
+  "injectedFile",
+  "injectedLines",
+  "injectionCommit",
+  "targetCommit",
+  "commit",
+  "inputHash",
+  "reviewFile",
+  "disposition",
+  "reason",
+  "judgements",
+] as const;
 
 function idOf(line: LedgerLine): string | undefined {
   for (const field of ID_FIELDS) {
@@ -181,6 +209,11 @@ export function ledgerProblems(path: string): string[] {
     }
     if (isBlank(line.reason)) problems.push(`${label}: has no reason`);
     if (isBlank(line.evidence)) problems.push(`${label}: has no evidence`);
+    // A string or a list would be spread into numbered fields when applied: only an object of fields is a change.
+    if (typeof line.change !== "object" || line.change === null || Array.isArray(line.change)) {
+      problems.push(`${label}: its change isn't an object of fields`);
+      continue;
+    }
     const touched = LOCKED_FIELDS.filter((field) => line.change && Object.hasOwn(line.change, field));
     if (touched.length) problems.push(`${label}: changes ${touched.join(", ")}, which an amendment may not touch`);
   }

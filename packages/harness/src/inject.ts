@@ -28,7 +28,7 @@ import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
 import { guardProblem } from "./guard-install.ts";
-import { appendJsonl, git as gitIn, log, readJsonl, run, runProof, runStep } from "./inject-run.ts";
+import { git as gitIn, log, readJsonl, run, runProof, runStep } from "./inject-run.ts";
 import {
   applyMutation,
   loadTemplate,
@@ -37,7 +37,9 @@ import {
   type Template,
   templateRefusal,
 } from "./inject-template.ts";
+import { appendAnswerKeyEntry, appendEvent, eventProblems } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { injectionInputHash } from "./ledger-hashes.ts";
 import { telltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
 import { sha256, TOOL } from "./provenance.ts";
@@ -281,8 +283,7 @@ const entry =
         validated: true,
         createdAt,
       };
-appendJsonl(ledgerPath, entry);
-appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
+const injectedEvent = {
   eventId: randomUUID(),
   type: template.kind === "bug" ? "sabotage.injected" : "control.injected",
   at: createdAt,
@@ -290,12 +291,18 @@ appendJsonl(join(PRIVATE_DIR, "audit-events.jsonl"), {
   branch: actualBranch,
   tool: TOOL,
   environment: `${platform()}-${arch()}-node${process.versions.node}`,
-  inputHash: sha256(
-    readFileSync(join(templateDir, "template.json")) +
-      proofs.map((p) => sha256(readFileSync(join(templateDir, p.proofTest)))).join("") +
-      baseCommit,
+  inputHash: injectionInputHash(
+    readFileSync(join(templateDir, "template.json"), "utf8"),
+    proofs.map((p) => readFileSync(join(templateDir, p.proofTest))),
+    baseCommit,
   ),
-});
+};
+// Checked before the answer key is written: an event refused after it would leave a case id with no injection
+// event, which no rerun could repair (Qodo on PR 269).
+const eventIssues = eventProblems(injectedEvent);
+if (eventIssues.length) fail(`the injection event would be refused: ${eventIssues.join("; ")}`);
+appendAnswerKeyEntry(ledgerPath, entry);
+appendEvent(join(PRIVATE_DIR, "audit-events.jsonl"), injectedEvent);
 
 log(`validated: proof(s) pass on base, fail on variant; public tests ${publicTests}`);
 log(

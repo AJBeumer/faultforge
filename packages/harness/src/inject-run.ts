@@ -1,9 +1,10 @@
 /**
  * How `inject` runs things: commands with a time limit, git in the target, each step's log saved as an
- * artefact, and one proof test at a time in its own scratch folder. Also the answer key's jsonl helpers.
+ * artefact, and one proof test at a time in its own scratch folder. Also a reader for the answer key; it is
+ * written only through `ledger-append.ts`.
  */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Proof } from "./inject-template.ts";
@@ -100,10 +101,6 @@ export function git(targetDir: string, ...gitArgs: string[]): string {
 /** The file's lines (`readJsonLines`), or none when there is no file yet. */
 export function readJsonl(path: string): Record<string, unknown>[] {
   return existsSync(path) ? readJsonLines(path) : [];
-}
-
-export function appendJsonl(path: string, value: object) {
-  appendFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 export function log(message: string) {

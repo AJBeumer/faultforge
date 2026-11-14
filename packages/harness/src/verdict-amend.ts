@@ -20,13 +20,14 @@
  * problem, the case has no verdict, its saved review can't be found, the owner's login can't be read, or the
  * line couldn't be appended.
  */
-import { appendFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
+import { appendAmendment } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { casePr, findSavedReview, savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
@@ -135,8 +136,8 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
 
   const at = (options.now ?? (() => new Date().toISOString()))();
   const amendment = {
-    kind: "amendment",
-    amends: verdict.eventId,
+    kind: "amendment" as const,
+    amends: verdict.eventId as string,
     at,
     change: { amendedReason: reason, amendedReasonAt: at, amendedReasonBy: by, amendedReasonWrittenLater: true },
     reason: AMENDMENT_REASON,
@@ -156,10 +157,9 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
       error(`verdict:amend: ${caseId}'s verdict changed while you answered; nothing written`);
       return 1;
     }
-    (options.append ?? ((path, value) => appendFileSync(path, `${JSON.stringify(value)}\n`)))(
-      auditEventsPath,
-      amendment,
-    );
+    const { kind: _kind, ...line } = amendment;
+    if (options.append) options.append(auditEventsPath, amendment);
+    else appendAmendment(auditEventsPath, line);
   } catch (e) {
     error(`verdict:amend: can't append to ${auditEventsPath}: ${message(e)}`);
     return 2;
@@ -180,11 +180,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     console.error("usage: npm run verdict:amend -- <FF-NNNN> [--dry-run]");
     process.exit(2);
   }
-  run(caseId, { dryRun: parsed.values["dry-run"] ?? false }).then(
-    (code) => process.exit(code),
-    (e) => {
+  run(caseId, { dryRun: parsed.values["dry-run"] ?? false })
+    .then((code) => process.exit(code))
+    .catch((e: unknown) => {
       console.error(`verdict:amend: ${message(e)}`);
       process.exit(2);
-    },
-  );
+    });
 }
