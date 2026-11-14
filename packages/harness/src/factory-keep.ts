@@ -13,7 +13,7 @@
  *
  * Exit codes: 0 nothing needed keeping, or every unsaved run was pushed to the branch; 1 there were unsaved
  * runs and the push failed (their logs are still in the runs folder); 2 it couldn't run (a bad command line,
- * no private checkout).
+ * no private checkout, or an unexpected error).
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,23 +22,21 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
 import { git, gitLong } from "./factory-exec.ts";
+import { parseJsonLines } from "./jsonl.ts";
 import { evidenceDir, ROOT, runsDir } from "./paths.ts";
 
 /** Events logged after the final copy is pushed: they say nothing about whether the run was saved. */
 const AFTER_SAVE = new Set(["saved", "cleanup", "kept"]);
 
-/** True when the log's `saved` event comes after every other event that matters. */
+/** True when the log's `saved` event comes after every other event that matters. A log cut off mid-line was
+ * stopped while writing, so it is never saved. */
 export function wasSaved(log: string): boolean {
-  const events = log
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => {
-      try {
-        return String(JSON.parse(line).event ?? "");
-      } catch {
-        return "(unreadable)";
-      }
-    });
+  let events: string[];
+  try {
+    events = parseJsonLines<{ event?: unknown }>(log).map((entry) => String(entry.event ?? ""));
+  } catch {
+    return false;
+  }
   const lastSaved = events.lastIndexOf("saved");
   if (lastSaved < 0) return false;
   return events.slice(lastSaved + 1).every((event) => AFTER_SAVE.has(event));
@@ -103,4 +101,11 @@ function main() {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`factory:keep could not run: ${error instanceof Error ? error.message : error}`);
+    process.exit(2);
+  }
+}
