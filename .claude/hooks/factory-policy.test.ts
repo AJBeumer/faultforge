@@ -650,3 +650,18 @@ describe("factory policy: other spellings of the program and of the environment 
     expect(commandViolations(command)).toContainEqual(expect.stringMatching(/environment/));
   });
 });
+
+describe("factory policy: compact flags, other env programs, /proc, JS clients (Qodo on PR 270, round 3)", () => {
+  it.each([
+    "gh api repos/o/r/pulls/1/reviews -fbody=hi -fevent=COMMENT",
+    "/usr/bin/env",
+    "bash -c 'env'",
+    'sh -c "env"',
+    "node -e \"require('child_process').execSync('env')\"",
+    "cat /proc/1234/envir?n",
+    "cat /proc/self/cmdline",
+    "node -e \"require('axios').get(u)\"",
+  ])("refuses %s", (command) => {
+    expect(commandViolations(command)).not.toEqual([]);
+  });
+});

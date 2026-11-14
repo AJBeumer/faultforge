@@ -204,6 +204,7 @@ export function runAgent(
     remoteUrl: `https://github.com/${labRepo?.github ?? github}.git`,
     evidence: factory.evidence,
     evidenceRoot: resolve(ws.lab, factory.evidence),
+    repoKey,
   });
   // Built now, before the agent starts: building it at the first request would stop the runner for minutes.
   const unbuilt = broker.prepare();

@@ -271,3 +271,46 @@ describe("the review broker: one request at a time, small requests, no links (Qo
     expect(readFileSync(join(dir, "outside.txt"), "utf8")).toBe("runner file");
   });
 });
+
+describe("the review broker: only the run's own repo, only regular files (Qodo on PR 270, round 3)", () => {
+  const make = () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-broker4-"));
+    let runs = 0;
+    const b = reviewBroker({
+      dir: join(dir, "requests"),
+      trustedRoot: join(dir, "trusted"),
+      labDirName: "lab",
+      remoteUrl: "https://github.com/owner/lab.git",
+      evidence: "private/raw-artifacts",
+      evidenceRoot: join(dir, "kept"),
+      repoKey: "target",
+      build: (verifyRoot, name) => {
+        const lab = join(verifyRoot, name);
+        mkdirSync(lab, { recursive: true });
+        return lab;
+      },
+      run: async () => {
+        runs++;
+        return { exitCode: 1, output: "" };
+      },
+    });
+    b.prepare();
+    mkdirSync(b.dir, { recursive: true });
+    return { b, runs: () => runs };
+  };
+
+  it("refuses another repo's reviews", async () => {
+    const { b, runs } = make();
+    writeFileSync(join(b.dir, "o.request.json"), JSON.stringify({ argv: ["faultforge", "262"] }));
+    await Promise.all(b.serve());
+    expect(runs()).toBe(0);
+    expect(JSON.parse(readFileSync(join(b.dir, "o.answer.json"), "utf8")).output).toMatch(/only its reviews/);
+  });
+
+  it("refuses a request that isn't a regular file, unread", async () => {
+    const { b, runs } = make();
+    mkdirSync(join(b.dir, "d.request.json"));
+    await Promise.all(b.serve());
+    expect(runs()).toBe(0);
+  });
+});

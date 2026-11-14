@@ -171,7 +171,11 @@ export function serveReviewRequests(dir: string, run: AnswerRequest, most = Numb
     } catch {
       // The agent made the answer path unwritable; its own review:wait gives up with exit 2 in time.
     }
-    rmSync(taken, { force: true });
+    try {
+      rmSync(taken, { force: true, recursive: true });
+    } catch {
+      // Left behind: harmless, and never worth stopping the runner over.
+    }
   };
   let names: string[];
   try {
@@ -194,7 +198,10 @@ export function serveReviewRequests(dir: string, run: AnswerRequest, most = Numb
     let argv: unknown;
     try {
       // A request is a few words: anything bigger is refused unread, never parsed (Qodo on PR 270).
-      if (statSync(taken).size > MAX_REQUEST_BYTES) throw new Error("too big");
+      // A regular file only, never followed through a link: a pipe or a link to a device would block the
+      // runner on the read (Qodo on PR 270).
+      const stat = lstatSync(taken);
+      if (!stat.isFile() || stat.size > MAX_REQUEST_BYTES) throw new Error("not a small regular file");
       argv = JSON.parse(readFileSync(taken, "utf8")).argv;
     } catch {
       argv = null;
@@ -250,6 +257,8 @@ export function reviewBroker(options: {
   evidence: string;
   /** Where the agent's run keeps its evidence (its own checkout's evidence folder). */
   evidenceRoot: string;
+  /** The run's own repo key: a request for another repo's reviews is refused (Qodo on PR 270). */
+  repoKey?: string;
   build?: typeof buildTrustedCheckout;
   run?: RunReviewWait;
 }) {
@@ -270,6 +279,11 @@ export function reviewBroker(options: {
   };
   const answer: AnswerRequest = async (argv) => {
     if (!trusted) return { exitCode: 2, output: `review:wait couldn't run: ${buildError || "no trusted checkout"}` };
+    if (options.repoKey && argv[0] !== options.repoKey)
+      return {
+        exitCode: 2,
+        output: `review:wait: this run works on ${options.repoKey}, so only its reviews are served.`,
+      };
     const sub = `${argv[0]}-pr${argv[1]}`;
     const kept = join(evidenceRoot, "reviews", sub);
     const saves = join(trusted, evidence, "reviews", sub);
