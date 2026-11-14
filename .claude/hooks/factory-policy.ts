@@ -11,8 +11,16 @@
  *  - file edits outside the run's own folder (`FAULTFORGE_RUN_ROOT`) and the temp folder
  *  - edits in the private worktree to the answer key, the audit log, `templates/` or `config/` (#142)
  *  - `review:wait` started in the background: a headless run ends with the agent's turn (#129)
- *  - naming a key, reading the whole environment (`env`, `printenv`, `process.env`, `os.environ`), and
- *    requests to anything but the app on localhost, by a tool (`curl`) or by code (`fetch(`, `http.request`)
+ *  - naming a key, reading the whole environment (`env`, `printenv`, `process.env`, `os.environ`, `%ENV`,
+ *    `ENV`, a name built at run time), and requests to anything but the app on localhost, by a tool (`curl`,
+ *    `ssh`) or by code (`fetch(`, `http.request`)
+ *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
+ *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
+ *  - reading `/proc`, the answer key, the audit log and the templates with any tool, and in a target ticket's
+ *    run the private checkouts the runner names in `FAULTFORGE_PRIVATE_CHECKOUTS` (#284)
+ *
+ * Every rule reads the command as written and in normalised spellings (shell-decode.ts): `g''h`, `\gh`,
+ * `${x}`, ANSI-C strings, and a program's punctuation read as spaces.
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
  * whole command, so a blocked word inside a quoted message also blocks: it fails closed. Text therefore
@@ -26,7 +34,17 @@ import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { commandViolations, readings } from "./factory-policy-commands.ts";
+import {
+  guardrailWriteViolation,
+  privateCommandViolation,
+  readViolation,
+  scriptViolation,
+} from "./factory-policy-paths.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
+import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
+
+/** The tools that only read files; Claude Code's settings route them to this hook too (#284). */
+const READ_TOOLS = ["Read", "Grep", "Glob", "NotebookRead"];
 
 export { commandViolations } from "./factory-policy-commands.ts";
 
@@ -113,6 +131,10 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
   if ([resolve(path), real].some((p) => /(^|[/\\])\.claude([/\\]|$)/i.test(p))) {
     return "the agent can't change its own guardrails (.claude)";
   }
+  // The giveaway word list both hooks read: emptied, it would let every hint through (AUD-M4, re-grade).
+  if ([resolve(path), real].some((p) => /(^|[/\\])packages[/\\]harness[/\\]src[/\\]neutral\.ts$/i.test(p))) {
+    return "the agent can't change the giveaway word list (neutral.ts) the guard hooks read";
+  }
   if ([resolve(path), real].some((p) => /(^|[/\\])\.github[/\\]workflows([/\\]|$)/i.test(p))) {
     return "the agent can't change the workflows (.github/workflows): the owner does, with a token that may";
   }
@@ -159,6 +181,18 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       reasons = commandViolations(command, env.FAULTFORGE_TICKET_NUMBER);
       const background = backgroundViolation(command, args.run_in_background === true);
       if (background) reasons.push(background);
+      // Only a command short enough to read is looked at further; the length rule above already refuses it.
+      if (command.length <= MAX_COMMAND_CHARS) {
+        for (const reason of [
+          guardrailWriteViolation(command),
+          privateCommandViolation(command, env),
+          scriptViolation(command, cwd),
+        ])
+          if (reason && !reasons.includes(reason)) reasons.push(reason);
+      }
+    } else if (READ_TOOLS.includes(tool)) {
+      const reason = readViolation(args, cwd, env);
+      if (reason) reasons = [reason];
     } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
       const reason = editViolation(
         resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),

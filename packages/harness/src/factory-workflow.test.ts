@@ -134,6 +134,22 @@ describe("factory workflow", () => {
     expect(steps[install]).not.toMatch(/if:|continue-on-error/);
   });
 
+  it("checks the private repo out only after the tick, never where an agent runs (AUD-H2, #284)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
+    const keep = steps.findIndex((step) => step.includes("npm run -s factory:keep"));
+    const privateCheckouts = steps
+      .map((step, i) => ({ step, i }))
+      .filter(({ step }) => step.includes("repository: AJBeumer/faultforge-private"));
+    expect(privateCheckouts.length).toBe(1);
+    const only = privateCheckouts[0];
+    expect(only?.i).toBeGreaterThan(tick);
+    expect(only?.i).toBeLessThan(keep);
+    expect(only?.step).toMatch(/\n {8}if: always\(\)\n/);
+    // The tick clones it itself, by name, when a lab ticket or its own steps need it.
+    expect(steps[tick] ?? "").toContain("FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private");
+  });
+
   it("gives the tick the agent's own narrower token, which the agent gets as GH_TOKEN (AUD-H2)", () => {
     const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template

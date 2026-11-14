@@ -10,6 +10,7 @@ import {
   hookProblems,
   hookSelfTest,
   hookTimeoutSeconds,
+  readHookProblems,
   realHookRunner,
   withCleanupFailure,
 } from "./factory-hooks.ts";
@@ -24,6 +25,17 @@ describe("hookProblems", () => {
   it("accepts this repo's own settings", () => {
     const text = readFileSync(join(import.meta.dirname, "../../../.claude/settings.json"), "utf8");
     expect(hookProblems(text)).toEqual([]);
+    expect(readHookProblems(text)).toEqual([]);
+  });
+
+  it("refuses settings where the policy hook doesn't judge the read tools (#284)", () => {
+    const noReads = settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: both }]);
+    expect(readHookProblems(noReads)).toEqual([
+      "factory-policy.ts doesn't run before Read",
+      "factory-policy.ts doesn't run before Grep",
+      "factory-policy.ts doesn't run before Glob",
+    ]);
+    expect(readHookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
   });
 
   it("refuses settings without the policy hook, as on a main from before it existed", () => {

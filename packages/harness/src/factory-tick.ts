@@ -101,7 +101,7 @@ export interface Workspace {
   root: string;
   /** This repo's worktree, where the agent starts. */
   lab: string;
-  /** The private repo's worktree, on its own branch. */
+  /** The private repo's worktree, on its own branch; empty in a target ticket's run, which has none (AUD-H2). */
   private: string;
   /** Each repo's `main` commit when the run started. */
   mainAtStart: Record<string, string>;
@@ -147,7 +147,8 @@ export interface TickDeps {
   /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
    * is built: a drift in the reviewer is caught before an agent is ever started on it. */
   qodoCheck(runId: string): Promise<QodoCheckOutcome>;
-  workspace(runId: string): Workspace;
+  /** `repoKey` is the ticket's repo: a target ticket's run gets no private worktree (AUD-H2). */
+  workspace(runId: string, repoKey: string): Workspace;
   runAgent(
     ws: Workspace,
     runId: string,
@@ -343,7 +344,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return "needs-help";
     }
 
-    ws = deps.workspace(id);
+    ws = deps.workspace(id, pick.repoKey);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 

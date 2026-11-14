@@ -3,7 +3,7 @@
  * of what the agent must not change. Split from factory-tick.ts (#227).
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import type { FactoryConfig } from "./factory-config.ts";
 import { git } from "./factory-exec.ts";
@@ -64,9 +64,11 @@ export function teardown(
     git(repo, "worktree", "list", "--porcelain")
       .split("\n")
       .some((line) => line.startsWith("worktree ") && samePath(line.slice(9), path));
-  if (registered(privateRepo, priv))
+  // A target ticket's run has no private worktree (`priv` is empty): its evidence branch belongs to the
+  // runner's own worktree, made after the agent ended, and is the runner's to remove (AUD-H2).
+  if (priv && registered(privateRepo, priv))
     attempt("private worktree", () => git(privateRepo, "worktree", "remove", "--force", priv));
-  if (git(privateRepo, "branch", "--list", `run-${runId}`))
+  if (priv && git(privateRepo, "branch", "--list", `run-${runId}`))
     attempt("private branch", () => git(privateRepo, "branch", "-D", `run-${runId}`));
   for (const repo of Object.values(factory.repos)) {
     const source = resolve(LAB_ROOT, repo.path);
@@ -107,8 +109,17 @@ export function fingerprints(
   prints[`the run's guardrail files (${guardrails})`] = hash(
     files.map((f) => `${f}\n${readFileSync(join(guardrails, f), "utf8")}`).join("\n"),
   );
+  // Outside .claude, every file the hooks import: emptied, the word list would let every hint through
+  // (AUD-M4, re-grade). A file that is gone, or appears, changes the print too.
+  for (const file of HOOK_IMPORTS) {
+    const path = join(lab, file);
+    prints[`the run's guardrail file ${file}`] = hash(existsSync(path) ? readFileSync(path, "utf8") : "(missing)");
+  }
   return prints;
 }
+
+/** The files outside `.claude` that the guard hooks import, relative to the lab's root. */
+export const HOOK_IMPORTS = ["packages/harness/src/neutral.ts"];
 
 function hash(text: string): string {
   return createHash("sha256").update(text).digest("hex");

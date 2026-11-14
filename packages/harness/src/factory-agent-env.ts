@@ -8,8 +8,10 @@
  * What it needs, and why:
  *  - the system: `PATH` (and Windows' `Path`, `PATHEXT`, `SystemRoot`, `ComSpec`, ...), the home and temp
  *    folders (git reads its config from home, npm its cache), the locale and the terminal;
- *  - `FAULTFORGE_*`: the run's id, folder, ticket and the review broker, which its hooks and tools read;
- *    except `FAULTFORGE_AGENT_TOKEN`, which becomes `GH_TOKEN` instead;
+ *  - the run's own `FAULTFORGE_*` values, by exact name (`AGENT_RUN_VARIABLES`): the run's id, folder,
+ *    ticket, the review broker, and in a target ticket's run the private checkouts its policy keeps it out of.
+ *    No other `FAULTFORGE_*` passes, from the runner or the run: a prefix let a runner-side setting (a
+ *    private folder, a config path) reach the agent by its name alone (AUD-H2, re-grade);
  *  - `GH_TOKEN`: `gh` and git's credential helper (`gh auth setup-git`) push and open the PR with it;
  *  - Claude Code's own sign-in: `CLAUDE_CODE_OAUTH_TOKEN` in Actions, else `ANTHROPIC_API_KEY`, only one.
  *    The CLI can't run without it. Its tools see it too: Claude Code's own setting that hides it from them
@@ -67,6 +69,19 @@ const SYSTEM = [
   "GH_CONFIG_DIR",
 ];
 
+/**
+ * The only `FAULTFORGE_*` variables the agent gets, all set by the runner for this run (`run` in `agentEnv`).
+ * `FAULTFORGE_AGENT_TOKEN` is not one: it becomes `GH_TOKEN` instead.
+ */
+export const AGENT_RUN_VARIABLES: readonly string[] = [
+  "FAULTFORGE_FACTORY_RUN",
+  "FAULTFORGE_RUN_ROOT",
+  "FAULTFORGE_TICKET_NUMBER",
+  "FAULTFORGE_TICKET_FILE",
+  "FAULTFORGE_REVIEW_BROKER",
+  "FAULTFORGE_PRIVATE_CHECKOUTS",
+];
+
 /** The variables Claude Code signs in with, in the order it is given one. */
 export const CLAUDE_AUTH = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
 
@@ -92,7 +107,6 @@ export function agentEnv(from: Record<string, string | undefined>, run: Record<s
   for (const name of SYSTEM) take(name);
   for (const name of Object.keys(from)) {
     if (/^LC_[A-Z]+$/.test(name)) take(name);
-    if (name.startsWith("FAULTFORGE_") && name !== "FAULTFORGE_AGENT_TOKEN") take(name);
   }
   const auth = CLAUDE_AUTH.find((name) => from[name]);
   if (auth) take(auth);
@@ -104,5 +118,6 @@ export function agentEnv(from: Record<string, string | undefined>, run: Record<s
     warning =
       "FAULTFORGE_AGENT_TOKEN is not set, so the agent has the runner's own GitHub token; give it a narrower one";
   }
-  return { env: { ...env, ...run }, agentToken: Boolean(agentToken), ...(warning ? { warning } : {}) };
+  for (const [name, value] of Object.entries(run)) if (AGENT_RUN_VARIABLES.includes(name)) env[name] = value;
+  return { env, agentToken: Boolean(agentToken), ...(warning ? { warning } : {}) };
 }

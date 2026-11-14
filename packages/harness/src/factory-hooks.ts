@@ -44,6 +44,29 @@ export function hookProblems(settingsText: string): string[] {
 }
 
 /**
+ * Why the policy hook doesn't judge the read tools, or an empty list: it keeps a run's Read, Grep and Glob off
+ * the keys under /proc and off the private repo in a target ticket's run (#284).
+ */
+export function readHookProblems(settingsText: string): string[] {
+  let hooks: { matcher?: string; hooks?: { command?: string }[] }[] = [];
+  try {
+    hooks = JSON.parse(settingsText).hooks?.PreToolUse ?? [];
+  } catch {
+    return ["its settings.json is missing or unreadable"];
+  }
+  return ["Read", "Grep", "Glob"]
+    .filter(
+      (tool) =>
+        !hooks.some(
+          (h) =>
+            (!h.matcher || h.matcher === "*" || new RegExp(`^(${h.matcher})$`).test(tool)) &&
+            (h.hooks ?? []).some((c) => runsHook(c.command ?? "", "factory-policy.ts")),
+        ),
+    )
+    .map((tool) => `factory-policy.ts doesn't run before ${tool}`);
+}
+
+/**
  * The shortest time limit (seconds) the settings give either hook. Claude Code's default is 60. A hook
  * that exceeds its limit is a non-blocking error, so the self-test below also checks speed.
  */
@@ -268,7 +291,7 @@ export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
 export function requireHooks(factory: FactoryConfig, lab: string): HooksReport {
   const settings = join(lab, ".claude", "settings.json");
   const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
-  const missing = hookProblems(text);
+  const missing = [...new Set([...hookProblems(text), ...readHookProblems(text)])];
   if (missing.length)
     throw new HooksCheckError(`the workspace's hooks aren't safe to run unattended: ${missing.join("; ")}`, {
       problems: missing,

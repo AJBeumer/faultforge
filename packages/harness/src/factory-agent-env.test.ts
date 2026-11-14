@@ -25,9 +25,25 @@ const RUN = { FAULTFORGE_FACTORY_RUN: "r1", FAULTFORGE_RUN_ROOT: "/runs/r1" };
 describe("agentEnv: the agent gets an allow-list, not the runner's environment (AUD-H2, #243)", () => {
   it("keeps the system's paths, locale, home and temp folders, and the run's own values", () => {
     const { env } = agentEnv(RUNNER, RUN);
-    for (const name of ["PATH", "HOME", "TEMP", "LANG", "LC_ALL", "FAULTFORGE_RUNS_DIR", "FAULTFORGE_FACTORY_RUN"])
+    for (const name of ["PATH", "HOME", "TEMP", "LANG", "LC_ALL", "FAULTFORGE_FACTORY_RUN"])
       expect(env[name]).toBeDefined();
     expect(env.FAULTFORGE_RUN_ROOT).toBe("/runs/r1");
+  });
+
+  it("passes only the listed FAULTFORGE_* variables, never the runner's own by prefix (AUD-H2, re-grade)", () => {
+    const runner = {
+      ...RUNNER,
+      FAULTFORGE_PRIVATE_DIR: "/owner/private",
+      FAULTFORGE_SOME_SECRET: "s",
+      FAULTFORGE_CONFIG: "/x/factory.json",
+      FAULTFORGE_CLAUDE: "/bin/claude",
+    };
+    const { env } = agentEnv(runner, { ...RUN, FAULTFORGE_TICKET_NUMBER: "5", FAULTFORGE_UNLISTED: "u" });
+    expect(
+      Object.keys(env)
+        .filter((name) => name.startsWith("FAULTFORGE_"))
+        .sort(),
+    ).toEqual(["FAULTFORGE_FACTORY_RUN", "FAULTFORGE_RUN_ROOT", "FAULTFORGE_TICKET_NUMBER"]);
   });
 
   it("leaves out the Qodo key and key file, the token files, the factory's and Actions' own tokens, and anything unlisted", () => {
