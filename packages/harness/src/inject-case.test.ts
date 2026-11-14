@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -485,6 +494,31 @@ describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
     }
     expect(() => applyTestChange(target, { file: "test/x.test.ts", content: "it();\n" })).toThrow(/outside the target/);
     expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("never writes through a link whose target is missing", (context) => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const outside = join(mkdtempSync(join(tmpdir(), "test-change-outside-")), "made.test.ts");
+    mkdirSync(join(target, "test"));
+    try {
+      symlinkSync(outside, join(target, "test", "x.test.ts"), "file");
+    } catch {
+      context.skip(); // a file link can't be made here (Windows without the right to)
+    }
+    expect(() => applyTestChange(target, { file: "test/x.test.ts", content: "it();\n" })).toThrow(/is a link/);
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it("leaves a file hard-linked to the edited test as it was", () => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const copy = join(mkdtempSync(join(tmpdir(), "test-change-copy-")), "a.test.ts");
+    mkdirSync(join(target, "test"));
+    writeFileSync(copy, "it(1);\n");
+    linkSync(copy, join(target, "test", "a.test.ts"));
+    applyTestChange(target, { file: "test/a.test.ts", find: "it(1);\n", replace: "it(2);\n" });
+    expect(readFileSync(join(target, "test", "a.test.ts"), "utf8")).toBe("it(2);\n");
+    expect(readFileSync(copy, "utf8")).toBe("it(1);\n");
+    expect(readdirSync(join(target, "test"))).toEqual(["a.test.ts"]);
   });
 
   it("refuses a test change kept in test-change.json beside template.json, rather than ignore it", () => {

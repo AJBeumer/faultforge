@@ -2,7 +2,16 @@
  * A template as `inject` reads it: loading it, the checks that refuse it before anything is planted, the
  * proofs its variant must break, and the mutation itself.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, posix, relative } from "node:path";
 import { benchmarkOf, benchmarkProblems, changedLines, names } from "./benchmark-rules.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
@@ -149,14 +158,35 @@ function testChangeTelltales(template: Template): string[] {
   );
 }
 
-/** Throws unless `path`, or the nearest folder of it that exists, really lies inside `targetDir`: no link out. */
+/** Whether anything is at `path`, a link included even when what it points to is missing. */
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Throws unless `path` is no link itself, and the nearest folder of it that exists really lies inside
+ * `targetDir`: no write leaves the target through a link, a dangling one included (Qodo on PR 293).
+ */
 function assertInside(targetDir: string, path: string): void {
+  if (present(path) && lstatSync(path).isSymbolicLink()) throw new Error(`testChange's file ${path} is a link`);
   let existing = path;
-  while (!existsSync(existing)) existing = dirname(existing);
+  while (!present(existing)) existing = dirname(existing);
   const root = realpathSync.native(targetDir);
   const real = realpathSync.native(existing);
   const rel = relative(root, real);
   if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`testChange's file ${path} lies outside the target`);
+}
+
+/** Writes `text` as a new file put in `path`'s place, so a file hard-linked to the old one keeps its content. */
+function replaceFile(path: string, text: string): void {
+  const next = `${path}.${process.pid}.next`;
+  writeFileSync(next, text, { flag: "wx" });
+  renameSync(next, path);
 }
 
 /**
@@ -171,9 +201,9 @@ export function applyTestChange(targetDir: string, change: TestChange): boolean 
   if (fileProblem) throw new Error(`testChange ${fileProblem}`);
   assertInside(targetDir, path);
   if (change.content !== undefined) {
-    if (existsSync(path)) throw new Error(`testChange would create ${change.file}, which already exists`);
+    if (present(path)) throw new Error(`testChange would create ${change.file}, which already exists`);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, change.content);
+    writeFileSync(path, change.content, { flag: "wx" });
     return true;
   }
   const source = readFileSync(path, "utf8");
@@ -182,7 +212,7 @@ export function applyTestChange(targetDir: string, change: TestChange): boolean 
   if (!find || at === -1 || source.indexOf(find, at + 1) !== -1) {
     throw new Error(`testChange's find text must occur exactly once in ${change.file}`);
   }
-  writeFileSync(path, source.slice(0, at) + (change.replace ?? "") + source.slice(at + find.length));
+  replaceFile(path, source.slice(0, at) + (change.replace ?? "") + source.slice(at + find.length));
   return false;
 }
 
