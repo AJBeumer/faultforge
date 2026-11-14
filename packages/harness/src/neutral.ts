@@ -84,6 +84,7 @@ const LOOKALIKES: Record<string, string> = {
   Τ: "T",
   Υ: "Y",
   Χ: "X",
+  ɑ: "a",
 };
 
 /**
@@ -96,16 +97,33 @@ export function normalizeLookalikes(text: string): string {
     .normalize("NFKC")
     .replace(/[​-‍⁠﻿­᠎]/g, "")
     .replace(/[‐-―−﹘﹣－]/g, "-")
-    .replace(/[Ͱ-ϿЀ-ԯɡı]/g, (ch) => LOOKALIKES[ch] ?? ch);
+    .replace(/[Ͱ-ϿЀ-ԯɡıɑ]/g, (ch) => LOOKALIKES[ch] ?? ch);
+}
+
+/** Digits and signs read as letters (leetspeak), except `1`, which reads as either `i` or `l`. */
+const LEET: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", $: "s" };
+
+/**
+ * The text's leetspeak readings (#285): `pl4nt3d` and `p1@nted` read `planted`. Two readings, because `1`
+ * stands for `i` as often as for `l`. Used beside the text as written, never instead of it: a case id such
+ * as `FF-0012` is digits, and only the text as written still shows it.
+ */
+export function leetReadings(text: string): string[] {
+  const base = text.replace(/[03457@$]/g, (ch) => LEET[ch] ?? ch);
+  // A third, mixed reading for words that use `1` both ways (`p1ant1ng`): before a vowel it reads `l`, else `i`.
+  const mixed = base.replace(/1(?=[aeiouy])/gi, "l").replace(/1/g, "i");
+  return [...new Set([base.replace(/1/g, "i"), base.replace(/1/g, "l"), mixed])];
 }
 
 /**
  * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
- * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242).
+ * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242), and
+ * neither can digits written for letters (#285).
  */
 export function telltales(text: string): string[] {
   const seen = normalizeLookalikes(text);
-  return TELLTALES.filter(([pattern]) => pattern.test(seen)).map(([, reason]) => reason);
+  const readings = [seen, ...leetReadings(seen)];
+  return TELLTALES.filter(([pattern]) => readings.some((reading) => pattern.test(reading))).map(([, reason]) => reason);
 }
 
 /**

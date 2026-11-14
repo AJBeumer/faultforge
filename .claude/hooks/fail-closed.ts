@@ -65,11 +65,38 @@ export function answer(name: string, outcome: Outcome): { code: 0 | 2; stdout: s
   return why("its answer is not a hook decision");
 }
 
+/**
+ * The least a hook file holds: both hooks are several kilobytes. An emptied or truncated file would load, print
+ * nothing and exit 0, which is an allow (re-grade after round 4, #285).
+ */
+export const MIN_HOOK_BYTES = 2000;
+
+/**
+ * Why `file` can't be the hook it names, or undefined (#285): too small, no `decide` export, or no entry point
+ * that answers when run. A file someone emptied, cut short or replaced with a one-line allow fails here, and
+ * the action is refused before it runs.
+ */
+export function hookFileProblem(file: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    return `its file can't be read: ${(error as Error).message}`;
+  }
+  if (Buffer.byteLength(text) < MIN_HOOK_BYTES)
+    return `its file is under ${MIN_HOOK_BYTES} bytes, emptied or cut short`;
+  if (!/^export function decide\(/m.test(text)) return "its file doesn't export decide";
+  if (!/^if \(isEntry\(import\.meta\.url\)\) main\(\);\s*$/m.test(text)) return "its file doesn't answer when run";
+  return undefined;
+}
+
 /** Runs the hook named on the command line with this process's stdin, and answers for it. */
 export function run(argv: string[], stdin: () => Buffer, timeout = BUDGET_MS): ReturnType<typeof answer> {
   const [hook, ...rest] = argv;
   if (!hook) return answer("fail-closed.ts", { status: 1, stdout: "", stderr: "no hook file named" });
   const file = isAbsolute(hook) ? hook : resolve(import.meta.dirname, hook);
+  const problem = hookFileProblem(file);
+  if (problem) return answer(hook.replace(/^.*[/\\]/, ""), { status: 1, stdout: "", stderr: problem });
   let input: Buffer;
   try {
     input = stdin();

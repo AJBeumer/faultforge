@@ -11,7 +11,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
+import { leetReadings, normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
 import { checkoutAt, within } from "./guard-repos.ts";
 import { blankQuoted, gitSteps, quotedMask } from "./shell-scan.ts";
 
@@ -59,6 +59,17 @@ export function privateTemplateIds(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): 
  */
 export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | undefined {
   if (!ids.length) return undefined;
+  const pattern = privateIdPattern(ids);
+  // Leetspeak too (#285): the text and the ids are read the same way, so `x-s3cr3t-v1` meets `x-secret-v1`.
+  const folded = privateIdPattern(ids.flatMap(leetReadings));
+  return (text) => {
+    const seen = normalizeLookalikes(text);
+    return pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading));
+  };
+}
+
+/** The whole-word pattern for `ids`, their parts joined by any of `-`, `_`, `.` or a space. */
+function privateIdPattern(ids: string[]): RegExp {
   const alternatives = ids.map((id) =>
     id
       .split(/[-_.\s]+/)
@@ -66,8 +77,7 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
       .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
       .join("[-_.\\s]?"),
   );
-  const pattern = new RegExp(`(?<![a-z0-9])(?:${alternatives.join("|")})(?![a-z0-9])`, "i");
-  return (text) => pattern.test(normalizeLookalikes(text));
+  return new RegExp(`(?<![a-z0-9])(?:${alternatives.join("|")})(?![a-z0-9])`, "i");
 }
 
 /** The denial, which never repeats the id. */
