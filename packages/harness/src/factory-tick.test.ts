@@ -1670,3 +1670,35 @@ describe("tick: a retried ticket continues the earlier run's pull request (AUD-N
     expect(earlierPrs(prs, 18, "owner")).toEqual([]);
   });
 });
+
+describe("tick: a ticket still agent-working is never picked, and the earlier-PR lookup is only a hint (Qodo on PR 268)", () => {
+  it("skips a ticket that carries agent-working beside a leftover ready-for-agent", async () => {
+    const f = fake(
+      {
+        "owner/target#18": {
+          title: "F",
+          events: [labelled("owner", "2026-11-09T08:00:00Z")],
+          labels: [LABELS.ready, LABELS.working],
+        },
+      },
+      { mode: "ci", claimMode: () => "local" },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("idle");
+    expect(f.calls).not.toContain("agent");
+  });
+
+  it("goes on without the hint when listing open pull requests fails", async () => {
+    const f = fake(
+      { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        openPrs: () => {
+          throw new Error("HTTP 502");
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({
+      message: expect.stringMatching(/open pull requests/),
+    });
+  });
+});

@@ -215,7 +215,11 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     if (recovery.recovered.length || recovery.failed.length || recovery.otherMode) log("recovered", recovery);
     const candidates: Candidate[] = [];
     for (const [repoKey, repo] of Object.entries(factory.repos)) {
+      // Still agent-working after recovery: a live run's, here or in the other mode, even with a leftover
+      // ready-for-agent beside it. Never picked again (Qodo on PR 268).
+      const busy = new Set(deps.labelled(repo.github, LABELS.working).map((t) => t.number));
       for (const issue of deps.labelled(repo.github, LABELS.ready)) {
+        if (busy.has(issue.number)) continue;
         const added = lastLabelled(deps.events(repo.github, issue.number), LABELS.ready);
         if (!added) continue;
         candidates.push({
@@ -349,7 +353,14 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const late = provenanceProblems(snapshot.provenance, owner);
     if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
     // A retried ticket continues the pull request an earlier run left open, rather than open a second.
-    const earlier = (deps.openPrs?.(pick.github, pick.number) ?? []).filter((url) => prNumber(url, pick.github));
+    // Only a hint: a lookup that fails is logged and the run goes on without it (Qodo on PR 268).
+    let found: string[] = [];
+    try {
+      found = deps.openPrs?.(pick.github, pick.number) ?? [];
+    } catch (error) {
+      log("error", { message: `couldn't list open pull requests: ${error instanceof Error ? error.message : error}` });
+    }
+    const earlier = found.filter((url) => prNumber(url, pick.github));
     if (earlier.length) log("earlier-prs", { prs: earlier });
     const ticketFile = deps.writeTicket(ws, earlier.length ? snapshot.text + earlierPrsNote(earlier) : snapshot.text);
     log("ticket-snapshot", { file: ticketFile, characters: snapshot.text.length });
