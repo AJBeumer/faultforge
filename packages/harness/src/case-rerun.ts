@@ -3,21 +3,24 @@
  * a line: the earlier entry stays as it was, and the rerun's entry gains `rerunOf` when the file is read.
  *
  *   npm run case:rerun -- FF-0019 --of FF-0015
- *   npm run case:rerun -- FF-0019 --of FF-0015 --dry-run     # prints the amendment, writes nothing
+ *   npm run case:rerun -- FF-0019 --of FF-0015 --dry-run           # prints the amendment, writes nothing
+ *   npm run case:rerun -- FF-0019 --of FF-0015 --target <checkout>  # read the commits from another checkout
  *
  * Both must be bug cases planted from the same template, and their injection commits must hold the very
- * same tree in the target repository (`git rev-parse <commit>^{tree}`): then the second planted nothing the
- * first didn't, and the two count as one distinct defect. A case already marked, a case marked as its own
- * rerun, and a rerun of a case that is itself a rerun are refused. The amendment's evidence names both
- * commits and the shared tree, so anyone can check it.
+ * same tree in the target repository (`git rev-parse <commit>^{tree}`, in `factory.json`'s target checkout
+ * unless `--target` names another): then the second planted nothing the first didn't, and the two count as
+ * one distinct defect. Refused: a case already marked, a case marked as its own rerun, a rerun of a case that
+ * is itself a rerun, and marking a case that another case already names as its original (no chains). The
+ * marks are checked again under the answer key's lock, just before writing, so two runs can't both succeed.
+ * The amendment's evidence names both commits and the shared tree, so anyone can check it.
  *
  * `ledger:check` accepts the result: `rerunOf` is not a locked field. Published records are unchanged: their
  * schema has no field for it, and `case:build` doesn't read it.
  *
  * Exit codes: 0 the amendment was appended (or, with `--dry-run`, printed); 1 refused: usage, a case is
- * missing or isn't a bug case, the templates or the trees differ, or a case is already marked; 2 couldn't
- * run: the answer key or audit log has a problem, git couldn't read a commit, or the line couldn't be
- * appended.
+ * missing or isn't a bug case, the templates or the trees differ, or the marks would chain or are already
+ * there; 2 couldn't run: the answer key or audit log has a problem, git couldn't read a commit, or the line
+ * couldn't be appended.
  */
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
@@ -37,6 +40,8 @@ export interface RerunArgs {
   caseId: string;
   of: string;
   dryRun: boolean;
+  /** The target checkout to read the commits from; `factory.json`'s when absent. */
+  target?: string;
 }
 
 /** The command line, or null when it's wrong. */
@@ -44,13 +49,18 @@ export function parseCliArgs(argv: string[]): RerunArgs | null {
   try {
     const { values, positionals } = parseArgs({
       args: argv,
-      options: { of: { type: "string" }, "dry-run": { type: "boolean" } },
+      options: { of: { type: "string" }, "dry-run": { type: "boolean" }, target: { type: "string" } },
       allowPositionals: true,
     });
     const [caseId] = positionals;
     const ids = [caseId, values.of];
     if (positionals.length !== 1 || !ids.every((id) => typeof id === "string" && /^FF-\d{4}$/.test(id))) return null;
-    return { caseId: caseId as string, of: values.of as string, dryRun: values["dry-run"] ?? false };
+    return {
+      caseId: caseId as string,
+      of: values.of as string,
+      dryRun: values["dry-run"] ?? false,
+      ...(values.target ? { target: values.target } : {}),
+    };
   } catch {
     return null;
   }
@@ -65,9 +75,33 @@ export interface RerunOptions {
   now?: () => string;
 }
 
-function liveTreeOf(commit: string): string {
-  const target = resolve(ROOT, repoConfig(loadFactory(), "target").path);
-  return execFileSync("git", ["-C", target, "rev-parse", "--verify", `${commit}^{tree}`], { encoding: "utf8" }).trim();
+function liveTreeOf(target: string | undefined): (commit: string) => string {
+  const dir = target ? resolve(target) : resolve(ROOT, repoConfig(loadFactory(), "target").path);
+  return (commit) =>
+    execFileSync("git", ["-C", dir, "rev-parse", "--verify", `${commit}^{tree}`], { encoding: "utf8" }).trim();
+}
+
+/** Why the answer key can't take this mark, or undefined: both cases, their kinds, and no mark that would chain. */
+export function markProblem(entries: LedgerEntry[], caseId: string, of: string): string | undefined {
+  if (caseId === of) return "a case can't be a rerun of itself";
+  const rerun = entries.find((e) => e.caseId === caseId);
+  const original = entries.find((e) => e.caseId === of);
+  if (!rerun || !original) return `${rerun ? of : caseId} is not in the answer key`;
+  for (const entry of [rerun, original]) {
+    if (entry.kind !== "sabotage") return `${String(entry.caseId)} is not a bug case`;
+    if (typeof entry.injectionCommit !== "string") return `${String(entry.caseId)} has no injection commit`;
+  }
+  if (rerun.rerunOf !== undefined) return `${caseId} is already marked a rerun of ${String(rerun.rerunOf)}`;
+  if (original.rerunOf !== undefined) {
+    return `${of} is itself a rerun of ${String(original.rerunOf)}: mark it against that case`;
+  }
+  // No chains the other way either: a case another names as its original stays an original (Qodo on PR 273).
+  const named = entries.find((e) => e.rerunOf === caseId);
+  if (named) return `${String(named.caseId)} is already marked a rerun of ${caseId}, so ${caseId} stays an original`;
+  if (rerun.templateId !== original.templateId) {
+    return `${caseId} planted ${String(rerun.templateId)}, ${of} planted ${String(original.templateId)}`;
+  }
+  return undefined;
 }
 
 export function run(args: RerunArgs, options: RerunOptions = {}): number {
@@ -93,30 +127,16 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
     error(`case:rerun: can't read ${groundTruthPath}: ${message(e)}`);
     return 2;
   }
-  if (args.caseId === args.of) return refuse("a case can't be a rerun of itself");
-  const rerun = entries.find((e) => e.caseId === args.caseId);
-  const original = entries.find((e) => e.caseId === args.of);
-  if (!rerun || !original) return refuse(`${rerun ? args.of : args.caseId} is not in the answer key`);
-  for (const entry of [rerun, original]) {
-    if (entry.kind !== "sabotage") return refuse(`${String(entry.caseId)} is not a bug case`);
-    if (typeof entry.injectionCommit !== "string") return refuse(`${String(entry.caseId)} has no injection commit`);
-  }
-  if (rerun.rerunOf !== undefined)
-    return refuse(`${args.caseId} is already marked a rerun of ${String(rerun.rerunOf)}`);
-  if (original.rerunOf !== undefined) {
-    return refuse(`${args.of} is itself a rerun of ${String(original.rerunOf)}: mark it against that case`);
-  }
-  if (rerun.templateId !== original.templateId) {
-    return refuse(
-      `${args.caseId} planted ${String(rerun.templateId)}, ${args.of} planted ${String(original.templateId)}`,
-    );
-  }
+  const problem = markProblem(entries, args.caseId, args.of);
+  if (problem) return refuse(problem);
+  const rerunCommit = entries.find((e) => e.caseId === args.caseId)?.injectionCommit as string;
+  const originalCommit = entries.find((e) => e.caseId === args.of)?.injectionCommit as string;
   let trees: [string, string];
   try {
-    const treeOf = options.treeOf ?? liveTreeOf;
-    trees = [treeOf(rerun.injectionCommit as string), treeOf(original.injectionCommit as string)];
+    const treeOf = options.treeOf ?? liveTreeOf(args.target);
+    trees = [treeOf(rerunCommit), treeOf(originalCommit)];
   } catch (e) {
-    error(`case:rerun: git can't read an injection commit: ${message(e)}`);
+    error(`case:rerun: git can't read an injection commit (pass --target for another checkout): ${message(e)}`);
     return 2;
   }
   if (trees[0] !== trees[1]) return refuse(`their injection commits hold different trees (${trees[0]}, ${trees[1]})`);
@@ -126,16 +146,22 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
     at: (options.now ?? (() => new Date().toISOString()))(),
     change: { rerunOf: args.of },
     reason: RERUN_REASON,
-    evidence: `target commits ${String(rerun.injectionCommit)} and ${String(original.injectionCommit)} both hold tree ${trees[0]}`,
+    evidence: `target commits ${rerunCommit} and ${originalCommit} both hold tree ${trees[0]}`,
   };
   if (args.dryRun) {
     log(`(dry run) would append to ${groundTruthPath}:`);
     log(JSON.stringify({ kind: "amendment", ...amendment }, null, 2));
     return 0;
   }
+  let raced: string | undefined;
   try {
-    appendAmendment(groundTruthPath, amendment);
+    // Checked again under the lock: another run may have marked either case meanwhile (Qodo on PR 273).
+    appendAmendment(groundTruthPath, amendment, () => {
+      raced = markProblem(readLedger(groundTruthPath), args.caseId, args.of);
+      if (raced) throw new Error(raced);
+    });
   } catch (e) {
+    if (raced) return refuse(raced);
     error(`case:rerun: can't append to ${groundTruthPath}: ${message(e)}`);
     return 2;
   }
@@ -146,7 +172,7 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const parsed = parseCliArgs(process.argv.slice(2));
   if (!parsed) {
-    console.error("usage: npm run case:rerun -- <FF-NNNN> --of <FF-NNNN> [--dry-run]");
+    console.error("usage: npm run case:rerun -- <FF-NNNN> --of <FF-NNNN> [--dry-run] [--target <checkout>]");
     process.exit(1);
   }
   try {

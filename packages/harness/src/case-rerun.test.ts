@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, RERUN_REASON, type RerunArgs, run } from "./case-rerun.ts";
 import { ledgerProblems, readLedger } from "./ledger.ts";
+import { appendAmendment } from "./ledger-append.ts";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -95,5 +96,51 @@ describe("case:rerun (AUD-M13)", () => {
     expect(parseCliArgs(["FF-9602", "--of", "FF-9601"])).toEqual({ caseId: "FF-9602", of: "FF-9601", dryRun: false });
     expect(parseCliArgs(["FF-9602"])).toBeNull();
     expect(parseCliArgs(["FF-96", "--of", "FF-9601"])).toBeNull();
+  });
+});
+
+describe("case:rerun: what Qodo found on PR 273", () => {
+  it("refuses to mark a case that another already names as its original", () => {
+    const marked = { kind: "amendment", amends: "FF-9602", change: { rerunOf: "FF-9601" }, reason: "r", evidence: "e" };
+    const root = fixture([
+      marked,
+      { caseId: "FF-9605", kind: "sabotage", templateId: "x-secret-v1", injectionCommit: A },
+    ]);
+    expect(rerun(root, { caseId: "FF-9601", of: "FF-9605" }).err).toContain("stays an original");
+  });
+
+  it("refuses when another run marked the case while this one read the trees", () => {
+    const root = fixture();
+    const path = join(root, "ground-truth.jsonl");
+    const err: string[] = [];
+    const code = run(
+      { caseId: "FF-9602", of: "FF-9601", dryRun: false },
+      {
+        env: { FAULTFORGE_PRIVATE_DIR: root },
+        log: () => {},
+        error: (l) => err.push(l),
+        treeOf: () => {
+          if (!readFileSync(path, "utf8").includes("rerunOf")) {
+            appendAmendment(path, {
+              amends: "FF-9602",
+              at: "2026-11-14T00:00:00Z",
+              change: { rerunOf: "FF-9601" },
+              reason: "r",
+              evidence: "e",
+            });
+          }
+          return "t1";
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(err.join(" ")).toContain("already marked");
+    expect(readFileSync(path, "utf8").match(/rerunOf/g)).toHaveLength(1);
+  });
+
+  it("reads --target from the command line", () => {
+    expect(parseCliArgs(["FF-9602", "--of", "FF-9601", "--target", "../elsewhere"])).toMatchObject({
+      target: "../elsewhere",
+    });
   });
 });
