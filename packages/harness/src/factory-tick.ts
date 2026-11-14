@@ -65,6 +65,7 @@ import {
 } from "./factory-settle.ts";
 import type { Verification } from "./factory-verify.ts";
 import type { RunMode } from "./factory-workspace.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
@@ -518,6 +519,12 @@ async function main() {
     deps = realDeps(factory, options, mode);
   } catch (error) {
     console.error(`factory:tick couldn't set up: ${error instanceof Error ? error.message : error}`);
+    process.exit(2);
+  }
+  // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
+  const unguarded = mode === "local" ? unguardedCheckouts(factory, LAB_ROOT) : [];
+  if (unguarded.length) {
+    console.error(`factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.`);
     process.exit(2);
   }
   const outcome = await tick(factory, deps, options);
