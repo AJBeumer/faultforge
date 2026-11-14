@@ -220,6 +220,7 @@ function deadPid(): number {
   return Number(child.stdout);
 }
 
+// Taking a lock reads this process's start time, which takes seconds on Windows.
 describe("a lock whose holder died (#308)", () => {
   it("is taken over by the next tick, which then recovers the ticket the dead run left working", () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-faults-lock-"));
@@ -242,7 +243,7 @@ describe("a lock whose holder died (#308)", () => {
       lock.release();
     }
     expect(existsSync(join(dir, "factory.lock"))).toBe(false);
-  });
+  }, 60_000);
 
   it("ends the dead holder's agent, still running, before it takes the lock", () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-faults-agent-"));
@@ -265,7 +266,7 @@ describe("a lock whose holder died (#308)", () => {
       lock.release();
       live.kill();
     }
-  });
+  }, 60_000);
 });
 
 describe("a crash between saving evidence and labelling (#308)", () => {
