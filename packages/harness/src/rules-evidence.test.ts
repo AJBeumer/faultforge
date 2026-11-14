@@ -179,6 +179,17 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["inj9999", "inj8888", "rev7777"]));
   });
 
+  it("excludes both the commit an amendment replaced and the one it names (AUD-N1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
+    dirs.push(dir);
+    const amendment = { kind: "amendment", amends: "FF-9001", change: { injectionCommit: "new2222" }, reason: "r" };
+    writeFileSync(
+      join(dir, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9001", injectionCommit: "old1111" })}\n${JSON.stringify(amendment)}\n`,
+    );
+    expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["old1111", "new2222"]));
+  });
+
   it("skips a stray file that matches the folder pattern instead of crashing", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);

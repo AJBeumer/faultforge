@@ -17,7 +17,8 @@
  *
  * Exit codes: 0 the template is valid and (in `--validate-only`) every proof passed on the base commit
  * and failed on the variant, or (otherwise) the case was planted and recorded; 1 a refusal or a failed
- * validation, printed on stderr.
+ * validation, printed on stderr; 2 it stopped on an unexpected error (a git call failed, a mutation didn't
+ * apply), printed on stderr. Whatever was done before the error stays done: check the target's branches.
  */
 import { randomUUID } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -26,7 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { deriveBranchName, gitBranchExistence } from "./branch-name.ts";
-import { appendJsonl, git as gitIn, log, readJsonl, run, runProof, runStep, sha256 } from "./inject-run.ts";
+import { appendJsonl, git as gitIn, log, readJsonl, run, runProof, runStep } from "./inject-run.ts";
 import {
   applyMutation,
   loadTemplate,
@@ -38,11 +39,19 @@ import {
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { telltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
+import { sha256, TOOL } from "./provenance.ts";
 import type { Outcome } from "./run-outcome.ts";
 import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
+// An unexpected error is exit 2, never 1: 1 is a refusal or a failed validation (AUD-N3). An unknown option
+// is a usage error, so it is 1 like the usage message below.
+process.on("uncaughtException", (error) => {
+  const usage = (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") ?? false;
+  console.error(`${usage ? "refused" : "inject stopped on an unexpected error"}: ${error.message}`);
+  process.exit(usage ? 1 : 2);
+});
+
 const PRIVATE_DIR = privateDir();
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
 
 const { values: args } = parseArgs({
   options: {

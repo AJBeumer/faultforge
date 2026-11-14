@@ -9,6 +9,9 @@
  * not proposed twice. Opening a ticket needs a token with issue write access (`GH_TOKEN`). The
  * factory runner calls this once after each finished run, so the factory raises its own hand when
  * its work keeps producing the same finding — and the owner alone decides what becomes a rule.
+ *
+ * Exit codes: 0 the proposals were printed, or (with `--open`) each new one was opened as a ticket; 2 it couldn't
+ * run (a bad option, the evidence or case records couldn't be read, or `gh` failed to open a ticket).
  */
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -188,4 +191,11 @@ function main(): void {
   propose(loadFactory(), ROOT, { open: values.open ?? false });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`rules:propose could not run: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+}

@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadFactory } from "./factory-config.ts";
+import { readJsonLines } from "./jsonl.ts";
 import { evidenceDir, privateDir } from "./paths.ts";
 import type { Finding } from "./qodo-review.ts";
 
@@ -98,17 +99,20 @@ export function casePrs(casesDir: string): Set<string> {
  * is an error, for the same reason as `casePrs`.
  */
 export function groundTruthCommits(groundTruthFile: string): Set<string> {
-  let text: string;
+  let lines: Record<string, unknown>[];
   try {
-    text = readFileSync(groundTruthFile, "utf8");
+    lines = readJsonLines(groundTruthFile);
   } catch (error) {
     throw new Error(`cannot read the answer key at ${groundTruthFile}: ${(error as Error).message}`);
   }
   const commits = new Set<string>();
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const entry = JSON.parse(line);
-    for (const sha of [entry.injectionCommit, entry.reviewedCommit]) if (typeof sha === "string") commits.add(sha);
+  for (const line of lines) {
+    // An amendment's `change` can name a new commit; the one it replaced stays excluded as well (AUD-N1).
+    const change =
+      typeof line.change === "object" && line.change !== null ? (line.change as Record<string, unknown>) : {};
+    for (const source of [line, change]) {
+      for (const sha of [source.injectionCommit, source.reviewedCommit]) if (typeof sha === "string") commits.add(sha);
+    }
   }
   return commits;
 }
