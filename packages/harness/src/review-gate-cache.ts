@@ -119,6 +119,9 @@ function isEntry(value: unknown): value is Entry {
     Array.isArray(r.trees) &&
     r.trees.every((t) => typeof t === "string") &&
     typeof r.source === "string" &&
+    (typeof r.baseSha === "string" || r.baseSha === null) &&
+    (typeof r.repo === "string" || r.repo === null) &&
+    (r.incompleteBecause === undefined || typeof r.incompleteBecause === "string") &&
     typeof r.complete === "boolean" &&
     typeof r.skipped === "boolean" &&
     typeof r.at === "number"

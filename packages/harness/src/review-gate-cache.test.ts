@@ -163,3 +163,38 @@ describe("review:gate's cache (AUD-N6)", () => {
     expect(read().parsed).toBe(0);
   });
 });
+
+describe("review:gate's cache entries (Qodo on PR 278)", () => {
+  it("are not trusted when a field a fresh read always writes is missing or of the wrong kind", () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-gate-cache-"));
+    try {
+      const evidence = join(dir, "evidence");
+      const cacheFile = join(dir, "gate.json");
+      mkdirSync(evidence);
+      writeFileSync(join(evidence, "review.json"), review(TREE_A));
+      const first = ReviewCache.load(cacheFile);
+      readReviewRecords(evidence, first);
+      first.save();
+      for (const broken of [
+        (r: Record<string, unknown>) => delete r.baseSha,
+        (r: Record<string, unknown>) => delete r.repo,
+        (r: Record<string, unknown>) => {
+          r.incompleteBecause = 7;
+        },
+      ]) {
+        const doc = JSON.parse(readFileSync(cacheFile, "utf8")) as {
+          entries: Record<string, { record: Record<string, unknown> }>;
+        };
+        const fresh = JSON.parse(JSON.stringify(doc));
+        for (const entry of Object.values(doc.entries)) broken(entry.record);
+        writeFileSync(cacheFile, JSON.stringify(doc));
+        const result = readReviewRecords(evidence, ReviewCache.load(cacheFile));
+        expect(result.parsed).toBe(1);
+        expect(result.records[0]?.baseSha).toBe("c".repeat(40));
+        writeFileSync(cacheFile, JSON.stringify(fresh));
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
