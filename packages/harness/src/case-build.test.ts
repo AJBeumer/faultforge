@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, run } from "./case-build.ts";
 import { type BuildInputs, buildCaseRecord, type Overlay, repoSlug } from "./case-builder.ts";

@@ -2,9 +2,9 @@
  * A template as `inject` reads it: loading it, the checks that refuse it before anything is planted, the
  * proofs its variant must break, and the mutation itself.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { benchmarkOf, benchmarkProblems, changedLines } from "./benchmark-rules.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, posix, relative } from "node:path";
+import { benchmarkOf, benchmarkProblems, changedLines, names } from "./benchmark-rules.ts";
 import { telltales, templateTelltales } from "./neutral.ts";
 import type { Outcome } from "./run-outcome.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
@@ -78,10 +78,8 @@ export function templateRefusal(
   if (existsSync(join(templateDir, LOOSE_TEST_CHANGE))) {
     return `template ${templateId} keeps its test change in ${LOOSE_TEST_CHANGE}: move it into template.json as testChange`;
   }
-  // The recorded lines are the main change's: a test change in the same file would move them.
-  if (template.testChange && template.testChange.file === template.file) {
-    return `template ${templateId}'s testChange must change another file than ${template.file}`;
-  }
+  const testFileProblem = template.testChange && testChangeFileProblem(template.testChange.file, template.file);
+  if (testFileProblem) return `template ${templateId}'s testChange ${testFileProblem}`;
 
   // The terms the match rule's third criterion looks for, declared here before any case runs the template.
   // Only a bug template carries one: a control has no injected problem to describe.
@@ -98,11 +96,40 @@ export function templateRefusal(
   return undefined;
 }
 
-/** What in a template's test change would give the case away: a giveaway word, or a name only the lab uses. */
+/** A test file: `<name>.test.<ext>` or `<name>.spec.<ext>`, as the target's test runner picks them up. */
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+
+/**
+ * Why a test change's file can't be used, or undefined. It must be a test file: anything else in the commit
+ * would be a second change the answer key never records (Qodo on PR 293). It may never touch git's own
+ * folder, and must be another file than the main change's, however either is spelled: the recorded lines are
+ * the main change's, and a test change in the same file would move them.
+ */
+export function testChangeFileProblem(file: string, mainFile: string): string | undefined {
+  const normal = (path: string) => posix.normalize(path.replace(/\\/g, "/"));
+  const path = normal(file);
+  if (path.split("/").some((part) => part.toLowerCase() === ".git")) return `may not touch git's own folder (${file})`;
+  if (!TEST_FILE.test(path)) return `must change a test file (*.test.ts or *.spec.ts), not ${file}`;
+  if (path.toLowerCase() === normal(mainFile).toLowerCase()) return `must change another file than ${mainFile}`;
+  return undefined;
+}
+
+/**
+ * What in a template's test change would give the case away: a giveaway word, a name only the lab uses, or,
+ * for a bug, a word starting with one of its kind terms or any invariant it breaks (Qodo on PR 293).
+ */
 function testChangeTelltales(template: Template): string[] {
   const change = template.testChange;
   if (!change) return [];
   const ownNames = [template.id, template.invariantId].filter((name): name is string => Boolean(name));
+  const oracle =
+    template.kind === "bug"
+      ? [
+          ...(template.match?.kindTerms ?? []),
+          ...(template.invariantId ? [template.invariantId] : []),
+          ...(template.alsoBreaks ?? []).map((a) => a.invariantId),
+        ]
+      : [];
   const fields: [string, string | undefined][] = [
     ["testChange.file", change.file],
     ["testChange.find", change.find],
@@ -115,8 +142,21 @@ function testChangeTelltales(template: Template): string[] {
       : [
           ...telltales(text),
           ...ownNames.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map((n) => `names ${n}`),
+          ...[...new Set(oracle.filter((term) => names(text, term)))].map(
+            (t) => `restates what the change breaks (${t})`,
+          ),
         ].map((reason) => `${field}: ${reason}`),
   );
+}
+
+/** Throws unless `path`, or the nearest folder of it that exists, really lies inside `targetDir`: no link out. */
+function assertInside(targetDir: string, path: string): void {
+  let existing = path;
+  while (!existsSync(existing)) existing = dirname(existing);
+  const root = realpathSync.native(targetDir);
+  const real = realpathSync.native(existing);
+  const rel = relative(root, real);
+  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`testChange's file ${path} lies outside the target`);
 }
 
 /**
@@ -126,6 +166,10 @@ function testChangeTelltales(template: Template): string[] {
  */
 export function applyTestChange(targetDir: string, change: TestChange): boolean {
   const path = join(targetDir, change.file);
+  // Checked here too, not only in `templateRefusal`: this is what writes (Qodo on PR 293).
+  const fileProblem = testChangeFileProblem(change.file, "");
+  if (fileProblem) throw new Error(`testChange ${fileProblem}`);
+  assertInside(targetDir, path);
   if (change.content !== undefined) {
     if (existsSync(path)) throw new Error(`testChange would create ${change.file}, which already exists`);
     mkdirSync(dirname(path), { recursive: true });

@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import { loadTemplates, type Proof, proofCorpus } from "./inject-template.ts";
+import { applyTestChange, loadTemplates, type Proof, proofCorpus, testChangeFileProblem } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
@@ -445,16 +445,54 @@ describe("inject: a template's test change, in the same commit", () => {
   it("refuses a test change in the same file as the change, one that gives the case away, or find text not found", () => {
     const same = world({ bug: { testChange: { ...EDIT, file: "src/sum.ts" } } });
     expect(same.inject()).toBe(1);
-    expect(same.errors.join("\n")).toContain("testChange must change another file");
+    expect(same.errors.join("\n")).toContain("testChange must change a test file");
     const telling = world({ bug: { testChange: { ...NEW, content: "// x-secret-v1\n" } } });
     expect(telling.inject()).toBe(1);
     expect(telling.errors.join("\n")).toContain("testChange.content: names x-secret-v1");
     expect(world({ bug: { testChange: { ...EDIT, find: "nowhere\n" } } }).inject()).toBe(2);
   });
 
+  it("refuses a bug's test that names its own kind terms, which the ticket may not either (Qodo on PR 293)", () => {
+    const w = world({ bug: { testChange: { ...NEW, content: 'it("is not off by one", () => {});\n' } } });
+    expect(w.inject()).toBe(1);
+    expect(w.errors.join("\n")).toContain("testChange.content: restates what the change breaks (off by one)");
+  });
+
+  it("refuses a test change to git's own folder, or to a file that isn't a test (Qodo on PR 293)", () => {
+    const git = world({ control: { testChange: { file: ".git/config", content: "[x]\n" } }, variant: ["pass"] });
+    expect(git.inject({ template: CONTROL.id, validateOnly: true, caseId: undefined })).toBe(1);
+    expect(git.errors.join("\n")).toContain("may not touch git's own folder");
+    expect(existsSync(join(git.target, ".git", "config"))).toBe(false);
+    const prod = world({ bug: { testChange: { file: "src/other.ts", content: "export const x = 1;\n" } } });
+    expect(prod.inject()).toBe(1);
+  });
+});
+
+describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
+  it("sees the main change's file however it is spelled", () => {
+    expect(testChangeFileProblem("./test//a.test.ts", "test/a.test.ts")).toContain("another file");
+    expect(testChangeFileProblem("test/b.test.ts", "test/a.test.ts")).toBeUndefined();
+    expect(testChangeFileProblem("test/.GIT/x.test.ts", "src/a.ts")).toContain("git's own folder");
+  });
+
+  it("never writes through a link out of the target", (context) => {
+    const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
+    const outside = mkdtempSync(join(tmpdir(), "test-change-outside-"));
+    try {
+      symlinkSync(outside, join(target, "test"), "junction");
+    } catch {
+      context.skip(); // a link can't be made here
+    }
+    expect(() => applyTestChange(target, { file: "test/x.test.ts", content: "it();\n" })).toThrow(/outside the target/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
   it("refuses a test change kept in test-change.json beside template.json, rather than ignore it", () => {
     const w = world();
-    writeFileSync(join(w.priv, "templates", BUG.id, "test-change.json"), JSON.stringify(EDIT));
+    writeFileSync(
+      join(w.priv, "templates", BUG.id, "test-change.json"),
+      JSON.stringify({ file: "test/sum.test.ts", find: "x", replace: "y" }),
+    );
     expect(w.inject()).toBe(1);
     expect(w.errors.join("\n")).toContain("move it into template.json as testChange");
   });
