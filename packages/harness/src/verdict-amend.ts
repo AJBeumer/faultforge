@@ -24,6 +24,7 @@ import { appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
@@ -48,8 +49,6 @@ export interface AmendOptions {
   now?: () => string;
   append?: (path: string, value: object) => void;
 }
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function run(caseId: string, options: AmendOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
