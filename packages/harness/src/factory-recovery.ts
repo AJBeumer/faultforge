@@ -78,19 +78,20 @@ export function recoverStranded(
 }
 
 /**
- * True when a lock file's holder may be treated as gone: its process is not alive, or the lock is older than
- * `maxAgeMs`. After a restart a recorded pid can belong to another program, so age is the check that still
- * holds then. `at` that can't be read counts as old.
+ * True when a lock file's holder can't be running: no pid, its process is gone, or its last heartbeat
+ * (`at`) is older than the machine's start (`bootMs`), so the pid now belongs to another program. A live
+ * pid whose heartbeat is after the start keeps the lock however old it is (AUD-M19): an age limit once let
+ * a tick take over a run that was still going. An `at` that can't be read proves nothing about a restart,
+ * so a live pid keeps the lock then too.
  */
 export function lockIsStale(
   held: { pid?: number; at?: string },
   isAlive: (pid: number) => boolean,
-  nowMs: number,
-  maxAgeMs: number,
+  bootMs: number,
 ): boolean {
   if (!held.pid || !isAlive(held.pid)) return true;
   const at = held.at ? Date.parse(held.at) : Number.NaN;
-  return !Number.isFinite(at) || nowMs - at > maxAgeMs;
+  return Number.isFinite(at) && at < bootMs;
 }
 
 /**

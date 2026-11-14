@@ -76,39 +76,87 @@ describe("acquireLock (#107)", () => {
   });
 });
 
-describe("acquireLock and pidAlive after a restart (#197)", () => {
-  it("takes over a lock older than any run can last, even when its pid now names a live process", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ff-lock-old-"));
-    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-01T00:00:00.000Z" }));
-    expect(acquireLock(dir, () => true).acquired).toBe(true);
+describe("acquireLock: a live holder keeps its lock however old; a restart frees it (AUD-M19)", () => {
+  const dir = () => mkdtempSync(join(tmpdir(), "ff-lock-live-"));
+  const BOOT = Date.parse("2026-11-10T00:00:00.000Z");
+
+  it("never takes over a lock whose pid is alive, however old it is", () => {
+    const d = dir();
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-10T01:00:00.000Z" }));
+    // Days later: the old age limit would have taken it over.
+    const result = acquireLock(d, () => true, BOOT);
+    expect(result.acquired).toBe(false);
+    expect(result.note).toMatch(/pid 12345/);
   });
 
-  it("keeps a recent lock whose holder is alive", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ff-lock-new-"));
-    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: new Date().toISOString() }));
-    expect(acquireLock(dir, () => true).acquired).toBe(false);
+  it("takes over a lock last refreshed before the machine started, even when its pid now names a live process", () => {
+    const d = dir();
+    writeFileSync(join(d, "factory.lock"), JSON.stringify({ pid: 12345, at: "2026-11-09T23:00:00.000Z" }));
+    const taken = acquireLock(d, () => true, BOOT);
+    expect(taken.acquired).toBe(true);
+    expect(taken.note).toMatch(/machine restarted/);
+    taken.release();
+  });
+
+  it("decides staleness from the pid and the machine's start only", () => {
+    expect(lockIsStale({ pid: 1, at: "2026-11-01T00:00:00.000Z" }, () => true, Date.parse("2026-10-01"))).toBe(false);
+    expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, BOOT)).toBe(false);
+    expect(lockIsStale({ pid: 1, at: "2026-11-01T00:00:00.000Z" }, () => true, BOOT)).toBe(true);
+    expect(lockIsStale({ pid: 1, at: "2026-11-11T00:00:00.000Z" }, () => false, BOOT)).toBe(true);
+    expect(lockIsStale({}, () => true, BOOT)).toBe(true);
   });
 
   it("reads a permission error as a live process, and only 'no such process' as gone", () => {
-    expect(lockIsStale({ pid: 1, at: new Date().toISOString() }, () => true, Date.now(), 60_000)).toBe(false);
-    expect(lockIsStale({ pid: 1, at: "not a date" }, () => true, Date.now(), 60_000)).toBe(true);
     expect(pidAlive(process.pid)).toBe(true);
     expect(pidAlive(2_147_483_646)).toBe(false);
   });
 });
 
-describe("acquireLock: the age limit and the release belong to this run (Qodo on PR 211)", () => {
-  it("keeps a live lock younger than the age it is given, and takes over an older one", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ff-lock-age-"));
-    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
-    writeFileSync(join(dir, "factory.lock"), JSON.stringify({ pid: 12345, at: twoHoursAgo }));
-    expect(acquireLock(dir, () => true, 3 * 3_600_000).acquired).toBe(false);
-    const taken = acquireLock(dir, () => true, 1 * 3_600_000);
-    expect(taken.acquired).toBe(true);
-    // The tick logs this note: a holder still alive past every run's limit may be a hung agent (#226).
-    expect(taken.note).toMatch(/a process with that pid is still running/);
+describe("acquireLock: the heartbeat (AUD-M19)", () => {
+  it("refresh writes a newer heartbeat with the same token, and only into a lock that is still this tick's", async () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-beat-"));
+    const file = join(d, "factory.lock");
+    const lock = acquireLock(d);
+    const first = JSON.parse(readFileSync(file, "utf8"));
+    await new Promise((r) => setTimeout(r, 15));
+    lock.refresh();
+    const second = JSON.parse(readFileSync(file, "utf8"));
+    expect(second.token).toBe(first.token);
+    expect(second.since).toBe(first.since);
+    expect(Date.parse(second.at)).toBeGreaterThan(Date.parse(first.at));
+    // Someone else's lock now: refresh leaves it alone.
+    writeFileSync(file, JSON.stringify({ pid: 777777, at: "2026-11-10T00:00:00Z", token: "other" }));
+    lock.refresh();
+    expect(JSON.parse(readFileSync(file, "utf8")).token).toBe("other");
+    expect(readdirSync(d)).toEqual(["factory.lock"]);
   });
 
+  it("a running tick refreshes it on a timer, and stops when it releases", async () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-timer-"));
+    const file = join(d, "factory.lock");
+    const lock = acquireLock(d, () => true, 0, 20);
+    const first = Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
+    const heartbeat = () => Date.parse(JSON.parse(readFileSync(file, "utf8")).at);
+    // Waits for a beat, up to two seconds: a busy machine can delay a 20 ms timer, never skip it.
+    for (let waited = 0; waited < 2000 && heartbeat() <= first; waited += 20)
+      await new Promise((r) => setTimeout(r, 20));
+    expect(heartbeat()).toBeGreaterThan(first);
+    lock.release();
+    expect(existsSync(file)).toBe(false);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("never leaves a lock file without content: it appears whole or not at all", () => {
+    const d = mkdtempSync(join(tmpdir(), "ff-lock-whole-"));
+    const lock = acquireLock(d);
+    expect(JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).pid).toBe(process.pid);
+    expect(readdirSync(d)).toEqual(["factory.lock"]);
+    lock.release();
+  });
+});
+
+describe("acquireLock: the release belongs to this run (Qodo on PR 211)", () => {
   it("leaves a lock another tick took over when the first one releases", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-lock-own-"));
     const first = acquireLock(dir);

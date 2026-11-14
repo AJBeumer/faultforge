@@ -35,8 +35,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     print: (line) => console.log(line),
-    // A lock outlives no run: the agent's own limit, plus an hour for the steps around it (#197).
-    lock: () => acquireLock(runs, pidAlive, (options.minutes + 60) * 60_000),
+    // A live holder keeps it however long it runs; a restart frees it (AUD-M19).
+    lock: () => acquireLock(runs, pidAlive),
     labelled: (github, label) =>
       ghAll<{ number: number; title: string; pull_request?: unknown }>(
         `repos/${github}/issues?state=open&per_page=100&labels=${encodeURIComponent(label)}`,

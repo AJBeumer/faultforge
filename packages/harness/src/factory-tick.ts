@@ -18,17 +18,20 @@
  *     the factory policy hook switched on.
  *  8. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's
  *     review of its head commit is complete, and `main` didn't move during the run.
- *  9. Label the ticket `agent-done` or `agent-needs-help`, comment why, push the run log to the private
- *     repo, and clean up (worktrees are kept when the run needs help, for inspection).
+ *  9. Save the run log to the private repo, then label the ticket `agent-done` (only once it is saved) or
+ *     `agent-needs-help`, comment why, and clean up (worktrees are kept when the run needs help).
  *
  * Every step is appended with a UTC time to `<runs>/<run id>.jsonl` as it happens, and saved under
- * `<evidence>/factory-runs/`. `npm run factory:timeline` prints it as a table.
+ * `<evidence>/factory-runs/`; the saved copy ends with the outcome the ticket shows (`factory-finish.ts`).
+ * `npm run factory:timeline` prints it as a table.
  *
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  *
- * Exit codes: 0 the tick ended normally (a run delivered, or nothing to take: busy, idle, a ticket refused or
- * not ready, each logged); 1 a run stopped and needs the owner (`agent-needs-help`); 2 the command line or the
- * environment was wrong, so no tick ran.
+ * Exit codes: 0 the tick ended and its ticket, if any, doesn't need the owner (a run delivered `agent-done`,
+ * or nothing to take: busy, idle, or a ticket refused, each logged); 1 the ticket it took now carries
+ * `agent-needs-help`: a run stopped, the runner failed, or the ticket isn't ready; 2 the command line or the
+ * environment was wrong (a bad option, no token, a token file that can't be read, a config that doesn't
+ * load), so no tick ran.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -38,179 +41,53 @@ import type { AgentRun } from "./factory-agent.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { type EvidencePush, evidenceFile } from "./factory-evidence.ts";
+import { finishRun } from "./factory-finish.ts";
 import { HooksCheckError, type HooksReport, hooksEvent } from "./factory-hooks.ts";
 import { recoverStranded } from "./factory-recovery.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
+import {
+  type Candidate,
+  exitCodeFor,
+  type Finish,
+  type IssueEvent,
+  LABELS,
+  lastLabelled,
+  oldest,
+  parseAgentResult,
+  QODO_CHECK_COMMENT,
+  redact,
+  runIdFor,
+  safeText,
+  settle,
+  type TickOutcome,
+} from "./factory-settle.ts";
 import type { Verification } from "./factory-verify.ts";
 import type { RunMode } from "./factory-workspace.ts";
-import { telltales } from "./neutral.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { type Difference, summarizeDifference } from "./qodo-check.ts";
 import { proposeAfterRun } from "./rules-propose.ts";
 import { provenanceProblems, type TicketSnapshot, ticketChangeProblems } from "./ticket-snapshot.ts";
 
-export const LABELS = {
-  ready: "ready-for-agent",
-  working: "agent-working",
-  done: "agent-done",
-  help: "agent-needs-help",
-} as const;
-
-// ---------------------------------------------------------------------------------------------
-// Pure decisions (unit tested)
-
-export interface IssueEvent {
-  event: string;
-  created_at: string;
-  actor?: { login: string } | null;
-  label?: { name: string } | null;
-}
-
-/** Who added `label` most recently, and when, or null if the events never show it being added. */
-export function lastLabelled(events: IssueEvent[], label: string): { by: string; at: string } | null {
-  const added = events.filter((e) => e.event === "labeled" && e.label?.name === label);
-  const last = added.sort((a, b) => a.created_at.localeCompare(b.created_at)).pop();
-  return last ? { by: last.actor?.login ?? "(unknown)", at: last.created_at } : null;
-}
-
-export interface Candidate {
-  repoKey: string;
-  github: string;
-  number: number;
-  title: string;
-  labelledAt: string;
-  labelledBy: string;
-}
-
-/** The ticket labelled longest ago; ties go to the lower repo key, then the lower number. */
-export function oldest(candidates: Candidate[]): Candidate | undefined {
-  return [...candidates].sort(
-    (a, b) => a.labelledAt.localeCompare(b.labelledAt) || a.repoKey.localeCompare(b.repoKey) || a.number - b.number,
-  )[0];
-}
-
-export interface AgentResult {
-  outcome: "ready" | "owner-gate" | "stuck";
-  pr: string | null;
-  reason: string;
-}
-
-/** The agent's last `FACTORY_RESULT {...}` line, or null if it gave none or it doesn't parse. */
-export function parseAgentResult(text: string | null | undefined): AgentResult | null {
-  const lines = [...(text ?? "").matchAll(/^\s*FACTORY_RESULT\s+(\{.*\})\s*$/gm)];
-  const last = lines.pop();
-  if (!last?.[1]) return null;
-  try {
-    const value = JSON.parse(last[1]);
-    if (!["ready", "owner-gate", "stuck"].includes(value.outcome)) return null;
-    return {
-      outcome: value.outcome,
-      pr: typeof value.pr === "string" && value.pr ? value.pr : null,
-      reason: String(value.reason ?? "").trim() || "(no reason given)",
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** The PR number when `url` is a pull request of exactly this repo, else null. */
-export function prNumber(url: string | null, github: string): number | null {
-  const match = url?.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/);
-  return match?.[1]?.toLowerCase() === github.toLowerCase() ? Number(match[2]) : null;
-}
-
-export interface Finish {
-  label: typeof LABELS.done | typeof LABELS.help;
-  reason: string;
-  pr: string | null;
-}
-
-/**
- * What the run delivered, from the agent's own report and the runner's independent checks. Anything the
- * runner can't confirm is a stop for the owner, never a success.
- */
-export function settle(
-  agent: AgentRun,
-  result: AgentResult | null,
-  verify: (pr: number) => Verification,
-  github: string,
-  minutes: number,
-): Finish {
-  if (agent.timedOut)
-    return { label: LABELS.help, reason: `hit the time limit of ${minutes} minutes`, pr: agent.lastPr ?? null };
-  if (!result) {
-    const how = agent.subtype && agent.subtype !== "success" ? ` (${agent.subtype})` : "";
-    return {
-      label: LABELS.help,
-      reason: `the agent ended without a result, exit code ${agent.exitCode}${how}`,
-      pr: null,
-    };
-  }
-  if (result.outcome === "stuck") return { label: LABELS.help, reason: result.reason, pr: result.pr };
-  if (agent.exitCode !== 0 || (agent.subtype !== null && agent.subtype !== "success")) {
-    return {
-      label: LABELS.help,
-      reason: `the agent reported "${result.outcome}" but exited with code ${agent.exitCode} (${agent.subtype ?? "no result"})`,
-      pr: result.pr,
-    };
-  }
-  const number = prNumber(result.pr, github);
-  if (number === null) {
-    return {
-      label: LABELS.help,
-      reason: `the agent reported "${result.outcome}" without a pull request in ${github}`,
-      pr: null,
-    };
-  }
-  const { problems, ownerGates = [] } = verify(number);
-  if (problems.length) {
-    return {
-      label: LABELS.help,
-      reason: `the agent reported "${result.outcome}", but ${problems.join("; ")}`,
-      pr: result.pr,
-    };
-  }
-  // The runner's own gates hold a PR the agent called ready (#215).
-  const waits = [...(result.outcome === "ready" ? [] : [result.reason]), ...ownerGates];
-  return {
-    label: LABELS.done,
-    reason: waits.length
-      ? `waiting for the owner: ${waits.join("; ")}`
-      : "the pull request is ready for the owner to merge",
-    pr: result.pr,
-  };
-}
-
-/** The secret names whose values must never reach a log. */
-export const SECRET_NAMES = [
-  "GH_TOKEN",
-  "GITHUB_TOKEN",
-  "QODO_API_KEY",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "ANTHROPIC_API_KEY",
-];
-
-/** Replaces every secret value from the environment (8 characters or longer) with three stars. */
-export function redact(text: string, env: Record<string, string | undefined> = process.env): string {
-  let out = text;
-  for (const name of SECRET_NAMES) {
-    const value = env[name]?.trim();
-    if (value && value.length >= 8) out = out.split(value).join("***");
-  }
-  return out;
-}
-
-/** Text for a ticket comment; in a reviewed repo, anything that would give the lab away is replaced. */
-export function safeText(text: string, reviewed: boolean): string {
-  if (!reviewed || !telltales(text).length) return text;
-  return "The details are in the run log.";
-}
-
-/** A sortable run id from the start time and the ticket, e.g. `20261109-093012-target-18`. */
-export function runIdFor(now: Date, repoKey: string, number: number): string {
-  const stamp = now.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
-  return `${stamp}-${repoKey}-${number}`;
-}
+export {
+  type AgentResult,
+  type Candidate,
+  EXIT_CODES,
+  exitCodeFor,
+  type Finish,
+  type IssueEvent,
+  LABELS,
+  lastLabelled,
+  oldest,
+  parseAgentResult,
+  prNumber,
+  QODO_CHECK_COMMENT,
+  redact,
+  runIdFor,
+  SECRET_NAMES,
+  safeText,
+  settle,
+  type TickOutcome,
+} from "./factory-settle.ts";
 
 // ---------------------------------------------------------------------------------------------
 // The tick, with every side effect behind `TickDeps` so the stop paths can be tested with fakes.
@@ -285,8 +162,6 @@ export interface TickOptions {
   budget: number;
 }
 
-export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-help";
-
 export async function tick(factory: FactoryConfig, deps: TickDeps, options: TickOptions): Promise<TickOutcome> {
   const lock = deps.lock();
   if (!lock.acquired) {
@@ -297,12 +172,18 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
   let claimed: Candidate | null = null;
   let ws: Workspace | null = null;
   let finalLabel: string | null = null;
+  let finishedLogged = false;
   const log: Logger = (event, detail = {}) => {
     // Every logged value is scrubbed of the secrets in the environment: the log can be public.
     const entry = JSON.parse(redact(JSON.stringify({ t: deps.now().toISOString(), event, ...detail })));
     const shown = Object.keys(detail).length ? ` ${redact(JSON.stringify(detail))}` : "";
     deps.print(`${entry.t} ${event}${shown}`);
     if (runId) deps.record(runId, entry);
+  };
+  /** Copies the run log to private storage, after its outcome is logged; `saved` is logged after the push. */
+  const saveLog = (id: string) => {
+    deps.saveEvidence(id, null);
+    log("saved", { evidence: evidenceFile(factory, id) });
   };
   try {
     if (lock.note) log("lock", { note: lock.note });
@@ -328,13 +209,13 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       log("idle", { labelled: 0 });
       return "idle";
     }
-    runId = runIdFor(deps.now(), pick.repoKey, pick.number);
+    const id = runIdFor(deps.now(), pick.repoKey, pick.number);
+    runId = id;
     const reviewed = repoConfig(factory, pick.repoKey).guard === "reviewed";
     const say = (body: string) => deps.comment(pick.github, pick.number, safeText(body, reviewed));
-    // relabel still adds the new label even when removing the old one failed (real side effects, below).
-    // A failed removal is just logged - an old label left lingering is cosmetic - but a failed add means
-    // the ticket's intended new state was never recorded, so this throws for the caller to treat as any
-    // other failure here: never silently proceeding as if the ticket now shows what it doesn't.
+    // The new label is added before the old ones go (`relabelWith`). A failed removal is logged: the old
+    // label lingers beside the new one. A failed add throws, for the caller to treat as any other failure:
+    // never proceeding as if the ticket now shows what it doesn't. Returns whether the removal worked too.
     const relabel = (remove: string[], add: string[]) => {
       const { removeFailed, addFailed } = deps.relabel(pick.github, pick.number, remove, add);
       if (removeFailed) {
@@ -343,6 +224,22 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         });
       }
       if (addFailed) throw addFailed instanceof Error ? addFailed : new Error(String(addFailed));
+      return !removeFailed;
+    };
+    /** Takes `ready-for-agent` off a ticket that won't run, and comments only once that worked: while the
+     * label stays, the next tick meets the ticket again, and a comment on every tick would repeat (#245). */
+    const turnAway = (
+      outcome: "refused" | "not-ready",
+      add: string[],
+      body: string,
+      detail: Record<string, unknown>,
+    ) => {
+      if (relabel([LABELS.ready], add)) say(body);
+      else log("error", { message: "no comment until the label is off, so it is posted once" });
+      if (add.length) finalLabel = LABELS.help;
+      log(outcome, detail);
+      saveLog(id);
+      return outcome;
     };
     log("picked", {
       repo: pick.repoKey,
@@ -355,73 +252,59 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const owner = pick.github.split("/")[0] ?? "";
     if (pick.labelledBy.toLowerCase() !== owner.toLowerCase()) {
-      relabel([LABELS.ready], []);
-      say(
+      return turnAway(
+        "refused",
+        [],
         `Not started. The \`${LABELS.ready}\` label was added by ${pick.labelledBy}, and only the repository owner can start an agent run. The label has been removed.`,
+        { reason: `label added by ${pick.labelledBy}, not the owner ${owner}` },
       );
-      log("refused", { reason: `label added by ${pick.labelledBy}, not the owner ${owner}` });
-      deps.saveEvidence(runId, null);
-      return "refused";
     }
 
     const authors = provenanceProblems(deps.snapshot(pick.github, pick.number).provenance, owner);
     if (authors.length) {
-      relabel([LABELS.ready], []);
-      say(
+      return turnAway(
+        "refused",
+        [],
         `Not started. An agent run follows this ticket's text, so only a ticket written, edited and commented on by the repository owner can start one (${authors.join("; ")}). The label has been removed.`,
+        { reason: authors.join("; ") },
       );
-      log("refused", { reason: authors.join("; ") });
-      deps.saveEvidence(runId, null);
-      return "refused";
     }
 
     const readiness = deps.ready(pick.repoKey, pick.number);
     if (readiness.problems.length) {
-      relabel([LABELS.ready], [LABELS.help]);
-      say(
+      return turnAway(
+        "not-ready",
+        [LABELS.help],
         `Not started: this ticket isn't ready yet.\n\n${readiness.problems.map((p) => `- ${p}`).join("\n")}\n\nFix the ticket and add \`${LABELS.ready}\` again.`,
+        { problems: readiness.problems },
       );
-      log("not-ready", { problems: readiness.problems });
-      deps.saveEvidence(runId, null);
-      return "not-ready";
     }
 
     claimed = pick;
     // An earlier run's result label goes too: a ticket carries one state at a time (#197).
     relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
     say(
-      `Picked up by scheduled agent run \`${runId}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
+      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.`,
     );
     log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
 
-    const qodo = await deps.qodoCheck(runId);
-    // A summary only, here too: CI prints this log and uploads it from a public repo, and a rule's name
-    // or content can hold text read from private storage. The full state is in the saved Qodo evidence.
-    log("qodo-checked", {
-      exitCode: qodo.exitCode,
-      message: qodo.message,
-      differences: qodo.differences.map(summarizeDifference),
-    });
+    const qodo = await deps.qodoCheck(id);
+    // Summaries only, in the log, and a fixed sentence on the ticket: CI prints this log and uploads it from
+    // a public repo, and a rule's name or content can hold text read from private storage.
+    const differences = qodo.differences.map(summarizeDifference);
+    log("qodo-checked", { exitCode: qodo.exitCode, message: qodo.message, differences });
     if (qodo.exitCode !== 0) {
       relabel([LABELS.working, LABELS.ready], [LABELS.help]);
       finalLabel = LABELS.help;
-      const reason =
-        qodo.exitCode === 2
-          ? `Qodo's configuration couldn't be checked against the snapshot (${qodo.message})`
-          : `Qodo's configuration has drifted from the snapshot (${qodo.message})`;
-      // A summary only: the full detail (a rule's content, a field's before/after) can hold text read
-      // from private storage, which must never reach a ticket a reviewer can read (Qodo on PR 145).
-      const summary = qodo.differences.map(summarizeDifference);
-      say(
-        `Agent run \`${runId}\` stopped and needs help: ${reason}${summary.length ? `\n\n${summary.map((l) => `- ${l}`).join("\n")}` : ""}.`,
-      );
-      log("finished", { label: LABELS.help, reason, pr: null });
-      log("saved", { evidence: evidenceFile(factory, runId) });
-      deps.saveEvidence(runId, null);
+      say(QODO_CHECK_COMMENT);
+      const reason = qodo.exitCode === 2 ? "Qodo's configuration couldn't be checked" : "Qodo's configuration drifted";
+      log("finished", { label: LABELS.help, reason: `${reason} (${qodo.message})`, pr: null });
+      finishedLogged = true;
+      saveLog(id);
       return "needs-help";
     }
 
-    ws = deps.workspace(runId);
+    ws = deps.workspace(id);
     log("workspace", { root: ws.root, mainAtStart: ws.mainAtStart });
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
@@ -434,7 +317,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const agentFrom = deps.now().toISOString();
     log("agent-started", { command: `/factory ${pick.repoKey} ${pick.number}` });
-    const agent = await deps.runAgent(ws, runId, pick.repoKey, pick.number, ticketFile, log);
+    const agent = await deps.runAgent(ws, id, pick.repoKey, pick.number, ticketFile, log);
     const agentTo = deps.now().toISOString();
     const result = parseAgentResult(agent.resultText);
     log("agent-finished", {
@@ -471,62 +354,24 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const finish: Finish = audit.length
       ? { label: LABELS.help, reason: `the run's audit found: ${audit.join("; ")}`, pr: settled.pr }
       : settled;
-    // ready-for-agent is stripped again here too: if its removal at the claim failed silently (logged,
-    // not fatal, above), a ticket that already finished must never still look pickable by a later tick.
-    relabel([LABELS.working, LABELS.ready], [finish.label]);
-    finalLabel = finish.label;
-    const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
-    say(
-      finish.label === LABELS.done
-        ? `Agent run \`${runId}\` finished: ${finish.reason}.${prLine}`
-        : `Agent run \`${runId}\` stopped and needs help: ${finish.reason}.${prLine}`,
-    );
-    log("finished", { label: finish.label, reason: finish.reason, pr: finish.pr });
-    // Logged before the copy is made, so the saved log ends with it too.
-    log(finish.label === LABELS.done ? "cleanup" : "kept", { root: ws.root });
-    log("saved", { evidence: evidenceFile(factory, runId) });
-    const saved = deps.saveEvidence(runId, ws);
-    if (saved.blocked.length) {
-      log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
-      const where = saved.savedAt
-        ? `the private repository's \`${saved.savedAt}\` branch`
-        : `the run folder (\`${ws.root}\`), kept for inspection`;
-      // Sanitised on its own, so a protected word among the blocked paths only blanks this clause, never
-      // the branch or folder the owner needs to find the evidence by (Qodo on PR 141).
-      const paths = safeText(saved.blocked.join(", "), reviewed);
-      const blockedMessage = `The run also changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
-      // Said before the relabel, and each retried once on its own: one failing must never also cost the
-      // other, and the run log (which the run-log copy itself always reaches, win or lose) is never the
-      // owner's only way to learn a done-looking ticket was actually blocked (Qodo on PR 141, round 2).
-      const once = (what: string, fn: () => void): boolean => {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            fn();
-            return true;
-          } catch (error) {
-            log("error", { message: `couldn't ${what}: ${error instanceof Error ? error.message : error}` });
-          }
-        }
-        return false;
-      };
-      once("comment the blocked evidence on the ticket", () => say(blockedMessage));
-      if (finish.label !== LABELS.help) {
-        if (
-          once(`relabel the blocked run to ${LABELS.help}`, () =>
-            relabel([LABELS.working, LABELS.ready, finish.label], [LABELS.help]),
-          )
-        ) {
-          finalLabel = LABELS.help;
-        }
-      }
-      // The run folder is only kept when even the blocked-branch push failed: that's the one case
-      // left where it's the owner's sole copy (Qodo on PR 141).
-      // A run that needs help keeps its worktrees, as its log says: they may hold its only copy (#197).
-      if (saved.savedAt && finish.label === LABELS.done) deps.cleanup(ws);
-      return "needs-help";
-    }
-    if (finish.label === LABELS.done) deps.cleanup(ws);
-    return finish.label === LABELS.done ? "done" : "needs-help";
+    const label = finishRun({
+      factory,
+      deps,
+      runId: id,
+      ws: workspace,
+      finish,
+      log,
+      relabel,
+      say,
+      reviewed,
+      labelled: (l) => {
+        finalLabel = l;
+      },
+      finished: () => {
+        finishedLogged = true;
+      },
+    });
+    return label === LABELS.done ? "done" : "needs-help";
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     if (error instanceof HooksCheckError) log("hooks-checked", hooksEvent(error.report));
@@ -552,7 +397,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         log("error", {
           message: `couldn't update the ticket's label: ${addFailed instanceof Error ? addFailed.message : addFailed}`,
         });
-      }
+      } else finalLabel = LABELS.help;
       try {
         const reviewed = repoConfig(factory, claimed.repoKey).guard === "reviewed";
         deps.comment(
@@ -564,10 +409,13 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         log("error", { message: `couldn't report on the ticket: ${inner instanceof Error ? inner.message : inner}` });
       }
     }
-    if (runId) {
+    if (runId && !finishedLogged) {
+      // The saved log ends with how the run ended: the label the ticket now shows (AUD-M18).
+      log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });
       try {
         const saved = deps.saveEvidence(runId, ws);
         if (saved.blocked.length) log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+        log("saved", { evidence: evidenceFile(factory, runId) });
       } catch {
         // The live log under the runs folder still has everything.
       }
@@ -591,6 +439,24 @@ function positiveOption(values: Record<string, unknown>, name: "minutes" | "budg
   return value;
 }
 
+/**
+ * GH_TOKEN, or the content of the file GH_TOKEN_FILE names, or why neither can be had. A token file that is
+ * missing or empty is the environment being wrong (exit 2), never a crash that reads as a failed run.
+ */
+export function tokenFrom(
+  env: Record<string, string | undefined>,
+  read: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): { token: string } | { problem: string } {
+  if (env.GH_TOKEN) return { token: env.GH_TOKEN };
+  if (!env.GH_TOKEN_FILE) return { problem: "factory:tick needs GH_TOKEN or GH_TOKEN_FILE." };
+  try {
+    const token = read(env.GH_TOKEN_FILE).trim();
+    return token ? { token } : { problem: "factory:tick: the file GH_TOKEN_FILE names is empty." };
+  } catch (error) {
+    return { problem: `factory:tick can't read GH_TOKEN_FILE (${(error as NodeJS.ErrnoException).code ?? "error"}).` };
+  }
+}
+
 async function main() {
   let values: { ci?: boolean; minutes?: string; budget?: string };
   try {
@@ -606,14 +472,22 @@ async function main() {
   }
   const options = { minutes: positiveOption(values, "minutes", 120), budget: positiveOption(values, "budget", 25) };
   const mode: RunMode = values.ci ? "ci" : "local";
-  if (!process.env.GH_TOKEN && process.env.GH_TOKEN_FILE)
-    process.env.GH_TOKEN = readFileSync(process.env.GH_TOKEN_FILE, "utf8").trim();
-  if (!process.env.GH_TOKEN) {
-    console.error("factory:tick needs GH_TOKEN or GH_TOKEN_FILE.");
+  const auth = tokenFrom(process.env);
+  if ("problem" in auth) {
+    console.error(auth.problem);
     process.exit(2);
   }
-  const factory = loadFactory();
-  const outcome = await tick(factory, realDeps(factory, options, mode), options);
+  process.env.GH_TOKEN = auth.token;
+  let factory: FactoryConfig;
+  let deps: TickDeps;
+  try {
+    factory = loadFactory();
+    deps = realDeps(factory, options, mode);
+  } catch (error) {
+    console.error(`factory:tick couldn't set up: ${error instanceof Error ? error.message : error}`);
+    process.exit(2);
+  }
+  const outcome = await tick(factory, deps, options);
   if (outcome === "done" || outcome === "needs-help") {
     // After a finished run, ask whether the saved reviews now repeat a pattern worth a rule. The
     // owner decides on the proposal ticket; a failure here is reported and never changes the
@@ -626,7 +500,7 @@ async function main() {
       );
     }
   }
-  process.exit(outcome === "needs-help" ? 1 : 0);
+  process.exit(exitCodeFor(outcome));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main();

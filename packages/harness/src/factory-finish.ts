@@ -1,0 +1,98 @@
+/**
+ * The end of a run that reached the agent: save its evidence, then label the ticket from what was saved,
+ * report it, log the outcome, and copy the log once more so the saved copy ends with that outcome. Split from
+ * factory-tick.ts, which may not grow (CLAUDE.md, module size rule).
+ *
+ * The order is the point (AUD-M18, #245):
+ *  1. The run log and transcript go to private storage first. `agent-done` is set only once they are there;
+ *     a failed or blocked save ends `agent-needs-help`, so a ticket never says done for a run with no record.
+ *  2. The label (added before the old one is removed, `relabelWith`), then the comment.
+ *  3. `finished`, with the label the ticket now carries, is the log's last event before the final copy.
+ *  4. The final copy; `saved` is logged after its push, so it is in the live log only.
+ *  5. Cleanup, after the copy: the private worktree it removes is where the copy is made.
+ */
+
+import type { FactoryConfig } from "./factory-config.ts";
+import { evidenceFile } from "./factory-evidence.ts";
+import { type Finish, LABELS, safeText } from "./factory-settle.ts";
+import type { Logger, TickDeps, Workspace } from "./factory-tick.ts";
+
+export interface FinishContext {
+  factory: FactoryConfig;
+  deps: TickDeps;
+  runId: string;
+  ws: Workspace;
+  finish: Finish;
+  log: Logger;
+  /** Adds the new label before removing the old ones; throws when the add failed. */
+  relabel(remove: string[], add: string[]): void;
+  /** Comments on the ticket, sanitised for a reviewed repo. */
+  say(body: string): void;
+  reviewed: boolean;
+  /** Told the ticket's final label as soon as it is set, so a later failure never adds a second one. */
+  labelled(label: string): void;
+  /** Told once the outcome has been logged, so a later failure never logs a second one. */
+  finished(): void;
+}
+
+const message = (error: unknown): string =>
+  error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+
+/** Saves, labels, reports and copies the log, in that order. Returns the ticket's final label. */
+export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.help {
+  const { deps, runId, ws, finish, log } = c;
+  let saved: ReturnType<TickDeps["saveEvidence"]> | null = null;
+  let saveError = "";
+  try {
+    saved = deps.saveEvidence(runId, ws);
+  } catch (error) {
+    saveError = message(error);
+    log("error", { message: `couldn't save the run's evidence: ${saveError}` });
+  }
+  let label: typeof LABELS.done | typeof LABELS.help = finish.label;
+  let reason = finish.reason;
+  let note = "";
+  if (saved?.blocked.length) {
+    log("evidence-blocked", { blocked: saved.blocked, savedAt: saved.savedAt ?? null });
+    label = LABELS.help;
+    const where = saved.savedAt
+      ? `the private repository's \`${saved.savedAt}\` branch`
+      : `the run folder (\`${ws.root}\`), kept for inspection`;
+    reason = `${finish.label === LABELS.done ? `${finish.reason}, but ` : `${finish.reason}; also, `}the run changed files in the private repository outside the evidence folders`;
+    // Sanitised on its own, so a protected word among the paths only blanks this clause (Qodo on PR 141).
+    const paths = safeText(saved.blocked.join(", "), c.reviewed);
+    note = `\n\nThe run changed files in the private repository outside \`raw-artifacts/\` and \`factory-log/\` (${paths}). Nothing was pushed to its \`main\`; the run log and transcript are saved instead in ${where}.`;
+  } else if (!saved?.pushed) {
+    label = LABELS.help;
+    reason = `${finish.reason}; but the run's evidence couldn't be saved to the private repository (${saveError || "the push failed"}), so its folder is kept`;
+  }
+  c.relabel([LABELS.working, LABELS.ready], [label]);
+  c.labelled(label);
+  const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
+  try {
+    c.say(
+      label === LABELS.done
+        ? `Agent run \`${runId}\` finished: ${reason}.${prLine}`
+        : `Agent run \`${runId}\` stopped and needs help: ${reason}.${prLine}${note}`,
+    );
+  } catch (error) {
+    log("error", { message: `couldn't report on the ticket: ${message(error)}` });
+  }
+  log("finished", { label, reason, pr: finish.pr });
+  c.finished();
+  try {
+    deps.saveEvidence(runId, ws);
+    log("saved", { evidence: evidenceFile(c.factory, runId) });
+  } catch (error) {
+    log("error", { message: `couldn't save the final copy of the run log: ${message(error)}` });
+  }
+  // A run that needs help keeps its worktrees (#197), unless it was done and only its evidence was
+  // blocked, and that evidence reached its own branch: then the folder holds nothing the branch doesn't.
+  const keep = label === LABELS.help && !(finish.label === LABELS.done && saved?.blocked.length && saved.savedAt);
+  if (keep) log("kept", { root: ws.root });
+  else {
+    deps.cleanup(ws);
+    log("cleanup", { root: ws.root });
+  }
+  return label;
+}

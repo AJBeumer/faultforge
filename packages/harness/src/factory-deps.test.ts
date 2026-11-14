@@ -198,10 +198,12 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(readFileSync(file, "utf8")).toBe("# Filter\n");
   });
 
-  it("removes each label on its own, then adds the new ones in one edit, ignoring a label already gone", () => {
-    vi.mocked(gh).mockImplementationOnce(() => {
-      throw new ExternalCallError("gh api", { stderr: "gh: Label does not exist (HTTP 404)\n" });
-    });
+  it("adds the new labels in one edit, then removes each old one on its own, ignoring a label already gone (AUD-M19)", () => {
+    vi.mocked(gh)
+      .mockImplementationOnce(() => "")
+      .mockImplementationOnce(() => {
+        throw new ExternalCallError("gh api", { stderr: "gh: Label does not exist (HTTP 404)\n" });
+      });
     const problems = realDeps(FACTORY, OPTIONS).relabel(
       "owner/target",
       18,
@@ -210,9 +212,9 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     );
     expect(problems).toEqual({ removeFailed: null, addFailed: null });
     expect(vi.mocked(gh).mock.calls).toEqual([
+      ["issue", "edit", "18", "--repo", "owner/target", "--add-label", "agent-working"],
       ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/ready-for-agent"],
       ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/agent-done"],
-      ["issue", "edit", "18", "--repo", "owner/target", "--add-label", "agent-working"],
     ]);
   });
 
