@@ -7,13 +7,13 @@
  *   npm run verdict -- FF-0001 --review <path>     # read findings from this file instead of discovering one
  *
  * Reads the case's ground-truth entry (`readLedger`, #10) for the injected file, lines and template,
- * and the saved review (one of the `*.review.json` files `review:wait` writes) for the commit it
- * reviewed, found by matching `headSha` against the entry's `injectionCommit` (a `--review <path>` is
+ * and the saved review (one of the `*.review.json` files `review:wait` writes) of the entry's
+ * `injectionCommit` on the case's own PR, as its `pr.opened` event names it (a `--review <path>` is
  * refused if its own `headSha` differs). Prints every finding's match against the fixed rule
  * (`applyMatchRule`, #18): file, lines, width, category and summary, then the overall catch. When the
- * saved review's own `state` is not `"complete"` (skipped, timed out, or the head moved on), a warning
- * is printed and the only verdict on offer is `review incomplete`: a clean result from an unfinished
- * review proves nothing.
+ * saved review's own `state` is not `"complete"` (skipped, timed out, the head moved on, or no state at
+ * all), a warning is printed and the only verdict on offer is `review incomplete`: a clean result from an
+ * unfinished review proves nothing. A save with no findings list is refused.
  *
  * It then asks the owner, on the terminal: the verdict on the planted bug (`detected`, `missed` or
  * `review incomplete`, with a nonblank reason — retried, then refused, if left blank), and a judgement
@@ -31,23 +31,25 @@
  *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
  * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
- * answer key or audit log has an amendment or history problem (`ledgerProblemsWithHistory`); the case, its review or its template
- * can't be read; the review doesn't match the injected commit; an answer couldn't be parsed after retrying;
+ * answer key or audit log has an amendment or history problem (`ledgerProblemsWithHistory`); the case, its
+ * PR, its review or its template can't be read or found; the review doesn't match the injected commit or
+ * holds no findings list; an answer couldn't be parsed after retrying;
  * an answer the rule contradicts wasn't confirmed; or the event couldn't be appended.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { arch, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
+import { errorText as message } from "./error-text.ts";
 import { gh } from "./github.ts";
-import { readLedger } from "./ledger.ts";
-import { ledgerProblemsWithHistory } from "./ledger-check.ts";
+import { verdictInputHash } from "./ledger-hashes.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { ROOT } from "./paths.ts";
-import { findSavedReview, type SavedReview, toMatchFinding } from "./saved-review.ts";
-import { kindTermsOf, privateDir, templateDir } from "./templates.ts";
+import { TOOL } from "./provenance.ts";
+import { isComplete, savedReviewsDir, toMatchFinding } from "./saved-review.ts";
+import { privateDir } from "./templates.ts";
 import {
   type AskFn,
   askJudgement,
@@ -58,8 +60,7 @@ import {
   printReport,
 } from "./verdict-ask.ts";
 import { type AdjudicationEvent, BUG_VERDICTS, CONTROL_VERDICTS, type Judgement } from "./verdict-event.ts";
-
-const TOOL = `faultforge-harness@${JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version}`;
+import { loadVerdictInputs } from "./verdict-inputs.ts";
 
 export interface RunOptions {
   env?: NodeJS.ProcessEnv;
@@ -87,119 +88,43 @@ function defaultAppend(path: string, value: object): void {
   appendFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
-function sha256(data: string): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
 export async function run(caseId: string, options: RunOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   const root = privateDir(env);
-  const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
-  const reviewsDir = options.reviewsDir ?? join(root, "raw-artifacts", "reviews");
+  const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
+  const loaded = loadVerdictInputs(
+    caseId,
+    {
+      groundTruthPath,
+      auditEventsPath,
+      reviewsDir: options.reviewsDir ?? savedReviewsDir(env),
+      reviewPath: options.reviewPath,
+    },
+    env,
+  );
+  if ("problem" in loaded) {
+    error(`verdict: ${loaded.problem}`);
+    return 2;
+  }
+  const { entry, review, reviewText, templateText, kindTerms, isControl, injectedFile, injectedLines } = loaded;
 
-  // A verdict is appended only to an answer key and audit log whose amendments check out (#192). Checked
-  // before anything is read from them: an amendment that changes a case id would hide the case itself.
-  let ledgerIssues: string[];
-  try {
-    ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
-  } catch (e) {
-    error(`verdict: can't read ${groundTruthPath} or ${auditEventsPath}: ${message(e)}`);
-    return 2;
-  }
-  if (ledgerIssues.length) {
-    error(`verdict: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
-    return 2;
-  }
-
-  let entries: ReturnType<typeof readLedger>;
-  try {
-    entries = readLedger(groundTruthPath);
-  } catch (e) {
-    error(`verdict: can't read ${groundTruthPath}: ${message(e)}`);
-    return 2;
-  }
-  const entry = entries.find((e) => e.caseId === caseId);
-  if (!entry) {
-    error(`verdict: no ground-truth entry for ${caseId} in ${groundTruthPath}`);
-    return 2;
-  }
-  const injectedFile = entry.injectedFile;
-  const injectedLines = entry.injectedLines;
-  const templateId = entry.templateId;
-  const injectionCommit = entry.injectionCommit;
-  if (
-    typeof injectedFile !== "string" ||
-    !Array.isArray(injectedLines) ||
-    typeof templateId !== "string" ||
-    typeof injectionCommit !== "string"
-  ) {
-    error(
-      `verdict: ${caseId}'s ground-truth entry is missing injectedFile, injectedLines, templateId or injectionCommit`,
-    );
-    return 2;
-  }
-
-  let reviewPath = options.reviewPath;
-  let reviewText: string;
-  let review: SavedReview;
-  if (reviewPath) {
-    try {
-      reviewText = readFileSync(reviewPath, "utf8");
-      review = JSON.parse(reviewText);
-    } catch (e) {
-      error(`verdict: can't read ${reviewPath}: ${message(e)}`);
-      return 2;
-    }
-    if (review.headSha !== injectionCommit) {
-      error(`verdict: ${reviewPath} reviewed ${review.headSha}, not ${caseId}'s injected commit ${injectionCommit}`);
-      return 2;
-    }
-  } else {
-    const found = findSavedReview(reviewsDir, injectionCommit);
-    if (!found) {
-      error(`verdict: no saved review.json for commit ${injectionCommit} under ${reviewsDir}; run review:wait first`);
-      return 2;
-    }
-    reviewPath = found.path;
-    reviewText = found.text;
-    review = found.review;
-  }
-
-  const dir = templateDir(templateId, env);
-  if (!dir) {
-    error(`verdict: template ${templateId} not found in private/templates or templates/seed`);
-    return 2;
-  }
-  // A control's template declares no match terms (the schema forbids them): there is no bug to match (#162).
-  const isControl = entry.kind === "control";
-  let templateText: string;
-  let kindTerms: string[] = [];
-  try {
-    templateText = readFileSync(join(dir, "template.json"), "utf8");
-    if (!isControl) kindTerms = kindTermsOf(JSON.parse(templateText), `${dir}/template.json`);
-  } catch (e) {
-    error(`verdict: can't use ${dir}/template.json: ${message(e)}`);
-    return 2;
-  }
-
-  const findings = (review.findings ?? []).map(toMatchFinding);
+  const findings = review.findings.map(toMatchFinding);
   const result = isControl
     ? undefined
-    : applyMatchRule({ file: injectedFile, lines: injectedLines as [number, number] }, findings, kindTerms);
+    : applyMatchRule({ file: injectedFile, lines: injectedLines }, findings, kindTerms);
   if (result) printReport(log, findings, result);
   else printControlFindings(log, findings);
 
-  // "complete" only when review:wait finished reviewing this exact commit; anything else (skipped,
-  // timed out, head moved) means a clean result proves nothing, so only "review incomplete" is offered.
-  const reviewIncomplete = typeof review.state === "string" && review.state !== "complete";
+  // "complete" only when review:wait finished reviewing this exact commit; anything else (skipped, timed out,
+  // head moved, or no state at all) means a clean result proves nothing, so only "review incomplete" is offered.
+  const reviewIncomplete = !isComplete(review);
   if (reviewIncomplete) {
     log(
-      `WARNING: the saved review's state is "${review.state}", not complete. A missing finding may mean the review never finished, not that nothing was found; only "review incomplete" can be recorded.`,
+      `WARNING: the saved review's state is ${JSON.stringify(review.state ?? null)}, not "complete". A missing finding may mean the review never finished, not that nothing was found; only "review incomplete" can be recorded.`,
     );
   }
 
@@ -298,7 +223,10 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     by,
     tool: TOOL,
     environment: `${platform()}-${arch()}-node${process.versions.node}`,
-    inputHash: sha256(`${JSON.stringify(entry)}\n${templateText}\n${reviewText}`),
+    inputHash: verdictInputHash(entry, templateText, reviewText),
+    // The file hashed, so the hash is checked against it even when `--review` named another (Qodo on PR 264).
+    reviewFile: relative(dirname(groundTruthPath), loaded.reviewPath).replace(/\\/g, "/"),
+    ...(result ? { ruleVersion: result.ruleVersion } : {}),
     disposition: verdicts[bugAnswer] as string,
     reason: bugReason,
     judgements,

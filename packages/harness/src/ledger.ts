@@ -38,7 +38,8 @@
  * `case-build.ts` requires `sabotage.injected`/`control.injected`, `review.recorded` and
  * `case.adjudicated` for the case it's building; a case missing one is refused, naming the stage.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readJsonLines } from "./jsonl.ts";
 
 export interface Amendment {
   kind: "amendment";
@@ -74,10 +75,7 @@ function isBlank(value: unknown): boolean {
 }
 
 function readLines(path: string): LedgerLine[] {
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line));
+  return readJsonLines<LedgerLine>(path);
 }
 
 /** Ids held by more than one non-amendment entry: an amendment naming one can't pick a single target. */
@@ -92,7 +90,7 @@ function duplicateIds(lines: LedgerLine[]): Set<string> {
 }
 
 /** Every non-amendment line, in file order, with the amendments that name it applied. */
-function applyAmendments(path: string): LedgerEntry[] {
+function applyAmendments(path: string, keep?: (amendment: Amendment, nth: number) => boolean): LedgerEntry[] {
   const lines = readLines(path);
   const ambiguous = duplicateIds(lines);
   const baseEntries: LedgerLine[] = [];
@@ -109,8 +107,9 @@ function applyAmendments(path: string): LedgerEntry[] {
     if (!isAmendment(line)) continue;
     const target = line.amends !== undefined ? byId.get(line.amends) : undefined;
     if (!target) continue;
-    Object.assign(target, line.change ?? {});
     const applied = amendmentsFor.get(target) ?? [];
+    if (keep && !keep(line, applied.length)) continue;
+    Object.assign(target, line.change ?? {});
     applied.push(line);
     amendmentsFor.set(target, applied);
   }
@@ -121,6 +120,19 @@ function applyAmendments(path: string): LedgerEntry[] {
 /** The answer key's cases, amendments applied. */
 export function readLedger(path: string): LedgerEntry[] {
   return applyAmendments(path);
+}
+
+/**
+ * Every version an entry has had, oldest first: with none of its amendments applied, then the first, the
+ * first two, and so on. The file is append-only, so whatever a tool read at some moment was one of these;
+ * a verdict's `inputHash` covers whichever it was, whatever times the amendments claim.
+ */
+export function entryVersions(path: string, id: string): LedgerEntry[] {
+  const all = applyAmendments(path).find((e) => idOf(e) === id);
+  if (!all) return [];
+  return Array.from({ length: all.amendments.length + 1 }, (_, count) =>
+    applyAmendments(path, (amendment, nth) => amendment.amends !== id || nth < count).find((e) => idOf(e) === id),
+  ).filter((e): e is LedgerEntry => e !== undefined);
 }
 
 /** The audit log's events, amendments applied. */

@@ -12,9 +12,12 @@ import { worktreeFor } from "./factory-workspace.ts";
  * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
  * guard hook and the factory policy hook must run before every shell command and file edit.
  */
-/** True when a hook command runs exactly this repo's hook file with node, not merely mentions it. */
+/**
+ * True when a hook command runs exactly this repo's hook file with node, through the fail-closed wrapper that
+ * turns a crash, a broken import or a timeout into a refusal (AUD-M4), not merely mentions it.
+ */
 export function runsHook(command: string, file: string): boolean {
-  const expected = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${file}"`;
+  const expected = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" ${file}`;
   return command.trim().replace(/\\/g, "/") === expected;
 }
 
@@ -27,7 +30,8 @@ export function hookProblems(settingsText: string): string[] {
   }
   const problems: string[] = [];
   for (const hook of ["guard-target.ts", "factory-policy.ts"]) {
-    for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+    // An MCP tool can post too, so the guard hooks must run before those as well (Qodo on PR 265).
+    for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "mcp__any__tool"]) {
       const covered = hooks.some(
         (h) =>
           (!h.matcher || h.matcher === "*" || new RegExp(`^(${h.matcher})$`).test(tool)) &&
@@ -236,11 +240,12 @@ export function hooksEvent(report: HooksReport): Record<string, unknown> {
   };
 }
 
-/** Runs a hook file from the workspace's `.claude/hooks` with node, the way settings.json does. */
+/** Runs a hook file from the workspace's `.claude/hooks` with node, through the wrapper, the way settings.json does. */
 export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
   return (hook, stdin, env) => {
     const started = Date.now();
-    const result = spawnSync(process.execPath, [join(lab, ".claude", "hooks", hook)], {
+    const hooks = join(lab, ".claude", "hooks");
+    const result = spawnSync(process.execPath, [join(hooks, "fail-closed.ts"), join(hooks, hook)], {
       input: stdin,
       encoding: "utf8",
       env: {

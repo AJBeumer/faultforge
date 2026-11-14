@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -110,6 +110,43 @@ describe("extractReviewRecord", () => {
 
   it("ignores a tree value that is not a 40-character hash", () => {
     expect(extractReviewRecord(payload({ checkpointTree: "not-a-hash" }), "x", 0)).toBeNull();
+  });
+});
+
+// The two shapes in the saved evidence (#254): the toolbox CLI kept a checkpoint and reported its finding list
+// complete; every `review:local` run (API key) kept none, said `checkpoint_unavailable`, and reported it
+// incomplete, with coverage complete in both.
+describe("the two kinds of saved local review", () => {
+  const withCheckpoint = payload({ checkpointTree: TREE_A });
+  const noCheckpoint = (() => {
+    const p = payload({ snapshotTree: TREE_A, inventoryComplete: false });
+    (p.meta as Record<string, unknown>).analysis = { mode: "full", reason: "checkpoint_unavailable" };
+    return p;
+  })();
+
+  it("covers the tree of a review that kept a checkpoint", () => {
+    const r = extractReviewRecord(withCheckpoint, "toolbox.raw.json", 0) as ReviewRecord;
+    expect(r.complete).toBe(true);
+    expect(checkTree(TREE_A, [r]).covered).toBe(true);
+  });
+
+  it("says why a review that kept no checkpoint doesn't cover, instead of blaming its coverage", () => {
+    const r = extractReviewRecord(noCheckpoint, "local-reviews/x/review.json", 0) as ReviewRecord;
+    expect(r.complete).toBe(false);
+    const result = checkTree(TREE_A, [r]);
+    expect(result.covered).toBe(false);
+    expect(result.reason).toContain("finding list");
+    expect(result.reason).toContain("checkpoint_unavailable");
+    expect(result.reason).not.toContain("coverage");
+  });
+});
+
+describe("the hook that warned after every commit is retired (#254)", () => {
+  const root = join(import.meta.dirname, "../../..");
+
+  it("is no longer registered in the project's Claude Code settings, and its file is gone", () => {
+    expect(readFileSync(join(root, ".claude/settings.json"), "utf8")).not.toContain("review-gate-note");
+    expect(existsSync(join(root, ".claude/hooks/review-gate-note.ts"))).toBe(false);
   });
 });
 

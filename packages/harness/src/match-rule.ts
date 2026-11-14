@@ -35,7 +35,15 @@ export interface FindingMatch {
   matched: boolean;
 }
 
+/**
+ * The version of the rule below. The rule is fixed: a change to what it computes is a new version, recorded
+ * in the decision log, and never applied to a case adjudicated under an earlier one. Every result carries it,
+ * so a stored result says which rule produced it (AUD-M11).
+ */
+export const RULE_VERSION = "1";
+
 export interface MatchRuleResult {
+  ruleVersion: string;
   findings: FindingMatch[];
   caught: boolean;
   matchedFindingIds: string[];
@@ -129,5 +137,5 @@ export function applyMatchRule(injection: Injection, findings: MatchFinding[], k
     };
   });
   const matchedFindingIds = results.filter((r) => r.matched).map((r) => r.id);
-  return { findings: results, caught: matchedFindingIds.length > 0, matchedFindingIds };
+  return { ruleVersion: RULE_VERSION, findings: results, caught: matchedFindingIds.length > 0, matchedFindingIds };
 }
