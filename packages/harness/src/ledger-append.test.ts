@@ -141,3 +141,12 @@ describe("one writer (AUD-M5, #251)", () => {
     expect(writes).toEqual([]);
   });
 });
+
+describe("appendAmendment: locked fields (Qodo on PR 269)", () => {
+  it("refuses an amendment that changes a locked field, writing nothing", () => {
+    const path = temp("audit-events.jsonl");
+    const base = { amends: "e1", at: "2026-11-14T00:00:00Z", reason: "r", evidence: "e" };
+    expect(() => appendAmendment(path, { ...base, change: { disposition: "confirmed_missed" } })).toThrow(/locked/);
+    expect(readdirSync(join(path, "..")).filter((f) => f.startsWith("audit"))).toEqual([]);
+  });
+});

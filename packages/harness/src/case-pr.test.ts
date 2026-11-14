@@ -213,3 +213,25 @@ describe("case:pr: round two on PR 269", () => {
     expect(calls.some((c) => c[0] === "pr")).toBe(false);
   });
 });
+
+describe("case:pr: round three on PR 269", () => {
+  it("records a PR opened by hand with --existing, opening nothing", async () => {
+    const { code, events, calls } = await open(fixture(), { existing: 31 });
+    expect(code).toBe(0);
+    expect(calls.some((c) => c[0] === "pr")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "pr.opened", pr: 31 });
+    expect(
+      parseCliArgs(["--case", "FF-9400", "--body", "x", "--relationships", "r", "--existing", "31"]),
+    ).toMatchObject({
+      existing: 31,
+    });
+    expect(parseCliArgs(["--case", "FF-9400", "--body", "x", "--relationships", "r", "--existing", "0"])).toBeNull();
+  });
+
+  it("refuses a ticket on another repository, and asks for a slashed branch as one path segment", async () => {
+    const elsewhere = { type: "case.ticket-created", issue: { number: 12, repo: "Owner/other" } };
+    expect((await open(fixture([PLANTED, elsewhere]))).code).toBe(1);
+    const { calls } = await open(fixture());
+    expect(calls[0]).toContain("repos/Owner/target/branches/tidy-lookup");
+  });
+});

@@ -48,7 +48,7 @@ npm run case:pr -- --case <FF-NNNN> --body "<one plain sentence>" --relationship
 - The title is the template's commit message; the body is your sentence followed by `Closes #<N>` from the case's ticket. The sentence is about the change, never about bugs, tests or reviews. `case:pr` refuses (exit 1) giveaway words, links to an issue or PR, a branch whose pushed head isn't the injected commit, a missing ticket, or a case that already has a PR; nothing has left the machine then.
 - It checks that the template and proofs are still the ones the case was planted from, runs the Qodo configuration check itself (with `QODO_KEY_FILE` set) and refuses unless Qodo matches its snapshot, records that version and the folder the check saved, checks the opened PR's head against the answer key, and appends the `pr.opened` event itself. Never type that event by hand.
 - Exit 2 means it couldn't finish: an earlier attempt's marker exists, `gh` failed, or the opened PR's head is wrong. Check GitHub before anything else; never retry blindly.
-- If `gh` lacks permission, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body, and stop: the owner decides how the event gets recorded.
+- If `gh` lacks permission, give the owner the compare link (`https://github.com/AJBeumer/faultforge-target/compare/main...<branch>?expand=1`), the title and the body. Once the owner has opened it, record it with the same command plus `--existing <pr number>`: every check runs again and nothing is opened. The same applies when a run stopped (exit 2) after GitHub had opened the PR.
 - Not a draft. No reviewers, labels or assignees.
 
 ## 4. Capture the review

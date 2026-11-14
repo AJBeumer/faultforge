@@ -13,6 +13,7 @@ import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, 
 import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { readJsonLines } from "./jsonl.ts";
+import { LOCKED_FIELDS } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
 
 const eventSchema = new Ajv2020({ allErrors: true }).compile(
@@ -137,6 +138,9 @@ export function appendAmendment(
   if (!amendment.amends || !amendment.reason.trim() || !amendment.evidence.trim()) {
     throw new Error("refusing an amendment with no target, reason or evidence");
   }
+  // A locked field written once would make every reader refuse the file for good (Qodo on PR 269).
+  const locked = LOCKED_FIELDS.filter((field) => Object.hasOwn(change, field));
+  if (locked.length) throw new Error(`refusing an amendment that changes ${locked.join(", ")}, which is locked`);
   appendLine(path, { kind: "amendment", ...amendment });
 }
 
