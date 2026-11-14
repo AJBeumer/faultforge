@@ -43,7 +43,8 @@ export function explicitDestinations(command: string): string[] {
   const urls = gitSteps(command, /\b(?:push|pull|fetch|clone|remote|send-pack)\b/).flatMap((step) =>
     [...step.text.matchAll(remote)].map((m) => (m[1] ?? "").toLowerCase()),
   );
-  return [...named, ...urls];
+  // gh takes `owner/name.git` for `owner/name` (#285).
+  return [...named, ...urls].map((repo) => repo.replace(/\.git$/, ""));
 }
 
 /**
@@ -107,16 +108,20 @@ export function isWrite(command: string): boolean {
 /**
  * True when a push in the command could rewrite or delete history: `--force` in any spelling (`-f`, `-fu`,
  * `-uf`, `--force-with-lease`, `--force-if-includes`), a `+` refspec, `--mirror`, `--delete` or `-d`, a
- * `:branch` refspec (a delete), `--prune`, or `git send-pack` (AUD-M3).
+ * `:branch` refspec (a delete), `--prune`, or `git send-pack` (AUD-M3). With `variablesForce`, the command as
+ * the shell reads it with its own variables expanded, a word a variable still builds (`$FLAG`) counts too: it
+ * could be `--force`, and only a value the command sets shows it isn't (#285).
  */
-export function rewritesHistory(command: string): boolean {
+export function rewritesHistory(command: string, variablesForce = false): boolean {
   const c = joinedWords(command).replace(/\\(?=\w)/g, "");
   if (gitSteps(c, /\bsend-pack\b/).length) return true;
-  return gitSteps(c, /\bpush\b/).some((step) =>
-    /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
-      step.text.slice(step.text.search(/\bpush\b/) + 4),
-    ),
-  );
+  return gitSteps(c, /\bpush\b/).some((step) => {
+    const args = step.text.slice(step.text.search(/\bpush\b/) + 4);
+    if (variablesForce && /\$\{?[A-Za-z_]|\$\(/.test(args)) return true;
+    return /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
+      args,
+    );
+  });
 }
 
 /**
