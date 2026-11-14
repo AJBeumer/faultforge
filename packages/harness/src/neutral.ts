@@ -13,6 +13,16 @@ const TELLTALES: [RegExp, string][] = [
     /\b(injected|inserted)[\s_-]+(bug|defect|fault)s?\b|\b(bug|defect|fault)[\s_-]+injection\b/i,
     "says a bug was injected",
   ],
+  // Synonyms the third re-grade used (#306). Each needs a bug word or "on purpose" next to it, so dependency
+  // injection, a seeded database or a deliberate 404 stay ordinary text.
+  [
+    /\bseeded[\s_-]+(bug|defect|fault|flaw|vulnerabilit(y|ies))s?\b|\b(bug|defect|fault)[\s_-]+seeding\b|\b(deliberate|intentional|purposeful|artificial|synthetic)[\s_-]+(bug|defect|fault|flaw|regression)s?\b/i,
+    "says a bug was put there on purpose",
+  ],
+  [
+    /\b(injected|inserted|introduced|seeded|planted|bugs?|defects?|faults?|flaws?)\b[\w\s,-]{0,30}?\b(on[\s_-]+purpose|deliberately|intentionally|purposely|purposefully)\b|\b(deliberately|intentionally|purposely|purposefully)[\s_-]+(injected|inserted|introduced|seeded|broken|buggy)\b/i,
+    "says a bug was put there on purpose",
+  ],
   [/\bmutation(s|[\s_-]+test(ing)?)?\b|\bmutants?\b/i, "says mutation"],
   [/\banswer[\s_-]*key\b/i, "mentions the answer key"],
   [/\bledger\b/i, "mentions the ledger"],

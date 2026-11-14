@@ -97,7 +97,8 @@ describe("the git-level guard reads what a push really sends (Qodo on PR 213)", 
     const { git, status } = guarded();
     expect(status("push", "-q", "origin", `HEAD:refs/heads/${WORD}-fix`)).not.toBe(0);
     expect(status("push", "-q", "origin", "HEAD:refs/heads/tidy-fix")).toBe(0);
-    git("push", "-q", "origin", "--delete", "tidy-fix");
+    // A deletion is refused (re-grade 3); the test cleans up around the hook.
+    git("push", "-q", "--no-verify", "origin", "--delete", "tidy-fix");
   }, 60_000);
 
   it("refuses a message line that starts with # when -m keeps it", () => {
@@ -118,5 +119,71 @@ describe("the git-level guard reads what a push really sends (Qodo on PR 213)", 
     git("commit", "-q", "--no-verify", "-m", "Tidy");
     git("push", "-q", "--no-verify", "origin", "main");
     expect(status("push", "-q", "backup", "main")).not.toBe(0);
+  }, 60_000);
+});
+
+describe("the git-level guard keeps the reviewed repo's history, however the push starts (re-grade 3)", () => {
+  /** A guarded clone whose last pushed commit has been rewritten locally. */
+  function rewritten() {
+    const repo = guarded();
+    writeFileSync(join(repo.dir, "f.md"), "One\n");
+    repo.git("add", "f.md");
+    repo.git("commit", "-q", "-m", "Add f");
+    repo.git("push", "-q", "origin", "main");
+    repo.git("commit", "-q", "--amend", "-m", "Add f, reworded");
+    return repo;
+  }
+
+  it.each([
+    ["git push --force", ["push", "-q", "--force", "origin", "main"]],
+    ["a + refspec", ["push", "-q", "origin", "+main"]],
+    ["--force-with-lease", ["push", "-q", "--force-with-lease", "origin", "main"]],
+    ["--mirror", ["push", "-q", "--mirror", "origin"]],
+  ])(
+    "refuses %s, and the remote keeps its commit",
+    (_name, args) => {
+      const { git, status } = rewritten();
+      const before = git("rev-parse", "origin/main");
+      expect(status(...args)).not.toBe(0);
+      expect(git("ls-remote", "origin", "refs/heads/main").split(/\s/)[0]).toBe(before);
+    },
+    60_000,
+  );
+
+  it.each([
+    ["--delete", ["push", "-q", "origin", "--delete", "tidy"]],
+    ["a :ref refspec", ["push", "-q", "origin", ":tidy"]],
+  ])(
+    "refuses a deletion by %s",
+    (_name, args) => {
+      // Not main: a bare remote refuses to delete its own HEAD branch whatever the hook says.
+      const { git, status } = guarded();
+      git("push", "-q", "origin", "HEAD:refs/heads/tidy");
+      expect(status(...args)).not.toBe(0);
+      expect(git("ls-remote", "origin", "refs/heads/tidy")).not.toBe("");
+    },
+    60_000,
+  );
+
+  it("refuses a force push started from a subprocess the Claude Code guard can't read", () => {
+    const { dir, git } = rewritten();
+    const before = git("rev-parse", "origin/main");
+    const code = `require("child_process").execFileSync("git", ["-C", process.argv[1], "push", "-q", "--force", "origin", "main"], { stdio: "ignore" })`;
+    let failed = false;
+    try {
+      execFileSync(process.execPath, ["-e", code, dir], { stdio: "ignore" });
+    } catch {
+      failed = true;
+    }
+    expect(failed).toBe(true);
+    expect(git("ls-remote", "origin", "refs/heads/main").split(/\s/)[0]).toBe(before);
+  }, 60_000);
+
+  it("allows an ordinary fast-forward push", () => {
+    const { dir, git, status } = guarded();
+    writeFileSync(join(dir, "g.md"), "Clean\n");
+    git("add", "g.md");
+    git("commit", "-q", "-m", "Add g");
+    expect(status("push", "-q", "origin", "main")).toBe(0);
   }, 60_000);
 });
