@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import { type Proof, proofCorpus } from "./inject-template.ts";
+import { loadTemplates, type Proof, proofCorpus } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import type { Outcome } from "./run-outcome.ts";
 
@@ -302,5 +302,28 @@ describe("proofCorpus: a broken private copy (Qodo on PR 271)", () => {
     writeFileSync(join(seed, "same", "template.json"), JSON.stringify({ ...BUG, id: "same" }));
     writeFileSync(join(seed, "same", "proof.test.ts"), "// p\n");
     expect(proofCorpus([priv, seed]).map((p) => p.dir)).toEqual([join(seed, "same")]);
+  });
+});
+
+describe("inject: what Qodo found on PR 274", () => {
+  it("names on the control's record any template left out of the corpus", () => {
+    const w = world({ variant: ["pass"] });
+    w.deps.corpusSkipped = () => ["x-draft-v1: its proof p.test.ts is missing"];
+    expect(w.inject({ template: CONTROL.id })).toBe(0);
+    expect(w.lines("ground-truth.jsonl")[1].validation.corpusSkipped).toEqual([
+      "x-draft-v1: its proof p.test.ts is missing",
+    ]);
+  });
+
+  it("never lets a half-written private copy, of any kind, hide a published bug template", () => {
+    const priv = mkdtempSync(join(tmpdir(), "corpus-priv-"));
+    const seed = mkdtempSync(join(tmpdir(), "corpus-seed-"));
+    mkdirSync(join(priv, "same"));
+    writeFileSync(join(priv, "same", "template.json"), JSON.stringify({ id: "same", kind: "control" }));
+    mkdirSync(join(seed, "same"));
+    writeFileSync(join(seed, "same", "template.json"), JSON.stringify({ ...BUG, id: "same" }));
+    writeFileSync(join(seed, "same", "proof.test.ts"), "// p\n");
+    expect(proofCorpus([priv, seed]).map((p) => p.dir)).toEqual([join(seed, "same")]);
+    expect(loadTemplates([priv, seed]).map((t) => t.kind)).toEqual(["bug"]);
   });
 });

@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { benchmarkOf, benchmarkProblems, changedLines } from "./benchmark-rules.ts";
 import { templateTelltales } from "./neutral.ts";
+import type { Outcome } from "./run-outcome.ts";
 import { kindTermsOf, templateProblems } from "./templates.ts";
 
 interface AlsoBreaks {
@@ -127,13 +128,14 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
         skipped(id, `template.json can't be read (${e instanceof Error ? e.message : String(e)})`);
         continue;
       }
-      if (template.kind !== "bug") {
-        seen.add(id);
-        continue;
-      }
+      // Validated before its kind is trusted: a half-written copy must not hide a published bug template.
       const problems = templateProblems(template);
       if (problems.length) {
         skipped(id, `it fails the schema (${problems[0]})`);
+        continue;
+      }
+      if (template.kind !== "bug") {
+        seen.add(id);
         continue;
       }
       const proofs = proofsOf(template);
@@ -149,7 +151,10 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
   return corpus;
 }
 
-/** Every readable template under `templateRoots`, private storage first (one per id); unreadable ones are left out. */
+/**
+ * Every valid template under `templateRoots`, private storage first (one per id). A copy that can't be read
+ * or fails the schema is left out and hides no other copy of its id (Qodo on PR 274).
+ */
 export function loadTemplates(templateRoots: string[]): Template[] {
   const seen = new Set<string>();
   const templates: Template[] = [];
@@ -157,13 +162,44 @@ export function loadTemplates(templateRoots: string[]): Template[] {
     if (!existsSync(root)) continue;
     for (const id of readdirSync(root).sort()) {
       if (seen.has(id) || !existsSync(join(root, id, "template.json"))) continue;
-      seen.add(id);
+      let template: Template;
       try {
-        templates.push(loadTemplate(join(root, id)));
+        template = loadTemplate(join(root, id));
       } catch {
-        // A template still being written is no template to compare with.
+        continue;
       }
+      if (templateProblems(template).length) continue;
+      seen.add(id);
+      templates.push(template);
     }
   }
   return templates;
+}
+
+/** Why the variant doesn't validate, or undefined. `publicTests` is "pass" when they weren't run. */
+export function variantFailure(
+  template: Pick<Template, "kind">,
+  proofs: Proof[],
+  onVariant: Outcome[],
+  typecheck: Outcome,
+  publicTests: Outcome,
+): string | undefined {
+  const named = (outcome: Outcome) => proofs.filter((_, i) => onVariant[i] === outcome).map((p) => p.invariantId);
+  if (named("not_run").length) {
+    return `proof test did not finish, failed only to load, or ran no test on the variant, so the mutation is not validated: ${named("not_run").join(", ")}`;
+  }
+  if (template.kind === "bug" && named("pass").length) {
+    return `proof test still passes on the variant, so the mutation is not validated: ${named("pass").join(", ")}`;
+  }
+  // A "harmless" change that breaks a known invariant is a real bug labelled as a control (AUD-M8).
+  if (template.kind === "control" && named("fail").length) {
+    return `the control variant fails proofs in the corpus, so it is not a clean control: ${named("fail").join(", ")}`;
+  }
+  if (typecheck === "not_run") return "typecheck did not finish, so the mutation is not validated";
+  if (typecheck === "fail") return "variant does not typecheck";
+  if (publicTests === "not_run") return "public tests did not finish, so the mutation is not validated";
+  if (template.kind === "control" && publicTests === "fail") {
+    return "control variant fails the public tests, so it is not a clean control";
+  }
+  return undefined;
 }

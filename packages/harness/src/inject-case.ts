@@ -23,6 +23,7 @@ import {
   proofsOf,
   type Template,
   templateRefusal,
+  variantFailure,
 } from "./inject-template.ts";
 import { appendAnswerKeyEntry, appendEvent, eventProblems } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
@@ -44,8 +45,9 @@ export interface InjectArgs {
 export interface InjectDeps {
   privateDir: string;
   findTemplateDir: (id: string) => string | undefined;
-  /** Every proof a control's variant must pass. */
+  /** Every proof a control's variant must pass, and the templates left out of the corpus (by id, with why). */
   corpus: () => Proof[];
+  corpusSkipped?: () => string[];
   /** Every template, for the benchmark v2 rules that compare a template with the others. */
   allTemplates?: () => Template[];
   ledgerProblems: (paths: string[]) => string[];
@@ -71,15 +73,20 @@ const refuse = (message: string): never => {
   throw new Refusal(message);
 };
 
+export { variantFailure };
+
 /** The real git, proofs, typecheck and tests, and private storage as `privateDir()` names it. */
 export function liveInjectDeps(env: NodeJS.ProcessEnv = process.env): InjectDeps {
+  const skipped: string[] = [];
   return {
     privateDir: privateDir(env),
     findTemplateDir: (id) => findTemplateDir(id, env),
     corpus: () =>
-      proofCorpus([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")], (id, why) =>
-        console.error(`[inject] corpus: skipped ${id}, because ${why}`),
-      ),
+      proofCorpus([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")], (id, why) => {
+        skipped.push(`${id}: ${why}`);
+        console.error(`[inject] corpus: skipped ${id}, because ${why}`);
+      }),
+    corpusSkipped: () => skipped,
     allTemplates: () => loadTemplates([join(privateDir(env), "templates"), join(ROOT, "templates", "seed")]),
     ledgerProblems: ledgerProblemsWithHistory,
     git: gitIn,
@@ -306,6 +313,8 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
               proofOnBase: proofsOnBase[i],
               proofOnVariant: proofsOnVariant[i],
             })),
+            // Any template left out of the corpus, said on the record, never silently (Qodo on PR 274).
+            ...(deps.corpusSkipped?.().length ? { corpusSkipped: deps.corpusSkipped() } : {}),
           },
           validated: true,
           createdAt,
@@ -340,34 +349,6 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
   );
   deps.log(`ledger: ${ledgerPath}`);
   return 0;
-}
-
-/** Why the variant doesn't validate, or undefined. `publicTests` is "pass" when they weren't run. */
-export function variantFailure(
-  template: Pick<Template, "kind">,
-  proofs: Proof[],
-  onVariant: Outcome[],
-  typecheck: Outcome,
-  publicTests: Outcome,
-): string | undefined {
-  const named = (outcome: Outcome) => proofs.filter((_, i) => onVariant[i] === outcome).map((p) => p.invariantId);
-  if (named("not_run").length) {
-    return `proof test did not finish, failed only to load, or ran no test on the variant, so the mutation is not validated: ${named("not_run").join(", ")}`;
-  }
-  if (template.kind === "bug" && named("pass").length) {
-    return `proof test still passes on the variant, so the mutation is not validated: ${named("pass").join(", ")}`;
-  }
-  // A "harmless" change that breaks a known invariant is a real bug labelled as a control (AUD-M8).
-  if (template.kind === "control" && named("fail").length) {
-    return `the control variant fails proofs in the corpus, so it is not a clean control: ${named("fail").join(", ")}`;
-  }
-  if (typecheck === "not_run") return "typecheck did not finish, so the mutation is not validated";
-  if (typecheck === "fail") return "variant does not typecheck";
-  if (publicTests === "not_run") return "public tests did not finish, so the mutation is not validated";
-  if (template.kind === "control" && publicTests === "fail") {
-    return "control variant fails the public tests, so it is not a clean control";
-  }
-  return undefined;
 }
 
 const USAGE =
