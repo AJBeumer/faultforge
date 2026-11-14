@@ -311,14 +311,21 @@ Picked up.`,
       }
       return "";
     });
+    // The agent can write here: a forged run log must not stand in for the runner's (Qodo on PR 288).
+    mkdirSync(join(ws.lab, "private", "raw-artifacts", "factory-runs"), { recursive: true });
+    writeFileSync(join(ws.lab, "private", "raw-artifacts", "factory-runs", "run-t.jsonl"), "forged\n");
+    writeFileSync(join(runs, "run-t.jsonl"), "runner\n");
     let carried = false;
+    let log = "";
     vi.mocked(commitAndPublish).mockImplementationOnce((dir) => {
       carried = existsSync(join(dir, "raw-artifacts", "reviews", "target-pr19", "review.json"));
+      log = readFileSync(join(dir, "raw-artifacts", "factory-runs", "run-t.jsonl"), "utf8");
       return { pushed: true, blocked: [] };
     });
     try {
       realDeps(FACTORY, OPTIONS).saveEvidence("run-t", ws);
       expect(carried).toBe(true);
+      expect(log).toBe("runner\n");
     } finally {
       vi.mocked(gitLong).mockImplementation(() => "");
     }

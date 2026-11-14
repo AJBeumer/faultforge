@@ -164,6 +164,19 @@ describe("factory policy: the read tools (#284)", () => {
     expect(bash(`cat ${join(RUN, "ticket.md").replace(/\\/g, "/")}`, RUN, target).kind).toBe("allow");
   });
 
+  it("denies shell paths that climb out of the run or glob into a checkout, in a target ticket's run (Qodo on PR 288)", () => {
+    const owner = resolve("/owner/FaultForge");
+    const target = runEnv({ FAULTFORGE_PRIVATE_CHECKOUTS: join(owner, "private") });
+    const lab = join(RUN, "FaultForge");
+    expect(bash("cat ../../../owner/FaultForge/private/notes.md", lab, target).kind).toBe("deny");
+    expect(bash(`ls ${owner.replace(/\\/g, "/")}/priv*/`, lab, target).kind).toBe("deny");
+    expect(
+      bash(`cat ${join(RUN, "..", "..", "owner", "FaultForge", "private", "x").replace(/\\/g, "/")}`, lab, target).kind,
+    ).toBe("deny");
+    // Inside the run's own folder, `..` is fine.
+    expect(bash("git -C ../faultforge-target status", lab, target).kind).toBe("allow");
+  });
+
   it("denies the private repo by name or by numeric id through gh and git, in any run", () => {
     for (const command of [
       "gh api repos/AJBeumer/faultforge-private/contents/x",
@@ -282,6 +295,9 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     for (const command of [
       "npx tsx src/server.ts",
       "node src/server.ts",
+      // A flag's value is not the script (Qodo on PR 288).
+      "python3 -W ignore src/server.ts",
+      "node --env-file .env src/server.ts",
       "node --version",
       "npm run check",
       "npm start",

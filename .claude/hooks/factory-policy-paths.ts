@@ -118,7 +118,7 @@ export function readViolation(args: Record<string, unknown>, cwd: string, env: N
 }
 
 /** Why a shell command may not run because it names the private repo's files or checkouts, or undefined. */
-export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv): string | undefined {
+export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv, cwd?: string): string | undefined {
   const readings = [command, spokenWords(command)];
   if (readings.some((r) => ANSWER_FILES.test(r))) return "no run reads the answer key, the audit log or the templates";
   const checkouts = privateCheckouts(env);
@@ -132,6 +132,18 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv)
   };
   if (readings.some((r) => PRIVATE_NAMES.test(r) || named(r)))
     return "a target ticket's run doesn't read or change the private repo";
+  // Paths as the shell would resolve them (Qodo on PR 288): one that climbs out of the run's folder with `..`,
+  // or whose fixed start (before a wildcard) is a private checkout or a folder that holds one.
+  const root = env.FAULTFORGE_RUN_ROOT ? resolve(env.FAULTFORGE_RUN_ROOT) : undefined;
+  for (const word of spokenWords(command).split(/[\s;&|<>()=]+/)) {
+    if (!/[/\\]/.test(word) && !/^\.\.?$/.test(word)) continue;
+    const base = resolve(cwd ?? root ?? ".", globBase(word) || word);
+    if (root && /(^|[/\\])\.\.([/\\]|$)/.test(word) && !inside(base, root))
+      return "a target ticket's run stays in its own folder: no `..` out of it";
+    if (root && inside(base, root)) continue;
+    if (checkouts.some((c) => inside(base, c) || (inside(c, base) && /[/\\]/.test(word))))
+      return "a target ticket's run doesn't read or change the private repo";
+  }
   return undefined;
 }
 
@@ -159,6 +171,8 @@ const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)$/i;
 const INLINE = /^(-e|-c|-p|-pe|-ne|--eval|--print|-Command|-EncodedCommand)$/i;
 /** Flags whose value, the next word, is a file the interpreter loads before the script. */
 const PRELOAD = /^(-r|--require|--import|--loader|--experimental-loader|-File)$/i;
+/** Interpreter flags that take the next word as their value (python, perl, node). */
+const VALUE_FLAG = /^(-W|-X|--env-file|--input-type|--conditions|--title)$/;
 /** Words that run the next word as a program: `timeout 5 node x.js`, `env A=b node x.js`, `xargs node`. */
 const PREFIX =
   /^(sudo|env|exec|time|nice|nohup|command|stdbuf|xargs|timeout|setsid|ionice|taskset|strace|ltrace|valgrind|\(|\{)$/i;
@@ -273,6 +287,11 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
       }
       if (PRELOAD.test(word)) {
         found.push({ file: words[j + 1] ?? "", dir });
+        j++;
+        continue;
+      }
+      // A flag whose value is the next word, not the script: `python3 -W ignore x.py` (Qodo on PR 288).
+      if (VALUE_FLAG.test(word)) {
         j++;
         continue;
       }
