@@ -197,6 +197,8 @@ function checkShell(ctx: Context, command: string) {
   if (alias) deny(alias);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
   const read = shellReading(command);
+  const readAlias = aliasProblem(read);
+  if (readAlias) deny(readAlias);
   // A default repo set here sends later posts to a reviewed repo without naming it (#285).
   if (/\bgh\s+repo\s+set-default\b/.test(joinedWords(read))) {
     const here = locate(ctx.cwd, ctx.reviewed);

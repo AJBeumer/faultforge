@@ -145,8 +145,13 @@ export function stdinFiles(cwd: string, command: string): string[] {
  * or one with no `$` or backtick in it. Nothing is built: the text is the command's own.
  */
 function literalHeredoc(inner: string): boolean {
-  const m = /^\s*cat\s+<<-?\s*(['"]?)(\w+)\1\s*\n([\s\S]*)\n\s*\2\s*$/.exec(inner);
-  return Boolean(m && (m[1] || !/[$`]/.test(m[3] ?? "")));
+  const lines = inner.replace(/^\s+/, "").split("\n");
+  const m = /^cat\s+<<(-?)\s*(['"]?)(\w+)\2\s*$/.exec(lines[0] ?? "");
+  if (!m) return false;
+  // The body ends at the first delimiter line, as the shell ends it; nothing may run after it (Qodo on PR 291).
+  const close = lines.findIndex((line, i) => i > 0 && (m[1] ? line.replace(/^\t+/, "") : line).trim() === m[3]);
+  if (close < 0 || lines.slice(close + 1).some((line) => line.trim())) return false;
+  return Boolean(m[2]) || !/[$`]/.test(lines.slice(1, close).join("\n"));
 }
 
 /** Text built by a command the guard can't read: refused in a post to a reviewed repo (#242). */
@@ -226,8 +231,9 @@ export function builtText(
     // printf with a format (`%s`) or an escape, and `echo -e`, build text the guard would have to run (#285).
     // The producer is read with its quoted text blanked, so its format is looked for in the command itself.
     const plain =
-      /^(?:echo|Write-Output)\b(?!\s+-\w*e)/i.test(producer ?? "") ||
-      (/^printf\b/.test(producer ?? "") && !/\bprintf\b[^|]*(%|\\(x|u|[0-7]))/.test(command));
+      // Any `-e` among echo's flags, and printf's formats and escapes anywhere in the command (Qodo on PR 291).
+      (/^(?:echo|Write-Output)\b/i.test(producer ?? "") && !/\s-[a-zA-Z]*e\b/.test(producer ?? "")) ||
+      (/^printf\b/.test(producer ?? "") && !/\bprintf\b[\s\S]*(%|\\(x|u|U|[0-7]))/.test(command));
     if (producer !== undefined && !reads && !plain) {
       throw new BuiltText(
         `This post's body is piped in from "${producer.slice(0, 40)}", which the guard can't check before it runs. Write the text to a file and pass it with --body-file.`,

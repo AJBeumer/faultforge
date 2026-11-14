@@ -97,6 +97,26 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
     const body = (text: string) => `gh pr create --title Tidy --body "$(cat <<'EOF'\n${text}\nEOF\n)"`;
     expect(verdict(body("Small cleanup."))).toBeUndefined();
     expect(verdict(body("Demo with x-secret-v1."))).toMatch(/still private/);
+    // The heredoc ends at its first delimiter line: a program after it runs, and is refused (Qodo on PR 291).
+    expect(verdict(body("hi\nEOF\nprintf 'x-sec\\x72et-v1'"))).toBeDefined();
+  });
+
+  it("closes the second round's spellings (Qodo on PR 291)", () => {
+    // An apostrophe inside double quotes is a letter, not the start of literal text.
+    expect(verdict(`gh pr comment 3 -R ${T} -b "it's $MSG, isn't it"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
+    // gh's subcommand from a variable or ANSI-C could be alias.
+    expect(verdict("A=alias; gh $A set c 'pr merge'", LAB, NO_PRIVATE)).toMatch(/aliases/);
+    expect(verdict("gh $'alias' set c 'pr merge'", LAB, NO_PRIVATE)).toMatch(/aliases/);
+    // A bare value with a backslash isn't taken as written: the variable stays unreadable.
+    expect(expandVariables('M=pla\\nted; echo "$M"')).toBe('M=pla\\nted; echo "$M"');
+    // echo -e among other flags, printf \U and a quoted pipe before a format.
+    expect(verdict(`echo -n -e 'pla\\x6eted' | gh pr comment 3 -R ${T} --body-file -`, LAB, NO_PRIVATE)).toBeDefined();
+    expect(verdict(`printf 'x-sec\\U00000072et-v1' | gh pr create --title T --body-file -`)).toBeDefined();
+    expect(verdict(`printf 'a|b %s' x | gh pr comment 3 -R ${T} --body-file -`, LAB, NO_PRIVATE)).toBeDefined();
+    // PowerShell's $env:NAME set in the command is read as its value.
+    expect(expandVariables('$env:MSG = "ok"; gh pr comment 3 -b "$env:MSG"')).toBe(
+      '$env:MSG = "ok"; gh pr comment 3 -b "ok"',
+    );
   });
 
   it("refuses a write whose repo is a variable the command doesn't set", () => {

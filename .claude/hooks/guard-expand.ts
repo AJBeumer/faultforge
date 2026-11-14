@@ -8,16 +8,19 @@ import { spawnSync } from "node:child_process";
 import { outsidePostedText, postedRanges } from "./guard-posted.ts";
 import { isWrite } from "./guard-reach.ts";
 import { decodeAnsiC } from "./shell-decode.ts";
-import { joinedWords, quotedMask } from "./shell-scan.ts";
+import { joinedWords, quotedMask, quotedSpans } from "./shell-scan.ts";
 
 /** A variable's name in shell text: `$NAME`, `${NAME}`, PowerShell's `$env:NAME`. Not `$(`, `$1` or `$?`. */
 export const VARIABLE = /\$\{?[A-Za-z_]\w*/;
 
 /** A statement that only sets variables to plain text: `A=x`, `export A="x" B='y'`. */
+// A bare value with a backslash is not taken: the shell removes it, and the value it holds is another word
+// (`M=pla\nted` holds `planted`; Qodo on PR 291), so the variable stays unreadable.
 const ASSIGNS_ONLY =
-  /^\s*(?:(?:export|local|declare|readonly)\s+)?(?:[A-Za-z_]\w*=(?:"[^"$`\\]*"|'[^']*'|[^\s;&|$`'"()<>]*)\s*)+$/;
-const ASSIGNMENT = /([A-Za-z_]\w*)=(?:"([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>]*))/g;
-const POWERSHELL_ASSIGN = /^\s*\$([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')\s*$/;
+  /^\s*(?:(?:export|local|declare|readonly)\s+)?(?:[A-Za-z_]\w*=(?:"[^"$`\\]*"|'[^']*'|[^\s;&|$`'"()<>\\]*)\s*)+$/;
+const ASSIGNMENT = /([A-Za-z_]\w*)=(?:"([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>\\]*))/g;
+// PowerShell's `$NAME = 'x'` and `$env:NAME = 'x'`, read the same way as its uses.
+const POWERSHELL_ASSIGN = /^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')\s*$/i;
 
 /**
  * The variables the command sets to plain text, replaced where the shell would use them (Qodo on PR 291): a
@@ -43,7 +46,7 @@ export function expandVariables(command: string): string {
     } else {
       let read = text;
       for (const [name, value] of assigned)
-        read = read.replace(new RegExp(String.raw`\$\{${name}\}|\$${name}(?!\w)`, "g"), () => value);
+        read = read.replace(new RegExp(String.raw`\$\{${name}\}|\$(?:env:)?${name}(?!\w)`, "gi"), () => value);
       out += read;
     }
   };
@@ -128,7 +131,8 @@ export function shellReading(command: string, timeoutMs?: number): string {
 
 /** Why the command may not run because it hides a later post behind an alias, or undefined. */
 export function aliasProblem(command: string): string | undefined {
-  if (/\bgh\s+alias\s+(set|import)\b/i.test(joinedWords(command)))
+  // Also a gh whose subcommand is a variable or a substitution: it could be `alias` (Qodo on PR 291).
+  if (/\bgh\s+alias\s+(set|import)\b/i.test(joinedWords(command)) || /\bgh\s+["']?(\$|`)/.test(command))
     return "gh aliases hide what a later command posts, and where, from the guard. Run the full command instead.";
   return undefined;
 }
@@ -139,15 +143,18 @@ export function aliasProblem(command: string): string | undefined {
  * an escaped `\$`, or a variable inside a substitution, which builtText reads or refuses.
  */
 export function unreadablePost(command: string): boolean {
-  return postedRanges(command).some(([start, end]) =>
-    VARIABLE.test(
-      command
-        .slice(start, end)
-        .replace(/'[^']*'/g, "")
-        .replace(/\\\$/g, "")
-        .replace(/\$\([^)]*\)?/g, ""),
-    ),
-  );
+  return postedRanges(command).some(([start, end]) => {
+    // Single-quoted parts as the shell reads them: an apostrophe inside double quotes is a letter (Qodo on PR 291).
+    const word = command.slice(start, end);
+    let text = "";
+    let at = 0;
+    for (const span of quotedSpans(word).filter((s) => s.kind === "single")) {
+      text += word.slice(at, span.start);
+      at = span.end;
+    }
+    text += word.slice(at);
+    return VARIABLE.test(text.replace(/\\\$/g, "").replace(/\$\([^)]*\)?/g, ""));
+  });
 }
 
 /** True when the repo a write goes to is a variable the command doesn't set: where it goes can't be read. */
