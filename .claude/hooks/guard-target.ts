@@ -26,7 +26,7 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { chainProblem, DEFAULT_BUDGET_MS, withDeadline } from "./guard-content.ts";
+import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames } from "./guard-content.ts";
 import { referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import {
@@ -73,6 +73,8 @@ interface Context {
   cwd: string;
   reviewed: Reviewed[];
   env: NodeJS.ProcessEnv;
+  /** A test for private template ids, read once per decision; undefined where there are none. */
+  names: ((text: string) => boolean) | undefined;
 }
 
 /** A tool's input as parsed from the payload: whatever Claude Code sent. */
@@ -103,17 +105,21 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     const tool = String(input.tool_name ?? "");
     const args: ToolInput = input.tool_input ?? {};
     const cwd = String(input.cwd ?? process.cwd());
-    const ctx: Context = { cwd, reviewed: reviewedRepos(env.FAULTFORGE_CONFIG), env };
+    const names = privateIdMatcher(privateTemplateIds(env));
+    const ctx: Context = { cwd, reviewed: reviewedRepos(env.FAULTFORGE_CONFIG), env, names };
     // One deadline for the whole decision, every scan in it included (audit N-4).
-    withDeadline(guardBudget(env), () => {
-      if (tool === "Bash" || tool === "PowerShell") {
-        checkCommand(ctx, String(args.command ?? ""));
-      } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-        checkFileEdit(ctx, args);
-      } else if (tool.startsWith("mcp__")) {
-        checkOtherTool(ctx, tool, args);
-      }
-    });
+    // Pending content may not carry a private id either (Qodo on PR 265).
+    withDeadline(guardBudget(env), () =>
+      withPrivateNames(names, () => {
+        if (tool === "Bash" || tool === "PowerShell") {
+          checkCommand(ctx, String(args.command ?? ""));
+        } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+          checkFileEdit(ctx, args);
+        } else if (tool.startsWith("mcp__")) {
+          checkOtherTool(ctx, tool, args);
+        }
+      }),
+    );
     return ALLOW;
   } catch (error) {
     if (error instanceof Denied || error instanceof Unreadable) return { kind: "deny", reason: error.message };
@@ -157,8 +163,13 @@ function postedPieces(ctx: Context, command: string): string[] {
  * reviewed repo, and not to the lab, whose PRs the reviewer can read too. The id is never printed.
  */
 function checkPrivateIds(ctx: Context, command: string) {
-  const names = privateIdMatcher(privateTemplateIds(ctx.env));
-  if (!names || onlyPrivateRepo(command, ctx.cwd, privateRoot(ctx.env))) return;
+  const names = ctx.names;
+  // Where the post goes, read as the shell reads it, so a fake --repo in a body can't claim private storage.
+  const outside = outsidePostedText(command);
+  const real = [...explicitDestinations(outside), ...urlDestinations(outside)];
+  // A destination must really be named (outside posted text), and none, in either reading, may be public.
+  const destinations = real.length ? [...explicitDestinations(command), ...real] : [];
+  if (!names || onlyPrivateRepo(command, ctx.cwd, privateRoot(ctx.env), destinations)) return;
   if ([command, joinedWords(command), ...postedPieces(ctx, command)].some(names)) deny(PRIVATE_ID_REASON);
 }
 
@@ -298,6 +309,7 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
+  if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const found = telltales(text);
   if (found.length) {
     deny(
@@ -312,7 +324,7 @@ function checkFileEdit(ctx: Context, args: ToolInput) {
  */
 function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   const text = JSON.stringify(args ?? {});
-  if (privateIdMatcher(privateTemplateIds(ctx.env))?.(text)) deny(PRIVATE_ID_REASON);
+  if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const repo = ctx.reviewed.find((r) => new RegExp(`${esc(r.github)}|\\b${esc(r.name)}\\b`, "i").test(text));
   if (!repo) return;
   const found = telltales(stripReviewedNames(ctx.reviewed, text));

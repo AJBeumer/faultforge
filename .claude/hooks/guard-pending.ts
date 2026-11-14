@@ -29,7 +29,8 @@ export function pendingProblem(reviewed: Reviewed[], command: string, touched: R
     if (!moment) continue;
     for (const repo of checkouts) {
       if (!existsSync(resolve(repo.checkout, ".git"))) {
-        if (touched.some((r) => r.github === repo.github)) {
+        // Only a checkout the command itself aims at must exist: a second clone stands on its own (Qodo on PR 265).
+        if (touched.some((r) => resolve(r.checkout) === resolve(repo.checkout))) {
           return `The guard can't find ${repo.name}'s checkout at ${repo.checkout} (from factory.json), so it can't check what this ${moment} would carry. Fix the path before committing or pushing there.`;
         }
         continue;

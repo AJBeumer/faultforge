@@ -7,8 +7,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { run } from "./fail-closed.ts";
+import { answer, run } from "./fail-closed.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
+import { check } from "./git-guard.ts";
 import { decide } from "./guard-target.ts";
 import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
 
@@ -17,9 +18,12 @@ const LAB = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
 const CONFIG = guardConfig(tempRepo(true).dir);
 
-/** A private folder holding one unreleased template and one that is already in templates/seed/. */
+/**
+ * A private folder holding one unreleased template and one that is already in templates/seed/. Its name has a
+ * `~`, as a Windows short name does (CI runs in `C:\Users\RUNNER~1`).
+ */
 function privateFolder(): string {
-  const dir = mkdtempSync(join(tmpdir(), "guard-private-"));
+  const dir = mkdtempSync(join(tmpdir(), "guard~private-"));
   mkdirSync(join(dir, "templates", "x-secret-v1"), { recursive: true });
   mkdirSync(join(dir, "templates", "idempotency-guard-bypass-v1"), { recursive: true });
   return dir;
@@ -42,7 +46,7 @@ const bash = (command: string, cwd?: string, extra?: NodeJS.ProcessEnv) => verdi
 
 /** A temp folder named like the target's checkout, holding `body.md` with the given text. */
 function targetFolder(body: string): string {
-  const dir = join(mkdtempSync(join(tmpdir(), "guard-tf-")), "faultforge-target");
+  const dir = join(mkdtempSync(join(tmpdir(), "guard~tf-")), "faultforge-target");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "body.md"), body);
   return dir;
@@ -282,5 +286,67 @@ describe("a second clone of a reviewed repo is recognised by its remote (AUD-M3)
     const worktree = join(mkdtempSync(join(tmpdir(), "guard-wt-")), "elsewhere");
     clone.git("worktree", "add", "-q", worktree);
     expect(bash('git commit --allow-empty -m "Fix the planted bug"', worktree)).toMatch(/says planted/);
+  });
+});
+
+describe("holes Qodo found in the first version (PR 265)", () => {
+  it("refuses a hook answer Claude Code would ignore: another event, or a decision it doesn't know", () => {
+    const event = (hookEventName: string, permissionDecision: string) =>
+      JSON.stringify({ hookSpecificOutput: { hookEventName, permissionDecision } });
+    expect(answer("h", { status: 0, stdout: event("PostToolUse", "deny"), stderr: "" }).code).toBe(2);
+    expect(answer("h", { status: 0, stdout: event("PreToolUse", "maybe"), stderr: "" }).code).toBe(2);
+    expect(answer("h", { status: 0, stdout: event("PreToolUse", "deny"), stderr: "" }).code).toBe(0);
+  });
+
+  it("counts a raw write to GitHub's GraphQL endpoint as reaching every reviewed repo", () => {
+    expect(bash("curl -X POST https://api.github.com/graphql -d @payload.json")).toMatch(/with gh/);
+  });
+
+  it("keeps a private id out of a reviewed checkout's files and pending content", () => {
+    const checkout = tempRepo(true);
+    const extra = { FAULTFORGE_CONFIG: guardConfig(checkout.dir) };
+    const write = { file_path: join(checkout.dir, "notes.md"), content: "see x-secret-v1" };
+    expect(verdict("Write", write, LAB, extra)).toMatch(/still private/);
+    writeFileSync(join(checkout.dir, "notes.md"), "see x-secret-v1\n");
+    const reason = bash('git commit -am "Tidy"', TARGET, extra);
+    expect(reason).toMatch(/names a private template/);
+    expect(reason).not.toMatch(/secret/);
+    writeFileSync(join(checkout.dir, "notes.md"), "see the notes\n");
+    expect(bash('git commit -am "Tidy"', TARGET, extra)).toBeUndefined();
+  });
+
+  it("keeps a private id out of git's own commit-msg hook too", () => {
+    const message = join(mkdtempSync(join(tmpdir(), "guard-msg-")), "COMMIT_EDITMSG");
+    writeFileSync(message, "Add x-secret-v1\n");
+    const saved = process.env.FAULTFORGE_PRIVATE_DIR;
+    process.env.FAULTFORGE_PRIVATE_DIR = PRIVATE;
+    try {
+      expect(check("commit-msg", tempRepo().dir, message)?.reasons).toEqual(["names a private template"]);
+    } finally {
+      if (saved === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+      else process.env.FAULTFORGE_PRIVATE_DIR = saved;
+    }
+  });
+
+  it("doesn't take a fake --repo in a body, or a repo that only shares the private repo's name, as private storage", () => {
+    const priv = privateFolder();
+    execFileSync("git", ["init", "-q", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-private.git"]);
+    const extra = { FAULTFORGE_PRIVATE_DIR: priv };
+    const post = (repo: string) => `gh issue create -R ${repo} --title x --body "x-secret-v1"`;
+    expect(
+      bash('gh pr create --title Tidy --body "x-secret-v1 --repo AJBeumer/faultforge-private"', LAB, extra),
+    ).toMatch(/still private/);
+    expect(bash(post("someone/faultforge-private"), LAB, extra)).toMatch(/still private/);
+    expect(bash(post("AJBeumer/faultforge-private"), LAB, extra)).toBeUndefined();
+  });
+
+  it("lets a second clone commit when the configured checkout is missing", () => {
+    const repo = tempRepo();
+    repo.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
+    const clone = repo.dir;
+    const extra = { FAULTFORGE_CONFIG: guardConfig(join(tmpdir(), "no-such-checkout-here")) };
+    expect(bash('git commit --allow-empty -m "Tidy"', clone, extra)).toBeUndefined();
+    expect(bash('git commit --allow-empty -m "Fix the planted bug"', clone, extra)).toMatch(/says planted/);
   });
 });

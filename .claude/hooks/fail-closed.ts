@@ -54,7 +54,11 @@ export function answer(name: string, outcome: Outcome): { code: 0 | 2; stdout: s
   if (!out) return { code: 0, stdout: "", stderr: "" };
   try {
     const decision = JSON.parse(out).hookSpecificOutput;
-    if (decision?.hookEventName && decision?.permissionDecision) return { code: 0, stdout: out, stderr: "" };
+    // Only a decision Claude Code acts on passes: any other event name or decision is ignored by Claude
+    // Code, which then runs the tool, so it is refused here (Qodo on PR 265).
+    const valid =
+      decision?.hookEventName === "PreToolUse" && ["allow", "deny", "ask"].includes(decision?.permissionDecision);
+    if (valid) return { code: 0, stdout: out, stderr: "" };
   } catch {
     // not JSON
   }

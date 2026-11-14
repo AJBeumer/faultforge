@@ -25,6 +25,29 @@ const MAX_COMMITS = 50;
 /** The hook has 15 s in settings.json; the scan gives up well before that, so a timeout can't let the tool run. */
 export const DEFAULT_BUDGET_MS = 8000;
 
+/** Besides the giveaway words, a test for private template ids, while a check that set one runs (AUD-H1). */
+let privateNames: ((text: string) => boolean) | undefined;
+
+/**
+ * Runs `fn` with `names` as the private-id test every pending-content scan in it applies, so a private
+ * template id written into a reviewed checkout can't be committed or pushed (Qodo on PR 265).
+ */
+export function withPrivateNames<T>(names: ((text: string) => boolean) | undefined, fn: () => T): T {
+  const outer = privateNames;
+  privateNames = names;
+  try {
+    return fn();
+  } finally {
+    privateNames = outer;
+  }
+}
+
+/** The reasons a text must not travel: its giveaway words, and a private template id it names (never the id). */
+export function reasonsIn(text: string): string[] {
+  const found = telltales(text);
+  return privateNames?.(text) ? [...found, "names a private template"] : found;
+}
+
 /** The one deadline every git call and scan in the current decision shares, while one is set (audit N-4). */
 let active: { end: number; ms: number } | undefined;
 
@@ -139,7 +162,7 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
       tracked.map((file) => `:0:${file}`),
     ),
   ];
-  return { reasons: telltales(texts.join("\n")), where: "the changes not yet committed" };
+  return { reasons: reasonsIn(texts.join("\n")), where: "the changes not yet committed" };
 }
 
 /**
@@ -164,7 +187,7 @@ export function pendingIndex(checkout: string): Pending {
       staged.filter((file) => !submodules.has(file)).map((file) => `:0:${file}`),
     ),
   ];
-  return { reasons: telltales(texts.join("\n")), where: "the staged changes" };
+  return { reasons: reasonsIn(texts.join("\n")), where: "the staged changes" };
 }
 
 /**
@@ -197,9 +220,9 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
   // have it yet, and without asking the remotes the guard can't tell which (Qodo on PR 208). A giveaway name
   // shouldn't stay on the target either way, so this blocks pushes until it is removed.
   const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
-    (name) => telltales(name).length,
+    (name) => reasonsIn(name).length,
   );
-  const reasons = [...new Set([...telltales(texts.join("\n")), ...giveaways.flatMap((name) => telltales(name))])];
+  const reasons = [...new Set([...reasonsIn(texts.join("\n")), ...giveaways.flatMap((name) => reasonsIn(name))])];
   const where = giveaways.length
     ? `a new branch, or a tag (${giveaways.join(", ")})`
     : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
@@ -266,9 +289,9 @@ export function pendingPushUpdates(checkout: string, remote: string, updates: Pu
       commits.add(sha);
   }
   const texts = [...names, ...commitTexts(checkout, [...commits], tick)];
-  const giveaways = names.filter((name) => telltales(name).length);
+  const giveaways = names.filter((name) => reasonsIn(name).length);
   const where = giveaways.length ? `the pushed ref (${giveaways.join(", ")})` : "the commits this push sends";
-  return { reasons: telltales(texts.join("\n")), where };
+  return { reasons: reasonsIn(texts.join("\n")), where };
 }
 
 /**

@@ -3,7 +3,7 @@
  * always, plus every repo marked reviewed in `factory.json`. Used by guard-target.ts.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export interface Reviewed {
   /** owner/name on GitHub */
@@ -153,13 +153,20 @@ function remotesOf(dotGit: string): string[] {
   }
 }
 
+/** True when `path` is `folder` or inside it, compared case-blind on Windows. */
+function within(path: string, folder: string): boolean {
+  const fold = (p: string) => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+  const rel = relative(fold(folder), fold(path));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 /**
  * The reviewed repo whose checkout holds `path`: by folder name, as before, or by a remote that points at
  * the repo on GitHub, so a second clone in a folder with another name is guarded too (AUD-M3). A checkout
  * found by its remote carries its own folder as `checkout`, so its pending content is read from there.
  */
 export function locate(path: string, reviewed: Reviewed[]): Reviewed | undefined {
-  const named = reviewed.find((r) => inCheckout(path, r));
+  const named = reviewed.find((r) => inCheckout(path, r) || within(path, r.checkout));
   if (named) return named;
   const found = checkoutAt(path);
   if (!found) return undefined;
@@ -189,7 +196,7 @@ export function navigationTargets(command: string, cwd: string): string[] {
   let here = cwd;
   for (const m of [...command.matchAll(MOVE)].slice(0, MAX_MOVES)) {
     const path = m[1] ?? m[2] ?? m[3] ?? "";
-    if (!path || /[$`%~]/.test(path) || path === "-") continue;
+    if (!path || /[$`%]|^~/.test(path) || path === "-") continue;
     const resolved = resolve(here, path);
     targets.push(resolved);
     if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved;

@@ -48,9 +48,13 @@ export function urlDestinations(outside: string): string[] {
   });
 }
 
-/** True when the command runs a GraphQL mutation through `gh api graphql`: it can write to any repo. */
+/**
+ * True when the command runs a GraphQL mutation, which can write to any repo: through `gh api graphql`, or as a
+ * raw write to GitHub's GraphQL endpoint, whose payload may sit in a file the guard doesn't read (Qodo on PR 265).
+ */
 export function graphqlMutation(command: string): boolean {
-  return /\bgh\s+api\s+graphql\b/i.test(command) && /\bmutation\b/i.test(command);
+  if (/\bgh\s+api\s+graphql\b/i.test(command) && /\bmutation\b/i.test(command)) return true;
+  return rawApiWrite(command) && /api\.github\.com\/graphql\b/i.test(joinedWords(command));
 }
 
 /** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */

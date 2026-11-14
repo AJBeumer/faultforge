@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
+import { checkoutAt } from "./guard-repos.ts";
 import { gitSteps } from "./shell-scan.ts";
 
 const LAB_ROOT = join(import.meta.dirname, "../..");
@@ -80,26 +81,28 @@ function inside(dir: string, root: string): boolean {
 /**
  * True when every write in the command stays in private storage, where template ids belong: each git
  * commit, push, tag or note runs there (its `-C`, or the folder the command has moved to), and any gh or
- * API call names only the private repo. Anything else, or anything unclear, is a public post.
+ * API call names, in `destinations`, only the repo the private checkout's own remote points at (by owner and
+ * name, read from its git config: a repo elsewhere that merely shares the name is public as far as the guard
+ * knows; Qodo on PR 265). Anything else, or anything unclear, is a public post.
  */
-export function onlyPrivateRepo(command: string, cwd: string, root: string): boolean {
-  const destinations = [...command.matchAll(/(?:--repo|\s-R)[\s=]*["']?([\w.-]+\/[\w.-]+)/g)].map((m) => m[1] ?? "");
+export function onlyPrivateRepo(command: string, cwd: string, root: string, destinations: string[]): boolean {
   if (/\b(?:gh|curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b/i.test(command)) {
-    if (!destinations.length || destinations.some((d) => !/\/faultforge-private$/i.test(d))) return false;
+    const own = checkoutAt(root)?.remotes ?? [];
+    if (!destinations.length || destinations.some((d) => !own.includes(d.toLowerCase()))) return false;
   }
   let here = cwd;
   let wrote = false;
   for (const step of command.split(/&&|\|\||[;|\n]/).map((s) => s.trim())) {
     const move = /^(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?["']?([^"'\s]+)/i.exec(step);
     if (move?.[1]) {
-      if (/[$`%~]/.test(move[1])) return false;
+      if (/[$`%]|^~/.test(move[1])) return false;
       here = resolve(here, move[1]);
       continue;
     }
     if (!gitSteps(step, /\b(?:commit|push|tag|notes)\b/).length) continue;
     wrote = true;
     const at = /\bgit\s+-C\s*["']?([^"'\s]+)/.exec(step)?.[1];
-    if (at && /[$`%~]/.test(at)) return false;
+    if (at && /[$`%]|^~/.test(at)) return false;
     if (!inside(at ? resolve(here, at) : here, root)) return false;
   }
   return wrote || destinations.length > 0;
