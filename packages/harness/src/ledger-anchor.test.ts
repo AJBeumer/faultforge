@@ -10,6 +10,20 @@ function sh(dir: string, ...args: string[]): string {
   return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
 }
 
+const CONTROL_ENTRY = {
+  kind: "control",
+  templateId: "x-control-v1",
+  targetRepo: "https://github.com/Owner/target.git",
+  targetCommit: "a".repeat(40),
+  injectionCommit: "b".repeat(40),
+  branch: "tidy",
+  injectedFile: "src/x.ts",
+  injectedLines: [1, 1],
+  validation: { typecheck: "pass", publicTests: "pass", corpus: [] },
+  validated: true,
+  createdAt: "2026-11-01T00:00:00.000Z",
+};
+
 /** A private repository whose answer key gained one line per commit, and an empty anchors file beside it. */
 function world() {
   const repo = mkdtempSync(join(tmpdir(), "ledger-anchor-"));
@@ -18,8 +32,10 @@ function world() {
   sh(repo, "config", "user.name", "Test");
   sh(repo, "config", "core.autocrlf", "false");
   const key = join(repo, "ground-truth.jsonl");
+  // Each line a whole control entry, as `inject` writes one, so the answer-key schema accepts it.
   const add = (line: string) => {
-    writeFileSync(key, `${readFileOr(key)}${line}\n`);
+    const entry = { ...CONTROL_ENTRY, ...JSON.parse(line) };
+    writeFileSync(key, `${readFileOr(key)}${JSON.stringify(entry)}\n`);
     sh(repo, "add", "ground-truth.jsonl");
     sh(repo, "commit", "--quiet", "-m", `add ${line}`);
   };

@@ -138,12 +138,41 @@ describe("ledgerCheckProblems: both files together", () => {
 
   it("is empty for two clean, append-only files", () => {
     const dir = repo();
-    commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "first case");
+    commit(dir, "ground-truth.jsonl", `${JSON.stringify(CONTROL_ENTRY)}\n`, "first case");
     const event = '{"eventId":"evt-1","type":"pr.opened","at":"2026-11-01T00:00:00Z","caseId":"FF-0001"}\n';
     commit(dir, "audit-events.jsonl", event, "first event");
     expect(ledgerCheckProblems(dir)).toEqual([]);
   });
+
+  it("reports an answer-key line, or a saved review, that doesn't fit its schema (AUD-N5)", () => {
+    const dir = repo();
+    commit(dir, "ground-truth.jsonl", `${JSON.stringify(CONTROL_ENTRY)}\n{"caseId":"FF-0002"}\n`, "two cases");
+    commit(dir, "audit-events.jsonl", "", "no events");
+    const reviews = join(dir, "raw-artifacts", "reviews", "target-pr1");
+    mkdirSync(reviews, { recursive: true });
+    writeFileSync(join(reviews, "abcdef0.review.json"), '{"state":"complete"}');
+    const problems = ledgerCheckProblems(dir);
+    expect(problems).toContainEqual(expect.stringMatching(/^ground-truth\.jsonl line 2: /));
+    expect(problems).toContainEqual(expect.stringMatching(/^reviews\/target-pr1\/abcdef0\.review\.json: /));
+    expect(problems.filter((p) => p.includes("line 1:"))).toEqual([]);
+  });
 });
+
+/** A control as `inject` writes it, which the answer-key schema accepts. */
+const CONTROL_ENTRY = {
+  caseId: "FF-0001",
+  kind: "control",
+  templateId: "x-control-v1",
+  targetRepo: "https://github.com/Owner/target.git",
+  targetCommit: "a".repeat(40),
+  injectionCommit: "b".repeat(40),
+  branch: "tidy",
+  injectedFile: "src/x.ts",
+  injectedLines: [1, 1],
+  validation: { typecheck: "pass", publicTests: "pass", corpus: [] },
+  validated: true,
+  createdAt: "2026-11-01T00:00:00.000Z",
+};
 
 describe("ledgerProblemsWithHistory: what the case commands check first (#224)", () => {
   it("finds a rewritten line in the committed history of a file at its repository's root", () => {

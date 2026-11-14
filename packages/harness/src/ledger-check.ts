@@ -9,9 +9,10 @@
  * committed) removed or changed a line of either file: every commit may only add lines. That history can
  * itself be squashed or rewritten, so it then checks each commit `npm run ledger:anchor` recorded in this
  * repo's `docs/ledger-anchors.txt` (`ledger-anchor.ts`): each must still be an ancestor of the private HEAD,
- * and both files at it must be the start of today's. Last, it recomputes the `inputHash` of every
- * tool-written injection and verdict event (`ledger-hashes.ts`): a template, proof or saved review changed
- * after its event is reported.
+ * and both files at it must be the start of today's. Every answer-key line and every saved review must fit
+ * its JSON schema (`ledger-schemas.ts`). Last, it recomputes the `inputHash` of every tool-written injection
+ * and verdict event (`ledger-hashes.ts`): a template, proof or saved review changed after its event is
+ * reported.
  *
  * It only reads: git's output is streamed through a private temporary folder outside the repository
  * (`git-stream.ts`), so the private repository is left exactly as it was.
@@ -29,6 +30,7 @@ import { ledgerProblems, ledgerProblemsIn, readAuditLog } from "./ledger.ts";
 import { ANCHORS_FILE, anchorProblems, LEDGER_FILES as FILES } from "./ledger-anchor.ts";
 import { readEventProblems } from "./ledger-append.ts";
 import { hashProblems } from "./ledger-hashes.ts";
+import { answerKeyProblems, savedReviewProblems } from "./ledger-schemas.ts";
 import { savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 
@@ -227,6 +229,11 @@ export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): 
     }
   }
   const env = { ...process.env, FAULTFORGE_PRIVATE_DIR: privateRoot };
+  // Every answer-key line and every saved review in the shape its schema describes (AUD-N5).
+  problems.push(
+    ...answerKeyProblems(join(privateRoot, FILES[0] as string)),
+    ...savedReviewProblems(savedReviewsDir(env)),
+  );
   problems.push(
     ...hashProblems(
       {

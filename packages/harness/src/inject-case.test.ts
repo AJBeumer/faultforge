@@ -6,6 +6,7 @@ import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
 import { loadTemplates, type Proof, proofCorpus } from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
+import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
 
 const BASE = "b".repeat(40);
@@ -134,6 +135,7 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     });
     const [event] = auditFile(w);
     expect(eventProblems(event)).toEqual([]);
+    expect(answerKeyEntryProblem(w.lines("ground-truth.jsonl")[1])).toBeUndefined();
     expect(readFileSync(join(w.target, "src", "sum.ts"), "utf8")).toContain("total + 1");
   });
 
@@ -237,6 +239,7 @@ describe("inject run(deps): a control must pass the whole proof corpus (AUD-M8, 
       kind: "control",
       validation: { corpus: [{ proofTest, proofOnBase: "pass", proofOnVariant: "pass" }] },
     });
+    expect(answerKeyEntryProblem(w.lines("ground-truth.jsonl")[1])).toBeUndefined();
     expect(eventProblems(auditFile(w)[0])).toEqual([]);
   });
 

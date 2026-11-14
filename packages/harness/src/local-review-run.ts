@@ -3,9 +3,10 @@
  * chunks, verify it and decide the exit code. Every call to Qodo is passed in, so it runs without a
  * network in the tests; `review-local.ts` wires it to the real API.
  */
-import { createHash } from "node:crypto";
+
 import { type LocalReviewPayload, labelFindings, stateListsReadable } from "./local-findings.ts";
 import { type OperationState, type ResultChunkPage, type StartParams, unwrapResult } from "./local-review-wire.ts";
+import { sha256 } from "./provenance.ts";
 
 export interface ReviewLocalDeps {
   startParams: StartParams;
@@ -141,7 +142,7 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
       operationId,
     };
   }
-  const actual = createHash("sha256").update(text, "utf8").digest("hex");
+  const actual = sha256(text);
   if (actual !== expectedSha256) {
     return {
       exitCode: 2,

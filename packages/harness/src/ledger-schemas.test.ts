@@ -1,0 +1,234 @@
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { answerKeyEntryProblem, answerKeyProblems, savedReviewProblem, savedReviewProblems } from "./ledger-schemas.ts";
+
+const A = "a".repeat(40);
+const B = "b".repeat(40);
+const PROOF = `x-secret-v1/proof.test.ts@sha256:${"c".repeat(64)}`;
+
+const located = {
+  targetRepo: "https://github.com/Owner/target.git",
+  targetCommit: A,
+  injectionCommit: B,
+  branch: "tidy-sum",
+  injectedFile: "src/sum.ts",
+  injectedLines: [3, 4],
+  validated: true,
+  createdAt: "2026-11-14T02:00:00.000Z",
+};
+const BUG = {
+  caseId: "FF-9501",
+  kind: "sabotage",
+  templateId: "x-secret-v1",
+  invariantId: "INV-X-001",
+  defectClass: "off-by-one",
+  ...located,
+  validation: {
+    proofs: [{ invariantId: "INV-X-001", proofTest: PROOF, proofOnBase: "pass", proofOnVariant: "fail" }],
+    typecheck: "pass",
+    publicTests: "pass",
+  },
+};
+const CONTROL = {
+  caseId: "FF-9502",
+  kind: "control",
+  templateId: "x-control-v1",
+  ...located,
+  validation: {
+    typecheck: "pass",
+    publicTests: "pass",
+    corpus: [{ invariantId: "INV-X-001", proofTest: PROOF, proofOnBase: "pass", proofOnVariant: "pass" }],
+  },
+};
+const AMENDMENT = {
+  kind: "amendment",
+  amends: "FF-9501",
+  at: "2026-11-14T03:00:00.000Z",
+  change: { rerunOf: "FF-9500" },
+  reason: "r",
+  evidence: "e",
+};
+const FINDING = {
+  id: "f1",
+  file: "src/sum.ts",
+  lines: [3, 3],
+  severity: "action_required",
+  category: "Bug",
+  title: "t",
+  description: "d",
+};
+const SAVED = {
+  repo: "Owner/target",
+  pr: 7,
+  headSha: B,
+  state: "complete",
+  headMovedTo: null,
+  pushSeenAt: "2026-11-14T02:00:00Z",
+  reviewEffort: "standard",
+  reviewSeenCompleteAt: "2026-11-14T02:05:00.000Z",
+  reviewSeenCompleteNote: "n",
+  reviewStartedAt: "2026-11-14T02:01:00.123456Z",
+  recordedAt: "2026-11-14T02:05:01.000Z",
+  ci: "npm run check: success",
+  abTest: { name: null, arm: null },
+  findings: [FINDING],
+  openFindings: [{ ...FINDING, commit: B.slice(0, 7) }],
+};
+
+describe("the answer-key schema (AUD-N5)", () => {
+  it("accepts a planted bug, a control, an amendment, and an early entry with its proof pinned on the entry", () => {
+    expect(answerKeyEntryProblem(BUG)).toBeUndefined();
+    expect(answerKeyEntryProblem(CONTROL)).toBeUndefined();
+    expect(answerKeyEntryProblem(AMENDMENT)).toBeUndefined();
+    const early = { ...BUG, proofTest: PROOF, validation: { proofOnBase: "pass", proofOnVariant: "fail" } };
+    expect(answerKeyEntryProblem(early)).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown field", { ...BUG, note: "x" }],
+    ["a bug's field on a control", { ...CONTROL, invariantId: "INV-X-001" }],
+    ["a short commit id", { ...BUG, injectionCommit: B.slice(0, 7) }],
+    ["a malformed case id", { ...BUG, caseId: "FF-95" }],
+    ["lines that aren't a pair", { ...BUG, injectedLines: [3] }],
+    ["line zero", { ...BUG, injectedLines: [0, 1] }],
+    ["an unknown outcome", { ...BUG, validation: { ...BUG.validation, typecheck: "ok" } }],
+    [
+      "a proof not pinned by its hash",
+      { ...CONTROL, validation: { corpus: [{ ...CONTROL.validation.corpus[0], proofTest: "p.ts" }] } },
+    ],
+    ["no invariant on a bug", { ...BUG, invariantId: undefined }],
+    ["an unknown kind", { ...BUG, kind: "planted" }],
+    ["an amendment with no reason", { ...AMENDMENT, reason: "" }],
+    ["an amendment of something that isn't a case", { ...AMENDMENT, amends: "evt-1" }],
+  ])("refuses %s", (_name, entry) => {
+    expect(answerKeyEntryProblem(JSON.parse(JSON.stringify(entry)))).toBeDefined();
+  });
+
+  it("reports each line that doesn't fit, by line, a line that isn't JSON, and passes a sound file", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "schemas-")), "ground-truth.jsonl");
+    writeFileSync(path, `${[BUG, CONTROL, AMENDMENT].map((l) => JSON.stringify(l)).join("\n")}\n`);
+    expect(answerKeyProblems(path)).toEqual([]);
+    writeFileSync(path, `${JSON.stringify(BUG)}\n${JSON.stringify({ ...CONTROL, extra: 1 })}\n`);
+    expect(answerKeyProblems(path)).toEqual([expect.stringMatching(/^ground-truth\.jsonl line 2: /)]);
+    writeFileSync(path, `${JSON.stringify(BUG)}\nnot json\n`);
+    expect(answerKeyProblems(path)).toEqual([expect.stringMatching(/^ground-truth\.jsonl line 2 is not JSON/)]);
+  });
+});
+
+describe("the saved-review schema (AUD-N5)", () => {
+  it("accepts what review:wait writes, a review that never finished, and an early save without the later fields", () => {
+    expect(savedReviewProblem(SAVED)).toBeUndefined();
+    const unfinished = { ...SAVED, state: "review incomplete", reviewSeenCompleteAt: null, reviewEffort: null };
+    expect(savedReviewProblem(unfinished)).toBeUndefined();
+    const { reviewSeenCompleteAt: _a, reviewSeenCompleteNote: _b, openFindings: _c, headMovedTo: _d, ...early } = SAVED;
+    expect(savedReviewProblem(early)).toBeUndefined();
+    expect(savedReviewProblem({ ...SAVED, findings: [{ ...FINDING, file: null, lines: null }] })).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown state", { ...SAVED, state: "done" }],
+    ["no findings list", { ...SAVED, findings: undefined }],
+    ["findings that aren't a list", { ...SAVED, findings: {} }],
+    ["a finding with one line", { ...SAVED, findings: [{ ...FINDING, lines: [3] }] }],
+    ["a finding with no id", { ...SAVED, findings: [{ ...FINDING, id: undefined }] }],
+    ["a short head commit", { ...SAVED, headSha: B.slice(0, 7) }],
+    ["an unknown field", { ...SAVED, verdict: "caught" }],
+    ["an open finding without its commit", { ...SAVED, openFindings: [FINDING] }],
+    ["a PR that isn't a number", { ...SAVED, pr: "7" }],
+    ["a finding with a field the writer never writes (Qodo on PR 289)", { ...SAVED, findings: [{ ...FINDING, x: 1 }] }],
+    ["an open finding with such a field", { ...SAVED, openFindings: [{ ...FINDING, commit: "abcdef0", x: 1 }] }],
+  ])("refuses %s", (_name, review) => {
+    expect(savedReviewProblem(JSON.parse(JSON.stringify(review)))).toBeDefined();
+  });
+
+  it("reports each save under the reviews folder that isn't JSON or doesn't fit", () => {
+    const reviews = mkdtempSync(join(tmpdir(), "schemas-reviews-"));
+    mkdirSync(join(reviews, "target-pr7"));
+    writeFileSync(join(reviews, "target-pr7", "bbbbbbb.review.json"), JSON.stringify(SAVED));
+    writeFileSync(join(reviews, "target-pr7", "bbbbbbb.qodo-api.raw.json"), "{}");
+    expect(savedReviewProblems(reviews)).toEqual([]);
+    writeFileSync(join(reviews, "target-pr7", "ccccccc.review.json"), "{");
+    writeFileSync(join(reviews, "target-pr7", "ddddddd.review.json"), JSON.stringify({ ...SAVED, state: "done" }));
+    expect(savedReviewProblems(reviews)).toEqual([
+      "reviews/target-pr7/ccccccc.review.json: not JSON",
+      expect.stringMatching(/^reviews\/target-pr7\/ddddddd\.review\.json: \/state /),
+    ]);
+  });
+
+  it("checks archived saves too: an unfinished one renamed, and one moved into its own folder (Qodo on PR 289)", () => {
+    const reviews = mkdtempSync(join(tmpdir(), "schemas-archived-"));
+    const pr = join(reviews, "target-pr7");
+    mkdirSync(join(pr, "bbbbbbb.unfinished-1"), { recursive: true });
+    writeFileSync(join(pr, "bbbbbbb.review.json"), JSON.stringify(SAVED));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-2.json"), JSON.stringify({ ...SAVED, state: "done" }));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-1", "bbbbbbb.review.json"), JSON.stringify({ ...SAVED, x: 1 }));
+    writeFileSync(join(pr, "bbbbbbb.unfinished-1", "bbbbbbb.qodo-api.raw.json"), "{}");
+    expect(savedReviewProblems(reviews)).toEqual([
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.unfinished-1\/bbbbbbb\.review\.json: /),
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.unfinished-2\.json: /),
+    ]);
+  });
+});
+
+describe("the answer key as the tools read it, amendments applied (Qodo on PR 289)", () => {
+  const file = (lines: object[], blankAfterFirst = false) => {
+    const path = join(mkdtempSync(join(tmpdir(), "schemas-amended-")), "ground-truth.jsonl");
+    const text = lines.map((l) => JSON.stringify(l));
+    if (blankAfterFirst) text.splice(1, 0, "");
+    writeFileSync(path, `${text.join("\n")}\n`);
+    return path;
+  };
+
+  it("accepts the kinds of field real amendments add", () => {
+    const also = { alsoBreaks: [{ invariantId: "INV-X-002", proofTest: PROOF }] };
+    expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change: also }]))).toEqual([]);
+    expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change: { rerunOf: "FF-9500" } }]))).toEqual([]);
+  });
+
+  it("reports an entry an amendment made unsound, though each line alone fits", () => {
+    for (const change of [{ validated: false }, { createdAt: "yesterday" }, { note: "an unknown field" }]) {
+      expect(answerKeyProblems(file([BUG, { ...AMENDMENT, change }]))).toEqual([
+        expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended \(1 of 1\): /),
+      ]);
+    }
+  });
+
+  it("reports an unsound version even when a later amendment puts it right", () => {
+    const broken = { ...AMENDMENT, change: { validated: false } };
+    const mended = { ...AMENDMENT, at: "2026-11-14T04:00:00.000Z", change: { validated: true } };
+    expect(answerKeyProblems(file([BUG, broken, mended]))).toEqual([
+      expect.stringMatching(/^ground-truth\.jsonl FF-9501 as amended \(1 of 2\): /),
+    ]);
+  });
+
+  it("names a line by its place in the file, blank lines counted, and the unexpected field itself", () => {
+    expect(answerKeyProblems(file([BUG, { ...CONTROL, extra: 1 }], true))).toEqual([
+      expect.stringMatching(/^ground-truth\.jsonl line 3: .*\(extra\)$/),
+    ]);
+  });
+
+  it("judges a line by its own kind only, so its real fault is the one named", () => {
+    expect(answerKeyEntryProblem({ ...AMENDMENT, at: "soon" })).toMatch(/^\/at must match pattern/);
+    expect(answerKeyEntryProblem({ ...BUG, kind: "planted" })).toBe(
+      "/kind must be one of sabotage, control, amendment",
+    );
+  });
+});
+
+describe("saved reviews under a link (Qodo on PR 289)", () => {
+  it("never follows a link, so one pointing back up can't make the check run forever", (context) => {
+    const reviews = mkdtempSync(join(tmpdir(), "schemas-link-"));
+    mkdirSync(join(reviews, "target-pr7"));
+    writeFileSync(join(reviews, "target-pr7", "bbbbbbb.review.json"), JSON.stringify({ state: "done" }));
+    try {
+      symlinkSync(reviews, join(reviews, "target-pr7", "loop"), "junction");
+    } catch {
+      context.skip(); // a link can't be made here
+    }
+    expect(savedReviewProblems(reviews)).toEqual([
+      expect.stringMatching(/^reviews\/target-pr7\/bbbbbbb\.review\.json: /),
+    ]);
+  });
+});
