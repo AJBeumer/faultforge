@@ -5,6 +5,7 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
+import { type ReviewCache, sidecarStamp, stampOf } from "./review-gate-cache.ts";
 
 export interface ReviewRecord {
   /** The saved file this came from, relative to the evidence folder where possible. */
@@ -150,12 +151,18 @@ function readSidecar(reviewFile: string): Sidecar | null {
 }
 
 /** Every saved review with a recorded tree under `root`, however deep. A file that is not JSON, is too
- * large, or holds no review is skipped, never an error: the evidence folder also holds other things. */
-export function readReviewRecords(root: string): { records: ReviewRecord[]; problems: string[] } {
+ * large, or holds no review is skipped, never an error: the evidence folder also holds other things.
+ * With a cache, a file unchanged since the cache last saw it is not read again (AUD-N6); `parsed` counts the
+ * files that were. A file that could not be read is never cached, so it is tried, and reported, every time. */
+export function readReviewRecords(
+  root: string,
+  cache?: ReviewCache,
+): { records: ReviewRecord[]; problems: string[]; parsed: number } {
   const files: string[] = [];
   const problems: string[] = [];
   walk(root, files, problems);
   const records: ReviewRecord[] = [];
+  let parsed = 0;
   for (const file of files) {
     try {
       const relative = file.slice(root.length + 1);
@@ -164,18 +171,29 @@ export function readReviewRecords(root: string): { records: ReviewRecord[]; prob
       if (relative.split(sep)[0] === "reviews") continue;
       const stat = statSync(file);
       if (stat.size > MAX_FILE_BYTES) continue;
-      const rec = extractReviewRecord(
-        JSON.parse(readFileSync(file, "utf8")),
-        file.slice(root.length + 1),
-        stat.mtimeMs,
-        readSidecar(file),
-      );
+      // Stamped before reading, so a file that changes while it is read is read again next time.
+      const sidecar = basename(file) === "review.json" ? sidecarStamp(join(dirname(file), "split.json")) : "none";
+      const stamp = sidecar === null ? null : `${stampOf(stat)}|${sidecar}`;
+      const known = cache?.get(relative, stamp);
+      if (known) {
+        if (known.record) records.push(known.record);
+        continue;
+      }
+      parsed++;
+      let rec: ReviewRecord | null;
+      try {
+        rec = extractReviewRecord(JSON.parse(readFileSync(file, "utf8")), relative, stat.mtimeMs, readSidecar(file));
+      } catch (error) {
+        // Not JSON is not a review.
+        if (!(error instanceof SyntaxError)) throw error;
+        rec = null;
+      }
+      cache?.set(relative, stamp, rec);
       if (rec) records.push(rec);
     } catch (error) {
-      // Not JSON is not a review. A file git cannot read might have been one: say so.
-      if (!(error instanceof SyntaxError))
-        problems.push(`cannot read ${file}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
+      // A file git cannot read might have been one: say so.
+      problems.push(`cannot read ${file}: ${(error as Error).message.split(LINE_BREAK)[0]}`);
     }
   }
-  return { records, problems };
+  return { records, problems, parsed };
 }
