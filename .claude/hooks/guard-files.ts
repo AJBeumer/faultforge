@@ -5,9 +5,9 @@
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { STDIN_BODY } from "./guard-posted.ts";
+import { postedRanges, STDIN_BODY } from "./guard-posted.ts";
 import { navigationTargets } from "./guard-repos.ts";
-import { gitSteps, quotedMask } from "./shell-scan.ts";
+import { blankQuoted, gitSteps, quotedMask, substitutions } from "./shell-scan.ts";
 
 /** The most a posted file may hold: read in well under the hook's time limit (Qodo on PR 233). */
 export const MAX_POSTED_BYTES = 1024 * 1024;
@@ -128,4 +128,81 @@ export function stdinFiles(cwd: string, command: string): string[] {
     texts.push(...read);
   }
   return texts;
+}
+
+/** Text built by a command the guard can't read: refused in a post to a reviewed repo (#242). */
+export class BuiltText extends Error {}
+
+/** The file a substitution reads, when all it does is read one: `cat f`, `type f`, `Get-Content f`, `gc f`, `< f`. */
+function fileRead(inner: string): string | undefined {
+  const value = String.raw`(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`;
+  const m = new RegExp(
+    String.raw`^\s*(?:<\s*|(?:cat|type|Get-Content|gc)\s+(?:-(?:Raw|Path|LiteralPath|Encoding\s+\S+)\s+)*)${value}\s*$`,
+    "i",
+  ).exec(inner);
+  return m ? (m[1] ?? m[2] ?? m[3]) : undefined;
+}
+
+/**
+ * The text a post builds from commands (#242): each substitution inside a posted value, or anywhere when the
+ * body comes from stdin, that only reads a file is read and returned, so the file's text is checked like
+ * the command's own. With `strict` (a post to a reviewed repo), any other substitution, and a body piped in
+ * from anything but `cat`, `type`, `Get-Content`, `echo` or `printf`, throws `BuiltText`: what a program
+ * prints can't be checked before it runs. A file that can't be read throws `Unreadable`.
+ */
+export function builtText(cwd: string, command: string, strict: boolean, backticks: boolean): string[] {
+  const stdin = STDIN_BODY.test(command);
+  const ranges = postedRanges(command);
+  const posted = (at: number) => stdin || ranges.some(([start, end]) => at >= start && at < end);
+  const texts: string[] = [];
+  for (const sub of substitutions(command, backticks)) {
+    if (!posted(sub.start)) continue;
+    const file = fileRead(sub.inner);
+    if (file === undefined) {
+      if (strict) {
+        throw new BuiltText(
+          `This post builds its text by running "${sub.inner.trim().slice(0, 40)}", which the guard can't check before it runs. Write the text to a file and pass it with --body-file.`,
+        );
+      }
+      continue;
+    }
+    const read = /[$`%]/.test(file) ? [] : readPosted(cwd, command, file);
+    if (!read.length) {
+      throw new Unreadable(
+        `This post reads ${file}, and the guard can't read that file, so it can't check the text. Write the file first, then post it with --body-file.`,
+      );
+    }
+    texts.push(...read);
+  }
+  if (strict && stdin) {
+    const producer = pipedInto(command);
+    if (producer !== undefined && !/^(?:cat|type|Get-Content|gc|echo|printf|Write-Output)\b/i.test(producer)) {
+      throw new BuiltText(
+        `This post's body is piped in from "${producer.slice(0, 40)}", which the guard can't check before it runs. Write the text to a file and pass it with --body-file.`,
+      );
+    }
+  }
+  return texts;
+}
+
+/** The step whose output is piped into the step that reads its body from stdin, or undefined when none is. */
+function pipedInto(command: string): string | undefined {
+  const blank = blankQuoted(command);
+  const at = blank.search(STDIN_BODY);
+  if (at < 0) return undefined;
+  const before = blank.slice(0, at);
+  const stepStart = Math.max(
+    before.lastIndexOf(";"),
+    before.lastIndexOf("&"),
+    before.lastIndexOf("\n"),
+    before.lastIndexOf("|"),
+  );
+  if (stepStart < 0 || before[stepStart] !== "|" || before[stepStart - 1] === "|") return undefined;
+  const producerStart = Math.max(
+    before.lastIndexOf(";", stepStart - 1),
+    before.lastIndexOf("&", stepStart - 1),
+    before.lastIndexOf("\n", stepStart - 1),
+    before.lastIndexOf("|", stepStart - 1),
+  );
+  return before.slice(producerStart + 1, stepStart).trim();
 }

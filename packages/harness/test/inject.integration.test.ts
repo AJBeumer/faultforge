@@ -104,6 +104,35 @@ describe("inject exit codes (#8: branch derivation)", () => {
   );
 
   it.skipIf(!hasRealTarget)(
+    "refuses a real run in a target without git's own guard hooks, without changing it (#242)",
+    () => {
+      const dir = scratchTargetCopy();
+      const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+      git("switch", "-q", "main");
+      // Everything else is in order: HEAD is origin/main. Only the guard is switched off.
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      git("remote", "set-url", "origin", "/nonexistent/origin.git");
+      git("config", "core.hooksPath", ".no-hooks-here");
+      const state = () => `${git("status", "--porcelain", "--branch")}|${git("rev-parse", "HEAD")}`;
+      const savedPrivate = process.env.FAULTFORGE_PRIVATE_DIR;
+      process.env.FAULTFORGE_PRIVATE_DIR = mkdtempSync(join(tmpdir(), "inject-private-"));
+      scratchDirs.push(process.env.FAULTFORGE_PRIVATE_DIR);
+      const before = state();
+      let result: ReturnType<typeof runInject>;
+      try {
+        result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", dir, "--case", "FF-9998"]);
+      } finally {
+        if (savedPrivate === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+        else process.env.FAULTFORGE_PRIVATE_DIR = savedPrivate;
+      }
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("guard:install");
+      expect(state()).toBe(before);
+    },
+    90_000,
+  );
+
+  it.skipIf(!hasRealTarget)(
     "--validate-only exits 0 without ever asking origin about the branch",
     () => {
       const dir = scratchTargetCopy();

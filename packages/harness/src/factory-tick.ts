@@ -43,6 +43,7 @@ import { recoverStranded } from "./factory-recovery.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
 import type { Verification } from "./factory-verify.ts";
 import type { RunMode } from "./factory-workspace.ts";
+import { unguardedCheckouts } from "./guard-install.ts";
 import { telltales } from "./neutral.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { type Difference, summarizeDifference } from "./qodo-check.ts";
@@ -613,6 +614,12 @@ async function main() {
     process.exit(2);
   }
   const factory = loadFactory();
+  // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
+  const unguarded = mode === "local" ? unguardedCheckouts(factory, LAB_ROOT) : [];
+  if (unguarded.length) {
+    console.error(`factory:tick refused: ${unguarded.join("; ")}. Run npm run guard:install first.`);
+    process.exit(2);
+  }
   const outcome = await tick(factory, realDeps(factory, options, mode), options);
   if (outcome === "done" || outcome === "needs-help") {
     // After a finished run, ask whether the saved reviews now repeat a pattern worth a rule. The

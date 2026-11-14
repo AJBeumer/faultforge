@@ -4,7 +4,7 @@
  * (AUD-M3). Every test here reads the command with its quote marks removed (`joinedWords`), so `"--force"`,
  * `gi''t` and `'+main'` read as the shell runs them.
  */
-import { gitSteps, joinedWords, segments } from "./shell-scan.ts";
+import { blankQuoted, gitSteps, joinedWords, segments } from "./shell-scan.ts";
 
 const REPO = String.raw`([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s?#)]|$)`;
 
@@ -21,6 +21,8 @@ export function explicitDestinations(command: string): string[] {
     /(?<=\s)-R[\s=]*["']?([\w.-]+\/[\w.-]+)/g,
     // gh reads the repo from the environment too, in bash or PowerShell (AUD-M3).
     /\bGH_REPO\s*=\s*["']?([\w.-]+\/[\w.-]+)/gi,
+    // gh repo edit and its siblings take the repo as a plain argument (#242).
+    /\bgh\s+repo\s+[\w-]+\s+["']?([\w.-]+\/[\w.-]+)/gi,
     // An API route, with or without a path after the repo: `repos/o/n -X PATCH` edits the repo itself.
     new RegExp(String.raw`\brepos\/${REPO}`, "gi"),
     /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
@@ -101,5 +103,18 @@ export function rewritesHistory(command: string): boolean {
     /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
       step.text.slice(step.text.search(/\bpush\b/) + 4),
     ),
+  );
+}
+
+/**
+ * True when the command would switch off git's own guard hooks (#242): `--no-verify` in any spelling, a
+ * commit's `-n` (alone or in combined short flags, outside quoted text), or a hooks path or config set from
+ * the command line or the environment.
+ */
+export function skipsGitGuard(command: string): boolean {
+  const words = joinedWords(command);
+  if (/--no-verify\b|\bcore\.hookspath\b|\bGIT_CONFIG_(?:PARAMETERS|COUNT)\b/i.test(words)) return true;
+  return gitSteps(blankQuoted(command), /\bcommit\b/).some((step) =>
+    /\s-[a-zA-Z]*n[a-zA-Z]*\b/.test(step.text.slice(step.text.search(/\bcommit\b/))),
   );
 }

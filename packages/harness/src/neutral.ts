@@ -99,9 +99,13 @@ export function normalizeLookalikes(text: string): string {
     .replace(/[Ͱ-ϿЀ-ԯɡı]/g, (ch) => LOOKALIKES[ch] ?? ch);
 }
 
-/** Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. */
+/**
+ * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
+ * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242).
+ */
 export function telltales(text: string): string[] {
-  return TELLTALES.filter(([pattern]) => pattern.test(text)).map(([, reason]) => reason);
+  const seen = normalizeLookalikes(text);
+  return TELLTALES.filter(([pattern]) => pattern.test(seen)).map(([, reason]) => reason);
 }
 
 /**

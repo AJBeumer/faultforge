@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadFactory } from "./factory-config.ts";
+import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { ROOT } from "./paths.ts";
 
 /** The first line after the shebang of every hook this command writes: how a rerun knows its own files. */
@@ -67,6 +67,52 @@ export function installHooks(checkout: string, script: string): string {
   }
   git("config", "--local", CONFIG_KEY, script.replace(/\\/g, "/"));
   return dir;
+}
+
+/**
+ * Why the checkout lacks the git-level guard, or undefined when it has it (#242): `core.hooksPath` unset,
+ * each of the three hooks present as this command wrote it, and the script setting naming a file that
+ * exists. Anything git can't answer counts as missing.
+ */
+export function guardProblem(checkout: string): string | undefined {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const setting = (key: string) => {
+    try {
+      return git("config", "--get", key);
+    } catch {
+      return "";
+    }
+  };
+  try {
+    const hooksPath = setting("core.hooksPath");
+    if (hooksPath) return `${checkout} sets core.hooksPath (${hooksPath}), so git skips the guard's hooks`;
+    const relative = git("rev-parse", "--git-path", "hooks");
+    const dir = isAbsolute(relative) ? relative : resolve(checkout, relative);
+    for (const stage of HOOKS) {
+      const file = join(dir, stage);
+      const ours =
+        existsSync(file) && !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8") === hookText(stage);
+      if (!ours) return `${checkout} has no guard ${stage} hook`;
+    }
+    const script = setting(CONFIG_KEY);
+    if (!script || !existsSync(script)) return `${checkout}'s guard hooks name no script that exists (${CONFIG_KEY})`;
+    return undefined;
+  } catch (error) {
+    return `${checkout} can't be read by git (${(error as Error).message.split("\n")[0]})`;
+  }
+}
+
+/** True when the checkout has the git-level guard; see `guardProblem`. */
+export function guardInstalled(checkout: string): boolean {
+  return guardProblem(checkout) === undefined;
+}
+
+/** Why each reviewed checkout in `factory` lacks the git-level guard, resolved from `root`; empty when all have it. */
+export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT): string[] {
+  return Object.values(factory.repos)
+    .filter((repo) => repo.guard === "reviewed")
+    .flatMap((repo) => guardProblem(resolve(root, repo.path)) ?? []);
 }
 
 function main(): number {

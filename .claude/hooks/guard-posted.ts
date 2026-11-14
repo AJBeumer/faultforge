@@ -48,9 +48,9 @@ function blankLocalPaths(text: string, redirects: boolean): string {
   // `--git-dir` and `--work-tree` name where it runs, never what it posts.
   const navigates =
     /\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+-C\s*|--(?:git-dir|work-tree)[=\s]\s*/;
-  const reader = redirects
-    ? new RegExp(`\\b(?:cat|type|Get-Content|gc)\\s+|<\\s*|${navigates.source}`)
-    : /\b(?:cat|type|Get-Content|gc)\s+/;
+  // A reader's own options (`Get-Content -Raw`) come before its file; `$(< file)` reads one too (#242).
+  const readers = /\b(?:cat|type|Get-Content|gc)\s+(?:-(?:Raw|Path|LiteralPath|Encoding\s+\S+)\s+)*|\$\(\s*<\s*/;
+  const reader = redirects ? new RegExp(`${readers.source}|<\\s*|${navigates.source}`) : readers;
   return text.replace(new RegExp(`(${reader.source})(["']?)[^\\s"'\`;&|<>()]+\\2`, "gi"), "$1 ");
 }
 
@@ -99,4 +99,14 @@ export function outsidePostedText(command: string): string {
     outside = outside.slice(0, span.start) + outside.slice(span.end);
   }
   return outside.replace(postedFlagValue(), " ");
+}
+
+/** Where each posted flag value sits in the command, quotes included: `[start, end)`. */
+export function postedRanges(command: string): [number, number][] {
+  const pattern = new RegExp(postedFlagValue().source, "dg");
+  return [...command.matchAll(pattern)].flatMap((m) => {
+    const value = m.indices?.[1] ?? m.indices?.[2] ?? m.indices?.[3];
+    // The quote before a quoted value belongs to it.
+    return value ? [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), value[1] + 1] as [number, number]] : [];
+  });
 }
