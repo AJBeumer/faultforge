@@ -12,11 +12,10 @@ mkdirSync(join(PRIVATE, "templates", "x-secret-v1"), { recursive: true });
 const ENV = { ...process.env, FAULTFORGE_PRIVATE_DIR: PRIVATE, FAULTFORGE_GUARD_PRIVATE_DIR: PRIVATE };
 const CHECKOUT = join(DIR, "app");
 
-/** The reviewed repos, as the guard reads them from factory.json: the first is the default. */
-const REVIEWED: Reviewed[] = [
-  { github: "Owner/app", name: "app", folder: "app", checkout: CHECKOUT },
-  { github: "Owner/other", name: "other", folder: "other", checkout: join(DIR, "other") },
-];
+/** The reviewed repos, as the guard reads them from factory.json. */
+const APP: Reviewed = { github: "Owner/app", name: "app", folder: "app", checkout: CHECKOUT };
+const OTHER: Reviewed = { github: "Owner/other", name: "other", folder: "other", checkout: join(DIR, "other") };
+let REVIEWED: Reviewed[] = [APP];
 
 let files = 0;
 /** A text file with `text`, its path. */
@@ -325,6 +324,20 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
     );
     expect(code).toBe(2);
     expect(fake.calls).toEqual([]);
+  });
+
+  it("asks for --repo when there is more than one reviewed repo, and never picks one itself (Qodo on PR 344)", () => {
+    REVIEWED = [APP, OTHER];
+    try {
+      const fake = fakeGh();
+      expect(run(["issue-comment", "--number", "2", "--body-file", file("ok")], { gh: fake.gh }).code).toBe(1);
+      expect(
+        run(["issue-comment", "--repo", "Owner/other", "--number", "2", "--body-file", file("ok")], fake).code,
+      ).toBe(0);
+      expect(fake.calls[0]?.args).toContain("github.com/Owner/other");
+    } finally {
+      REVIEWED = [APP];
+    }
   });
 
   it("names github.com in --repo, so GH_HOST can't send the post to another host", () => {

@@ -12,8 +12,8 @@
  * Script files that could write to a reviewed repo are refused in guard-files.ts (`scriptProblem`), and inline
  * interpreter code that starts a program or reaches the network everywhere, in shell-exec.ts.
  */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { type Call, calls } from "./guard-history.ts";
 import { HTTP_CLIENT, httpSends, isSend } from "./guard-reach.ts";
 import { LAB_ROOT } from "./guard-repos.ts";
@@ -47,8 +47,9 @@ const same = (a: string, b: string) => {
  * True when the command is exactly the door: `npm run target:post -- …` on one line with plain arguments (no
  * expansion, redirect, line break or second command), run from `root`, the lab checkout the guard runs from, whose
  * `package.json` runs `DOOR_SCRIPT` for it with no `pre` or `post` script around it, and whose `.npmrc` sets no
- * shell, node option or script setting that could run something else. Anything else is judged like any other
- * command.
+ * shell, node option or script setting that could run something else. npm puts every `node_modules/.bin` from the
+ * root up ahead of `PATH`, so a `node` in one of them would run instead of Node itself: none may be there (Qodo on
+ * PR 344). Anything else is judged like any other command.
  */
 export function doorCommand(command: string, cwd: string, root = LAB_ROOT): boolean {
   if (!DOOR.test(command.trim()) || !same(cwd, root)) return false;
@@ -56,9 +57,17 @@ export function doorCommand(command: string, cwd: string, root = LAB_ROOT): bool
     const scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
     if (scripts["target:post"] !== DOOR_SCRIPT || scripts["pretarget:post"] || scripts["posttarget:post"]) return false;
     const npmrc = join(root, ".npmrc");
-    return !(
-      existsSync(npmrc) && /script-shell|node-options|ignore-scripts|scripts-prepend/i.test(readFileSync(npmrc, "utf8"))
-    );
+    if (
+      existsSync(npmrc) &&
+      /script-shell|node-options|ignore-scripts|scripts-prepend/i.test(readFileSync(npmrc, "utf8"))
+    )
+      return false;
+    for (let dir = resolve(root); ; dir = dirname(dir)) {
+      const bin = join(dir, "node_modules", ".bin");
+      if (existsSync(bin) && readdirSync(bin).some((name) => /^node(\.(exe|cmd|bat|ps1|com))?$/i.test(name)))
+        return false;
+      if (dirname(dir) === dir) return true;
+    }
   } catch {
     return false;
   }

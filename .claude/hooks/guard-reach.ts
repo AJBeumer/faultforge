@@ -81,18 +81,24 @@ export const HTTP_CLIENT =
 /**
  * True when an HTTP client's arguments send something: a body, a form, an upload, or a method other than GET or
  * HEAD (#340). curl's short options are read alone or combined (`-d`, `-sd`, `-sX POST`, `-XPOST`) and in their own
- * case, so `-f`, `-D` and `-x` stay reads; a PowerShell parameter (`-Headers`) is a word, not a cluster. httpie and xh
- * send a body for a data item (`key=value`, `key:=json`, `field@file`) or a method word.
+ * case, so `-f`, `-D` and `-x` stay reads; a PowerShell parameter (`-Headers`) is a word, not a cluster. A long option
+ * or a PowerShell parameter counts by any start of its name, as wget and PowerShell take one (`--post-d`, `-Me`,
+ * `-Bo`), and a bare method word (`POST`) counts anywhere. httpie and xh send a body for a data item (`key=value`,
+ * `key:=json`, `field@file`, `@file`) or a method word.
  */
 export function httpSends(client: string, args: string[]): boolean {
   const method = (value: string) => !/^(GET|HEAD)$/i.test(value);
+  const shell = /^(irm|iwr|Invoke-RestMethod|Invoke-WebRequest)$/i.test(client);
   for (let i = 0; i < args.length; i++) {
     const a = args[i] ?? "";
-    if (/^--(data\S*|json|form\S*|upload-file|post-data|post-file|body-data|body-file)(=|$)/.test(a)) return true;
-    if (/^-(Body|InFile|Form)$/i.test(a)) return true;
-    const named = /^(?:--request|--method|-Method)(?:[=:](.*))?$/i.exec(a);
-    if (named) {
-      if (method(named[1] ?? args[i + 1] ?? "")) return true;
+    if (/^(POST|PUT|PATCH|DELETE)$/i.test(a)) return true;
+    // A long option, or a PowerShell parameter, by any unambiguous start of a name that sends.
+    const long = shell ? /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a) : /^--([a-z][\w-]{2,})(?:=(.*))?$/.exec(a);
+    if (long) {
+      const name = (long[1] ?? "").toLowerCase();
+      const sends = (shell ? PS_SENDS : LONG_SENDS).filter((full) => full.startsWith(name));
+      if (sends.some((full) => !/^(method|request|custommethod)$/.test(full))) return true;
+      if (sends.length && method(long[2] ?? args[i + 1] ?? "")) return true;
       continue;
     }
     const short = /^-([a-zA-Z]+)(.*)$/.exec(a);
@@ -109,9 +115,30 @@ export function httpSends(client: string, args: string[]): boolean {
   return (
     args.some((a) => /^(--form|-f|--raw|--multipart)$/.test(a)) ||
     /^(POST|PUT|PATCH|DELETE)$/i.test(items[0] ?? "") ||
-    items.some((a) => !/:\/\//.test(a) && /^[^=:@\s]+(?:==?|:=|:=@|=@|@)/.test(a))
+    items.some((a) => !/:\/\//.test(a) && /^(?:@|[^=:@\s]+(?:==?|:=|:=@|=@|@))/.test(a))
   );
 }
+
+/** The long options of curl, wget and httpie that send a body or choose a method. */
+const LONG_SENDS = [
+  "data",
+  "data-ascii",
+  "data-binary",
+  "data-raw",
+  "data-urlencode",
+  "json",
+  "form",
+  "form-string",
+  "upload-file",
+  "post-data",
+  "post-file",
+  "body-data",
+  "body-file",
+  "method",
+  "request",
+];
+/** PowerShell's web-call parameters that send a body or choose a method, in lower case. */
+const PS_SENDS = ["method", "custommethod", "body", "infile", "form"];
 
 /** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */
 function rawApiWrite(command: string): boolean {

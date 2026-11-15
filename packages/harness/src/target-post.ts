@@ -13,7 +13,7 @@
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
  *
  * Every kind takes `--repo owner/name`, which must be a repo `factory.json` marks `"guard": "reviewed"`; without it,
- * faultforge-target, which the guard always counts as reviewed. Text comes only from files, read as UTF-8; a title is
+ * the one reviewed repo, refused when there are several. Text comes only from files, read as UTF-8; a title is
  * one line. A push sends the branch's commit from `--checkout` (by default the repo's checkout in `factory.json`) to
  * its origin, never forced.
  *
@@ -196,8 +196,8 @@ function readTitle(path: string): string {
 }
 
 /**
- * The post a command line asks for, its text read from its files, to one of `reviewed` (the first unless `--repo`
- * names another). Throws `Usage` when it can't make one.
+ * The post a command line asks for, its text read from its files, to the one of `reviewed` that `--repo`
+ * names, or the only one. Throws `Usage` when it can't make one.
  */
 export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   const [kind, ...rest] = argv;
@@ -217,9 +217,12 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   } catch (error) {
     throw new Usage(errorText(error));
   }
+  // With more than one reviewed repo, a post names its own: a default could send it to the wrong one (Qodo on PR 344).
   const target = values.repo
     ? reviewed.find((r) => r.github.toLowerCase() === values.repo?.toLowerCase())
-    : reviewed[0];
+    : reviewed.length === 1
+      ? reviewed[0]
+      : undefined;
   if (!target) throw new Usage(`--repo must name a reviewed repo: ${reviewed.map((r) => r.github).join(", ")}`);
   const post: Post = { kind: kind as Kind, repo: target.github };
   const allowed: Record<Kind, string[]> = {

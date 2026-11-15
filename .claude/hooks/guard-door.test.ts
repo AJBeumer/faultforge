@@ -2,7 +2,7 @@
  * The door rule (#340): every write to a reviewed repo goes through `npm run target:post`, and the guard refuses
  * every other one without reading what it would say. Reads, and local work in the reviewed checkout, still pass.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -256,5 +256,31 @@ describe("what Qodo found in the review of PR 344", () => {
     // From anywhere, a commit in the target's own checkout may name its own ticket.
     const own = `git -C ${at(FIXTURE.dir)} commit --allow-empty -m "Closes faultforge-target#5"`;
     expect(guardDecision("Bash", { command: own }, LAB, config)).toBeUndefined();
+  });
+});
+
+describe("what Qodo found in the second review of PR 344", () => {
+  const api = "https://api.github.com/repos/AJBeumer/faultforge-target/issues";
+
+  it("refuses httpie sending a file as the whole body", () => {
+    expect(bash("http api.github.com/repos/AJBeumer/faultforge-target/issues @payload.json")).toMatch(DOOR);
+  });
+
+  it("refuses PowerShell's and wget's abbreviated parameters, and a bare method word", () => {
+    expect(pwsh(`irm ${api} -Me Post -Bo '{"title":"x"}'`)).toMatch(DOOR);
+    expect(pwsh(`Invoke-WebRequest ${api} -In body.json`)).toMatch(DOOR);
+    expect(bash(`wget --post-d=x ${api}`)).toMatch(DOOR);
+    expect(bash(`wget --meth=POST ${api}`)).toMatch(DOOR);
+    expect(pwsh(`irm ${api} -Headers @{a=1}`)).toBeUndefined();
+  });
+
+  it("passes the door unread only when no node_modules/.bin from the root up holds a node of its own", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-door-bin-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { "target:post": DOOR_SCRIPT } }));
+    const door = "npm run target:post -- push --branch x";
+    expect(doorCommand(door, root, root)).toBe(true);
+    mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(root, "node_modules", ".bin", "node.cmd"), "@echo off\n");
+    expect(doorCommand(door, root, root)).toBe(false);
   });
 });
