@@ -16,6 +16,7 @@ import { copyEvidence, isReviewedTicket, privateAccess, privateUrl } from "./fac
 import { processStartId } from "./factory-process.ts";
 import { githubRecoveryReads, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
+import { sandboxFor } from "./factory-sandbox.ts";
 import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
@@ -182,8 +183,19 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     audit: (ws, ticket, from, to) =>
       auditRun(factory, { checkout: privateRepo, main: access.main }, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) =>
-      runAgent(factory, options, runs, ws, runId, repoKey, number, ticketFile, log, (pid) =>
-        held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
+      runAgent(
+        factory,
+        options,
+        runs,
+        ws,
+        runId,
+        repoKey,
+        number,
+        ticketFile,
+        log,
+        (pid) => held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
+        // In Actions the agent runs behind the network allow-list, or not at all; on a PC without one (#330).
+        sandboxFor(mode, factory),
       ),
     verifyPr(ws, repoKey, pr) {
       return verifyPrWith(

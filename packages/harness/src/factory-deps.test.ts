@@ -67,6 +67,7 @@ import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
+import { localSandbox } from "./factory-sandbox.ts";
 import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
@@ -275,7 +276,21 @@ Picked up.`,
       "/t.md",
       log,
       expect.any(Function),
+      localSandbox,
     );
+  });
+
+  it("starts a CI run's agent through the network sandbox, and a PC run's without one (#330)", async () => {
+    const ws = workspace(join(runs, "run-1"));
+    const log = () => {};
+    const ok = { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
+    vi.mocked(runAgent).mockResolvedValue(ok);
+    await realDeps(FACTORY, OPTIONS, "ci").runAgent(ws, "run-1", "target", 18, "/t.md", log);
+    const sandbox = vi.mocked(runAgent).mock.calls.at(-1)?.[10];
+    expect(sandbox).toBeDefined();
+    expect(sandbox).not.toBe(localSandbox);
+    await realDeps(FACTORY, OPTIONS, "local").runAgent(ws, "run-1", "target", 18, "/t.md", log);
+    expect(vi.mocked(runAgent).mock.calls.at(-1)?.[10]).toBe(localSandbox);
   });
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {

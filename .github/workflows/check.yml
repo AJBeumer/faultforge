@@ -91,6 +91,10 @@ jobs:
         working-directory: FaultForge
       - run: npm run test:integration
         working-directory: FaultForge
+        # The job's own read-only token, for the network sandbox test's `gh api` call alone (#330). Only this step
+        # has it, never an install step, and under its own name, so no other test takes it for GH_TOKEN.
+        env:
+          SANDBOX_TEST_GH_TOKEN: ${{ github.token }}
 
   # A red main opens the lab's alert issue, or comments on the open one (#308). Only for a push to main: a PR's
   # failures show on the PR. issues: write for this job alone, with the lab's own token.

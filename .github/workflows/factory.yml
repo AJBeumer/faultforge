@@ -128,6 +128,14 @@ jobs:
       - name: Install the git-level guard
         working-directory: FaultForge
         run: npm run -s guard:install
+      # The agent's network sandbox (#330): the agent runs as its own user, whose packets reach loopback only,
+      # where the tick's proxy lets them through to factory.json's allow-list and nowhere else. Only the agent's
+      # process tree is inside it: this step, the tick itself and every step after it keep the runner's network.
+      # After the git config and the guard, which it copies and gives the agent. The tick checks it again and
+      # never starts the agent without it.
+      - name: Set up the agent's network sandbox
+        working-directory: FaultForge
+        run: npm run -s factory:sandbox -- setup --dir "$GITHUB_WORKSPACE"
       - name: Run one tick
         id: tick
         working-directory: FaultForge
@@ -172,6 +180,17 @@ jobs:
           echo "::error title=Factory tick::$line"
           echo "- $line" >> "$GITHUB_STEP_SUMMARY"
           echo "code=stopped" >> "$GITHUB_OUTPUT"
+      # No process of the agent's user outlives the tick, even one a cancelled or crashed tick left: none is
+      # running when the private repo is checked out below (#330). Plain shell, not a script from the checkout,
+      # which the agent could have changed.
+      - name: Stop the agent's sandbox
+        if: always()
+        run: |
+          id -u ffagent >/dev/null 2>&1 || exit 0
+          sudo -n pkill -KILL -u ffagent || true
+          for i in $(seq 40); do pgrep -u ffagent >/dev/null || exit 0; sleep 0.25; done
+          echo "::error title=Factory sandbox::a process of the agent's user is still running"
+          exit 1
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
       # Only after the tick, when no agent runs any more: the keep step below writes through this checkout.

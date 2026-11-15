@@ -207,6 +207,39 @@ describe("factory workflow", () => {
     expect(step).not.toMatch(/secrets\.|private/);
   });
 
+  it("runs the agent behind the network sandbox: set up before the tick, stopped after it, the runner's steps outside (#330)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const at = (test: (step: string) => boolean) => steps.findIndex(test);
+    const gitConfig = at((s) => s.includes("gh auth setup-git"));
+    const guard = at((s) => s.includes("npm run -s guard:install"));
+    const setup = at((s) => s.startsWith("name: Set up the agent's network sandbox"));
+    const tick = at((s) => s.startsWith("name: Run one tick"));
+    const stop = at((s) => s.startsWith("name: Stop the agent's sandbox"));
+    const privateCheckout = at((s) => s.includes("repository: AJBeumer/faultforge-private"));
+    const keep = at((s) => s.includes("npm run -s factory:keep"));
+    // In order: the git identity and the guard it copies, the sandbox, the tick, then the stop before anything private.
+    expect(gitConfig).toBeGreaterThan(0);
+    expect(setup).toBeGreaterThan(gitConfig);
+    expect(setup).toBeGreaterThan(guard);
+    expect(tick).toBe(setup + 1);
+    expect(stop).toBeGreaterThan(tick);
+    expect(stop).toBeLessThan(privateCheckout);
+    expect(stop).toBeLessThan(keep);
+    const setupStep = withoutComments(steps[setup] ?? "");
+    expect(setupStep).toContain('run: npm run -s factory:sandbox -- setup --dir "$GITHUB_WORKSPACE"');
+    // Never optional, and no secret: the setup runs before any agent, and must succeed.
+    expect(setupStep).not.toMatch(/if:|continue-on-error|secrets\./);
+    // The stop runs whatever happened, in plain shell (no script from the checkout the agent could change), and
+    // fails while a process of the agent's user is left.
+    const stopStep = withoutComments(steps[stop] ?? "");
+    expect(stopStep).toMatch(/\n {8}if: always\(\)\n/);
+    expect(stopStep).not.toMatch(/npm |npx |tsx |node |working-directory/);
+    expect(stopStep).toContain("sudo -n pkill -KILL -u ffagent");
+    expect(stopStep).toMatch(/pgrep -u ffagent[\s\S]*exit 1/);
+    // The sandbox wraps the agent alone: the tick runs as the runner, with no sudo or user switch of its own.
+    expect(withoutComments(steps[tick] ?? "")).not.toMatch(/sudo|ffagent|unshare|ip netns/);
+  });
+
   it("pins every action to a full commit", () => {
     for (const [, ref] of workflow.matchAll(/uses: [\w./-]+@(\S+)/g)) expect(ref).toMatch(/^[0-9a-f]{40}$/);
   });
