@@ -46,6 +46,7 @@ import {
   pendingIndex,
   pendingPush,
   pendingPushUpdates,
+  pushedTexts,
   reasonsIn,
   withDeadline,
   withPrivateCopies,
@@ -167,7 +168,11 @@ function checkLab(
       ? [readFileSync(arg, "utf8"), "the commit message"]
       : [pushedMessages(checkout, arg, parseUpdates(stdin)), "a commit this push sends"];
   if (linksReviewed(text)) return { reasons: [LINK_REASON], where };
-  if (copyReasons([text]).length) return { reasons: copyReasons([text]), where };
+  // Nor a copy of private storage, in the message or in a file a pushed commit holds: one made before the lab's
+  // pre-commit hook was installed, or past it (Qodo on PR 337).
+  const files = stage === "lab-pre-push" ? pushedTexts(checkout, arg, parseUpdates(stdin)) : [];
+  const copies = copyReasons([text, ...files]);
+  if (copies.length) return { reasons: copies, where };
   // A lab commit is public: it may not name a private template either (re-grade 6).
   return names?.(text) ? { reasons: [PRIVATE_ID], where } : undefined;
 }
@@ -199,7 +204,9 @@ function checkNow(
   } else if (stage === "commit-msg") {
     if (!arg) throw new Error("commit-msg needs the message file git passes");
     // The whole file: with `-m`, git keeps lines that start with `#` (Qodo on PR 213).
-    pending = { reasons: reasonsIn(readFileSync(arg, "utf8")), where: "the commit message" };
+    const message = readFileSync(arg, "utf8");
+    // Nor a line of the answer key or the audit log (Qodo on PR 337).
+    pending = { reasons: [...reasonsIn(message), ...copyReasons([message])], where: "the commit message" };
   } else throw new Error(`unknown stage ${stage}`);
   return pending.reasons.length ? pending : undefined;
 }

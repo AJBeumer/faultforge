@@ -22,6 +22,7 @@ writeFileSync(join(LAB.dir, ".gitignore"), "private/\n");
 mkdirSync(join(LAB.dir, "docs"));
 LAB.git("add", ".gitignore");
 LAB.git("commit", "-q", "-m", "Ignore private storage");
+LAB.git("push", "-q", "origin", "main");
 const PRIVATE = join(LAB.dir, "private");
 const KEY_LINE = JSON.stringify({ caseId: "FF-9001", templateId: "x-secret-v1", injectedFile: "src/a.ts" });
 const AUDIT_LINE = JSON.stringify({ type: "pr.opened", caseId: "FF-9001", repo: "o/t", pr: 7 });
@@ -77,6 +78,10 @@ describe("no copy of private storage leaves it (Q21)", () => {
     "cat private/ground-truth.jsonl > docs/key.jsonl",
     "cat private/ground-truth.jsonl | tee docs/key.jsonl",
     "grep FF private/audit-events.jsonl | sort > docs/x.txt",
+    // An input redirect, dd, and a path the guard can't read that names the private folder (Qodo on PR 337).
+    "dd if=private/ground-truth.jsonl of=docs/key.jsonl",
+    "tee docs/key.jsonl < private/ground-truth.jsonl",
+    'cp "$FAULTFORGE_PRIVATE_DIR/ground-truth.jsonl" docs/key.jsonl',
     // Forward slashes: a backslash is a separator on Windows only, and the test runs on Linux too.
     "Copy-Item -Path private/ground-truth.jsonl -Destination docs/",
   ])("refuses %s", (command) => {
@@ -161,6 +166,47 @@ describe("a lab commit can't carry a copy (Q21)", () => {
     } finally {
       TARGET.git("rm", "-q", "--cached", "data.ts");
       rmSync(join(TARGET.dir, "data.ts"));
+    }
+  });
+});
+
+describe("commits and pushes carry no copy either (Qodo on PR 337)", () => {
+  /** The update line git hands a pre-push hook for `main`. */
+  const update = (repo: typeof LAB) =>
+    `refs/heads/main ${repo.git("rev-parse", "HEAD").trim()} refs/heads/main ${repo.git("rev-parse", "origin/main").trim()}\n`;
+
+  it("is refused by a reviewed repo's commit-msg hook", () => {
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", PRIVATE);
+    vi.stubEnv("FAULTFORGE_CONFIG", CONFIG);
+    const message = join(ELSEWHERE, "TARGET_EDITMSG");
+    writeFileSync(message, `Tidy\n\n${AUDIT_LINE}\n`);
+    expect(check("commit-msg", TARGET.dir, message)?.reasons).toContain(COPIES_PRIVATE);
+  });
+
+  it("is refused by a reviewed repo's pre-push hook, for a copy committed earlier", () => {
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", PRIVATE);
+    vi.stubEnv("FAULTFORGE_CONFIG", CONFIG);
+    writeFileSync(join(TARGET.dir, "data.ts"), TEMPLATE);
+    TARGET.git("add", "data.ts");
+    TARGET.git("commit", "-q", "--no-verify", "-m", "Add data");
+    try {
+      expect(check("pre-push", TARGET.dir, "origin", update(TARGET))?.reasons).toContain(COPIES_PRIVATE);
+    } finally {
+      TARGET.git("reset", "-q", "--hard", "origin/main");
+    }
+  });
+
+  it("is refused by the lab's pre-push hook, for a copy committed before its pre-commit hook", () => {
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", PRIVATE);
+    vi.stubEnv("FAULTFORGE_CONFIG", CONFIG);
+    writeFileSync(join(LAB.dir, "docs", "key.jsonl"), `${KEY_LINE}\n`);
+    LAB.git("add", "docs");
+    LAB.git("commit", "-q", "--no-verify", "-m", "Add notes");
+    const url = LAB.git("remote", "get-url", "origin").trim();
+    try {
+      expect(check("lab-pre-push", LAB.dir, "origin", update(LAB), url)?.reasons).toContain(COPIES_PRIVATE);
+    } finally {
+      LAB.git("reset", "-q", "--hard", "origin/main");
     }
   });
 });

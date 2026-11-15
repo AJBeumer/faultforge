@@ -18,7 +18,16 @@ import { outsidePostedText } from "./guard-posted.ts";
 import { privateRoot, privateTemplateIds } from "./guard-private.ts";
 import { checkoutAt, LAB_ROOT, locate, within } from "./guard-repos.ts";
 import type { Context } from "./guard-tools.ts";
-import { pathSteps } from "./shell-paths.ts";
+import {
+  COPIERS,
+  copyEnds,
+  insideReal,
+  MOVERS,
+  pathSteps,
+  RECURSIVE,
+  TOO_MANY_PATHS,
+  tooManyPaths,
+} from "./shell-paths.ts";
 
 /**
  * `privateCopyTest`, read only when a decision first needs it: most commands never commit or write a file, and
@@ -132,45 +141,55 @@ export function labIndex(checkout: string, named: ((text: string) => boolean) | 
 }
 
 /** True when a path is private content: one of the logs, or in a still-private template's folder, or holds one. */
-function privatePath(path: string, root: string, ids: string[], recursive: boolean): boolean {
-  if (!within(path, root)) return false;
-  if (PRIVATE_LOGS.some((log) => within(path, join(root, log)))) return true;
-  if (ids.some((id) => within(path, join(root, "templates", id)))) return true;
+function privatePath(path: string, root: string, ids: string[], recursive: boolean, cache: Map<string, string>) {
+  const inside = (p: string, folder: string) => insideReal(p, folder, cache);
+  if (!inside(path, root)) return false;
+  if (PRIVATE_LOGS.some((log) => inside(path, join(root, log)))) return true;
+  if (ids.some((id) => inside(path, join(root, "templates", id)))) return true;
   // The whole private folder, or its templates folder, copied with everything in it.
-  return recursive && (within(join(root, "templates"), path) || within(root, path));
+  return recursive && (inside(join(root, "templates"), path) || inside(root, path));
 }
 
-/** Programs that copy what they name to their last word. */
-const COPIERS = /^(cp|copy|copy-item|cpi|mv|move|move-item|mi|install|rsync|scp|xcopy|robocopy|ln|mklink)$/;
-/** Programs that print a file, whose output a redirect or `tee` could write elsewhere. */
-const PRINTERS = /^(cat|type|get-content|gc|head|tail|less|more|tac|nl|sort|uniq|cut|awk|sed|grep|rg|findstr)$/;
+/** Programs that print or pass on a file, whose output a redirect, `tee` or `dd of=` could write elsewhere. */
+const PRINTERS =
+  /^(cat|type|get-content|gc|head|tail|less|more|tac|nl|sort|uniq|cut|awk|sed|grep|rg|findstr|tee|dd|base64|xxd|od|gzip|zcat|tr|jq|iconv)$/;
 
 export const COPY_OUT =
   "This would copy the answer key, the audit log or a private template out of private storage. Nothing there leaves it.";
+
+/** Words that name private content even when the guard can't read the rest of the path (`$FAULTFORGE_PRIVATE_DIR`). */
+const PRIVATE_WORDS = /ground-truth|audit-events|FAULTFORGE_(GUARD_)?PRIVATE_DIR|templates/i;
 
 /** Why a shell command copies private content out of private storage, or undefined (Q21). */
 export function copyOutProblem(command: string, cwd: string, env: NodeJS.ProcessEnv, backticks = true) {
   const root = privateRoot(env);
   const ids = privateTemplateIds(env);
-  const outside = (path: string) => !within(path, root);
-  for (const step of pathSteps(command, cwd, backticks)) {
-    const recursive = step.args.some((w) => /^(-[a-z]*[rRa][a-z]*|--recursive|--archive|-recurse|\/s|\/e)$/i.test(w));
-    if (COPIERS.test(step.name)) {
-      const words = step.perWord.filter((list) => list.length);
-      const destination = words.at(-1) ?? [];
-      const sources = words.slice(0, -1).flat();
-      if (sources.some((s) => privatePath(s, root, ids, recursive)) && destination.some(outside)) return COPY_OUT;
-    }
-    const printed = PRINTERS.test(step.name) && step.paths.some((p) => privatePath(p, root, ids, false));
-    if (printed && step.redirects.some(outside)) return COPY_OUT;
-  }
-  // A printed file piped into `tee` or a redirect in a later step.
+  // Each folder's real place is looked up once for the command (AUD-M4).
+  const cache = new Map<string, string>();
+  const outside = (path: string) => !insideReal(path, root, cache);
   const all = pathSteps(command, cwd, backticks);
-  const reads = all.some((s) => PRINTERS.test(s.name) && s.paths.some((p) => privatePath(p, root, ids, false)));
-  const writes = all.some(
-    (s) => (s.name === "tee" && s.paths.some(outside)) || (s !== all[0] && s.redirects.some(outside)),
-  );
-  return reads && writes ? COPY_OUT : undefined;
+  let printed = false;
+  for (const step of all) {
+    const recursive = step.args.some((w) => RECURSIVE.test(w));
+    const copies = COPIERS.test(step.name) || MOVERS.test(step.name);
+    if ((copies || PRINTERS.test(step.name)) && tooManyPaths(step)) return TOO_MANY_PATHS;
+    if (copies) {
+      const { sources, destination } = copyEnds(step);
+      if (sources.some((s) => privatePath(s, root, ids, recursive, cache)) && destination.some(outside))
+        return COPY_OUT;
+      // A path the guard can't read that names private content: `cp "$FAULTFORGE_PRIVATE_DIR/…" docs/`.
+      if (step.unknown && PRIVATE_WORDS.test(step.text)) return COPY_OUT;
+    }
+    // Read by name, by `<`, or by `dd if=`; written by a redirect, `tee` or `dd of=`, in this step or a later one.
+    // Paths are only resolved for a program that passes a file on: a long command of other words stays fast.
+    const passes = PRINTERS.test(step.name) || (step.inputs.length > 0 && step.redirects.length > 0);
+    const reads = passes && [...step.paths, ...step.inputs].some((p) => privatePath(p, root, ids, false, cache));
+    const unread = passes && step.unknown && PRIVATE_WORDS.test(step.text);
+    if (reads || unread) printed = true;
+    const writes = step.redirects.some(outside) || (/^(tee|dd)$/.test(step.name) && step.paths.some(outside));
+    if (printed && writes) return COPY_OUT;
+  }
+  return undefined;
 }
 
 /** Why a Write or Edit of `path` with `text` copies private content out of private storage, or undefined. */

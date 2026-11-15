@@ -261,7 +261,9 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
   const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
     (name) => reasonsIn(name).length,
   );
-  const reasons = [...new Set([...reasonsIn(texts.join("\n")), ...giveaways.flatMap((name) => reasonsIn(name))])];
+  const reasons = [
+    ...new Set([...reasonsIn(texts.join("\n")), ...copyReasons(texts), ...giveaways.flatMap((n) => reasonsIn(n))]),
+  ];
   const where = giveaways.length
     ? `a new branch, or a tag (${giveaways.join(", ")})`
     : `the ${commits.length} commit${commits.length === 1 ? "" : "s"} not yet on any remote branch`;
@@ -311,11 +313,19 @@ const ZERO = /^0+$/;
  * A new ref's commits are the ones no ref of `remote` already holds. Deletions send nothing.
  */
 export function pendingPushUpdates(checkout: string, remote: string, updates: PushUpdate[]): Pending {
+  const names = updates.map((u) => u.remoteRef.replace(/^refs\/(heads|tags)\//, ""));
+  const texts = [...names, ...pushedTexts(checkout, remote, updates)];
+  const giveaways = names.filter((name) => reasonsIn(name).length);
+  const where = giveaways.length ? `the pushed ref (${giveaways.join(", ")})` : "the commits this push sends";
+  return { reasons: [...reasonsIn(texts.join("\n")), ...copyReasons(texts)], where };
+}
+
+/** The messages, file names and contents of every commit a push sends, as `pendingPushUpdates` reads them. */
+export function pushedTexts(checkout: string, remote: string, updates: PushUpdate[]): string[] {
   const started = Date.now();
   const tick = () => {
     if (Date.now() - started > DEFAULT_BUDGET_MS) throw new Uninspectable("reading the pushed commits took too long");
   };
-  const names = updates.map((u) => u.remoteRef.replace(/^refs\/(heads|tags)\//, ""));
   const commits = new Set<string>();
   for (const u of updates) {
     if (ZERO.test(u.localSha)) continue;
@@ -327,10 +337,7 @@ export function pendingPushUpdates(checkout: string, remote: string, updates: Pu
       .filter(Boolean))
       commits.add(sha);
   }
-  const texts = [...names, ...commitTexts(checkout, [...commits], tick)];
-  const giveaways = names.filter((name) => reasonsIn(name).length);
-  const where = giveaways.length ? `the pushed ref (${giveaways.join(", ")})` : "the commits this push sends";
-  return { reasons: reasonsIn(texts.join("\n")), where };
+  return commitTexts(checkout, [...commits], tick);
 }
 
 /**

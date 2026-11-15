@@ -6,7 +6,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutEdit } from "./guard-answer-key.ts";
-import { addressesQodo, QODO_REASON } from "./guard-cases.ts";
+import { addressesQodo, mcpCaseProblem, QODO_REASON } from "./guard-cases.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
 import { gitFolderEdit } from "./guard-hooks.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";
@@ -131,6 +131,9 @@ export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   const found = telltales(stripReviewedNames(ctx.reviewed, text));
   if (found.length) deny(`${tool} would put a hint into ${repo.name} (${found.join(", ")}).`);
   if (addressesQodo(text)) deny(QODO_REASON);
+  // Nor may it merge a case PR or move a case branch, as the shell may not (Qodo on PR 337).
+  const action = mcpCaseProblem(ctx.env, tool, args ?? {}, repo);
+  if (action) deny(action);
 }
 
 /**

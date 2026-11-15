@@ -151,8 +151,11 @@ function refProblem(call: Call, records: CaseRecords | undefined): string | unde
     return targets.some(recorded) ? BRANCH_REASON : undefined;
   }
   if (sub === "checkout" || sub === "switch") {
-    const at = rest.findIndex((w) => /^(-B|-C|--force-create)$/.test(w));
-    if (at >= 0 && recorded(rest[at + 1])) return BRANCH_REASON;
+    // The name may be its own word or joined on (`-Btidy`, `--force-create=tidy`; Qodo on PR 337).
+    for (let i = 0; i < rest.length; i++) {
+      const force = /^(?:-B|-C|--force-create)(?:=?)(.*)$/.exec(rest[i] ?? "");
+      if (force && recorded(force[1] || rest[i + 1])) return BRANCH_REASON;
+    }
   }
   return undefined;
 }
@@ -180,14 +183,16 @@ export function caseActionProblem(ctx: Context, command: string, repo: Reviewed)
       const texts = [command, ...referencedFiles(ctx.cwd, command)];
       if (/\bgraphql\b/.test(outside) && texts.some((t) => GRAPHQL_MERGE.test(t))) return MERGE_REASON;
       // gh api reads by default, and writes once it is given a field, an input or another method.
-      const method = /(?:-X|--method)[\s=]*["']?(\w+)/i.exec(command)?.[1];
+      // gh sends the last method given (Qodo on PR 337).
+      const method = [...command.matchAll(/(?:-X|--method)[\s=]*["']?(\w+)/gi)].at(-1)?.[1];
       const reads = method ? /^get$/i.test(method) : !/\s(-f|-F|--field|--raw-field|--input)\b/.test(command);
       // The repo itself, renamed, archived or deleted: `repos/<owner>/<name>` and nothing after it.
       if (!reads && /(^|[\s"'/])repos\/[\w.-]+\/[\w.-]+\/?(?=["'\s?]|$)/.test(outside)) return REPO_REASON;
       const merge = /pulls\/([^/\s"']+)\/merge\b/.exec(outside);
       if (merge && !reads) {
-        const prs = read()?.prs.get(repo.github.toLowerCase());
-        if (!prs || !/^\d+$/.test(merge[1] ?? "") || prs.has(Number(merge[1]))) return MERGE_REASON;
+        const known = read();
+        const prs = known?.prs.get(repo.github.toLowerCase()) ?? new Set<number>();
+        if (!known || !/^\d+$/.test(merge[1] ?? "") || prs.has(Number(merge[1]))) return MERGE_REASON;
       }
     }
     if (call.program === "gh") {
@@ -202,6 +207,25 @@ export function caseActionProblem(ctx: Context, command: string, repo: Reviewed)
       const problem = refProblem(call, /^(update-ref)$/.test(call.args[0] ?? "") ? undefined : read());
       if (problem) return problem;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Why an MCP tool's call on reviewed repo `repo` merges a case PR or deletes or moves a case branch, or undefined
+ * (Qodo on PR 337). Judged by the tool's name, as the guard can't know every server's: a merge with no PR number
+ * it can read, or a branch it can't read, is refused like one it can tell is a case's.
+ */
+export function mcpCaseProblem(env: NodeJS.ProcessEnv, tool: string, args: Record<string, unknown>, repo: Reviewed) {
+  const records = caseRecords(env);
+  if (/merge/i.test(tool)) {
+    const number = Number(args.pull_number ?? args.pullNumber ?? args.number ?? args.pr ?? Number.NaN);
+    const prs = records?.prs.get(repo.github.toLowerCase()) ?? new Set<number>();
+    if (!records || !Number.isInteger(number) || prs.has(number)) return MERGE_REASON;
+  }
+  if (/(delete|update|move|rename).*(branch|ref)|(branch|ref).*(delete|update|move|rename)/i.test(tool)) {
+    const name = String(args.branch ?? args.ref ?? args.name ?? "").replace(/^refs\/heads\//, "");
+    if (!records || !name || records.branches.has(name.toLowerCase())) return BRANCH_REASON;
   }
   return undefined;
 }

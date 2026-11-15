@@ -32,6 +32,12 @@ writeFileSync(join(PRIVATE, "ground-truth.jsonl"), `${JSON.stringify({ caseId: "
 /** Private storage that has lost its audit log: no case can be told apart. */
 const NO_LOG = mkdtempSync(join(tmpdir(), "guard-cases-nolog-"));
 mkdirSync(join(NO_LOG, "templates"));
+/** Private storage whose log records cases in another repo only. */
+const OTHER_CASES = mkdtempSync(join(tmpdir(), "guard-cases-other-"));
+writeFileSync(
+  join(OTHER_CASES, "audit-events.jsonl"),
+  `${JSON.stringify({ type: "pr.opened", repo: "o/x", pr: 1 })}\n`,
+);
 
 function ask(tool: string, input: object, cwd = ELSEWHERE, priv = PRIVATE): string | undefined {
   const env: NodeJS.ProcessEnv = { ...process.env, FAULTFORGE_CONFIG: CONFIG, FAULTFORGE_PRIVATE_DIR: priv };
@@ -85,6 +91,24 @@ describe("a case PR is never merged (Q23, Q24)", () => {
 
   it("refuses every merge where private storage has lost its audit log", () => {
     expect(bash(`gh pr merge 5 -R ${T} --squash`, ELSEWHERE, NO_LOG)).toMatch(/can't tell/);
+  });
+
+  it("reads the method gh sends, the last one given (Qodo on PR 337)", () => {
+    expect(bash(`gh api repos/${T}/pulls/77/merge -X GET -X PUT`)).toMatch(/merge a recorded case PR/);
+    expect(bash(`gh api -X GET -X DELETE repos/${T}`)).toMatch(/rename, archive or delete/);
+  });
+
+  it("merges an ordinary PR by API where the log records no case in that repo (Qodo on PR 337)", () => {
+    expect(bash(`gh api -X PUT repos/${T}/pulls/12/merge`, ELSEWHERE, OTHER_CASES)).toBeUndefined();
+  });
+
+  it("refuses an MCP tool's merge of a case PR, or of a PR it can't tell (Qodo on PR 337)", () => {
+    const merge = (input: object) => ask("mcp__github__merge_pull_request", input);
+    expect(merge({ owner: "AJBeumer", repo: "faultforge-target", pull_number: 77 })).toMatch(/recorded case PR/);
+    expect(merge({ owner: "AJBeumer", repo: "faultforge-target" })).toMatch(/recorded case PR/);
+    expect(merge({ owner: "AJBeumer", repo: "faultforge-target", pull_number: 5 })).toBeUndefined();
+    const del = { owner: "AJBeumer", repo: "faultforge-target", branch: "tidy-totals" };
+    expect(ask("mcp__github__delete_branch", del)).toMatch(/case branch/);
   });
 });
 
@@ -144,6 +168,10 @@ describe("a case branch stays in the reviewed checkout (H15)", () => {
     "git branch -f tidy-totals HEAD~1",
     "git checkout -B fix-rounding",
     "git switch -C tidy-totals origin/main",
+    // The name joined on to the flag (Qodo on PR 337).
+    "git checkout -Btidy-totals",
+    "git switch -Cfix-rounding",
+    "git switch --force-create=tidy-totals",
     "git branch -D $B",
   ])("refuses %s", (command) => {
     expect(bash(command, TARGET.dir)).toMatch(/update-ref|case branch/);
