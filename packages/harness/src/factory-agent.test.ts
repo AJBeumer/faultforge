@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { AGENT_DOOR_KINDS } from "../../../.claude/hooks/factory-policy-door.ts";
 import {
   AGENT_TOOLS,
   agentArgs,
@@ -10,7 +11,7 @@ import {
   killTree,
   prUrlFromToolResult,
 } from "./factory-agent.ts";
-import { parsePost } from "./target-post.ts";
+import { COMMAND_KINDS, parsePost } from "./target-post.ts";
 
 describe("agentInstructions (#73)", () => {
   it("tells the agent to pass PR bodies, comments and commit messages as files", () => {
@@ -186,5 +187,14 @@ describe("the factory skill sends a reviewed repo's writes through the door (#34
     expect(skill).toContain("npm run target:post -- pr-create --repo <github> --head <name>");
     expect(skill).toContain("npm run target:post -- pr-edit --repo <github> --number <n>");
     expect(skill).not.toMatch(/gh pr (create|edit)/);
+  });
+});
+
+describe("agentInstructions: the door kinds come from the policy's one list (#347)", () => {
+  it("names a command for every kind the policy allows, and none for a kind it refuses", () => {
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false, "Owner/app");
+    const named = COMMAND_KINDS.filter((kind) => text.includes(`npm run target:post -- ${kind} `));
+    expect(named.sort()).toEqual([...AGENT_DOOR_KINDS].sort());
+    expect(text).toContain(`allows only ${AGENT_DOOR_KINDS.join(", ")}`);
   });
 });

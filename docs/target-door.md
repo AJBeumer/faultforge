@@ -26,6 +26,8 @@ Exit codes: 0 sent; 1 usage; 2 refused, nothing sent; 3 `gh` or `git` failed aft
 
 `case:ticket` and `case:pr` send through the same module (`packages/harness/src/target-post.ts`), and so does the factory's runner for its comments and label moves on a reviewed repo's ticket (`ticket-write.ts`, #345). Its agent pushes and opens its PR with `npm run target:post`, like anyone else.
 
+During a factory run the agent may use only `push`, `pr-create` and `pr-edit` (#347). The factory policy hook refuses every other kind, so commenting on a PR, closing one and writing issues stay with the owner and the runner. The list lives in one place, `AGENT_DOOR_KINDS` in `.claude/hooks/factory-policy-door.ts`, which the policy and the agent's prompt both read. Outside a run the owner's door commands are unaffected.
+
 The module has one kind the command doesn't take: `label`, which only the runner uses, so a run's agent can't move a ticket's labels itself. It adds labels in one edit, then removes each other one. A label name is checked like any text, and must also be one plain line of at most 50 characters with no comma (gh would split it into two labels). A label post can't add and remove the same label.
 
 ## What the guard does
