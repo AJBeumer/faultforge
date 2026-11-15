@@ -13,6 +13,7 @@
     "factory:timeline": "tsx packages/harness/src/factory-timeline-cli.ts",
     "factory:keep": "tsx packages/harness/src/factory-keep.ts",
     "factory:recover": "tsx packages/harness/src/factory-recover-cli.ts",
+    "factory:sandbox": "tsx packages/harness/src/factory-sandbox-setup.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx packages/harness/src/vitest-run.ts run --project unit",
     "test:integration": "tsx packages/harness/src/vitest-run.ts run --project integration",

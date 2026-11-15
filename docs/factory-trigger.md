@@ -37,6 +37,33 @@ The same tick also runs on the owner's PC (`npm run factory:tick`, below), with 
 
 The `/factory` loop inside the run keeps its own limits: at most three review rounds, and it stops at every owner gate.
 
+## The agent's network
+
+The policy hook reads command text, and text can't tell what a test file, a script or inline code will connect to once it runs. So in Actions the operating system decides instead (#330):
+
+- **Its own user.** The agent, and everything it starts, runs as `ffagent`, a system user with no password, no sudo and no docker group. The tick starts it with `sudo -n -u ffagent`, passing its environment by variable name, never by value on a command line. `npm run factory:sandbox -- setup` makes the user before the tick, and gives it the run's folders by ACL (inherited by new files, for both users) and Node's install read-only.
+- **No route out.** Every packet of that user goes through one iptables chain, the same for IPv4 and IPv6: loopback is allowed, except DNS, and everything else is refused. Its user is also kept off the system resolver (a D-Bus policy and socket ACLs), so it can't have a name looked up for it either. A program that ignores the proxy below gets no connection, and no name.
+- **One way through.** The tick serves a small proxy on loopback, in its own process, as the runner's user. It tunnels (`CONNECT`) only to the hosts in `factory.json`'s `network.allow`, only on port 443, and refuses everything else (other hosts, ports, plain HTTP) without looking the name up. The agent gets `HTTPS_PROXY` and the other spellings, which Claude Code, `gh`, `git` and `npm` follow, and Claude Code's optional traffic (telemetry, error reports, update checks) is off, so it needs only `api.anthropic.com`.
+- **Fail closed.** Before it starts the agent, the tick checks that the user, both chains and a live probe (a direct connection from the user must be refused) are in place. If not, the agent isn't started and the run needs help. When the agent ends, every process of its user is killed; the workflow does that again after the tick, before the private repo is checked out.
+
+The allow-list, in `factory.json` under its schema:
+
+| Host | For |
+|---|---|
+| `api.anthropic.com` | Claude Code itself. With its optional traffic off, the only host it calls (seen through a logging proxy, and in the integration test). |
+| `api.github.com` | `gh` |
+| `github.com` | `git` fetch and push |
+| `codeload.github.com`, `objects.githubusercontent.com` | archives and files `git` and `gh` download |
+| `registry.npmjs.org` | `npm ci` |
+
+Adding a host is a change to `factory.json` and to the test that pins the list, so it is reviewed like any other change. The list limits where the agent's traffic can go, not what it says: GitHub is on it, so the agent's token is what bounds what it can write there, and the runner's audit is what catches it.
+
+What the runner reports: the run log gets `network-sandbox` (the user and the list) and `network-egress` (the number of tunnels and of refused requests, counts only, since a refused request can carry what a program tried to send). Each refused request line goes to the agent's transcript, which only the private repo keeps.
+
+The proof is `packages/harness/test/agent-sandbox.integration.test.ts`, which runs on Linux with passwordless sudo, in CI: a blocked host fails from `curl`, a script file, a `vitest` test file and inline `node -e` code (an aliased `WebSocket`, and `fetch` reached through `[].constructor.constructor`), proxied or direct; a name can't be resolved; and `npm ci`, `gh api`, `git` and Claude Code still reach their hosts.
+
+**A local run has no sandbox.** On the owner's PC (Windows), the agent runs as the owner, with the owner's network; only the hooks and the audit stand guard. The run log says so as its `network-sandbox` event: "no network sandbox: local mode".
+
 ## Following a run
 
 Every step goes to `<runs>/<run id>.jsonl` as it happens, and the agent's full transcript to `<run id>.agent.jsonl`. Both are pushed to `private/raw-artifacts/factory-runs/` at the end. In Actions, the steps also show in the job's log, and the event log (never the transcript: a public repo's artifacts can be downloaded) is kept as an artifact for 30 days. When a job is cancelled or times out, or the tick crashes before its last copy, an `if: always()` step (`npm run factory:keep`) pushes the event log and transcript of every run that didn't log `saved` to a branch of the private repo, `unsaved-<Actions run id>-<attempt>`, never to `main`; the tick step stops ten minutes inside the job's limit so this step has time to run. The run's page shows the outcome too: a summary line for every tick, naming the run and its outcome, and an error annotation when the tick failed (exit 3), couldn't set up (exit 2), or was cancelled or ran out of time before it could say.

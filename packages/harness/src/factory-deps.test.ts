@@ -67,6 +67,7 @@ import type { FactoryConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
+import { localSandbox } from "./factory-sandbox.ts";
 import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
@@ -275,7 +276,21 @@ Picked up.`,
       "/t.md",
       log,
       expect.any(Function),
+      localSandbox,
     );
+  });
+
+  it("starts a CI run's agent through the network sandbox, and a PC run's without one (#330)", async () => {
+    const ws = workspace(join(runs, "run-1"));
+    const log = () => {};
+    const ok = { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
+    vi.mocked(runAgent).mockResolvedValue(ok);
+    await realDeps(FACTORY, OPTIONS, "ci").runAgent(ws, "run-1", "target", 18, "/t.md", log);
+    const sandbox = vi.mocked(runAgent).mock.calls.at(-1)?.[10];
+    expect(sandbox).toBeDefined();
+    expect(sandbox).not.toBe(localSandbox);
+    await realDeps(FACTORY, OPTIONS, "local").runAgent(ws, "run-1", "target", 18, "/t.md", log);
+    expect(vi.mocked(runAgent).mock.calls.at(-1)?.[10]).toBe(localSandbox);
   });
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {
@@ -396,7 +411,7 @@ Picked up.`,
 
   it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself (#242)", () => {
     expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual(["faultforge-target: no guard hooks"]);
-    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT);
+    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT, join(LAB_ROOT, "private"));
     expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(
       /^factory:tick refused: faultforge-target: no guard hooks. Run npm run guard:install first.$/,
     );
@@ -404,6 +419,42 @@ Picked up.`,
     expect(setupRefusal(realDeps(FACTORY, OPTIONS, "ci"))).toBeNull();
     expect(vi.mocked(unguardedCheckouts)).not.toHaveBeenCalled();
     expect(setupRefusal({ unguarded: () => [] })).toBeNull();
+  });
+
+  it("says where guard:install writes when FAULTFORGE_PRIVATE_DIR moves it off the checkout the tick pushes (Qodo on PR 334)", () => {
+    const pushed = join(LAB_ROOT, "private");
+    const problem = `${pushed} has no guard pre-push hook`;
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", join(tmpdir(), "elsewhere-private"));
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce(["faultforge-target: no guard hooks", problem]);
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual([
+      "faultforge-target: no guard hooks",
+      `${problem} (guard:install writes to ${join(tmpdir(), "elsewhere-private")}, set by FAULTFORGE_PRIVATE_DIR: run it with that unset)`,
+    ]);
+    // Pointing at the same folder, the problem is reported as it is.
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", pushed);
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce([problem]);
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual([problem]);
+  });
+
+  it("a local tick reports a private checkout without its pre-push hook before a run starts (PR 333)", async () => {
+    // The wiring: the deps hand the private checkout over, and its problem refuses the tick.
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce(["private: no pre-push hook"]);
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(/^factory:tick refused: private: no pre-push hook\./);
+    // And the real check finds it: a private checkout with no hooks at all is reported.
+    const real = (await vi.importActual<typeof import("./guard-install.ts")>("./guard-install.ts")).unguardedCheckouts;
+    const lab = mkdtempSync(join(tmpdir(), "ff-deps-priv-"));
+    onTestFinished(() => rmSync(lab, { recursive: true, force: true }));
+    const priv = join(lab, "private");
+    mkdirSync(priv);
+    expect(
+      (await vi.importActual<typeof import("./factory-exec.ts")>("./factory-exec.ts")).git(priv, "init", "-q"),
+    ).toBe("");
+    const none: FactoryConfig = { ...FACTORY, repos: {} };
+    expect(real(none, lab)).toEqual([]);
+    expect(real(none, lab, priv)).toHaveLength(1);
   });
 
   it("takes the lock in the runs folder when local, and never holds one in CI", () => {

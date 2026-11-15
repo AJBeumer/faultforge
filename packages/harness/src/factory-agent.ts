@@ -10,6 +10,7 @@ import { type FactoryConfig, repoConfig } from "./factory-config.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
 import { guardPrivateDir, privateCheckoutsFor } from "./factory-private.ts";
 import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
+import { type AgentSandbox, type Launch, localSandbox } from "./factory-sandbox.ts";
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
 
@@ -184,9 +185,10 @@ export function agentStep(command: string): string | null {
 
 /**
  * Runs the agent on one ticket in `ws` (`TickDeps.runAgent`), with the run's budget and time limit, and reads
- * its result from the stream. Its transcript goes to `<runs>/<run id>.agent.jsonl`.
+ * its result from the stream. Its transcript goes to `<runs>/<run id>.agent.jsonl`. `sandbox` decides how it is
+ * started: in a CI run as its own user behind the network allow-list, never without it (`factory-sandbox.ts`).
  */
-export function runAgent(
+export async function runAgent(
   factory: FactoryConfig,
   options: TickOptions,
   runs: string,
@@ -198,6 +200,7 @@ export function runAgent(
   log: Logger,
   /** Told the agent's pid when it starts, and null once it has ended, so the lock only ever names a live agent. */
   onAgent: (pid: number | null) => void = () => {},
+  sandbox: AgentSandbox = localSandbox,
 ): Promise<AgentRun> {
   const { github } = repoConfig(factory, repoKey);
   const settingsFile = join(ws.root, "agent-settings.json");
@@ -253,10 +256,32 @@ export function runAgent(
   });
   log("agent-env", { names: Object.keys(agent.env).sort(), agentToken: agent.agentToken });
   if (agent.warning) log("warning", { message: agent.warning });
-  return new Promise((done) => {
-    const child = spawn(claudeBinary(), args, {
+  let launch: Launch;
+  try {
+    // A refused request can carry what a program tried to send: it goes to the private transcript, never the log.
+    launch = await sandbox.open(claudeBinary(), args, agent.env, log, (line) =>
+      appendFileSync(transcript, `${JSON.stringify({ t: new Date().toISOString(), egressRefused: line })}\n`),
+    );
+  } catch (error) {
+    const left = broker.close();
+    if (left) log("error", { message: left });
+    const message = (error as Error).message;
+    log("error", { message });
+    return {
+      exitCode: null,
+      timedOut: false,
+      resultText: null,
+      subtype: `could not start the agent: ${message}`,
+      costUsd: null,
+      turns: null,
+      lastPr: null,
+    };
+  }
+  const killAgent = launch.kill ?? ((pid: number) => killTree(pid));
+  const finished = new Promise<AgentRun>((done) => {
+    const child = spawn(launch.command, launch.args, {
       cwd: ws.lab,
-      env: agent.env,
+      env: launch.env,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -267,13 +292,13 @@ export function runAgent(
       if (left) log("error", { message: left });
     };
     // Stopping the runner stops the agent, and the lock learns its pid for a kill the runner can't catch.
-    const unguard = child.pid ? killOnExit(child.pid) : () => {};
+    const unguard = child.pid ? killOnExit(child.pid, killAgent) : () => {};
     if (child.pid) onAgent(child.pid);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       try {
-        if (child.pid) killTree(child.pid);
+        if (child.pid) killAgent(child.pid);
       } catch (error) {
         log("error", { message: `couldn't end the agent at its time limit: ${(error as Error).message}` });
       }
@@ -362,4 +387,11 @@ export function runAgent(
       });
     });
   });
+  const run = await finished;
+  try {
+    await launch.close();
+  } catch (error) {
+    log("error", { message: `couldn't close the agent's sandbox: ${(error as Error).message}` });
+  }
+  return run;
 }

@@ -16,6 +16,9 @@ export interface RepoConfig {
 
 export interface FactoryConfig {
   evidence: string;
+  /** The hosts a CI run's agent may reach, through the runner's proxy (#330, `factory-sandbox.ts`). Required by
+   * the schema; optional here so a test's made-up config needs none. */
+  network?: { allow: string[] };
   repos: Record<string, RepoConfig>;
 }
 
