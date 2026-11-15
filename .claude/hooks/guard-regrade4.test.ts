@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { githubRepo, unreadableMove } from "./guard-repos.ts";
+import { githubRepo, navigationTargets, unreadableMove } from "./guard-repos.ts";
 import { decide } from "./guard-target.ts";
 import { joinContinuations } from "./shell-scan.ts";
 
@@ -151,5 +151,33 @@ describe("a move whose destination can't be read touches every reviewed repo (re
     expect(bash('cd "$TARGET_DIR" && git status')).toBeUndefined();
     expect(bash('cd "$HOME/x" && git push origin tidy-list')).toBeUndefined();
     expect(bash(`cd ${at(ELSEWHERE)} && git push --force origin main`)).toBeUndefined();
+  });
+
+  it("reads a move only where the shell acts on it, never in a message (Qodo on PR 322)", () => {
+    expect(bash(`git commit -m 'the planted bug: run cd "$DIR" first'`)).toBeUndefined();
+    expect(bash(`gh pr create -R ${LAB} --title "Tidy" --body 'then git -C "$X" status'`)).toBeUndefined();
+  });
+
+  it("reads single-quoted text and a lone % as written (Qodo on PR 322)", () => {
+    expect(unreadableMove("cd '$DIR'", ELSEWHERE)).toBe(false);
+    expect(unreadableMove("git -C '$(x)' status", ELSEWHERE)).toBe(false);
+    expect(unreadableMove("cd 100%done", ELSEWHERE)).toBe(false);
+    expect(unreadableMove("cd %USERPROFILE%", ELSEWHERE)).toBe(true);
+    expect(unreadableMove("cd -", ELSEWHERE)).toBe(true);
+  });
+
+  it("counts a wildcard with more matches than the guard follows as unreadable, without walking them (Qodo on PR 322)", () => {
+    const many = mkdtempSync(join(tmpdir(), "guard-many-"));
+    for (let i = 0; i < 40; i++) mkdirSync(join(many, `d${i}`));
+    expect(navigationTargets(`cd ${at(many)}/*`, ELSEWHERE)).toEqual([]);
+    expect(unreadableMove(`cd ${at(many)}/*`, ELSEWHERE)).toBe(true);
+    expect(navigationTargets(`cd ${at(many)}/d1?`, ELSEWHERE)).toHaveLength(10);
+  });
+});
+
+describe("a GitHub URL counts only where github.com is the host (Qodo on PR 322)", () => {
+  it("reads nothing from github.com in another host's path", () => {
+    expect(githubRepo("https://gitlab.com/github.com/AJBeumer/faultforge-target.git")).toBeUndefined();
+    expect(bash("git push --force https://gitlab.com/github.com/AJBeumer/faultforge-target.git main")).toBeUndefined();
   });
 });

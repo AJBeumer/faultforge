@@ -6,7 +6,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { outsidePostedText } from "./guard-posted.ts";
 import { globMatches, hasWildcard } from "./shell-glob.ts";
+import { quotedSpans } from "./shell-scan.ts";
 
 export interface Reviewed {
   /** owner/name on GitHub */
@@ -189,8 +191,10 @@ function gitRemotes(gitDir: string): string[] {
  * user (`git@`), a host of `github.com` or one under it (`www.`, `ssh.`), a port (`:443`), then the repo after
  * `/` or the scp-style `:`, with or without `.git` and a closing slash, in any case. Groups: owner, name.
  * A port is only read as one when an `owner/name` follows it; otherwise `:1234/x` is the scp form's owner.
+ * The host must be the URL's host: at the start of a word, after a scheme's `//`, or after a user's `@`, never
+ * inside another host's path (`gitlab.com/github.com/o/n`; Qodo on PR 322).
  */
-export const GITHUB_URL = String.raw`(?<![\w.-])(?:[\w-]+\.)*github\.com(?::\d+(?=\/[\w.-]+\/))?[\/:]+([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\/"'\s?#)]|$)`;
+export const GITHUB_URL = String.raw`(?<=^|[\s"'=<(@]|\/\/)(?:[\w-]+\.)*github\.com(?::\d+(?=\/[\w.-]+\/))?[\/:]+([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\/"'\s?#)]|$)`;
 
 /** Every GitHub repo the text names by URL, as `owner/name` in lower case. */
 export function githubRepos(text: string): string[] {
@@ -253,17 +257,30 @@ export function moveCount(command: string): number {
   return [...command.matchAll(MOVE)].length;
 }
 
-/** A move's path the guard can't read: built from a variable or a substitution, or `-`, the previous folder. */
-const UNREADABLE_PATH = /[$`%]|^-$/;
+/**
+ * True when a move's path can't be read before the shell runs: built from a variable, a substitution or cmd's
+ * `%NAME%`, or `-`, the previous folder. Single-quoted text is literal to the shell, `$` and all (Qodo on PR 322).
+ */
+function unreadablePath(path: string, singleQuoted: boolean): boolean {
+  if (path === "-") return true;
+  return !singleQuoted && /[$`]|%[A-Za-z_]\w*%/.test(path);
+}
+
+/** Where a command moves (see `navigation`): the folders it reaches, and whether one of them can't be read. */
+export interface Navigation {
+  targets: string[];
+  unreadable: boolean;
+}
 
 /**
  * The folders a command moves into or points git at, in order, each resolved from the folder the one
  * before left it in: `cd`, `pushd`, `Set-Location`, `git -C`, `--work-tree`, `--git-dir`, `GIT_DIR=` and
  * `GIT_WORK_TREE=`. An unquoted wildcard path is expanded against the folders that exist, as the shell does
  * (re-grade 4). A path built from a variable or a substitution can't be resolved here: it is left out, and
- * `unreadable` says one was seen. At most `MAX_MOVES` are read.
+ * `unreadable` says one was seen. At most `MAX_MOVES` folders are read in all; a wildcard that names more is
+ * unreadable too, so the guard never walks up from each of thousands of matches (Qodo on PR 322).
  */
-function moves(command: string, cwd: string): { targets: string[]; unreadable: boolean } {
+export function navigation(command: string, cwd: string): Navigation {
   const targets: string[] = [];
   let unreadable = false;
   // The folders an unquoted path names from `from`: its wildcard matches, or the path itself.
@@ -272,14 +289,17 @@ function moves(command: string, cwd: string): { targets: string[]; unreadable: b
     const full = path.startsWith("~") ? join(homedir(), path.slice(1)) : resolve(from, path);
     if (quoted || !hasWildcard(path)) return [full];
     const found = globMatches(full, from);
-    if (!found) unreadable = true;
-    return found?.length ? found : [full];
+    if (!found || targets.length + found.length > MAX_MOVES) {
+      unreadable = true;
+      return [];
+    }
+    return found.length ? found : [full];
   };
   let here = cwd;
   for (const m of [...command.matchAll(MOVE)].slice(0, MAX_MOVES)) {
     const path = m[1] ?? m[2] ?? m[3] ?? "";
     if (!path) continue;
-    if (UNREADABLE_PATH.test(path)) {
+    if (unreadablePath(path, m[2] !== undefined)) {
       unreadable = true;
       continue;
     }
@@ -287,15 +307,19 @@ function moves(command: string, cwd: string): { targets: string[]; unreadable: b
     targets.push(...resolved);
     if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved[0] ?? here;
     // Each further `-C` of the same git call is resolved from the one before, as git does (Qodo on PR 265).
-    if (/^git\s/i.test(m[0])) {
+    if (/^git\s/i.test(m[0]) && resolved.length) {
       let dir = resolved[0] ?? here;
       const option = /\s+-C\s*(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/y;
       option.lastIndex = (m.index ?? 0) + m[0].length;
       for (let c = option.exec(command); c; c = option.exec(command)) {
         const next = c[1] ?? c[2] ?? c[3] ?? "";
-        if (UNREADABLE_PATH.test(next)) unreadable = true;
-        if (unreadable || targets.length >= MAX_MOVES) break;
+        if (unreadablePath(next, c[2] !== undefined)) {
+          unreadable = true;
+          break;
+        }
+        if (targets.length >= MAX_MOVES) break;
         const nested = expand(next, dir, c[3] === undefined);
+        if (!nested.length) break;
         dir = nested[0] ?? dir;
         targets.push(...nested);
       }
@@ -304,17 +328,27 @@ function moves(command: string, cwd: string): { targets: string[]; unreadable: b
   return { targets, unreadable };
 }
 
-/** The folders a command moves into or points git at; see `moves`. */
+/** The folders a command moves into or points git at; see `navigation`. */
 export function navigationTargets(command: string, cwd: string): string[] {
-  return moves(command, cwd).targets;
+  return navigation(command, cwd).targets;
 }
 
 /**
  * True when the command moves into a folder the guard can't read before it runs (`cd "$DIR"`, `git -C $(…)`,
- * a wildcard with too many matches): a write after it may land in any reviewed checkout (re-grade 4).
+ * a wildcard with too many matches): a write after it may land in any reviewed checkout (re-grade 4). Only
+ * where the shell acts on it: a move written in a message, a single-quoted string or a comment is text, so it
+ * can't widen a write to every reviewed repo (Qodo on PR 322).
  */
 export function unreadableMove(command: string, cwd: string): boolean {
-  return moves(command, cwd).unreadable;
+  const acted = outsidePostedText(command);
+  let text = "";
+  let at = 0;
+  for (const span of quotedSpans(acted)) {
+    if (span.kind !== "single" && span.kind !== "comment") continue;
+    text += `${acted.slice(at, span.start)} `;
+    at = span.end;
+  }
+  return navigation(text + acted.slice(at), cwd).unreadable;
 }
 
 /** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
