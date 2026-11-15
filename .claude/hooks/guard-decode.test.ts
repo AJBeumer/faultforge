@@ -215,6 +215,37 @@ describe("leetspeak (AUD-M3)", () => {
   });
 });
 
+describe("markup that renders as nothing can't split a word or an id (re-grade 7)", () => {
+  it.each([
+    ["an HTML comment", "x-sec<!-- -->ret-v1"],
+    ["an entity", "x-s&#101;cret-v1"],
+    ["a named entity", "x&hyphen;secret&lowbar;v1"],
+    ["bold", "x-se**cret**-v1"],
+    ["a code span", "x-`secret`-v1"],
+    ["strikethrough", "x-se~~cret~~-v1"],
+    ["dots", "x.secret.v1"],
+  ])("reads a private id split by %s", (_name, text) => {
+    const names = privateIdMatcher(["x-secret-v1"]);
+    expect(names?.(`demo ${text} here`)).toBe(true);
+    expect(names?.("x-secret-v10 and x-secretive-v1")).toBe(false);
+  });
+
+  it("refuses a lab post that names a private id through markup", () => {
+    expect(verdict('gh pr create -R AJBeumer/faultforge -t Tidy -b "demo x-se<!---->cret-v1"')).toMatch(
+      /name a bug template that is still private/,
+    );
+  });
+
+  it.each([
+    ["an HTML comment", "plan<!-- -->ted bug"],
+    ["an entity", "pl&#97;nted bug"],
+    ["bold", "plan**ted** bug"],
+    ["a dot", "the answer.key"],
+  ])("refuses a post to a reviewed repo with a word split by %s", (_name, text) => {
+    expect(verdict(`gh pr comment 3 -R ${T} -b "${text}"`, LAB, NO_PRIVATE)).toMatch(/This would put a hint/);
+  });
+});
+
 describe("a force push built from a variable (AUD-M3)", () => {
   it("is a force push in a reviewed checkout unless the command sets the flag to something harmless", () => {
     expect(verdict("git push $FLAG origin main", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
@@ -252,5 +283,13 @@ describe("the fail-closed wrapper refuses a hook file that can't be the hook (AU
     const result = run([hook], () => Buffer.from("{}"));
     expect(result.code).toBe(2);
     expect(result.stderr).toMatch(/refused/);
+  });
+});
+
+describe("a private id split by a line break (Qodo on PR 339)", () => {
+  it("reads <br> as the new line it shows", () => {
+    const names = privateIdMatcher(["x-secret-v1"]);
+    expect(names?.("demo x-secret<br>v1")).toBe(true);
+    expect(names?.("demo x-secret<br />v1")).toBe(true);
   });
 });

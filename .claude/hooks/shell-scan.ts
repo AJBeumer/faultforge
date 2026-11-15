@@ -192,6 +192,20 @@ export function quotedMask(command: string): boolean[] {
 }
 
 /**
+ * True when `then` matches after the first match of `first`, in one part of `text` cut at any of `stops`: what
+ * `/first[^stops]*then/` tests, in linear time. That pattern tries every `first` and reads to the part's end from
+ * each, so a command of many `git` words took time quadratic in its length (re-grade 7). The first `first` leaves
+ * the most text after it, so it is the only one to try. `first` must not be global.
+ */
+export function wordThen(text: string, first: RegExp, then: RegExp, stops = "|;&\n"): boolean {
+  const parts = stops ? text.split(new RegExp(`[${stops.replace(/[\]\\^-]/g, "\\$&")}]`)) : [text];
+  return parts.some((part) => {
+    const found = first.exec(part);
+    return found !== null && then.test(part.slice(found.index + found[0].length));
+  });
+}
+
+/**
  * The text as the shell joins its words: quote marks gone, so `"pla""nted"`, `'pla'+'nted'` (PowerShell)
  * and `"--force"` read as `planted` and `--force`. For finding words and flags, never for reading paths.
  */

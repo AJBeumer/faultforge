@@ -821,7 +821,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
   const TEMPLATE_TEXT = JSON.stringify({ match: { kindTerms: ["off by one"] } });
 
   /** A bug case adjudicated by verdict (tool-written, with its inputHash) on a finished review of PR 7. */
-  function fixture(opts: { state?: string; disposition?: string; ruleVersion?: unknown } = {}) {
+  function fixture(opts: { state?: string | null; disposition?: string; ruleVersion?: unknown } = {}) {
     const root = mkdtempSync(join(tmpdir(), "case-build-gate-"));
     const groundTruthPath = join(root, "ground-truth.jsonl");
     const auditEventsPath = join(root, "audit-events.jsonl");
@@ -847,7 +847,8 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
       repo: "Owner/target",
       pr: 7,
       headSha: COMMIT,
-      state: opts.state ?? "complete",
+      // `state: null` leaves the field out, as a save from before review:wait wrote it would.
+      ...(opts.state === null ? {} : { state: opts.state ?? "complete" }),
       reviewSeenCompleteAt: "2026-11-01T00:04:00.000Z",
       findings: [],
     });
@@ -984,6 +985,15 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     const { code, err } = await build(fixture({ state: "review incomplete" }));
     expect(code).toBe(2);
     expect(err).toContain("only review_incomplete can");
+  });
+
+  it("refuses, exit 2, a final verdict on a save with no state, and builds review_incomplete on it (M1)", async () => {
+    for (const disposition of ["confirmed_missed", "clean_control"]) {
+      const { code, err } = await build(fixture({ state: null, disposition }));
+      expect(code).toBe(2);
+      expect(err).toContain('not "complete"');
+    }
+    expect((await build(fixture({ state: null, disposition: "review_incomplete" }))).code).toBe(0);
   });
 
   it("never uses a save of the same commit on another PR (M44b)", async () => {

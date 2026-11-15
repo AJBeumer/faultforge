@@ -79,3 +79,31 @@ export function canSymlink(): boolean {
     return false;
   }
 }
+
+/**
+ * How much slower `run` gets when its input grows `factor` times (AUD-M4, re-grade 7): the best of several timed
+ * runs at each size, after a warm-up, so a busy machine slows both sizes alike and a pause in one run doesn't
+ * count. Linear code grows at most `factor` times (less, with fixed costs such as a git call); quadratic code
+ * about factor² times. So a bound between them (`LINEAR_BOUND`) holds on a slow machine as on a fast one, and
+ * fails when the code turns quadratic. No wall-clock limit: a loaded machine made those fail at random.
+ */
+export function growth(run: (scale: number) => void, factor = GROWTH_FACTOR): number {
+  const best = (scale: number, times: number) => {
+    let least = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < times; i++) {
+      const started = performance.now();
+      run(scale);
+      least = Math.min(least, performance.now() - started);
+    }
+    return least;
+  };
+  run(1);
+  run(factor);
+  // A floor of a twentieth of a millisecond, under which the timer can't tell sizes apart.
+  return best(factor, 3) / Math.max(best(1, 5), 0.05);
+}
+
+/** The input growth `growth` measures by default: eight times. */
+export const GROWTH_FACTOR = 8;
+/** Three times what linear code can reach at GROWTH_FACTOR (8), and well under quadratic code's 64. */
+export const LINEAR_BOUND = 24;

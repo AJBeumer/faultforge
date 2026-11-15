@@ -16,6 +16,8 @@
  *    `ssh`) or by code (`fetch(`, `http.request`)
  *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
  *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
+ *  - changing package.json's check script or a script it runs, by any tool (factory-policy-check.ts, re-grade 7)
+ *  - reading stored git credentials, or another process's environment through `ps e` (re-grade 7)
  *  - switching off git's own guard hooks anywhere, the lab included: `--no-verify`, `core.hooksPath`, the guard's
  *    settings, or a file in a `.git` folder (re-grade 6)
  *  - reading the owner's secrets in the home folder (factory-policy-home.ts, re-grade 6)
@@ -38,6 +40,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { checkScriptViolation } from "./factory-policy-check.ts";
 import { commandViolations, readings } from "./factory-policy-commands.ts";
 import { HOME_SECRET_REASON, homeSecretCommand } from "./factory-policy-home.ts";
 import {
@@ -219,10 +222,8 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       const reason = readViolation(args, cwd, env, tool);
       if (reason) reasons = [reason];
     } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-      const reason = editViolation(
-        resolve(cwd, String(args.file_path ?? args.notebook_path ?? "")),
-        env.FAULTFORGE_RUN_ROOT,
-      );
+      const path = resolve(cwd, String(args.file_path ?? args.notebook_path ?? ""));
+      const reason = editViolation(path, env.FAULTFORGE_RUN_ROOT) ?? checkScriptViolation(tool, args, path);
       if (reason) reasons = [reason];
     }
   } catch (error) {

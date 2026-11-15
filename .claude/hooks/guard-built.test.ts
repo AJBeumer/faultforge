@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { guardConfig, tempRepo } from "./fixtures.ts";
+import { growth, guardConfig, LINEAR_BOUND, tempRepo } from "./fixtures.ts";
 import { decide } from "./guard-target.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
@@ -168,10 +168,9 @@ describe("holes found in the second review of PR 266", () => {
     );
   });
 
-  it("decides a long run of git options that never reaches -C in well under a second", () => {
-    const started = performance.now();
-    bash(`git ${"--a ".repeat(200)}log`);
-    expect(performance.now() - started).toBeLessThan(1000);
+  it("decides a long run of git options that never reaches -C in time linear in their number", () => {
+    // 50 options, then 400 (re-grade 7: no wall-clock limit, which a busy machine failed at random).
+    expect(growth((k) => bash(`git ${"--a ".repeat(50 * k)}log`))).toBeLessThan(LINEAR_BOUND);
   });
 });
 

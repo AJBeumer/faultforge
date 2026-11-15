@@ -50,8 +50,8 @@ jobs:
       - run: npm run check
 
   # The slow tests (packages/*/test), on both systems. They need the reviewed target checked out next to this
-  # repository, as on the owner's machine; it is public, so no token is needed. Not one of the checks
-  # protect-main requires, so a flaky network can't block a merge, but it runs on every push (#229).
+  # repository, as on the owner's machine; it is public, so no token is needed. Both jobs are required checks
+  # in protect-main, as the check jobs are: a red integration job blocks a merge. It runs on every push (#229).
   integration:
     name: npm run test:integration (${{ matrix.os }})
     strategy:

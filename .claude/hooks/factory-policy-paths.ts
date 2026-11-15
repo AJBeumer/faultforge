@@ -11,7 +11,7 @@ import { basename, dirname, join, posix, relative, resolve } from "node:path";
 import { HOME_SECRET_REASON, homeSecretPath } from "./factory-policy-home.ts";
 import { ANSWER_FILES, globBase, inside, privateReadViolation, real } from "./factory-policy-private.ts";
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
-import { quotedMask } from "./shell-scan.ts";
+import { quotedMask, wordThen } from "./shell-scan.ts";
 
 export { PRIVATE_CHECKOUTS_ENV, privateCheckouts, privateCommandViolation } from "./factory-policy-private.ts";
 
@@ -27,20 +27,35 @@ const GUARDRAILS = /(?<![\w-])\.claude(?![\w-])|\bneutral\.ts\b/i;
 /** Redirects that write no file: to another descriptor or to the null device. */
 const HARMLESS_REDIRECT = /\d?>&\d|\d?>\s*\/dev\/null|\d?>\s*nul\b/gi;
 
-/** Ways a shell command writes a file: a redirect, a file tool, an in-place edit, a write from code, or git. */
+/** Ways a shell command writes a file: a redirect, a file tool, or a write from code. */
 const SHELL_WRITE = new RegExp(
   [
     ">",
     String.raw`\b(cp|mv|tee|rm|rmdir|unlink|ln|install|rsync|truncate|dd|touch|chmod|chown|patch)\b`,
     String.raw`\b(Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|Remove-Item|New-Item|Rename-Item|Clear-Content)\b`,
-    String.raw`\bsed\b[^|;&\n]*\s(-[a-zA-Z]*i|--in-place)`,
-    String.raw`\bperl\b[^|;&\n]*\s-[a-zA-Z]*i`,
     String.raw`\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|cpSync|rename|renameSync|rmSync|unlink|unlinkSync|truncateSync|openSync|symlink|symlinkSync|write_text|write_bytes|shutil)\b`,
-    String.raw`\bopen\s*\([^)]*["'][wa]`,
-    String.raw`\bgit\b[^|;&\n]*\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)(?![\w-])`,
   ].join("|"),
   "i",
 );
+
+/**
+ * True when a shell command writes a file: `SHELL_WRITE`, an in-place edit (`sed -i`, `perl -i`), a file opened
+ * for writing from code, or a git command that changes files. A word then another in one step, each read in
+ * linear time (wordThen; re-grade 7).
+ */
+function writesFile(text: string): boolean {
+  return (
+    SHELL_WRITE.test(text) ||
+    wordThen(text, /\bsed\b/i, /\s(-[a-zA-Z]*i|--in-place)/i) ||
+    wordThen(text, /\bperl\b/i, /\s-[a-zA-Z]*i/i) ||
+    wordThen(text, /\bopen\s*\(/i, /["'][wa]/i, ")") ||
+    wordThen(
+      text,
+      /\bgit\b/i,
+      /\b(checkout|restore|apply|am|stash|reset|clean|mv|rm|switch|merge|pull|rebase|cherry-pick)(?![\w-])/i,
+    )
+  );
+}
 
 /** A text as forward-slashed, collapsed path text, so `/proc/./self` and `/proc//self` read `/proc/self`. */
 const asPath = (text: string) => posix.normalize(text.replace(/\\/g, "/"));
@@ -86,9 +101,15 @@ export function readViolation(
  */
 export function guardrailWriteViolation(command: string, cwd = ""): string | undefined {
   const readings = [command, spokenWords(command), codeAsWords(command)].map((r) => r.replace(HARMLESS_REDIRECT, " "));
-  if (!readings.some((r) => SHELL_WRITE.test(r))) return undefined;
+  if (!readings.some(writesFile)) return undefined;
   if (readings.some((r) => GUARDRAILS.test(r)) || (cwd && /(^|[/\\])\.claude([/\\]|$)/i.test(resolve(cwd))))
     return "the agent can't change its own guardrails (.claude, neutral.ts) from the shell either";
+  // package.json holds the check script: a shell write could make the check pass trivially, unseen (re-grade 7).
+  // The Edit and Write tools may change it, where the policy compares the scripts the check runs. Like the
+  // guardrail rule above, a command that writes anything and names package.json is refused, a read into another
+  // file included: telling which word a write lands on would need a shell parser, so it fails closed.
+  if (readings.some((r) => /(?<![\w-])package\.json\b/i.test(r)))
+    return "a shell command that writes a file and names package.json can't be checked: change package.json with the Edit or Write tool (the policy reads its check script there), and read it in a command that writes nothing";
   if (/\$\(|`|\$\{?[A-Za-z_]|<\(/.test(command))
     return "a shell write whose path the shell builds ($(…), a variable) can't be checked before it runs; write files with the Write tool";
   return undefined;
