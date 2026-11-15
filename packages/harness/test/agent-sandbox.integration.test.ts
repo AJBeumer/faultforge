@@ -293,11 +293,35 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
           env: { ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" },
         },
       );
+      // For comparison when it fails: the same call written to a file by a shell as the agent, and as the runner.
+      const file = join(work, "claude-out.txt");
+      const viaFile = await asAgent(
+        "/bin/sh",
+        ["-c", `"${claude}" -p "Reply with OK" --output-format json > "${file}" 2>&1; echo "exit $?"; cat "${file}"`],
+        { env: { ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" } },
+      );
+      const asRunner = await new Promise<string>((done) => {
+        const child = spawn(claude, ["-p", "Reply with OK", "--output-format", "json"], {
+          cwd: work,
+          env: { ...process.env, ...proxyEnv(proxy.port), ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let text = "";
+        child.stdout.on("data", (c) => {
+          text += c;
+        });
+        child.stderr.on("data", (c) => {
+          text += c;
+        });
+        child.on("close", (code) => done(`exit ${code}: ${text}`));
+      });
       const seen = JSON.stringify({
         status,
         counts: proxy.counts(),
         refused: refused.slice(before),
-        out: out.slice(-6000),
+        out: out.slice(-3000),
+        viaFile: viaFile.out.slice(-2000),
+        asRunner: asRunner.slice(-2000),
       });
       expect(out, seen).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
       expect(proxy.counts().allowed).toBeGreaterThan(allowedBefore);
