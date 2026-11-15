@@ -64,11 +64,15 @@ function linksReviewed(text: string): boolean {
  * the ref counts too. A remote commit that isn't here is skipped (`--ignore-missing`): more is read, never less.
  */
 function pushedMessages(checkout: string, remote: string, updates: PushUpdate[]): string {
+  // Both git calls share one budget, so the hook never waits past it (Qodo on PR 329).
+  const end = Date.now() + DEFAULT_BUDGET_MS;
   const git = (args: string[], input?: string) => {
+    const left = end - Date.now();
+    if (left <= 0) throw new Error(`the guard's ${DEFAULT_BUDGET_MS} ms ran out before git ${args[0]}`);
     const r = spawnSync("git", ["-C", checkout, ...args], {
       input,
       encoding: "utf8",
-      timeout: DEFAULT_BUDGET_MS,
+      timeout: left,
       maxBuffer: 64 * 1024 * 1024,
     });
     if (r.status !== 0)
@@ -81,14 +85,10 @@ function pushedMessages(checkout: string, remote: string, updates: PushUpdate[])
     .split("\n")
     .map((line) => line.split(/\s+/)[0] ?? "")
     .filter((sha) => /^[0-9a-f]{40,64}$/.test(sha));
-  const texts: string[] = [];
-  for (const u of sending) {
-    const known = ZERO.test(u.remoteSha) ? held : [...held, u.remoteSha];
-    texts.push(
-      git(["log", "--format=%B", "--ignore-missing", "--stdin"], [u.localSha, "--not", ...known, ""].join("\n")),
-    );
-  }
-  return texts.join("\n");
+  // One log for every ref: each update's old commit is on the remote, so it is excluded for all of them.
+  const old = sending.map((u) => u.remoteSha).filter((sha) => !ZERO.test(sha));
+  const revs = [...sending.map((u) => u.localSha), "--not", ...held, ...old, ""].join("\n");
+  return git(["log", "--format=%B", "--ignore-missing", "--stdin"], revs);
 }
 
 /**

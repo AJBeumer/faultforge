@@ -240,3 +240,29 @@ describe("Qodo on PR 329", () => {
     expect(bash("node --import tsx sum.mjs", ELSEWHERE, RUN)).toBeUndefined();
   });
 });
+
+describe("Qodo on PR 329, second review", () => {
+  const RUN = { FAULTFORGE_FACTORY_RUN: "run-1" };
+  writeFileSync(
+    join(ELSEWHERE, "read.graphql"),
+    '# not a deleteRef\nquery { repository(owner: "o", name: "deleteRef") { id } }',
+  );
+  writeFileSync(
+    join(ELSEWHERE, "post_test.ts"),
+    `await fetch("https://api.github.com/repos/${T}/issues", { method: "POST" });\n`,
+  );
+
+  it("lets a fixed-string search run in the target", () => {
+    expect(bash("grep -F pattern README.md", TARGET_REPO.dir)).toBeUndefined();
+  });
+
+  it("reads the script files a deno or bun subcommand is given", () => {
+    expect(bash("deno test ./post_test.ts", ELSEWHERE, RUN)).toMatch(/script/);
+    expect(bash("bun test post_test.ts", ELSEWHERE, RUN)).toMatch(/script/);
+    expect(bash("bun add lodash", ELSEWHERE, RUN)).toBeUndefined();
+  });
+
+  it("lets a read whose query file mentions a ref mutation only in a comment or a string", () => {
+    expect(bash("gh api graphql -F query=@read.graphql")).toBeUndefined();
+  });
+});

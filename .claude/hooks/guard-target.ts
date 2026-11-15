@@ -333,8 +333,10 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     deny(`In ${repo.name}, git's own guard hooks must run: no --no-verify, no commit -n, and no other core.hooksPath.`);
   }
   // A flag from a variable the command doesn't set (`git push $FLAG`) could be --force (#285).
-  // GitHub's API moves and deletes refs too, where no git hook runs (re-grade 5).
-  if (rewritesHistory(command, readable) || rewritesRefs(command, referencedFiles(ctx.cwd, command))) {
+  // GitHub's API moves and deletes refs too, where no git hook runs (re-grade 5). Only a GraphQL call's files are
+  // read for it: `grep -F x` names no posted file (Qodo on PR 329).
+  const queries = /\bgraphql\b/.test(command) ? referencedFiles(ctx.cwd, command) : [];
+  if (rewritesHistory(command, readable) || rewritesRefs(command, queries)) {
     deny(
       `Force pushes to ${repo.name} are not allowed, nor pushes or API calls that delete, mirror or move a ref: its history is evidence for recorded cases.`,
     );

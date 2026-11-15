@@ -156,6 +156,9 @@ function inlineFlag(name: string, word: string): boolean {
   return /^(-e|-p|-pe|-ne|-E|--eval|--print)$/.test(word);
 }
 
+/** A word that names a script file by its extension. */
+const SCRIPT_FILE = /\.(?:[cm]?[jt]sx?)$/i;
+
 /** A word that names a local file, not a package: `./x`, `../x`, an absolute path, or a name with an extension. */
 const localPath = (word: string) => /^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])/.test(word);
 
@@ -173,9 +176,16 @@ function stepScripts(text: string): ScriptFile[] {
     const word = unquote(all[i] ?? "");
     if (inlineFlag(name, word)) return found;
     // Subcommands: `deno run x.ts`, `bun x y`, `tsx watch x.ts`. Any other bare word to deno or bun is a
-    // subcommand of its own (`bun install`, `deno test`), which runs no file named here (Qodo on PR 329).
+    // subcommand of its own (`bun install`, `deno test`): then only the script files it is given are read
+    // (`deno test ./post_test.ts`), never a package name (Qodo on PR 329).
     if (/^(deno|bun|tsx)$/.test(name) && i === at + 1 && /^(run|x|watch)$/.test(word)) continue;
-    if (/^(deno|bun)$/.test(name) && i === at + 1 && /^[a-z]+$/.test(word)) return found;
+    if (/^(deno|bun)$/.test(name) && i === at + 1 && /^[a-z]+$/.test(word)) {
+      const files = all
+        .slice(i + 1)
+        .map(unquote)
+        .filter((w) => !w.startsWith("-") && SCRIPT_FILE.test(w));
+      return [...found, ...files.map((file) => ({ file, optional: false }))];
+    }
     // `python -m mod` runs a local module when there is one (Qodo on PR 329); an installed one is not read.
     if (/^(python|py|pypy)/.test(name) && word === "-m") {
       const module = (all[i + 1] ?? "").replace(/\./g, "/");

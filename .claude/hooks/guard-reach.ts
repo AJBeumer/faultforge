@@ -141,7 +141,9 @@ export function rewritesHistory(command: string, variablesForce = false): boolea
 export function rewritesRefs(command: string, files: string[] = []): boolean {
   const c = joinedWords(command).replace(/\\(?=\w)/g, "");
   const refMutation = /\b(?:updateRefs?|deleteRef)\b/;
-  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...files].some((text) => refMutation.test(text))) return true;
+  // A query file's comments and string values are no fields: a read that mentions a mutation in them is a read.
+  const fields = files.map((text) => text.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/#[^\n]*/g, ""));
+  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...fields].some((text) => refMutation.test(text))) return true;
   return segments(c).some(({ text }) => {
     if (/\bgh\s+repo\s+sync\b/.test(text)) return /\s--force\b/.test(text);
     const gh = /\bgh\s+api\b/.exec(text);
