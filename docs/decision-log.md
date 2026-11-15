@@ -462,3 +462,7 @@ The 14 November corrections listed some of Qodo's channels as unverified. The ow
 
   The changes had recorded reasons, and nothing shows a draw was steered. But neither draw is immune to steering, and the final report states this next to the results it affects. From now on, every candidate is committed and anchored before the draw, and the seed is one the drawer can't choose.
 - **One channel dropped.** The entry on what can reach a target review omits workspace memory, which the 14 November corrections had listed as unverified. The owner found no memory setting in Qodo's portal. That shows no switch exists to read; it doesn't prove the channel closed. Workspace memory stays listed as unverified.
+
+## 15 November: one more fact about the lab's own rules
+
+- **Unexplained.** The channels entry above says the 12 rules Qodo wrote from this repository's charter are scoped to it and don't reach the target. That holds. It leaves out that 7 of them, created around 23:43 UTC on 13 November, are active, while Qodo's setting to approve rules from repository files automatically shows off. The owner doesn't know who or what activated them, and no record says. Target reviews are unaffected: the rules are scoped to this repository, and `qodo:check` compares every rule before each case.
