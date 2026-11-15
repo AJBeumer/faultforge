@@ -20,7 +20,7 @@
  * printed; 2 could not run: not Linux, a usage error, a command that failed, or an unexpected error.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,7 +114,12 @@ export interface SetupInput {
   gitconfig: string | null;
   /** Which resolver sockets and bus exist on this machine. */
   exists: (path: string) => boolean;
+  /** Whether users other than its owner and group may already pass through a folder. */
+  othersEnter: (dir: string) => boolean;
 }
+
+/** Whether "other" has execute (pass-through) on a folder. */
+export const othersEnter = (dir: string): boolean => (statSync(dir).mode & 0o001) !== 0;
 
 /** The setup, as commands: pure, so the tests read exactly what will run. */
 export function setupPlan(input: SetupInput): Step[] {
@@ -141,8 +146,10 @@ export function setupPlan(input: SetupInput): Step[] {
   }
   for (const socket of RESOLVER_SOCKETS)
     if (input.exists(socket)) steps.push({ argv: sudo("setfacl", "-m", `u:${u}:-`, socket) });
+  // Only where everyone else is kept out: a named entry outranks "other", so on a folder others may already write
+  // in (/tmp) an `x` entry would take the agent's write access away.
   const traverse = new Set([...input.dirs, ...input.readDirs].flatMap(ancestors));
-  for (const dir of traverse) steps.push({ argv: sudo("setfacl", "-m", `u:${u}:x`, dir) });
+  for (const dir of traverse) if (!input.othersEnter(dir)) steps.push({ argv: sudo("setfacl", "-m", `u:${u}:x`, dir) });
   for (const dir of input.dirs) {
     steps.push({ argv: sudo("setfacl", "-R", "-m", `u:${u}:rwX`, dir) });
     steps.push({
@@ -269,6 +276,7 @@ export function main(argv: string[], sh: Sh = realSh): number {
         runner: userInfo().username,
         gitconfig: existsSync(gitconfig) ? gitconfig : null,
         exists: existsSync,
+        othersEnter,
       }),
     );
     if (failed) {

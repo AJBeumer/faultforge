@@ -18,6 +18,7 @@ import { loadFactory } from "../src/factory-config.ts";
 import { allowList, type EgressProxy, proxyEnv, sandboxedCommand, startEgressProxy } from "../src/factory-sandbox.ts";
 import {
   nodePrefix,
+  othersEnter,
   realSh,
   runPlan,
   sandboxProblems,
@@ -64,6 +65,7 @@ describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux
         runner: process.env.USER ?? "runner",
         gitconfig: null,
         exists: existsSync,
+        othersEnter,
       }),
     );
     expect(failed).toBeNull();
@@ -293,18 +295,8 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
         env: agentLike,
       });
       const seen = JSON.stringify({ status, counts: proxy.counts(), refused: refused.slice(before), out });
-      if (!out.includes("Invalid API key")) {
-        const trace = join(work, "claude.strace");
-        const probe = await asAgent(
-          "/bin/sh",
-          [
-            "-c",
-            `env -u SUDO_USER -u SUDO_UID -u SUDO_GID -u SUDO_COMMAND -u SUDO_HOME "${claude}" -p "Reply with OK" --output-format json < /dev/null 2>&1; echo "no-sudo-vars exit $?"; strace -f -tt -o "${trace}" "${claude}" -p "Reply with OK" --output-format json < /dev/null > /dev/null 2>&1; echo "strace exit $?"; grep -E "= -1 E|exit_group|killed|SIG" "${trace}" | grep -v -E "ENOENT|EAGAIN|ETIMEDOUT|EINPROGRESS" | tail -n 60 | cut -c1-240`,
-          ],
-          { env: agentLike },
-        );
-        console.log(probe.out);
-      }
+      // Claude Code that can't make its temp folder (/tmp/claude-<uid>) ends with exit 0 and says nothing: an empty
+      // answer here means the agent's user lost /tmp, not that the network failed.
       expect(out, seen).toMatch(/Invalid API key/);
       expect(out, seen).toContain('"api_error_status":401');
       expect(proxy.counts().allowed).toBeGreaterThan(allowedBefore);

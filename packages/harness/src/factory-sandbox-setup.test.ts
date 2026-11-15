@@ -26,6 +26,7 @@ const input = (over: Partial<SetupInput> = {}): SetupInput => ({
   runner: "runner",
   gitconfig: resolve("/home/runner/.gitconfig"),
   exists: () => true,
+  othersEnter: () => false,
   ...over,
 });
 const lines = (over: Partial<SetupInput> = {}) => setupPlan(input(over)).map((s) => s.argv.join(" "));
@@ -88,6 +89,15 @@ describe("setupPlan (#330)", () => {
     expect(all).toContain(`sudo -n find ${work} -type d -exec setfacl -m d:u:${SANDBOX_USER}:rwX,d:u:runner:rwX {} +`);
     expect(all).toContain(`sudo -n setfacl -R -m u:${SANDBOX_USER}:rX ${resolve("/opt/node")}`);
     for (const above of ancestors(work)) expect(all).toContain(`sudo -n setfacl -m u:${SANDBOX_USER}:x ${above}`);
+  });
+
+  it("leaves alone a folder above that others may already enter: a named x entry would take /tmp's write away", () => {
+    const open = resolve("/work");
+    const all = lines({ othersEnter: (dir) => dir === open });
+    expect(all).not.toContain(`sudo -n setfacl -m u:${SANDBOX_USER}:x ${open}`);
+    expect(all.filter((l) => l.startsWith(`sudo -n setfacl -m u:${SANDBOX_USER}:x `)).length).toBe(
+      new Set([...ancestors(work), ...ancestors(resolve("/opt/node"))]).size - 1,
+    );
   });
 
   it("copies the runner's git identity and credential helper, and trusts the run's checkouts", () => {
