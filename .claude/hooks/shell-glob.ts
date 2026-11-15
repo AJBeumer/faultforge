@@ -41,6 +41,16 @@ export function braces(word: string): string[] | undefined {
   return [word];
 }
 
+/** True when `[body]` is a character class a regular expression accepts. */
+function validClass(body: string): boolean {
+  try {
+    new RegExp(`[${body}]`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A pattern for one path segment: `*` any run, `?` one character, `[…]` (and `[!…]`) a class. */
 function segmentPattern(segment: string): RegExp {
   let source = "";
@@ -56,7 +66,8 @@ function segmentPattern(segment: string): RegExp {
           .slice(i + 1, end)
           .replace(/^!/, "^")
           .replace(/\\/g, "\\\\");
-        source += `[${body}]`;
+        // A range out of order (`[i-1]`, often code, not a path) matches nothing, as in bash (Qodo on PR 312).
+        source += validClass(body) ? `[${body}]` : "(?!)";
         i = end;
       }
     } else source += c.replace(/[.+^${}()|\\]/g, "\\$&");

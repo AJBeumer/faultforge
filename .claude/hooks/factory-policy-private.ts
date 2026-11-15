@@ -13,7 +13,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { spokenWords } from "./shell-decode.ts";
 import { globMatches, hasWildcard } from "./shell-glob.ts";
-import { joinedWords, quotedMask } from "./shell-scan.ts";
+import { joinedWords, quotedMask, quotedSpans } from "./shell-scan.ts";
 
 /** The runner's list of private checkouts a run must not read, as the agent's environment holds it. */
 export const PRIVATE_CHECKOUTS_ENV = "FAULTFORGE_PRIVATE_CHECKOUTS";
@@ -247,13 +247,24 @@ function expandVariables(command: string, env: NodeJS.ProcessEnv) {
   // A value's backslashes would read as escapes to the word rules below: a path's folders are split by `/`.
   const slashed = (value: string | undefined) => (value ?? "").replace(/\\/g, "/");
   let problem = /\$\{!/.test(command) ? VARIABLE_REASON : undefined;
-  const text = command
-    .replace(/\$\{([A-Za-z_]\w*)([^}]*)\}/g, (all, name: string, edit: string) => {
-      if (!edit) return slashed(env[name]);
-      if (touches(name, true)) problem = VARIABLE_REASON;
-      return all;
-    })
-    .replace(/\$env:([A-Za-z_]\w*)|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi, (_all, a, b, c) => slashed(env[a ?? b ?? c]));
+  const expand = (part: string) =>
+    part
+      .replace(/\$\{([A-Za-z_]\w*)([^}]*)\}/g, (all, name: string, edit: string) => {
+        if (!edit) return slashed(env[name]);
+        if (touches(name, true)) problem = VARIABLE_REASON;
+        return all;
+      })
+      .replace(/\$env:([A-Za-z_]\w*)|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi, (_all, a, b, c) =>
+        slashed(env[a ?? b ?? c]),
+      );
+  // Single-quoted text is the shell's literal text: no variable in it is expanded (Qodo on PR 312).
+  let text = "";
+  let at = 0;
+  for (const span of quotedSpans(command).filter((s) => s.kind === "single")) {
+    text += expand(command.slice(at, span.start)) + command.slice(span.start, span.end);
+    at = span.end;
+  }
+  text += expand(command.slice(at));
   const words = joinedWords(text);
   for (const name of Object.keys(env)) {
     if (problem) break;

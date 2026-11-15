@@ -39,6 +39,11 @@ describe("globMatches", () => {
     expect(globMatches(word, ROOT)?.sort()).toEqual(expected);
   });
 
+  it("reads a bracket with a range out of order as no match, never an error (Qodo on PR 312)", () => {
+    expect(globMatches("a[i-1]", ROOT)).toEqual([]);
+    expect(globMatches("[z-a]*", ROOT)).toEqual([]);
+  });
+
   it("matches an absolute pattern", () => {
     expect(globMatches(join(ROOT, "doc*", "*.md").replace(/\\/g, "/"), "/")).toEqual([join(ROOT, "docs", "a.md")]);
   });

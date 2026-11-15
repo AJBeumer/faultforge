@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
-import { CALL_TIMEOUT_MS, callDeadline, gh, ghAll } from "./github.ts";
+import { callDeadline, gh, ghAll } from "./github.ts";
 import { QodoApi } from "./qodo-api.ts";
 import { findingsFor, findingsShapeProblem, openFindings, type QodoReview, reviewEffort } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds } from "./review-feeds.ts";
@@ -99,9 +99,9 @@ export async function run(args: Args, deps: WaitScriptDeps): Promise<number> {
 async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScriptDeps): Promise<number> {
   const { dir, github, log } = deps;
   const deadline = deps.now() + timeoutMinutes * 60_000;
-  // While it waits, every gh call ends by the time limit, with one call's grace so the last poll's saves can
-  // finish: a retried read can't run minutes past it (Qodo on PR 310). Cleared before the evidence is saved.
-  callDeadline.at = Date.now() + timeoutMinutes * 60_000 + CALL_TIMEOUT_MS;
+  // While it waits, every gh call ends by the time limit itself, so a retried read can't run past it (Qodo on
+  // PRs 310 and 312). Cleared before the evidence is saved, so the final saves get their full time limit.
+  callDeadline.at = Date.now() + timeoutMinutes * 60_000;
   // A complete save is never overwritten (AUD-M26): refused before any waiting once the commit is known. An
   // unfinished one may be waited for again: it is moved, with every raw answer and feed saved beside it,
   // into a folder of its own first, so this wait overwrites none of its evidence (Qodo on PR 264).

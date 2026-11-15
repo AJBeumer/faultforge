@@ -7,6 +7,7 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { readPosted, Unreadable } from "./guard-files.ts";
+import { outsidePostedText } from "./guard-posted.ts";
 import { navigationTargets } from "./guard-repos.ts";
 import { spokenWords } from "./shell-decode.ts";
 import { globMatches, hasWildcard } from "./shell-glob.ts";
@@ -21,6 +22,9 @@ export interface Asset {
 
 /** Programs whose output is the text of the files they name, so that text is what a gist fed by them posts. */
 const READERS = /^(cat|type|get-content|gc|tac|head|tail)$/;
+
+/** Programs that only print their own words. */
+const PRINTERS = /^(echo|printf|write-output|write-host)$/;
 
 /**
  * Every folder a relative file name in the command could be read from: the folder the hook runs in, and each
@@ -83,6 +87,15 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
     if (step.piped && last) last.push(step);
     else pipelines.push([step]);
   }
+  const runs = pipelines.flat().flatMap((step) => publishes(step) ?? []);
+  // A word the shell builds at run time, anywhere in a command that publishes, can name any file: a redirect
+  // (`< "${PWD}/f"`), a step piped in, a here-string. None can be read here, so none is allowed (Qodo on PR 312).
+  const expanding = command.replace(/'[^']*'/g, "''");
+  if (runs.length && (/\$\{?[A-Za-z_]|\$\(|%[A-Za-z_]\w*%/.test(expanding) || (backticks && expanding.includes("`")))) {
+    throw new Unreadable(
+      "This gist or release names a word the shell builds at run time, so the guard can't read what it would publish. Name the files as written.",
+    );
+  }
   for (const pipeline of pipelines) {
     pipeline.forEach((step, index) => {
       const run = publishes(step);
@@ -113,7 +126,10 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
       for (const before of pipeline.slice(0, index)) {
         const raw = words(before.text.split("\n")[0] ?? "");
         const at = programAt(raw).at;
-        const reader = READERS.test(programName(raw[at] ?? ""));
+        const program = programName(raw[at] ?? "");
+        // A step that only prints its words passes on text, not a file (Qodo on PR 312).
+        if (PRINTERS.test(program)) continue;
+        const reader = READERS.test(program);
         for (const word of raw.slice(at + 1).map((w) => spokenWords(w).replace(/^\d*<|^--?[\w-]+=/, ""))) {
           if (!word || word.startsWith("-")) continue;
           for (const path of named(cwd, command, word)) add(path, true, reader);
@@ -126,13 +142,17 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
   // Text can reach a gist or a release in more ways than a pipe: a subshell (`(cat f) | gh gist create`), a group,
   // a process substitution (`<(cat f)`), a here-string of a substitution. So in a command that publishes, every
   // file or folder any word names, read as the shell splits it at those marks, counts too (Qodo on PR 312).
-  const runs = pipelines.flat().flatMap((step) => publishes(step) ?? []);
+  // Posted text (a release's notes and title) and what a step only prints are words, not files.
   if (runs.length) {
     const gist = runs.some((run) => run.gist);
-    for (const word of spokenWords(command).split(/[\s;&|()<>{}]+/)) {
-      const value = word.replace(/^--?[\w-]+=/, "");
-      if (!value || value.startsWith("-") || /[$`]/.test(value)) continue;
-      for (const path of named(cwd, command, value)) add(path, gist, false);
+    for (const step of steps(outsidePostedText(command), backticks)) {
+      const raw = words(step.text);
+      if (PRINTERS.test(programName(raw[programAt(raw).at] ?? ""))) continue;
+      for (const word of spokenWords(step.text).split(/[\s;&|()<>{}]+/)) {
+        const value = word.replace(/^--?[\w-]+=/, "");
+        if (!value || value.startsWith("-")) continue;
+        for (const path of named(cwd, command, value)) add(path, gist, false);
+      }
     }
   }
   return assets;

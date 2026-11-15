@@ -62,6 +62,7 @@ describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 3
     "x=FAULTFORGE_GUARD_PRIVATE_DIR; cd ${!x} && ls",
     "cd $(echo $FAULTFORGE_GUARD_PRIVATE_DIR) && ls",
     `node -e "console.log(process.env.FAULTFORGE_GUARD_PRIVATE_DIR)"`,
+    `cat "'" $FAULTFORGE_RUN_ROOT/lab/private/README.md "'"`,
   ])("refuses %s", (command) => {
     expect(bash(command)).toBeDefined();
   });
@@ -73,9 +74,20 @@ describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 3
     // The run's own files, though the runs folder they sit in is a checkout (Qodo on PR 312).
     `node -e "console.log(process.env.FAULTFORGE_TICKET_FILE)"`,
     'cat "$FAULTFORGE_TICKET_FILE"',
+    // Single-quoted text is not expanded by the shell (Qodo on PR 312).
+    "echo '$FAULTFORGE_RUN_ROOT/lab/private'",
   ])("allows %s", (command) => {
     expect(bash(command)).toBeUndefined();
   });
+});
+
+describe("a bracket that is no valid character class (Qodo on PR 312)", () => {
+  it.each([`node -e "const a = [1, 2]; const i = 1; console.log(a[i-1])"`, "awk '{print a[NR-1]}' docs/notes.md"])(
+    "is judged, not a hook failure: %s",
+    (command) => {
+      expect(() => bash(command)).not.toThrow();
+    },
+  );
 });
 
 describe("a wildcard before the private folder's name doesn't hide it (Qodo on PR 310)", () => {

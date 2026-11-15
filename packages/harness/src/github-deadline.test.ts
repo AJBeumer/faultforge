@@ -93,7 +93,8 @@ describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)
     const before = Date.now();
     expect(await run({ repoKey: "target", pr: 1, timeoutMinutes: 1, commit: head }, deps)).toBe(1);
     expect(seen.during).toBeGreaterThanOrEqual(before + 60_000);
-    expect(seen.during).toBeLessThanOrEqual(Date.now() + 60_000 + CALL_TIMEOUT_MS);
+    // The wait's own limit, with no grace beyond it (Qodo on PR 312).
+    expect(seen.during).toBeLessThanOrEqual(Date.now() + 60_000);
     expect(seen.saving).toBeUndefined();
     expect(callDeadline.at).toBeUndefined();
   });
