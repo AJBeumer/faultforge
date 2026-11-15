@@ -466,3 +466,13 @@ The 14 November corrections listed some of Qodo's channels as unverified. The ow
 ## 15 November: one more fact about the lab's own rules
 
 - **Unexplained.** The channels entry above says the 12 rules Qodo wrote from this repository's charter are scoped to it and don't reach the target. That holds. It leaves out that 7 of them, created around 23:43 UTC on 13 November, are active, while Qodo's setting to approve rules from repository files automatically shows off. The owner doesn't know who or what activated them, and no record says. Target reviews are unaffected: the rules are scoped to this repository, and `qodo:check` compares every rule before each case.
+
+## 15 November: one door for writes to the target
+
+Re-grades 5 to 7 kept finding new spellings that the shell guard missed, and its hook layer had grown to about 13,500 lines. Patching the parser for each new spelling had stopped helping, so the approach changed.
+
+- **One door (#340, PRs 343 and 344).** Every write to `faultforge-target` now goes through `npm run target:post`. It checks the exact text it sends, then sends it or refuses with exit 2. The guard refuses every other write aimed at the target without reading it, and the code that read raw write text is gone. The hooks went from 13,494 to 12,972 lines; Qodo's three review rounds added about 210 back. The target's git hooks stay as a second layer.
+- **The factory uses it too (#345, PR 346).** The runner's comments and labels, and the agent's pushes and PRs, go through the door. Only the runner may set labels on target tickets.
+- **The check can't be quietly weakened (#341, PR 342).** After a factory run, the runner compares the files that decide the check with the commit the run started from, reading them from a fresh copy of git, not the agent's worktree. Any change fails the run, unless the owner set the `touches-check` label before it started. `package.json` is compared by its scripts only. The owner decided that `package-lock.json` stays off the list, because counting it would fail every run that changes a dependency. The gap this leaves: a lockfile can move a tool to another version within the allowed range.
+- **A flaky test fixed at its cause (#348, PR 350).** The git-stream test failed once on Linux because the fixture's own `git commit` started git's background maintenance, which leaves a lock file for a moment. The fixture now turns maintenance off, and a new test fails if any starts.
+- **Process slip.** PR 350 was merged on its saved review without a fresh review after its description was edited. The edit added no commit, so the code merged is the code Qodo reviewed.
