@@ -76,10 +76,13 @@ function publishes(step: Step): { gist: boolean; args: string[]; raw: string[] }
 export function assetFiles(cwd: string, command: string, backticks = true): Asset[] {
   const assets: Asset[] = [];
   const add = (path: string, gist: boolean, read: boolean) => {
-    if (!existsSync(path)) return;
-    const file = statSync(path).isFile();
-    if (!read) assets.push({ path, text: "", gist });
-    else if (file) for (const text of readPosted(cwd, command, path)) assets.push({ path, text, gist });
+    if (!read) {
+      if (existsSync(path)) assets.push({ path, text: "", gist });
+      return;
+    }
+    // A path a wildcard matched may be gone by now (another program removed it): then nothing is published.
+    if (statSync(path, { throwIfNoEntry: false })?.isFile())
+      for (const text of readPosted(cwd, command, path)) assets.push({ path, text, gist });
   };
   const pipelines: Step[][] = [];
   for (const step of steps(command, backticks)) {

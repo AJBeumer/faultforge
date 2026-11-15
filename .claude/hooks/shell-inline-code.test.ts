@@ -55,6 +55,8 @@ describe("an aliased network call is still a network call (Qodo on PR 310)", () 
     "python3 /dev/stdin <<'EOF'\nimport urllib.request\nEOF",
     "node /dev/stdin <<EOF\nfetch('https://example.com')\nEOF",
     "echo \"fetch('https://example.com')\" | node /dev/fd/0",
+    "NODE_OPTIONS='--import=data:text/javascript,fetch(\"https://example.com\")' node x.mjs",
+    'python3 -m timeit "import urllib.request"',
   ])("refuses network code fed as a file from stdin: %s (Qodo on PR 312)", (command) => {
     expect(guard(command)).toBe(INLINE_NETWORK_REASON);
   });
@@ -96,6 +98,11 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     "ruby -e 'system(\"ls\")'",
     // Code from stdin or a substitution named as the script (Qodo on PR 312).
     "python3 <(echo 'import subprocess')",
+    // A module that runs code it is given, and code handed over in an option (Qodo on PR 312).
+    'python3 -m timeit "import subprocess"',
+    "echo 'import subprocess' | python3 -m code",
+    "node --import 'data:text/javascript,require(\"child_process\")' x.mjs",
+    "NODE_OPTIONS='--require ./x.cjs --eval require(\"child_process\")' node x.mjs",
     "echo 'import subprocess' | python3 /dev/stdin",
     "node /dev/stdin <<'EOF'\nrequire('child_process')\nEOF",
   ])("still refuse inline code that starts a program: %s", (command) => {

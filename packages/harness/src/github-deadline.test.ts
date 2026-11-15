@@ -63,8 +63,8 @@ describe("gh under a deadline (Qodo on PR 310)", () => {
 });
 
 describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)", () => {
-  it("sets the deadline while it waits and clears it before it saves", async () => {
-    const seen: { during?: number; saving?: number } = {};
+  it("bounds its head reads by the limit, and no evidence read", async () => {
+    const seen: { during?: number; saving?: number; suites?: number; feeds?: number } = {};
     const head = "a".repeat(40);
     let t = Date.now();
     const deps: WaitScriptDeps = {
@@ -74,8 +74,14 @@ describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)
         seen.during ??= callDeadline.at;
         return head;
       },
-      checkSuiteTimes: () => [],
-      commentFeeds: () => ({ pr: "[[]]", inline: "[[]]" }),
+      checkSuiteTimes: () => {
+        seen.suites = callDeadline.at;
+        return [];
+      },
+      commentFeeds: () => {
+        seen.feeds ??= callDeadline.at;
+        return { pr: "[[]]", inline: "[[]]" };
+      },
       formalReviews: () => "[]",
       fetchReview: async () => ({ review_session: { commit_sha: head, status: "running" } }),
       rawAnswers: () => ({ last: "raw", recovered: [] }),
@@ -95,7 +101,10 @@ describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)
     expect(seen.during).toBeGreaterThanOrEqual(before + 60_000);
     // The wait's own limit, with no grace beyond it (Qodo on PR 312).
     expect(seen.during).toBeLessThanOrEqual(Date.now() + 60_000);
+    // Evidence reads keep their full time limit, so a review seen at the limit is still saved (Qodo on PR 312).
     expect(seen.saving).toBeUndefined();
+    expect(seen.suites).toBeUndefined();
+    expect(seen.feeds).toBeUndefined();
     expect(callDeadline.at).toBeUndefined();
   });
 });

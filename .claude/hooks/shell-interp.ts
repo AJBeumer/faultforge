@@ -148,8 +148,12 @@ function stepCode(step: Step, before: Step[], name: string): string {
       if (/^\d*(<{1,3}|>{1,2}|&>{1,2})$/.test(word)) i++;
       continue;
     }
-    if (family.inline.test(word)) return step.text;
+    // Code handed over as a flag's value (`--import data:…`) is inline code too (Qodo on PR 312).
+    if (family.inline.test(word) || /(^|=)data:/.test(word)) return step.text;
     if (word === "-") break;
+    // A module that runs the code it is given or reads it from stdin (`-m timeit`, `-m code`; Qodo on PR 312).
+    const module = family.runs?.test(word) ? word.replace(/^-[a-zA-Z]*m/, "") || spokenWords(all[i + 1] ?? "") : "";
+    if (CODE_MODULES.test(module)) break;
     if (word === "--" || family.runs?.test(word)) {
       script = i;
       break;
@@ -172,8 +176,20 @@ function stepCode(step: Step, before: Step[], name: string): string {
 /** A script path that reads stdin or a program's output, or that the shell builds at run time. */
 const STDIN_SCRIPT = /^(\/dev\/(stdin|fd\/\d+)|\/proc\/(self|\d+)\/fd\/\d+)$|^[<>]\(|[$`]/;
 
-/** Each interpreter the command runs, by name, with the code it runs (`stepCode`). */
+/** Python's modules that run code given as an argument or on stdin. */
+const CODE_MODULES = /^(timeit|code|runpy|cProfile|profile|trace|pdb|doctest|asyncio|idlelib|IPython|ipython)$/;
+
+/** Variables that hand an interpreter code or options from outside its command line. */
+const OPTION_VARIABLES =
+  /\b(NODE_OPTIONS|NODE_PATH|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PYTHONINSPECT|PHP_INI_SCAN_DIR)\b/;
+
+/**
+ * Each interpreter the command runs, by name, with the code it runs (`stepCode`). A command that sets a
+ * variable an interpreter reads its options or startup code from (`NODE_OPTIONS='--import=data:…'`) hands it
+ * code outside its own words: then the whole command is that interpreter's code (Qodo on PR 312).
+ */
 function interpreterRuns(command: string, backticks: boolean): { name: string; code: string }[] {
+  const options = OPTION_VARIABLES.test(command);
   const pipelines: Step[][] = [];
   for (const step of steps(command, backticks)) {
     const last = pipelines[pipelines.length - 1];
@@ -184,7 +200,8 @@ function interpreterRuns(command: string, backticks: boolean): { name: string; c
     pipeline.flatMap((step, i) => {
       const all = words(step.text.split("\n")[0] ?? "");
       const name = programName(all[programAt(all).at] ?? "");
-      return INTERPRETERS.test(name) ? [{ name, code: stepCode(step, pipeline.slice(0, i), name) }] : [];
+      if (!INTERPRETERS.test(name)) return [];
+      return [{ name, code: options ? command : stepCode(step, pipeline.slice(0, i), name) }];
     }),
   );
 }

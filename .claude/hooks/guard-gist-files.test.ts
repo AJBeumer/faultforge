@@ -61,7 +61,8 @@ describe("a gist or release whose file is a wildcard (Qodo on PR 310)", () => {
   });
 
   it("doesn't take a release's notes for files (Qodo on PR 312)", () => {
-    const notes = `gh release create v1 -R ${T} ${CLEAN} --notes "kept out of ${basename(PRIVATE)}" --title "*"`;
+    // A release from the lab itself, as in Qodo's example: no reviewed repo, so no giveaway words are read.
+    const notes = `gh release create v1 ${CLEAN} --notes "kept out of ${basename(PRIVATE)}" --title "*"`;
     expect(bash(notes, dirname(PRIVATE))).toBeUndefined();
   });
 
