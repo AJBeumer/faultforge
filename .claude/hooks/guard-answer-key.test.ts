@@ -77,7 +77,8 @@ describe("no copy of private storage leaves it (Q21)", () => {
     "cat private/ground-truth.jsonl > docs/key.jsonl",
     "cat private/ground-truth.jsonl | tee docs/key.jsonl",
     "grep FF private/audit-events.jsonl | sort > docs/x.txt",
-    "Copy-Item private\\ground-truth.jsonl docs\\",
+    // Forward slashes: a backslash is a separator on Windows only, and the test runs on Linux too.
+    "Copy-Item -Path private/ground-truth.jsonl -Destination docs/",
   ])("refuses %s", (command) => {
     expect(bash(command)).toMatch(/copy the answer key/);
   });
