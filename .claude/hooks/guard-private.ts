@@ -69,7 +69,21 @@ export function pushUrls(dir: string, remote: string, push = true): string[] {
  */
 export function privateOrigin(root: string): string[] {
   const found = checkoutAt(root);
-  return found && within(found.root, root) ? pushUrls(found.root, "origin").flatMap(githubRepos) : [];
+  return found && within(found.root, root) ? agreedRepos(found.root, "origin") : [];
+}
+
+/**
+ * The GitHub repos a remote names when its fetch URL and every push URL agree, or none: a second push URL to
+ * another repo would make that repo "the remote" too, and git pushes to all of them (Qodo on PR 333).
+ */
+export function agreedRepos(dir: string, remote: string): string[] {
+  const fetched = pushUrls(dir, remote, false).flatMap(githubRepos);
+  const pushed = pushUrls(dir, remote);
+  const agree = pushed.every((url) => {
+    const repos = githubRepos(url);
+    return repos.length > 0 && repos.every((repo) => fetched.includes(repo));
+  });
+  return agree ? fetched : [];
 }
 
 /** The ids of templates that are in private storage and not yet in `templates/seed/`. */

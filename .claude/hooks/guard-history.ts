@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { referencedFiles } from "./guard-files.ts";
 import { configReads } from "./guard-hooks.ts";
 import { outsidePostedText } from "./guard-posted.ts";
-import { privateOrigin, privateRoot, pushUrls } from "./guard-private.ts";
+import { agreedRepos, privateOrigin, privateRoot, pushUrls } from "./guard-private.ts";
 import { checkoutAt, githubRepos, inCheckout, locate, type Reviewed, within } from "./guard-repos.ts";
 import type { Context } from "./guard-tools.ts";
 import { joinedWords } from "./shell-scan.ts";
@@ -127,7 +127,17 @@ function reviewedAt(url: string, dir: string, reviewed: Reviewed[]): Reviewed | 
 function ownCheckout(dir: string, r: Reviewed): boolean {
   if (inCheckout(dir, r) || within(dir, r.checkout)) return true;
   const found = checkoutAt(dir);
-  return found !== undefined && remoteUrls(found.root, "origin").flatMap(githubRepos).includes(r.github.toLowerCase());
+  return found !== undefined && agreedRepos(found.root, "origin").includes(r.github.toLowerCase());
+}
+
+/** True when a checkout's `origin` pushes somewhere it doesn't fetch from: a URL that is neither its fetch URL nor its repo. */
+function originSplits(dir: string): boolean {
+  const fetchUrls = pushUrls(dir, "origin", false);
+  const fetched = fetchUrls.flatMap(githubRepos);
+  return pushUrls(dir, "origin").some((url) => {
+    const repos = githubRepos(url);
+    return !fetchUrls.includes(url) && (!repos.length || repos.some((repo) => !fetched.includes(repo)));
+  });
 }
 
 /** A field that makes a repo public, in an API write: `private=false`, `"private": false`, `visibility: PUBLIC`. */
@@ -155,7 +165,8 @@ function privateProblem(call: Call, root: string): string | undefined {
   const own = privateOrigin(root);
   if (sub === "push" && inPrivate) {
     const remote = pushRemote(call.args) ?? "origin";
-    if (remote === "origin") return undefined;
+    // Origin goes where it fetches from; a second push URL elsewhere would send the history there too (Qodo on PR 333).
+    if (remote === "origin") return call.dir && originSplits(call.dir) ? PUBLISH : undefined;
     if (!call.dir || unreadable(remote)) return PUBLISH;
     // Each push URL must be the private repo's own: git pushes to every one of them.
     for (const url of remoteUrls(call.dir, remote)) {

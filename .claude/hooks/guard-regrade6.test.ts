@@ -287,3 +287,36 @@ describe("holes Qodo found in the second review of PR 333", () => {
     expect(decision.kind === "deny" ? decision.reason : decision.kind).toMatch(/stays private/);
   });
 });
+
+describe("holes Qodo found in the third review of PR 333", () => {
+  it("reads a PowerShell wildcard that can match a dot folder", () => {
+    const command = "Remove-Item -Recurse -Force -Path '[.]git/hooks/pre-push'";
+    expect(ask("PowerShell", { command }, LAB.dir)).toMatch(/git-level guard/);
+  });
+
+  it("doesn't take a checkout whose origin pushes to a reviewed repo as that repo's own", () => {
+    const other = tempRepo(true);
+    other.git("remote", "set-url", "origin", `https://github.com/${L}-notes.git`);
+    other.git("remote", "set-url", "--add", "--push", "origin", `https://github.com/${L}-notes.git`);
+    other.git("remote", "set-url", "--add", "--push", "origin", `https://github.com/${T}.git`);
+    expect(bash("git push origin HEAD:refs/heads/tidy", other.dir)).toMatch(/only from its own checkout/);
+  });
+
+  it("doesn't take a private origin with a second push URL as private storage", () => {
+    const lab = tempRepo(true);
+    const priv = join(lab.dir, "private");
+    mkdirSync(join(priv, "templates", "x-secret-v1"), { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", `https://github.com/${P}.git`]);
+    execFileSync("git", ["-C", priv, "remote", "set-url", "--add", "--push", "origin", `https://github.com/${P}.git`]);
+    execFileSync("git", ["-C", priv, "remote", "set-url", "--add", "--push", "origin", `https://github.com/${L}.git`]);
+    const ask2 = (command: string, cwd: string) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, FAULTFORGE_CONFIG: CONFIG, FAULTFORGE_PRIVATE_DIR: priv };
+      delete env.FAULTFORGE_FACTORY_RUN;
+      const decision = decide(JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }), env);
+      return decision.kind === "deny" ? decision.reason : decision.kind;
+    };
+    expect(ask2("git push origin main", priv)).toMatch(/stays private/);
+    expect(ask2(`gh issue comment 3 -R ${L} -b "x-secret-v1"`, lab.dir)).toMatch(/still private/);
+  });
+});

@@ -105,11 +105,12 @@ function linkIntoGit(path: string): boolean {
 }
 
 /** True when a word's wildcard could name a `.git` folder: one of its segments matches `.git` as a glob. */
-function wildcardGit(word: string): boolean {
+function wildcardGit(word: string, backticks: boolean): boolean {
   if (!hasWildcard(word)) return false;
   return word.split(/[/\\]+/).some((segment) => {
-    // The shell's wildcards skip names that start with a dot unless the pattern starts with one (Qodo on PR 333).
-    if (!hasWildcard(segment) || !/^[.{]/.test(segment)) return false;
+    // Bash's wildcards skip names that start with a dot unless the pattern starts with one (Qodo on PR 333);
+    // PowerShell's don't (`[.]git`).
+    if (!hasWildcard(segment) || (backticks && !/^[.{]/.test(segment))) return false;
     const pattern = segment
       .replace(/[.+^$()|\\]/g, "\\$&")
       .replace(/\*/g, ".*")
@@ -142,7 +143,7 @@ export function guardSwitchOff(command: string, backticks = true, cwd?: string):
     if (name === "git") continue;
     const paths = rest.map((w) => w.replace(/^\d*[<>]+/, "")).filter((w) => w && !w.startsWith("-"));
     const linked = cwd !== undefined && paths.some((w) => !/[$`%]/.test(w) && linkIntoGit(resolve(cwd, w)));
-    if (inside || folder || linked || paths.some(wildcardGit)) return SWITCH_OFF;
+    if (inside || folder || linked || paths.some((w) => wildcardGit(w, backticks))) return SWITCH_OFF;
   }
   return undefined;
 }
