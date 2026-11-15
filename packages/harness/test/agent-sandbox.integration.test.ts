@@ -61,8 +61,11 @@ describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux
   const refused: string[] = [];
 
   let input: SetupInput;
+  // An account of that name that was already there is used, and left as it was (Qodo on PR 334).
+  let createdUser = false;
 
   beforeAll(async () => {
+    createdUser = spawnSync("id", ["-u", SANDBOX_USER]).status !== 0;
     work = mkdtempSync(join(tmpdir(), "ff-sandbox-"));
     input = {
       dirs: [work],
@@ -78,13 +81,13 @@ describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux
     proxy = await startEgressProxy(allowList(loadFactory()), (line) => refused.push(line));
   }, 300_000);
 
-  // The machine is left as it was: no user, no chain, no OUTPUT rule (Qodo on PR 334).
+  // The machine is left as it was: no chain, no OUTPUT rule, and no user unless one was there before (Qodo on PR 334).
   afterAll(async () => {
     stopAgentProcesses();
     await proxy?.close();
     if (!input) return;
-    runPlan(realSh, teardownPlan(input));
-    expect(spawnSync("id", ["-u", SANDBOX_USER]).status).not.toBe(0);
+    runPlan(realSh, teardownPlan(input, createdUser));
+    expect(spawnSync("id", ["-u", SANDBOX_USER]).status !== 0).toBe(createdUser);
     for (const bin of ["iptables", "ip6tables"]) {
       expect(spawnSync("sudo", ["-n", bin, "-w", "-C", ...ownerRule()]).status).not.toBe(0);
       expect(spawnSync("sudo", ["-n", bin, "-w", "-S", SANDBOX_CHAIN]).status).not.toBe(0);

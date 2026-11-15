@@ -190,9 +190,10 @@ export function setupPlan(input: SetupInput): Step[] {
 /**
  * Undoes `setupPlan(input)` on a machine that is kept (the integration test on a developer's Linux box; a CI VM is
  * thrown away): the user's processes and the user, both chains, the D-Bus policy and every ACL entry it added.
- * Every step is tried, whatever an earlier one did.
+ * Every step is tried, whatever an earlier one did. The user is removed only when `createdUser` says the setup made
+ * it: an account that was there before is never deleted (Qodo on PR 334).
  */
-export function teardownPlan(input: SetupInput): Step[] {
+export function teardownPlan(input: SetupInput, createdUser: boolean): Step[] {
   const u = SANDBOX_USER;
   const sudo = (...argv: string[]) => ["sudo", "-n", ...argv];
   const step = (...argv: string[]): Step => ({ argv: sudo(...argv), mayFail: true });
@@ -214,7 +215,7 @@ export function teardownPlan(input: SetupInput): Step[] {
       step("find", dir, "-type", "d", "-exec", "setfacl", "-x", `d:u:${u},d:u:${input.runner}`, "{}", "+"),
     );
   for (const dir of input.readDirs) steps.push(step("setfacl", "-R", "-x", `u:${u}`, dir));
-  steps.push(step("userdel", "--remove", u));
+  if (createdUser) steps.push(step("userdel", "--remove", u));
   return steps;
 }
 

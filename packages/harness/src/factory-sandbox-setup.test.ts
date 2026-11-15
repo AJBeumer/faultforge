@@ -114,7 +114,7 @@ describe("setupPlan (#330)", () => {
 });
 
 describe("teardownPlan (Qodo on PR 334)", () => {
-  const down = (over: Partial<SetupInput> = {}) => teardownPlan(input(over));
+  const down = (over: Partial<SetupInput> = {}, created = true) => teardownPlan(input(over), created);
 
   it("undoes every kind of change the setup makes, each step tried whatever an earlier one did", () => {
     const plan = down();
@@ -139,6 +139,14 @@ describe("teardownPlan (Qodo on PR 334)", () => {
     const all = down({ exists: () => false, othersEnter: (dir) => dir === open }).map((s) => s.argv.join(" "));
     expect(all.join("\n")).not.toMatch(/dbus|resolve|nscd/);
     expect(all).not.toContain(`sudo -n setfacl -x u:${SANDBOX_USER} ${open}`);
+  });
+
+  it("never deletes an account the setup didn't make", () => {
+    const kept = down({}, false).map((s) => s.argv.join(" "));
+    expect(kept.join("\n")).not.toContain("userdel");
+    // Its processes and the sandbox's own rules still go.
+    expect(kept[0]).toBe(`sudo -n pkill -KILL -u ${SANDBOX_USER}`);
+    expect(kept).toContain(`sudo -n iptables -w -X ${SANDBOX_CHAIN}`);
   });
 });
 
