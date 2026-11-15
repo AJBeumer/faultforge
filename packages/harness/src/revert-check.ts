@@ -227,9 +227,9 @@ export interface CheckInput {
   /** Runs the given test files in a folder and reports. */
   runTests: (dir: string, files: string[]) => TestRun;
   temp?: string;
-  /** In a CI run: the scratch copy gets its own packages (no link to the runner's), is shared with the sandbox user
-   * before the tests run, and is removed through `remove`, whatever that user did to its files' modes (#335). */
-  sandbox?: { share(scratch: string): void; remove(scratch: string): void };
+  /** In a CI run: each copy gets its own packages (no link to the runner's), is shared with the sandbox user before
+   * its tests run, and the folder is removed through `remove`, whatever that user did to its files' modes (#335). */
+  sandbox?: { share(scratch: string, copy: string): void; remove(scratch: string): void };
 }
 
 function git(repo: string, args: string[], env?: NodeJS.ProcessEnv): string {
@@ -267,18 +267,38 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
   if (filesProblem(files, contents)) return judge();
 
   const scratch = mkdtempSync(join(input.temp ?? tmpdir(), "revert-check-"));
-  const link = join(scratch, "copy", "node_modules");
-  try {
-    const copy = join(scratch, "copy");
+  const links = ["with", "without"].map((name) => join(scratch, name, "node_modules"));
+  // Each run gets a copy of its own, built in full before its tests start: once tests have run in a copy, the runner
+  // never writes there again, so a link a test leaves can't send the runner's writes elsewhere (Qodo on PR 336). The
+  // temporary indexes stay in the scratch folder itself, which the tests never get to write.
+  const build = (name: string, edit?: (copy: string) => void): string => {
+    const copy = join(scratch, name);
     // A temporary index: the repository's own index and working tree are never touched.
-    const index = { GIT_INDEX_FILE: join(scratch, "index") };
+    const index = { GIT_INDEX_FILE: join(scratch, `index-${name}`) };
+    git(input.repo, ["read-tree", input.head], index);
+    git(input.repo, ["checkout-index", "-a", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`], index);
+    edit?.(copy);
+    const modules = join(input.repo, "node_modules");
+    const link = join(copy, "node_modules");
+    if (existsSync(modules) && input.sandbox) cpSync(modules, link, { recursive: true, verbatimSymlinks: true });
+    else if (existsSync(modules)) symlinkSync(modules, link, "junction");
+    input.sandbox?.share(scratch, copy);
+    return copy;
+  };
+  // Added files go; modified and deleted ones come back from the base, checked out the same way as
+  // the head (same line-ending conversion), so the only difference is the change itself.
+  const revert = (copy: string) => {
+    for (const change of files.code) if (change.status === "A") rmSync(join(copy, change.path), { force: true });
+    const restore = files.code.filter((c) => c.status !== "A").map((c) => c.path);
+    if (!restore.length) return;
+    const baseIndex = { GIT_INDEX_FILE: join(scratch, "index-base") };
+    git(input.repo, ["read-tree", input.base], baseIndex);
+    git(input.repo, ["checkout-index", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`, "--", ...restore], baseIndex);
+  };
+  try {
+    let copy: string;
     try {
-      git(input.repo, ["read-tree", input.head], index);
-      git(input.repo, ["checkout-index", "-a", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`], index);
-      const modules = join(input.repo, "node_modules");
-      if (existsSync(modules) && input.sandbox) cpSync(modules, link, { recursive: true, verbatimSymlinks: true });
-      else if (existsSync(modules)) symlinkSync(modules, link, "junction");
-      input.sandbox?.share(scratch);
+      copy = build("with");
     } catch (error) {
       const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
       return judge({ ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` });
@@ -286,33 +306,25 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
     const withChange = input.runTests(copy, files.tests);
     // A file that fails to load with the change already decides it: no second run (Qodo on PR 219).
     if (!withChange.ran || withChange.failed.length || withChange.loadFailed?.length) return judge(withChange);
-    // Added files go; modified and deleted ones come back from the base, checked out the same way as
-    // the head (same line-ending conversion), so the only difference is the change itself.
-    for (const change of files.code) if (change.status === "A") rmSync(join(copy, change.path), { force: true });
-    const restore = files.code.filter((c) => c.status !== "A").map((c) => c.path);
-    if (restore.length) {
-      const baseIndex = { GIT_INDEX_FILE: join(scratch, "index-base") };
-      git(input.repo, ["read-tree", input.base], baseIndex);
-      git(input.repo, ["checkout-index", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`, "--", ...restore], baseIndex);
-    }
-    return judge(withChange, input.runTests(copy, files.tests));
+    return judge(withChange, input.runTests(build("without", revert), files.tests));
   } finally {
     if (input.sandbox) input.sandbox.remove(scratch);
-    else removeScratch(scratch, link);
+    else removeScratch(scratch, links);
   }
 }
 
-/** Removes a scratch copy whose node_modules is a link to the real one: the link first, never through it. */
-function removeScratch(scratch: string, link: string): void {
-  // Remove the link to node_modules by itself first, so deleting the copy can never reach the real one.
-  try {
-    if (lstatSync(link).isSymbolicLink() || existsSync(link)) unlinkSync(link);
-  } catch {
-    // No link was made, or it is already gone.
+/** Removes a scratch folder whose copies link to the real node_modules: the links first, never through them. */
+function removeScratch(scratch: string, links: string[]): void {
+  for (const link of links) {
+    try {
+      if (lstatSync(link).isSymbolicLink() || existsSync(link)) unlinkSync(link);
+    } catch {
+      // No link was made, or it is already gone.
+    }
   }
-  // If the link is somehow still there, leave the copy behind rather than risk the real packages.
-  if (existsSync(link))
-    console.error(`revert:check left ${scratch} in place: its node_modules link couldn't be removed`);
+  // If a link is somehow still there, leave the copy behind rather than risk the real packages.
+  if (links.some((link) => existsSync(link)))
+    console.error(`revert:check left ${scratch} in place: a node_modules link couldn't be removed`);
   else rmSync(scratch, { recursive: true, force: true });
 }
 

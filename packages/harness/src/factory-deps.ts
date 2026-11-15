@@ -17,6 +17,7 @@ import { processStartId } from "./factory-process.ts";
 import { githubRecoveryReads, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
 import { sandboxFor } from "./factory-sandbox.ts";
+import { stopAgentProcesses } from "./factory-sandbox-setup.ts";
 import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
@@ -250,7 +251,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
       // The agent could write the run's private checkout, its .git too: the runner's commit and push there would run
       // its hooks and obey its config. Only as they were before the agent started; else the logs wait for the
-      // workflow's keep step, which pushes them from a clone of its own (#335).
+      // workflow's keep step, which pushes them from a clone of its own (#335). In CI no process of the agent's user
+      // may outlive the check either: one could change them after the runner looked (Qodo on PR 336).
+      const lingering = ws?.private && mode === "ci" ? stopAgentProcesses() : null;
+      if (lingering) throw new Error(`${lingering}, so the runner won't commit through the run's private checkout`);
       const tampered = ws?.private ? gitControlProblem(ws.private, ws.fingerprints) : undefined;
       if (tampered) throw new Error(tampered);
       // A target ticket's run kept the reviews review:wait saved in a plain folder of its lab worktree, which the

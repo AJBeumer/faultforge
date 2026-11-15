@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SANDBOX_HOME, SANDBOX_USER, type Sh } from "./factory-sandbox-setup.ts";
 import { removeShared, runVitest, type Spawn, sandboxedSpawn, shareWithSandbox, testSetup } from "./revert-run.ts";
@@ -34,10 +37,11 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
     expect(call?.args.join(" ")).not.toContain("/home/runner");
   });
 
-  it("shares the scratch copy with the sandbox user, and the runner whatever that user makes in it", () => {
+  it("shares one copy with the sandbox user, and only lets it pass through the scratch folder (Qodo on PR 336)", () => {
     const { sh, calls } = recorder();
-    shareWithSandbox("/tmp/revert-check-1", sh, "runner");
+    shareWithSandbox("/tmp/revert-check-1", "/tmp/revert-check-1/with", sh, "runner");
     expect(calls).toEqual([
+      ["sudo", "-n", "setfacl", "-m", `u:${SANDBOX_USER}:x`, "/tmp/revert-check-1"],
       [
         "sudo",
         "-n",
@@ -45,10 +49,33 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
         "-R",
         "-m",
         `u:${SANDBOX_USER}:rwX,d:u:${SANDBOX_USER}:rwX,d:u:runner:rwX`,
-        "/tmp/revert-check-1",
+        "/tmp/revert-check-1/with",
       ],
     ]);
-    expect(() => shareWithSandbox("/tmp/revert-check-1", recorder(1).sh, "runner")).toThrow(/couldn't share/);
+    expect(() => shareWithSandbox("/tmp/r", "/tmp/r/with", recorder(1).sh, "runner")).toThrow(/couldn't share/);
+  });
+
+  it("reads no report a test replaced with a link (Qodo on PR 336)", (context) => {
+    const dir = mkdtempSync(join(tmpdir(), "revert-run-"));
+    try {
+      try {
+        symlinkSync(join(dir, "probe-target"), join(dir, "probe"));
+      } catch {
+        context.skip(); // Windows without the right to make links: the link can't be made here, so can't be tested.
+      }
+      mkdirSync(join(dir, "node_modules", "vitest"), { recursive: true });
+      writeFileSync(join(dir, "node_modules", "vitest", "vitest.mjs"), "");
+      const elsewhere = join(dir, "elsewhere.json");
+      writeFileSync(elsewhere, JSON.stringify({ testResults: [{ assertionResults: [{ status: "passed" }] }] }));
+      const spawn: Spawn = (_command, args) => {
+        const out = String(args.find((a) => a.startsWith("--outputFile="))).slice("--outputFile=".length);
+        symlinkSync(elsewhere, out);
+        return { status: 0 };
+      };
+      expect(runVitest(dir, ["a.test.ts"], spawn)).toMatchObject({ ran: false });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("removes the scratch copy as root, whatever the tests did to their own files", () => {

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEPENDENCY_SECTIONS,
@@ -179,16 +179,18 @@ describe("revertCheck on a real git repository", () => {
     expect(seen[1]).toMatchObject({ list: "export const filter = 'all';\n", added: false });
   });
 
-  it("in a sandbox, gives the copy its own packages (no link to the runner's) and shares it before the tests (#335)", () => {
+  it("in a sandbox, gives each run a copy of its own, with its own packages, shared before its tests (#335)", () => {
     const { repo, base, head } = repoWithPr("test\n");
     const steps: string[] = [];
-    let shared = "";
+    const copies: string[] = [];
+    let folder = "";
     const sandbox = {
-      share: (scratch: string) => {
-        shared = scratch;
+      share: (scratch: string, copy: string) => {
+        folder = scratch;
+        copies.push(copy);
         steps.push("share");
         // The copy's packages are a folder of its own: removing it never reaches the repo's.
-        const modules = join(scratch, "copy", "node_modules");
+        const modules = join(copy, "node_modules");
         expect(lstatSync(modules).isSymbolicLink()).toBe(false);
         expect(readFileSync(join(modules, "pkg", "index.js"), "utf8")).toBe("module.exports = 1;\n");
       },
@@ -199,13 +201,18 @@ describe("revertCheck on a real git repository", () => {
     };
     const run = (dir: string) => {
       steps.push("tests");
-      return runTests(dir);
+      const result = runTests(dir);
+      // What a test does to its own copy (here: deletes it) never reaches the next run's (Qodo on PR 336).
+      rmSync(join(dir, "src"), { recursive: true, force: true });
+      return result;
     };
     const outcome = revertCheck({ repo, base, head, tests: TESTS, runTests: run, temp: root, sandbox });
     expect(outcome.exit).toBe(0);
-    expect(steps).toEqual(["share", "tests", "tests", "remove"]);
-    expect(shared.startsWith(root)).toBe(true);
-    expect(existsSync(shared)).toBe(false);
+    expect(steps).toEqual(["share", "tests", "share", "tests", "remove"]);
+    // Each copy is built in full before it is shared, in its own folder, never inside the one before.
+    expect(new Set(copies).size).toBe(2);
+    expect(copies.every((copy) => dirname(copy) === folder && folder.startsWith(root))).toBe(true);
+    expect(existsSync(folder)).toBe(false);
     expect(existsSync(join(repo, "node_modules", "pkg", "index.js"))).toBe(true);
   });
 

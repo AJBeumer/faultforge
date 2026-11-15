@@ -8,11 +8,11 @@
  * not pass 400 lines.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { SANDBOX_TMP, sandboxedCommand } from "./factory-sandbox.ts";
-import { realSh, SANDBOX_USER, type Sh, sandboxProblems } from "./factory-sandbox-setup.ts";
+import { realSh, SANDBOX_USER, type Sh, sandboxProblems, stopAgentProcesses } from "./factory-sandbox-setup.ts";
 import type { CheckInput, TestRun } from "./revert-check.ts";
 import { parseVitestReport } from "./run-outcome.ts";
 
@@ -54,13 +54,20 @@ export function sandboxedSpawn(spawn: Spawn = spawnSync): Spawn {
 }
 
 /**
- * Lets the sandbox user read and write the scratch folder, and the runner whatever that user makes in it, so the
- * runner can read the report and remove the folder afterwards. Throws when `setfacl` fails.
+ * Lets the sandbox user into the scratch folder, without writing there, and read and write one copy in it, and the
+ * runner whatever that user makes in the copy, so the runner can read the report and remove it afterwards. The
+ * folder itself, where the runner keeps its temporary indexes and builds the next copy, stays the runner's alone
+ * (Qodo on PR 336). Throws when `setfacl` fails.
  */
-export function shareWithSandbox(scratch: string, sh: Sh = realSh, runner = userInfo().username): void {
+export function shareWithSandbox(scratch: string, copy: string, sh: Sh = realSh, runner = userInfo().username): void {
   const acl = `u:${SANDBOX_USER}:rwX,d:u:${SANDBOX_USER}:rwX,d:u:${runner}:rwX`;
-  const result = sh("sudo", ["-n", "setfacl", "-R", "-m", acl, scratch]);
-  if (result.status !== 0) throw new Error(`couldn't share the scratch copy with the sandbox user: ${result.stderr}`);
+  for (const args of [
+    ["-m", `u:${SANDBOX_USER}:x`, scratch],
+    ["-R", "-m", acl, copy],
+  ]) {
+    const result = sh("sudo", ["-n", "setfacl", ...args]);
+    if (result.status !== 0) throw new Error(`couldn't share the scratch copy with the sandbox user: ${result.stderr}`);
+  }
 }
 
 /** Removes a scratch folder the sandbox user wrote in, whatever it did to its own files' modes. */
@@ -84,7 +91,8 @@ export function runVitest(dir: string, files: string[], spawn: Spawn = spawnSync
     encoding: "utf8",
     timeout: 10 * 60_000,
   });
-  if (!existsSync(report)) {
+  // A link a test left in place of the report would have the runner read some other file (Qodo on PR 336).
+  if (!existsSync(report) || lstatSync(report).isSymbolicLink()) {
     const why = (result.error?.message ?? result.stderr ?? "").trim().split("\n").slice(-3).join(" ");
     return { ran: false, failed: [], passed: 0, error: `vitest wrote no report (exit ${result.status}): ${why}` };
   }
@@ -101,8 +109,13 @@ export function testSetup(sandboxed: boolean, sh: Sh = realSh): Pick<CheckInput,
   const missing = sandboxProblems(sh);
   if (missing.length) throw new Error(`no sandbox for the tests (${missing.join("; ")})`);
   return {
-    runTests: (dir, files) => runVitest(dir, files, sandboxedSpawn()),
+    // No process a test left behind outlives its run: it could still write after the runner looked (Qodo on PR 336).
+    runTests: (dir, files) => {
+      const run = runVitest(dir, files, sandboxedSpawn());
+      const left = stopAgentProcesses(sh);
+      return left ? { ran: false, failed: [], passed: 0, error: left } : run;
+    },
     temp: SANDBOX_TMP,
-    sandbox: { share: (dir) => shareWithSandbox(dir, sh), remove: (dir) => removeShared(dir, sh) },
+    sandbox: { share: (scratch, copy) => shareWithSandbox(scratch, copy, sh), remove: (dir) => removeShared(dir, sh) },
   };
 }

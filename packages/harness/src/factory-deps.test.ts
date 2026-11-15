@@ -34,6 +34,10 @@ vi.mock("./factory-evidence.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./factory-evidence.ts")>()),
   commitAndPublish: vi.fn(() => ({ pushed: true, blocked: [] })),
 }));
+vi.mock("./factory-sandbox-setup.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./factory-sandbox-setup.ts")>()),
+  stopAgentProcesses: vi.fn(() => null),
+}));
 vi.mock("./factory-hooks.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./factory-hooks.ts")>()),
   requireHooks: vi.fn(() => ({ problems: [], hooks: [] })),
@@ -68,6 +72,7 @@ import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { localSandbox } from "./factory-sandbox.ts";
+import { stopAgentProcesses } from "./factory-sandbox-setup.ts";
 import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
@@ -395,6 +400,16 @@ Picked up.`,
     ws.fingerprints[GIT_CONTROL(ws.private)] = gitControlPrint(ws.private);
     writeFileSync(join(ws.private, ".git", "hooks", "pre-commit"), "#!/bin/sh\n");
     expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-h", ws)).toThrow(/hooks or config changed/);
+    expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
+  });
+
+  it("in CI, never commits through the private checkout while a process of the agent's user is left (Qodo on PR 336)", () => {
+    const ws = workspace(join(runs, "run-l"));
+    writeFileSync(join(runs, "run-l.jsonl"), "{}\n");
+    mkdirSync(join(ws.private, ".git", "hooks"), { recursive: true });
+    ws.fingerprints[GIT_CONTROL(ws.private)] = gitControlPrint(ws.private);
+    vi.mocked(stopAgentProcesses).mockReturnValueOnce("a process of ffagent is still running");
+    expect(() => realDeps(FACTORY, OPTIONS, "ci").saveEvidence("run-l", ws)).toThrow(/still running/);
     expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
   });
 

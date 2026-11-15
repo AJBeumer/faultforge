@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -37,6 +37,34 @@ describe("the git hooks and config of a checkout the agent could write (#335)", 
     const before = gitControlPrint(dir);
     appendFileSync(join(dir, ".git", "config"), "[core]\n\tfsmonitor = ./x\n");
     expect(gitControlPrint(dir)).not.toBe(before);
+  });
+
+  // Windows keeps no executable bit; git there runs a hook by its name alone.
+  it.skipIf(process.platform === "win32")(
+    "changes when a hook that was off is made executable (Qodo on PR 336)",
+    () => {
+      const dir = repo();
+      const hook = join(dir, ".git", "hooks", "pre-commit");
+      writeFileSync(hook, "#!/bin/sh\necho hi\n");
+      chmodSync(hook, 0o644);
+      const off = gitControlPrint(dir);
+      chmodSync(hook, 0o755);
+      expect(gitControlPrint(dir)).not.toBe(off);
+    },
+  );
+
+  it("changes when a file the config includes changes, however deep (Qodo on PR 336)", () => {
+    const dir = repo();
+    const outside = mkdtempSync(join(tmpdir(), "git-control-inc-"));
+    writeFileSync(join(outside, "a.cfg"), `[include]\n\tpath = b.cfg\n`);
+    writeFileSync(join(outside, "b.cfg"), "[user]\n\tname = t\n");
+    appendFileSync(
+      join(dir, ".git", "config"),
+      `[includeIf "gitdir:/"]\n\tpath = "${join(outside, "a.cfg").replace(/\\/g, "/")}"\n`,
+    );
+    const first = gitControlPrint(dir);
+    writeFileSync(join(outside, "b.cfg"), "[core]\n\tfsmonitor = ./x\n");
+    expect(gitControlPrint(dir)).not.toBe(first);
   });
 
   it("reads a worktree's shared hooks and config, and its own config.worktree", () => {
