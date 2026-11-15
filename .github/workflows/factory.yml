@@ -128,6 +128,12 @@ jobs:
       - name: Install the git-level guard
         working-directory: FaultForge
         run: npm run -s guard:install
+      # A copy of the harness as it is now, before the agent exists, in the runner's own temp folder, which the
+      # agent's user is never given (#335). The steps after the agent run from it: the checkout under the workspace
+      # is the agent's to write, so its scripts, packages and git hooks could be the agent's code by then. Before
+      # the sandbox's setup, so no ACL of the agent's user is copied with it.
+      - name: Keep a trusted copy of the harness
+        run: cp -a "$GITHUB_WORKSPACE/FaultForge" "$RUNNER_TEMP/trusted-harness"
       # The agent's network sandbox (#330): the agent runs as its own user, whose packets reach loopback only,
       # where the tick's proxy lets them through to factory.json's allow-list and nowhere else. Only the agent's
       # process tree is inside it: this step, the tick itself and every step after it keep the runner's network.
@@ -194,21 +200,22 @@ jobs:
           exit 1
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
-      # Only after the tick, when no agent runs any more: the keep step below writes through this checkout. Never
-      # while a process of the agent's user is left: the workspace's inherited ACL would let it read the private
-      # repo (Qodo on PR 334). The job then fails, and the logs stay in the run's own folder.
-      - name: Check out private storage for the logs
+      # Only after the tick, when no agent runs any more, and never while a process of the agent's user is left
+      # (Qodo on PR 334): the job then fails, and the logs stay in the run's own folder. A fresh clone into the
+      # trusted copy, never an action's checkout into the workspace: a lab ticket's run left a clone there whose
+      # .git (hooks, config) the agent could write, and actions/checkout would reuse it (#335). Plain shell.
+      - name: Clone private storage for the logs
         if: always() && steps.stop.outcome == 'success'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: AJBeumer/faultforge-private
-          ref: main
-          path: FaultForge/private
-          token: ${{ secrets.FACTORY_GH_TOKEN }}
-          persist-credentials: false
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+          FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private
+        run: |
+          rm -rf "$RUNNER_TEMP/trusted-harness/private"
+          git clone --quiet "https://github.com/$FAULTFORGE_PRIVATE_REPO.git" "$RUNNER_TEMP/trusted-harness/private"
+      # From the trusted copy: the script, its packages and npm's own config are as they were before the agent ran.
       - name: Keep the logs of a run that didn't save them
         if: always() && steps.stop.outcome == 'success'
-        working-directory: FaultForge
+        working-directory: ${{ runner.temp }}/trusted-harness
         env:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
           FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs

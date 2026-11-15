@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import { fingerprints, HOOK_IMPORTS, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
 import { git, gitRepo } from "./fixtures/git-repo.ts";
+import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 
 /** Only the harness itself: a repo at another path would point teardown at a sibling of the real checkout. */
@@ -134,6 +135,18 @@ describe("fingerprints: what the agent must not change", () => {
     expect(edited).not.toEqual(first);
     writeFileSync(join(lab, ".claude", "skills.md"), "new");
     expect(fingerprints(FACTORY, "unused", "ci", lab)).not.toEqual(edited);
+  });
+
+  it("prints the run's private checkout's git hooks and config, which the runner commits through after the agent (#335)", () => {
+    const lab = guarded({ "settings.json": "{}" });
+    const priv = gitRepo({ "README.md": "private\n" });
+    made.push(priv);
+    const first = fingerprints(FACTORY, "unused", "ci", lab, priv);
+    expect(first[GIT_CONTROL(priv)]).toBe(gitControlPrint(priv));
+    writeFileSync(join(priv, ".git", "hooks", "pre-commit"), "#!/bin/sh\n");
+    expect(fingerprints(FACTORY, "unused", "ci", lab, priv)[GIT_CONTROL(priv)]).not.toBe(first[GIT_CONTROL(priv)]);
+    // A target ticket's run has no private checkout, and nothing to print.
+    expect(Object.keys(fingerprints(FACTORY, "unused", "ci", lab, ""))).not.toContain(GIT_CONTROL(""));
   });
 
   it("locally, also fingerprints the owner's checkouts, and sees a change to one", () => {

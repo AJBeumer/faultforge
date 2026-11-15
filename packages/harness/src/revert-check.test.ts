@@ -1,7 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEPENDENCY_SECTIONS,
@@ -10,12 +19,11 @@ import {
   parseNameStatus,
   revertCheck,
   runnableTests,
-  runVitest,
   splitFiles,
-  strippedEnv,
   type TestRun,
   verdict,
 } from "./revert-check.ts";
+import { runVitest, strippedEnv } from "./revert-run.ts";
 
 const TESTS = /(\.test\.ts$|\/fixtures\/)/;
 
@@ -169,6 +177,43 @@ describe("revertCheck on a real git repository", () => {
     expect(seen[0]).toMatchObject({ list: "export const filter = 'status';\n", added: true, modules: true });
     // Without the change: the modified file is back at base, the added one is gone.
     expect(seen[1]).toMatchObject({ list: "export const filter = 'all';\n", added: false });
+  });
+
+  it("in a sandbox, gives each run a copy of its own, with its own packages, shared before its tests (#335)", () => {
+    const { repo, base, head } = repoWithPr("test\n");
+    const steps: string[] = [];
+    const copies: string[] = [];
+    let folder = "";
+    const sandbox = {
+      share: (scratch: string, copy: string) => {
+        folder = scratch;
+        copies.push(copy);
+        steps.push("share");
+        // The copy's packages are a folder of its own: removing it never reaches the repo's.
+        const modules = join(copy, "node_modules");
+        expect(lstatSync(modules).isSymbolicLink()).toBe(false);
+        expect(readFileSync(join(modules, "pkg", "index.js"), "utf8")).toBe("module.exports = 1;\n");
+      },
+      remove: (scratch: string) => {
+        steps.push("remove");
+        rmSync(scratch, { recursive: true, force: true });
+      },
+    };
+    const run = (dir: string) => {
+      steps.push("tests");
+      const result = runTests(dir);
+      // What a test does to its own copy (here: deletes it) never reaches the next run's (Qodo on PR 336).
+      rmSync(join(dir, "src"), { recursive: true, force: true });
+      return result;
+    };
+    const outcome = revertCheck({ repo, base, head, tests: TESTS, runTests: run, temp: root, sandbox });
+    expect(outcome.exit).toBe(0);
+    expect(steps).toEqual(["share", "tests", "share", "tests", "remove"]);
+    // Each copy is built in full before it is shared, in its own folder, never inside the one before.
+    expect(new Set(copies).size).toBe(2);
+    expect(copies.every((copy) => dirname(copy) === folder && folder.startsWith(root))).toBe(true);
+    expect(existsSync(folder)).toBe(false);
+    expect(existsSync(join(repo, "node_modules", "pkg", "index.js"))).toBe(true);
   });
 
   it("stops after the first run when a test file fails to load even with the change (Qodo on PR 219)", () => {

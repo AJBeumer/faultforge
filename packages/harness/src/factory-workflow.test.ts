@@ -68,7 +68,6 @@ describe("factory workflow", () => {
         expect(workflow).toContain(`path: ${basename(repo.path)}\n`);
       }
     }
-    expect(workflow).toContain("path: FaultForge/private");
   });
 
   it("pushes with the owner's token, never the default bot token", () => {
@@ -90,7 +89,7 @@ describe("factory workflow", () => {
 
   it("keeps no token on disk: every checkout sets persist-credentials: false, and git pushes through gh (#103)", () => {
     const steps = workflow.split(/\n {6}- /).filter((step) => step.includes("actions/checkout@"));
-    expect(steps.length).toBeGreaterThanOrEqual(4);
+    expect(steps.length).toBeGreaterThanOrEqual(3);
     for (const step of steps) expect(step).toContain("persist-credentials: false");
     expect(workflow).toContain("gh auth setup-git");
   });
@@ -142,21 +141,53 @@ describe("factory workflow", () => {
     expect(steps[install]).not.toMatch(/if:|continue-on-error/);
   });
 
-  it("checks the private repo out only after the tick, never where an agent runs (AUD-H2, #284)", () => {
+  it("clones the private repo for the logs only after the stop, fresh, into the trusted copy (AUD-H2, #284, #335)", () => {
     const steps = workflow.split(/\n {6}- /);
     const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
+    const stop = steps.findIndex((step) => step.startsWith("name: Stop the agent's sandbox"));
     const keep = steps.findIndex((step) => step.includes("npm run -s factory:keep"));
-    const privateCheckouts = steps
+    // No action checks it out: actions/checkout would reuse a lab ticket's clone, whose .git the agent could write.
+    expect(workflow).not.toContain("repository: AJBeumer/faultforge-private");
+    const clones = steps
       .map((step, i) => ({ step, i }))
-      .filter(({ step }) => step.includes("repository: AJBeumer/faultforge-private"));
-    expect(privateCheckouts.length).toBe(1);
-    const only = privateCheckouts[0];
-    expect(only?.i).toBeGreaterThan(tick);
+      .filter(({ step }) => /git clone[^\n]*FAULTFORGE_PRIVATE_REPO/.test(step));
+    expect(clones.length).toBe(1);
+    const only = clones[0];
+    expect(only?.i).toBeGreaterThan(stop);
     expect(only?.i).toBeLessThan(keep);
+    const script = withoutComments(only?.step ?? "");
     // Runs whatever happened, but never while a process of the agent's user is left (Qodo on PR 334).
-    expect(only?.step).toContain("\n        if: always() && steps.stop.outcome == 'success'\n");
+    expect(script).toContain("\n        if: always() && steps.stop.outcome == 'success'\n");
+    // Fresh: whatever is at the path goes first; the path is in the runner's own temp folder, which the agent can't write.
+    expect(script).toContain('rm -rf "$RUNNER_TEMP/trusted-harness/private"');
+    expect(script).toMatch(/git clone[^\n]*"\$RUNNER_TEMP\/trusted-harness\/private"/);
+    expect(script.indexOf("rm -rf")).toBeLessThan(script.indexOf("git clone"));
     // The tick clones it itself, by name, when a lab ticket or its own steps need it.
     expect(steps[tick] ?? "").toContain("FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private");
+  });
+
+  it("keeps a copy of the harness from before the agent, and runs factory:keep from it, never from the agent's checkout (#335)", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const at = (test: (step: string) => boolean) => steps.findIndex(test);
+    const deps = at((s) => s.startsWith("name: Install dependencies"));
+    const guard = at((s) => s.includes("npm run -s guard:install"));
+    const copy = at((s) => s.startsWith("name: Keep a trusted copy of the harness"));
+    const setup = at((s) => s.startsWith("name: Set up the agent's network sandbox"));
+    const stop = at((s) => s.startsWith("name: Stop the agent's sandbox"));
+    const keep = at((s) => s.includes("npm run -s factory:keep"));
+    // Copied once the dependencies and the guard are in place, before the sandbox's ACLs exist to be copied.
+    expect(copy).toBeGreaterThan(deps);
+    expect(copy).toBeGreaterThan(guard);
+    expect(copy).toBeLessThan(setup);
+    const copyStep = withoutComments(steps[copy] ?? "");
+    expect(copyStep).toContain('cp -a "$GITHUB_WORKSPACE/FaultForge" "$RUNNER_TEMP/trusted-harness"');
+    expect(copyStep).not.toMatch(/if:|continue-on-error|secrets\./);
+    // The keep step runs after the stop, from the copy.
+    expect(keep).toBeGreaterThan(stop);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
+    expect(steps[keep]).toContain("working-directory: ${{ runner.temp }}/trusted-harness\n");
+    // No step after the stop runs anything from the agent's checkout.
+    for (const step of steps.slice(stop + 1)) expect(step).not.toContain("working-directory: FaultForge");
   });
 
   it("gives the tick the agent's own narrower token, which the agent gets as GH_TOKEN (AUD-H2)", () => {
@@ -216,7 +247,7 @@ describe("factory workflow", () => {
     const setup = at((s) => s.startsWith("name: Set up the agent's network sandbox"));
     const tick = at((s) => s.startsWith("name: Run one tick"));
     const stop = at((s) => s.startsWith("name: Stop the agent's sandbox"));
-    const privateCheckout = at((s) => s.includes("repository: AJBeumer/faultforge-private"));
+    const privateCheckout = at((s) => /git clone[^\n]*FAULTFORGE_PRIVATE_REPO/.test(s));
     const keep = at((s) => s.includes("npm run -s factory:keep"));
     // In order: the git identity and the guard it copies, the sandbox, the tick, then the stop before anything private.
     expect(gitConfig).toBeGreaterThan(0);

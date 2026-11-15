@@ -84,7 +84,7 @@ export function auditRun(
   const privateBefore = ws.mainAtStart[PRIVATE_KEY] ?? "";
   if (privateNow !== privateBefore)
     problems.push(`main of the private repo moved (${privateBefore.slice(0, 7)} → ${privateNow.slice(0, 7)})`);
-  const after = fingerprints(factory, privateRepo, mode, ws.lab);
+  const after = fingerprints(factory, privateRepo, mode, ws.lab, ws.private);
   for (const [what, value] of Object.entries(ws.fingerprints)) {
     if (after[what] !== value) problems.push(`${what} changed during the run`);
   }

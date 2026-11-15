@@ -134,6 +134,9 @@ export interface VerifyPrIo {
  * `trustedRemoteUrl` turns the harness's GitHub address into the address `buildTrustedCheckout` fetches
  * from; a test can pass a local bare repository's path instead, so the whole check runs with no network
  * and no GitHub credentials, the same way `buildTrustedCheckout`'s own tests do (#161).
+ *
+ * With `sandbox` (a CI run), `revert:check` runs the PR's tests as the agent's sandbox user, never as the
+ * runner: they are the agent's code too (#335).
  */
 export function verifyPrWith(
   io: VerifyPrIo,
@@ -143,6 +146,7 @@ export function verifyPrWith(
   ws: Workspace,
   repoKey: string,
   pr: number,
+  sandbox = false,
 ): Verification {
   const repo = repoConfig(factory, repoKey);
   const { github } = repo;
@@ -180,7 +184,7 @@ export function verifyPrWith(
       verifyRoot,
       basename(LAB_ROOT),
       trustedRemoteUrl(labRepo.github),
-      repo.path === "." ? undefined : { source: resolve(LAB_ROOT, repo.path), path: repo.path },
+      repo.path === "." ? undefined : { remoteUrl: trustedRemoteUrl(github), path: repo.path },
     );
   } catch (error) {
     return { problems: [error instanceof Error ? error.message : String(error)] };
@@ -271,7 +275,7 @@ export function verifyPrWith(
     );
     const revert = io.npm(
       trustedLab,
-      ["run", "-s", "revert:check", "--", repoKey, String(pr)],
+      ["run", "-s", "revert:check", "--", repoKey, String(pr), ...(sandbox ? ["--sandbox"] : [])],
       REVERT_CHECK_TIMEOUT_MS,
     );
     // A damaged or missing record reads as no result, never throws: the rest of this verdict (the

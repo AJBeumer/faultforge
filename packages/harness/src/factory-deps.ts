@@ -17,10 +17,12 @@ import { processStartId } from "./factory-process.ts";
 import { githubRecoveryReads, pidAlive } from "./factory-recovery.ts";
 import { relabelWith } from "./factory-relabel.ts";
 import { sandboxFor } from "./factory-sandbox.ts";
+import { stopAgentProcesses } from "./factory-sandbox-setup.ts";
 import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
+import { gitControlProblem } from "./git-control.ts";
 import { gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
@@ -189,7 +191,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         lab,
         private: priv,
         mainAtStart,
-        fingerprints: fingerprints(factory, privateRepo, mode, lab),
+        fingerprints: fingerprints(factory, privateRepo, mode, lab, priv),
         hooks,
       };
     },
@@ -219,6 +221,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ws,
         repoKey,
         pr,
+        mode === "ci",
       );
     },
     record(runId, event) {
@@ -246,6 +249,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
       if (!existsSync(join(priv, ".git")))
         throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
+      // The agent could write the run's private checkout, its .git too: the runner's commit and push there would run
+      // its hooks and obey its config. Only as they were before the agent started; else the logs wait for the
+      // workflow's keep step, which pushes them from a clone of its own (#335). In CI no process of the agent's user
+      // may outlive the check either: one could change them after the runner looked (Qodo on PR 336).
+      const lingering = ws?.private && mode === "ci" ? stopAgentProcesses() : null;
+      if (lingering) throw new Error(`${lingering}, so the runner won't commit through the run's private checkout`);
+      const tampered = ws?.private ? gitControlProblem(ws.private, ws.fingerprints) : undefined;
+      if (tampered) throw new Error(tampered);
       // A target ticket's run kept the reviews review:wait saved in a plain folder of its lab worktree, which the
       // runner now carries into the private repo: only `reviews/`, and first, so nothing the agent wrote there can
       // stand in for the runner's own logs below; links are left behind (AUD-H2; Qodo on PR 288).
@@ -317,7 +328,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         lab: LAB_ROOT,
         private: reviewed ? "" : privateRepo,
         mainAtStart,
-        fingerprints: fingerprints(factory, privateRepo, mode, LAB_ROOT),
+        fingerprints: fingerprints(factory, privateRepo, mode, LAB_ROOT, reviewed ? "" : privateRepo),
         hooks,
       };
     },
