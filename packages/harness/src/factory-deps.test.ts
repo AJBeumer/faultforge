@@ -70,6 +70,7 @@ import { git, gitLong, npm } from "./factory-exec.ts";
 import { localSandbox } from "./factory-sandbox.ts";
 import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
+import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
@@ -300,7 +301,8 @@ Picked up.`,
     expect(call?.[0]).toEqual({ ghJson, git, npm: expect.any(Function) });
     expect(call?.slice(1, 3)).toEqual([FACTORY, runs]);
     expect(call?.[3]("owner/lab")).toBe("https://github.com/owner/lab.git");
-    expect(call?.slice(4)).toEqual([ws, "target", 19]);
+    // Locally, the tests run as the owner; in CI as the sandbox user (#335).
+    expect(call?.slice(4)).toEqual([ws, "target", 19, false]);
   });
 
   it("audits against the checkout's own private folder, in the run's mode", () => {
@@ -386,12 +388,23 @@ Picked up.`,
     expect(vi.mocked(commitAndPublish)).toHaveBeenCalledTimes(2);
   });
 
+  it("never commits through a private checkout whose git hooks or config changed while the agent ran (#335)", () => {
+    const ws = workspace(join(runs, "run-h"));
+    writeFileSync(join(runs, "run-h.jsonl"), "{}\n");
+    mkdirSync(join(ws.private, ".git", "hooks"), { recursive: true });
+    ws.fingerprints[GIT_CONTROL(ws.private)] = gitControlPrint(ws.private);
+    writeFileSync(join(ws.private, ".git", "hooks", "pre-commit"), "#!/bin/sh\n");
+    expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-h", ws)).toThrow(/hooks or config changed/);
+    expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
+  });
+
   it("copies the run log and transcript into the workspace's private worktree, then publishes them", () => {
     const ws = workspace(join(runs, "run-1"));
     writeFileSync(join(runs, "run-1.jsonl"), "{}\n");
     writeFileSync(join(runs, "run-1.agent.jsonl"), "{}\n");
     mkdirSync(ws.private, { recursive: true });
     writeFileSync(join(ws.private, ".git"), "gitdir: elsewhere\n");
+    ws.fingerprints[GIT_CONTROL(ws.private)] = gitControlPrint(ws.private);
     const saved = realDeps(FACTORY, OPTIONS).saveEvidence("run-1", ws);
     const dir = join(ws.private, "raw-artifacts", "factory-runs");
     expect(existsSync(join(dir, "run-1.jsonl"))).toBe(true);

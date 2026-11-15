@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "nod
 import { basename, join, relative, resolve } from "node:path";
 import type { FactoryConfig } from "./factory-config.ts";
 import { git } from "./factory-exec.ts";
+import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { sha256 } from "./provenance.ts";
 
@@ -84,13 +85,15 @@ export function teardown(
 
 /**
  * Fingerprints of what the agent must not change: the owner's own checkouts (commit, branch and
- * uncommitted changes) and the guardrail files in the run's lab worktree.
+ * uncommitted changes), the guardrail files in the run's lab worktree, and the git hooks and config of the run's
+ * private checkout (`priv`), which the runner commits through after the agent ends (#335).
  */
 export function fingerprints(
   factory: FactoryConfig,
   privateRepo: string,
   mode: RunMode,
   lab: string,
+  priv = "",
 ): Record<string, string> {
   const prints: Record<string, string> = {};
   // In CI the checkouts are the agent's own workspace, and no owner checkout exists to protect.
@@ -116,6 +119,7 @@ export function fingerprints(
     const path = join(lab, file);
     prints[`the run's guardrail file ${file}`] = sha256(existsSync(path) ? readFileSync(path, "utf8") : "(missing)");
   }
+  if (priv) prints[GIT_CONTROL(priv)] = gitControlPrint(priv);
   return prints;
 }
 

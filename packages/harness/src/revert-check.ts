@@ -1,7 +1,7 @@
 /**
  * Proves a PR's tests fail without its code change.
  *
- *   npm run revert:check -- target 19
+ *   npm run revert:check -- target 19 [--sandbox]
  *
  * FaultForge plants bugs to test a reviewer; this does the same to the factory's own tests. In a
  * scratch copy of the PR's head, it first runs the PR's new or changed test files with the change in
@@ -21,10 +21,13 @@
  * Read-only for the repository: the scratch copy is made through a temporary git index into a temp
  * folder, so the working tree, the real index and every branch stay as they were (a fetch updates
  * only FETCH_HEAD). The tests run with a stripped environment: they are agent-written code, and the
- * runner that calls this holds the factory's keys.
+ * runner that calls this holds the factory's keys. With `--sandbox` (a CI factory run) they also run as the
+ * agent's sandbox user, with no route out but loopback, in a scratch copy under the system's temp folder with its
+ * own copy of the packages (`revert-run.ts`, #335); without the sandbox in place it can't judge (exit 2).
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -41,7 +44,7 @@ import { fileURLToPath } from "node:url";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { ghJson } from "./github.ts";
 import { prEvidenceDir, ROOT } from "./paths.ts";
-import { parseVitestReport } from "./run-outcome.ts";
+import { testSetup } from "./revert-run.ts";
 
 export interface Change {
   /** git's name-status letter: A added, M modified, D deleted (renames are split into D and A). */
@@ -214,24 +217,6 @@ export function verdict(
   };
 }
 
-/**
- * Only what a test runner needs: no tokens, keys or other secrets from the caller's environment, and
- * `home` (the scratch folder) as the home directory, so tools that look for credentials there find none.
- * This is not a sandbox: the tests still run with the caller's file access, exactly as `npm run check`
- * already runs them. A real sandbox (no network, its own user) is the charter's Devil's Advocate work.
- */
-export function strippedEnv(env: NodeJS.ProcessEnv, home?: string): NodeJS.ProcessEnv {
-  const keep =
-    /^(PATH|PATHEXT|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|HOME|USERPROFILE|TEMP|TMP|TMPDIR|LANG|LC_ALL|TZ)$/i;
-  const out: NodeJS.ProcessEnv = { CI: "1", NODE_ENV: "test" };
-  for (const [key, value] of Object.entries(env)) if (keep.test(key)) out[key] = value;
-  if (home) {
-    out.HOME = home;
-    out.USERPROFILE = home;
-  }
-  return out;
-}
-
 export interface CheckInput {
   /** The repository's local checkout. */
   repo: string;
@@ -242,6 +227,9 @@ export interface CheckInput {
   /** Runs the given test files in a folder and reports. */
   runTests: (dir: string, files: string[]) => TestRun;
   temp?: string;
+  /** In a CI run: the scratch copy gets its own packages (no link to the runner's), is shared with the sandbox user
+   * before the tests run, and is removed through `remove`, whatever that user did to its files' modes (#335). */
+  sandbox?: { share(scratch: string): void; remove(scratch: string): void };
 }
 
 function git(repo: string, args: string[], env?: NodeJS.ProcessEnv): string {
@@ -288,7 +276,9 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
       git(input.repo, ["read-tree", input.head], index);
       git(input.repo, ["checkout-index", "-a", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`], index);
       const modules = join(input.repo, "node_modules");
-      if (existsSync(modules)) symlinkSync(modules, link, "junction");
+      if (existsSync(modules) && input.sandbox) cpSync(modules, link, { recursive: true, verbatimSymlinks: true });
+      else if (existsSync(modules)) symlinkSync(modules, link, "junction");
+      input.sandbox?.share(scratch);
     } catch (error) {
       const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
       return judge({ ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` });
@@ -307,56 +297,36 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
     }
     return judge(withChange, input.runTests(copy, files.tests));
   } finally {
-    // Remove the link to node_modules by itself first, so deleting the copy can never reach the real one.
-    try {
-      if (lstatSync(link).isSymbolicLink() || existsSync(link)) unlinkSync(link);
-    } catch {
-      // No link was made, or it is already gone.
-    }
-    // If the link is somehow still there, leave the copy behind rather than risk the real packages.
-    if (existsSync(link))
-      console.error(`revert:check left ${scratch} in place: its node_modules link couldn't be removed`);
-    else rmSync(scratch, { recursive: true, force: true });
+    if (input.sandbox) input.sandbox.remove(scratch);
+    else removeScratch(scratch, link);
   }
 }
 
-type Spawn = (
-  command: string,
-  args: readonly string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; encoding: "utf8"; timeout: number },
-) => { status: number | null; stderr?: string; error?: Error };
-
-/**
- * Runs vitest on the files, in the folder, with the stripped environment, and reads its JSON report.
- * The report from an earlier run is removed first: a run that dies before writing one must read as
- * "didn't run", never as the earlier run's result.
- */
-export function runVitest(dir: string, files: string[], spawn: Spawn = spawnSync): TestRun {
-  const vitest = join(dir, "node_modules", "vitest", "vitest.mjs");
-  if (!existsSync(vitest)) return { ran: false, failed: [], passed: 0, error: "vitest isn't installed in the repo" };
-  const report = join(dir, ".revert-check-report.json");
-  rmSync(report, { force: true });
-  const result = spawn(process.execPath, [vitest, "run", ...files, "--reporter=json", `--outputFile=${report}`], {
-    cwd: dir,
-    env: strippedEnv(process.env, dirname(dir)),
-    encoding: "utf8",
-    timeout: 10 * 60_000,
-  });
-  if (!existsSync(report)) {
-    const why = (result.error?.message ?? result.stderr ?? "").trim().split("\n").slice(-3).join(" ");
-    return { ran: false, failed: [], passed: 0, error: `vitest wrote no report (exit ${result.status}): ${why}` };
+/** Removes a scratch copy whose node_modules is a link to the real one: the link first, never through it. */
+function removeScratch(scratch: string, link: string): void {
+  // Remove the link to node_modules by itself first, so deleting the copy can never reach the real one.
+  try {
+    if (lstatSync(link).isSymbolicLink() || existsSync(link)) unlinkSync(link);
+  } catch {
+    // No link was made, or it is already gone.
   }
-  return { ran: true, ...parseVitestReport(JSON.parse(readFileSync(report, "utf8"))) };
+  // If the link is somehow still there, leave the copy behind rather than risk the real packages.
+  if (existsSync(link))
+    console.error(`revert:check left ${scratch} in place: its node_modules link couldn't be removed`);
+  else rmSync(scratch, { recursive: true, force: true });
 }
 
 async function main() {
   const factory = loadFactory();
-  const [repoKey, prArg] = process.argv.slice(2);
+  const sandboxed = process.argv.includes("--sandbox");
+  const [repoKey, prArg] = process.argv.slice(2).filter((arg) => arg !== "--sandbox");
   const pr = Number(prArg);
   if (!repoKey || !Number.isInteger(pr) || pr <= 0) {
-    console.error(`usage: npm run revert:check -- <${Object.keys(factory.repos).join("|")}> <pr>`);
+    console.error(`usage: npm run revert:check -- <${Object.keys(factory.repos).join("|")}> <pr> [--sandbox]`);
     process.exit(2);
   }
+  // The tests never run unsandboxed when a sandbox was asked for (#335): this throws first, and exits 2.
+  const runner = testSetup(sandboxed);
   const config = repoConfig(factory, repoKey);
   const lab = ROOT;
   const repo = resolve(lab, config.path);
@@ -378,7 +348,13 @@ async function main() {
     `revert:check ${repoKey} PR ${pr}: head ${head.slice(0, 7)}, base ${base.slice(0, 7)} (${view.state.toLowerCase()})`,
   );
 
-  const result = revertCheck({ repo, head, base, tests: new RegExp(config.tests), runTests: runVitest });
+  const result = revertCheck({
+    repo,
+    head,
+    base,
+    tests: new RegExp(config.tests),
+    ...runner,
+  });
   const split = splitFiles(result.changes, new RegExp(config.tests));
   console.log(`Test files: ${split.tests.map((c) => c.path).join(", ") || "none"}`);
   console.log(`Code files: ${split.code.map((c) => c.path).join(", ") || "none"}`);

@@ -153,8 +153,11 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     const git: VerifyPrIo["git"] = (cwd, ...args) => sh(cwd, ...args);
 
     const verifyRoot = join(root, "runs");
-    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42);
+    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42, true);
 
+    // In a CI run the PR's tests run as the sandbox user: revert:check is told so (#335).
+    const revertCall = calls.find((c) => c.args.includes("revert:check"));
+    expect(revertCall?.args.slice(-3)).toEqual(["lab", "42", "--sandbox"]);
     // The real finding from main's genuine script survived, even though ws.lab's own copy of the
     // script was edited to always report a clean review.
     expect(result.problems).toEqual(["1 action-required finding(s) still open: a real finding Qodo raised"]);

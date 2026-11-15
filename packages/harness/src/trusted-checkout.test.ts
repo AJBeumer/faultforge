@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,17 +72,35 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
     removeTrustedCheckout(verifyRoot);
   });
 
-  it("symlinks a sibling repo at the path the checked-out script would resolve it at", () => {
+  it("clones a sibling repo fresh at the path the checked-out script resolves it at, never linking the agent's checkout (#335)", () => {
     const { origin } = sourceWithDoctoredWorktree();
-    const siblingSource = join(root, "a-sibling-repo");
-    mkdirSync(siblingSource, { recursive: true });
-    writeFileSync(join(siblingSource, "marker.txt"), "sibling\n");
+    // The sibling's real address, and the agent's checkout of it, whose .git it could write (a hook, a filter).
+    const siblingOrigin = join(root, "sibling.git");
+    const agentCheckout = join(root, "a-sibling-repo");
+    sh(root, "init", "-q", "--bare", siblingOrigin);
+    sh(root, "clone", "-q", siblingOrigin, agentCheckout);
+    sh(agentCheckout, "config", "user.email", "t@example.com");
+    sh(agentCheckout, "config", "user.name", "t");
+    writeFileSync(join(agentCheckout, "marker.txt"), "sibling\n");
+    writeFileSync(join(agentCheckout, "package.json"), '{"name":"t","version":"1.0.0"}\n');
+    writeFileSync(
+      join(agentCheckout, "package-lock.json"),
+      '{"name":"t","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"t","version":"1.0.0"}}}\n',
+    );
+    sh(agentCheckout, "add", ".");
+    sh(agentCheckout, "commit", "-qm", "base");
+    sh(agentCheckout, "push", "-q", "origin", "HEAD:main");
+    sh(agentCheckout, "config", "core.fsmonitor", "./evil.sh");
+    mkdirSync(join(agentCheckout, ".git", "hooks"), { recursive: true });
+    writeFileSync(join(agentCheckout, ".git", "hooks", "post-checkout"), "#!/bin/sh\necho evil\n");
     const verifyRoot = join(root, "verify");
-    buildTrustedCheckout(verifyRoot, "lab", origin, {
-      source: siblingSource,
-      path: "../a-sibling-repo",
-    });
-    expect(readFileSync(join(verifyRoot, "a-sibling-repo", "marker.txt"), "utf8")).toBe("sibling\n");
+    buildTrustedCheckout(verifyRoot, "lab", origin, { remoteUrl: siblingOrigin, path: "../a-sibling-repo" });
+    const sibling = join(verifyRoot, "a-sibling-repo");
+    expect(readFileSync(join(sibling, "marker.txt"), "utf8")).toBe("sibling\n");
+    expect(lstatSync(sibling).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(sibling, ".git", "hooks", "post-checkout"))).toBe(false);
+    expect(readFileSync(join(sibling, ".git", "config"), "utf8")).not.toContain("fsmonitor");
+    expect(sh(sibling, "remote", "get-url", "origin")).toBe(siblingOrigin);
     removeTrustedCheckout(verifyRoot);
   });
 

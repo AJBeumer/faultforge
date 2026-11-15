@@ -2,7 +2,7 @@
  * A fresh checkout of the harness's `main`, with no inherited git or npm config, that the runner verifies a
  * pull request from instead of the agent's own worktree (#161). Split from factory-tick.ts (#227).
  */
-import { mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { LONG_CALL_TIMEOUT_MS, npm } from "./factory-exec.ts";
 import { CALL_TIMEOUT_MS, runExternal } from "./github.ts";
@@ -41,9 +41,10 @@ function gitIsolated(cwd: string, home: string, args: string[], timeoutMs: numbe
  * sees, so an agent's edit to an installed dependency (`tsx`, a module `revert-check.ts` imports)
  * would otherwise run as if it were trusted, even though the source it was fetched alongside never
  * was (Qodo on PR 167). When `sibling` is given (a repo whose `factory.json` path isn't `.`, such as
- * the target), its real checkout is symlinked in at the same relative path, so `revert-check.ts`'s own
- * path arithmetic (relative to wherever it's running from) finds it exactly as it would in the
- * agent's worktree.
+ * the target), its `main` is checked out fresh the same way, from its own address, at the same relative
+ * path, so `revert-check.ts`'s own path arithmetic finds it exactly as it would in the agent's worktree.
+ * Never a link to the agent's checkout of it: its `.git` (hooks, filters, `core.fsmonitor`) is the agent's
+ * to write, and git would obey it when `revert:check` fetches and checks files out there (#335).
  *
  * Throws, with a clear message, when the checkout can't be built - removing anything already made
  * first, so a failure here never leaves anything behind to clean up by hand.
@@ -52,27 +53,32 @@ export function buildTrustedCheckout(
   verifyRoot: string,
   labDirName: string,
   remoteUrl: string,
-  sibling?: { source: string; path: string },
+  sibling?: { remoteUrl: string; path: string },
 ): string {
   const lab = join(verifyRoot, labDirName);
   try {
-    mkdirSync(lab, { recursive: true });
-    gitIsolated(lab, verifyRoot, ["init", "-q"], CALL_TIMEOUT_MS);
-    // A real "origin", not just a one-off fetch URL: `revert-check.ts`'s own logic fetches a pull
-    // request's branch from "origin" by name when the repo under test is this very checkout (a
-    // pull request against the harness itself, exactly like this one).
-    gitIsolated(lab, verifyRoot, ["remote", "add", "origin", remoteUrl], CALL_TIMEOUT_MS);
-    gitIsolated(lab, verifyRoot, ["fetch", "--quiet", "origin", "main"], LONG_CALL_TIMEOUT_MS);
-    gitIsolated(lab, verifyRoot, ["checkout", "-q", "FETCH_HEAD"], CALL_TIMEOUT_MS);
-    const install = npm(lab, ["ci", "--no-audit", "--no-fund"], LONG_CALL_TIMEOUT_MS, isolatedEnv(verifyRoot));
-    if (install.status !== 0) throw new Error(`npm ci failed in the trusted checkout: ${install.output.slice(-400)}`);
-    if (sibling) symlinkSync(sibling.source, resolve(lab, sibling.path), "junction");
+    freshCheckout(lab, verifyRoot, remoteUrl);
+    if (sibling) freshCheckout(resolve(lab, sibling.path), verifyRoot, sibling.remoteUrl);
     return lab;
   } catch (error) {
     removeTrustedCheckout(verifyRoot);
     const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
     throw new Error(`couldn't build a clean checkout of main to run revert:check from: ${why}`);
   }
+}
+
+/** A new repository at `dir`, its "origin" at `remoteUrl`, checked out at that `main`, with its packages installed. */
+function freshCheckout(dir: string, home: string, remoteUrl: string): void {
+  mkdirSync(dir, { recursive: true });
+  gitIsolated(dir, home, ["init", "-q"], CALL_TIMEOUT_MS);
+  // A real "origin", not just a one-off fetch URL: `revert-check.ts`'s own logic fetches a pull
+  // request's branch from "origin" by name when the repo under test is this very checkout (a
+  // pull request against the harness itself, exactly like this one).
+  gitIsolated(dir, home, ["remote", "add", "origin", remoteUrl], CALL_TIMEOUT_MS);
+  gitIsolated(dir, home, ["fetch", "--quiet", "origin", "main"], LONG_CALL_TIMEOUT_MS);
+  gitIsolated(dir, home, ["checkout", "-q", "FETCH_HEAD"], CALL_TIMEOUT_MS);
+  const install = npm(dir, ["ci", "--no-audit", "--no-fund"], LONG_CALL_TIMEOUT_MS, isolatedEnv(home));
+  if (install.status !== 0) throw new Error(`npm ci failed in the trusted checkout: ${install.output.slice(-400)}`);
 }
 
 /**

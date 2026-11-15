@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,12 +19,11 @@ import {
   parseNameStatus,
   revertCheck,
   runnableTests,
-  runVitest,
   splitFiles,
-  strippedEnv,
   type TestRun,
   verdict,
 } from "./revert-check.ts";
+import { runVitest, strippedEnv } from "./revert-run.ts";
 
 const TESTS = /(\.test\.ts$|\/fixtures\/)/;
 
@@ -169,6 +177,36 @@ describe("revertCheck on a real git repository", () => {
     expect(seen[0]).toMatchObject({ list: "export const filter = 'status';\n", added: true, modules: true });
     // Without the change: the modified file is back at base, the added one is gone.
     expect(seen[1]).toMatchObject({ list: "export const filter = 'all';\n", added: false });
+  });
+
+  it("in a sandbox, gives the copy its own packages (no link to the runner's) and shares it before the tests (#335)", () => {
+    const { repo, base, head } = repoWithPr("test\n");
+    const steps: string[] = [];
+    let shared = "";
+    const sandbox = {
+      share: (scratch: string) => {
+        shared = scratch;
+        steps.push("share");
+        // The copy's packages are a folder of its own: removing it never reaches the repo's.
+        const modules = join(scratch, "copy", "node_modules");
+        expect(lstatSync(modules).isSymbolicLink()).toBe(false);
+        expect(readFileSync(join(modules, "pkg", "index.js"), "utf8")).toBe("module.exports = 1;\n");
+      },
+      remove: (scratch: string) => {
+        steps.push("remove");
+        rmSync(scratch, { recursive: true, force: true });
+      },
+    };
+    const run = (dir: string) => {
+      steps.push("tests");
+      return runTests(dir);
+    };
+    const outcome = revertCheck({ repo, base, head, tests: TESTS, runTests: run, temp: root, sandbox });
+    expect(outcome.exit).toBe(0);
+    expect(steps).toEqual(["share", "tests", "tests", "remove"]);
+    expect(shared.startsWith(root)).toBe(true);
+    expect(existsSync(shared)).toBe(false);
+    expect(existsSync(join(repo, "node_modules", "pkg", "index.js"))).toBe(true);
   });
 
   it("stops after the first run when a test file fails to load even with the change (Qodo on PR 219)", () => {
