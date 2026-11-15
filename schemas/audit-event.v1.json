@@ -181,6 +181,7 @@
             ]
           },
           "reason": { "type": "string", "minLength": 1 },
+          "reasonDraftedBy": { "enum": ["owner", "agent"] },
           "judgements": {
             "type": "array",
             "items": {

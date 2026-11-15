@@ -254,6 +254,38 @@ describe("a base that gives the lab away is refused (#224, audit H-4)", () => {
   );
 });
 
+describe("the target's drive-letter spelling doesn't change the result (#316)", () => {
+  // Only Windows spells a drive letter; elsewhere both spellings are one path.
+  it.skipIf(process.platform !== "win32" || !hasRealTarget)(
+    "--validate-only gives the same outcome for d:\\… and D:\\…",
+    () => {
+      const dir = scratchTargetCopy();
+      execFileSync("git", ["-C", dir, "remote", "set-url", "origin", "/nonexistent/origin.git"]);
+      try {
+        execFileSync("git", ["-C", dir, "branch", "-D", RENAME_CONTROL.publish.branch], { stdio: "ignore" });
+      } catch {
+        // not there: nothing to drop
+      }
+      const priv = mkdtempSync(join(tmpdir(), "inject-private-"));
+      scratchDirs.push(priv);
+      mkdirSync(join(priv, "templates", RENAME_CONTROL.id), { recursive: true });
+      writeFileSync(join(priv, "templates", RENAME_CONTROL.id, "template.json"), JSON.stringify(RENAME_CONTROL));
+      const drive = dir.slice(0, 1);
+      const outcomes = [drive.toLowerCase(), drive.toUpperCase()].map((letter) => {
+        const target = letter + dir.slice(1);
+        const result = runInject(["--template", RENAME_CONTROL.id, "--target", target, "--validate-only"], {
+          ...process.env,
+          FAULTFORGE_PRIVATE_DIR: priv,
+        });
+        return { status: result.status, stderr: result.stderr };
+      });
+      expect(outcomes[0]).toEqual({ status: 0, stderr: "" });
+      expect(outcomes[1]).toEqual(outcomes[0]);
+    },
+    180_000,
+  );
+});
+
 /** A control written for these tests only: a local variable renamed in `listBookings`, behaviour unchanged. */
 const RENAME_CONTROL = {
   schemaVersion: 2,

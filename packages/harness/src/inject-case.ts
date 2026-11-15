@@ -7,10 +7,11 @@
 import { randomUUID } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { baseTreeProblems } from "./base-tree.ts";
 import { type BranchExistence, deriveBranchName, gitBranchExistence } from "./branch-name.ts";
+import { realSpelling } from "./drive-spelling.ts";
 import { errorText } from "./error-text.ts";
 import { guardProblem } from "./guard-install.ts";
 import { checksFailure, runVariantChecks, type VariantChecks } from "./inject-checks.ts";
@@ -18,6 +19,7 @@ import { git as gitIn, readJsonl, run as runCommand, runProof, runStep, type Ste
 import {
   applyMutation,
   applyTestChange,
+  commitBody,
   loadTemplate,
   loadTemplates,
   type Proof,
@@ -130,7 +132,8 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
   const caseId = args.caseId;
   // A case id becomes a folder name and a permanent answer-key line, so a typo must stop here (#193).
   if (!validateOnly && !/^FF-\d{4}$/.test(caseId ?? "")) refuse(`--case must look like FF-NNNN, not ${caseId}`);
-  const targetDir = resolve(args.target);
+  // The real spelling, drive letter included: Vitest loads twice from another one (#316).
+  const targetDir = realSpelling(args.target);
   const templateDir =
     deps.findTemplateDir(args.template) ??
     refuse(`template ${args.template} not found in private/templates or templates/seed`);
@@ -231,7 +234,8 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
       checksFailure(checks, validateOnly);
 
     if (!failure && !validateOnly) {
-      git("commit", "--quiet", "--all", "-m", template.publish.commitMessage);
+      // A body as ordinary commits have, from the ticket the PR closes (#321): only new cases change.
+      git("commit", "--quiet", "--all", "-m", template.publish.commitMessage, "-m", commitBody(template.ticket.what));
       injectionCommit = git("rev-parse", "HEAD");
     }
   } finally {

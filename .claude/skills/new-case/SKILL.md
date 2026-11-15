@@ -68,7 +68,7 @@ npm run case:review -- <FF-NNNN>
 npm run verdict -- <FF-NNNN>
 ```
 
-`verdict` prints every finding against the fixed rule (same file as the injection, overlapping lines, a kind term from the template's `match.kindTerms` in its title, summary or category) and asks the owner, on a terminal, for the verdict and a judgement of every other finding. It appends one `case.adjudicated` event; nothing is written until every question is answered.
+`verdict` prints every finding against the fixed rule (same file as the injection, overlapping lines, a kind term from the template's `match.kindTerms` in its title, summary or category) and asks the owner, on a terminal, for the verdict, its reason, whether the owner wrote that reason ("Did you write this reason yourself? (y/n)", recorded as `reasonDraftedBy`), and a judgement of every other finding. It appends one `case.adjudicated` event; nothing is written until every question is answered.
 
 - A bug case: `detected`, `missed` or `review incomplete`. An answer the rule contradicts is recorded only after the owner confirms it.
 - A control: `clean` when Qodo raised nothing, `false alarm` when it raised something on the harmless change (each finding judged), `review incomplete` when the review didn't finish. A finding judged real refuses the verdict: the control wasn't clean.

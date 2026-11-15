@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,8 +13,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
+import { otherDriveSpelling } from "./drive-spelling.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import { applyTestChange, loadTemplates, type Proof, proofCorpus, testChangeFileProblem } from "./inject-template.ts";
+import {
+  applyTestChange,
+  commitBody,
+  loadTemplates,
+  type Proof,
+  proofCorpus,
+  testChangeFileProblem,
+} from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
@@ -253,6 +262,33 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(w.inject({ validateOnly: true, caseId: undefined })).toBe(0);
     expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
     expect(w.gitCalls.some((c) => c[0] === "commit")).toBe(false);
+  });
+});
+
+describe("inject: the target's real spelling, drive letter included (#316)", () => {
+  it("hands git, every step and every proof the real path, however --target spells the drive", () => {
+    const w = world();
+    const real = realpathSync.native(w.target);
+    const seen = new Set<string>();
+    const git = w.deps.git;
+    w.deps.git = (dir, ...args) => {
+      seen.add(dir);
+      return git(dir, ...args);
+    };
+    const step = w.deps.runStep;
+    w.deps.runStep = (places, ...rest) => {
+      seen.add(places.targetDir);
+      return step(places, ...rest);
+    };
+    const proof = w.deps.runProof;
+    w.deps.runProof = (places, ...rest) => {
+      seen.add(places.targetDir);
+      return proof(places, ...rest);
+    };
+    // On Windows the other drive letter case; elsewhere a path with a `..` in it, which resolves to the same.
+    const spelled = otherDriveSpelling(w.target) ?? join(w.target, "src", "..");
+    expect(w.inject({ target: spelled, validateOnly: true, caseId: undefined })).toBe(0);
+    expect([...seen]).toEqual([real]);
   });
 });
 
@@ -535,5 +571,33 @@ describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
     const w = world({ bug: { testChange: { file: "test/sum.test.ts" } } });
     expect(w.inject()).toBe(1);
     expect(w.errors.join("\n")).toContain("fails the schema");
+  });
+});
+
+describe("a case commit has an ordinary body: one sentence from the ticket's what (#321)", () => {
+  it("commits the template's message with the first sentence of its ticket's what as the body", () => {
+    const w = world({
+      bug: { ticket: { title: "Tidy the sum", what: "Tidy the sum.  Keep it short.", criteria: ["c"] } },
+    });
+    expect(w.inject()).toBe(0);
+    expect(w.gitCalls.find((c) => c[0] === "commit")).toEqual([
+      "commit",
+      "--quiet",
+      "--all",
+      "-m",
+      "Tidy the sum",
+      "-m",
+      "Tidy the sum.",
+    ]);
+  });
+
+  it.each([
+    ["Tidy it.", "Tidy it."],
+    ["Return the total\nas before", "Return the total as before."],
+    ["Call the list `own` in listBookings. Nothing else changes.", "Call the list `own` in listBookings."],
+    ["Accept v1.2 ids. Then tidy.", "Accept v1.2 ids."],
+    ["  Handle an empty list!  More text.", "Handle an empty list!"],
+  ])("reads %j as %j", (what, body) => {
+    expect(commitBody(what)).toBe(body);
   });
 });

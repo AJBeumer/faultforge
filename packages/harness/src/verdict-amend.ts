@@ -8,14 +8,15 @@
  * time stay as they were, so `case:build` keeps building the same record. It appends one amendment line to
  * `private/audit-events.jsonl` naming the case's latest `case.adjudicated` event, whose `change` adds
  * `amendedReason` (the owner's new text), `amendedReasonAt` (now) and `amendedReasonBy` (the owner's
- * login), and marks it `amendedReasonWrittenLater: true`. The amendment's own `reason` says so, and its
+ * login), whether the owner wrote it (`amendedReasonDraftedBy`: `owner` or `agent`, asked every time, no
+ * default; #321), and marks it `amendedReasonWrittenLater: true`. The amendment's own `reason` says so, and its
  * `evidence` is the saved review the verdict judged. `ledger:check` accepts it: no locked field changes.
  *
  * Asked on a terminal, as `verdict` asks: it prints the verdict and its reason, then asks for the new reason,
  * which must be nonblank, differ from the original, and not be any other case's reason or amended reason.
  *
  * Exit codes: 0 the amendment was appended (or, with `--dry-run`, printed); 1 nothing was written because it
- * was refused: stdin is not a terminal, the verdict already has an amended reason (or gained one, or was
+ * was refused: stdin is not a terminal, who wrote the reason got no y or n, the verdict already has an amended reason (or gained one, or was
  * replaced, while the owner answered), or no acceptable reason was given after retrying; 2 nothing was written because it couldn't run: usage, the answer key or audit log has a
  * problem, the case has no verdict, its saved review can't be found, the owner's login can't be read, or the
  * line couldn't be appended.
@@ -32,7 +33,7 @@ import { appendAmendment } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { casePr, findSavedReview, savedReviewsDir } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
-import { type AskFn, askOwnReason, defaultAsk } from "./verdict-ask.ts";
+import { type AskFn, askDraftedBy, askOwnReason, defaultAsk } from "./verdict-ask.ts";
 import { latestVerdict, normalReason, reasonsOfOtherCases } from "./verdict-event.ts";
 
 export const AMENDMENT_REASON = "Adds an accurate reason, written after the verdict; the original reason is kept.";
@@ -125,7 +126,8 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
   // Neither the reason it replaces in meaning nor any other case's reason (AUD-H4).
   const taken = reasonsOfOtherCases(events, caseId);
   if (typeof verdict.reason === "string") taken.add(normalReason(verdict.reason));
-  const reason = await askOwnReason(options.ask ?? defaultAsk, "Accurate reason for this verdict: ", taken);
+  const ask = options.ask ?? defaultAsk;
+  const reason = await askOwnReason(ask, "Accurate reason for this verdict: ", taken);
   if (typeof reason !== "string") {
     error(
       reason.taken
@@ -134,13 +136,26 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     );
     return 1;
   }
+  // Asked every time, as verdict asks it (#321). Its own field: the verdict's `reasonDraftedBy` is about the
+  // original reason, which stays as it was.
+  const draftedBy = await askDraftedBy(ask);
+  if (!draftedBy) {
+    error("verdict:amend: no answer (y or n) to who wrote the reason; nothing written");
+    return 1;
+  }
 
   const at = (options.now ?? (() => new Date().toISOString()))();
   const amendment = {
     kind: "amendment" as const,
     amends: verdict.eventId as string,
     at,
-    change: { amendedReason: reason, amendedReasonAt: at, amendedReasonBy: by, amendedReasonWrittenLater: true },
+    change: {
+      amendedReason: reason,
+      amendedReasonAt: at,
+      amendedReasonBy: by,
+      amendedReasonWrittenLater: true,
+      amendedReasonDraftedBy: draftedBy,
+    },
     reason: AMENDMENT_REASON,
     evidence,
   };

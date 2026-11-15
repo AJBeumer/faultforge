@@ -18,7 +18,9 @@
  *
  * It then asks the owner, on the terminal: the verdict on the planted bug (`detected`, `missed` or
  * `review incomplete`, with a nonblank reason of the case's own — retried, then refused, if left blank or
- * if it is the reason, or amended reason, of another case's verdict), and a judgement on every finding:
+ * if it is the reason, or amended reason, of another case's verdict), whether the owner wrote that reason
+ * ("Did you write this reason yourself? (y/n)", recorded as `reasonDraftedBy`: `owner` or `agent`; asked every
+ * time, with no default), and a judgement on every finding:
  * one the rule matched as `real` or `false alarm`, with a reason, never left open; every other one as
  * `real`, `false alarm` or `open`, each with a nonblank reason. A blank answer leaves an unmatched finding
  * `open` at once, unjudged, with no reason asked; it is never recorded as a false alarm. Nothing is
@@ -63,6 +65,7 @@ import { isComplete, savedReviewsDir, toMatchFinding } from "./saved-review.ts";
 import { privateDir } from "./templates.ts";
 import {
   type AskFn,
+  askDraftedBy,
   askJudgement,
   askMatchedJudgement,
   askNonBlank,
@@ -223,6 +226,12 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     );
     return 2;
   }
+  // Who drafted the reason, asked every time: an agent's draft the owner accepted reads the same (#321).
+  const reasonDraftedBy = await askDraftedBy(ask);
+  if (!reasonDraftedBy) {
+    error("verdict: no answer (y or n) to who wrote the reason; nothing recorded");
+    return 2;
+  }
 
   const judgements: Judgement[] = [];
   // Every finding is judged. One the rule matched must be judged real or a false alarm, never left open: the
@@ -298,6 +307,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     ...(result ? { ruleVersion: result.ruleVersion } : {}),
     disposition: verdicts[bugAnswer] as string,
     reason: bugReason,
+    reasonDraftedBy,
     judgements,
     ...(earlier ? { supersedes: earlier.eventId as string } : {}),
   };

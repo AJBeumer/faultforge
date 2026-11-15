@@ -7,6 +7,8 @@
  * `npm test` avoids this by starting Vitest from the real path (`vitest-run.ts`); `vitest.config.ts` uses this
  * check to stop a direct `npx vitest` from the other spelling with a message that says what to run instead.
  */
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * A message when `cwd` is its real path spelled in another case (`d:\…` for `D:\…`), or undefined. A path that
@@ -28,4 +30,19 @@ export function otherDriveSpelling(path: string): string | undefined {
   if (!drive) return undefined;
   const swapped = drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase();
   return swapped + path.slice(1);
+}
+
+/**
+ * The path as the file system spells it, drive letter and folder case included (`d:\x` becomes `D:\x` on
+ * Windows), through any link (#316). Every path the harness hands to the target's Vitest is built from this, so
+ * Vitest never loads twice. A path that doesn't exist is returned resolved, as written: the caller's own check
+ * (git, say) then says what is wrong with it.
+ */
+export function realSpelling(path: string): string {
+  const full = resolve(path);
+  try {
+    return realpathSync.native(full);
+  } catch {
+    return full;
+  }
 }

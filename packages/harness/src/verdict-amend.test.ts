@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ledgerProblems, readAuditLog } from "./ledger.ts";
 import { AMENDMENT_REASON, type AmendOptions, run } from "./verdict-amend.ts";
+import { DRAFTED_QUESTION } from "./verdict-ask.ts";
 
 const COMMIT = "f".repeat(40);
 
@@ -43,9 +44,10 @@ function fixture(verdictExtra: Record<string, unknown> = {}) {
   return root;
 }
 
-function answers(list: string[]) {
+/** Each of `list` in turn; whether the owner wrote the reason is answered `drafted` without taking one (#321). */
+function answers(list: string[], drafted = "y") {
   let i = 0;
-  return async () => list[i++] ?? "";
+  return async (question: string) => (question === DRAFTED_QUESTION ? drafted : (list[i++] ?? ""));
 }
 
 async function amend(root: string, extra: Partial<AmendOptions> = {}) {
@@ -85,6 +87,7 @@ describe("verdict:amend (#250, AUD-H4)", () => {
         amendedReasonAt: "2026-11-15T09:00:00.000Z",
         amendedReasonBy: "Owner",
         amendedReasonWrittenLater: true,
+        amendedReasonDraftedBy: "owner",
       },
       reason: AMENDMENT_REASON,
       evidence: `raw-artifacts/reviews/target-pr3/${COMMIT.slice(0, 7)}.review.json`,
@@ -155,5 +158,35 @@ describe("verdict:amend: the evidence is what the verdict judged (Qodo on PR 267
     const { code, out } = await amend(root, { dryRun: true, ask: answers(["a reason of its own"]) });
     expect(code).toBe(0);
     expect(out).toContain('"evidence": "elsewhere/judged.review.json"');
+  });
+});
+
+describe("verdict:amend: who wrote the amended reason (#321)", () => {
+  it("asks right after the reason and records amendedReasonDraftedBy", async () => {
+    for (const [answer, drafted] of [
+      ["y", "owner"],
+      ["n", "agent"],
+    ] as const) {
+      const asked: string[] = [];
+      const list = ["a reason of its own", answer];
+      let i = 0;
+      const ask = async (question: string) => {
+        asked.push(question);
+        return list[i++] ?? "";
+      };
+      const { code, out } = await amend(fixture(), { dryRun: true, ask });
+      expect(code).toBe(0);
+      expect(asked[1]).toBe("Did you write this reason yourself? (y/n) ");
+      expect(out).toContain(`"amendedReasonDraftedBy": "${drafted}"`);
+    }
+  });
+
+  it("has no silent default: without a y or n, nothing is written", async () => {
+    const root = fixture();
+    const before = readFileSync(join(root, "audit-events.jsonl"), "utf8");
+    const { code, err } = await amend(root, { ask: answers(["a reason of its own"], "") });
+    expect(code).toBe(1);
+    expect(err).toContain("who wrote the reason");
+    expect(readFileSync(join(root, "audit-events.jsonl"), "utf8")).toBe(before);
   });
 });

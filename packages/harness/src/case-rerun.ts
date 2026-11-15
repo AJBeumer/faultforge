@@ -28,6 +28,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { realSpelling } from "./drive-spelling.ts";
 import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
@@ -80,7 +81,7 @@ export interface RerunOptions {
 }
 
 function liveTreeOf(target: string | undefined): (commit: string) => string {
-  const dir = target ? resolve(target) : resolve(ROOT, repoConfig(loadFactory(), "target").path);
+  const dir = realSpelling(target ?? resolve(ROOT, repoConfig(loadFactory(), "target").path));
   return (commit) =>
     execFileSync("git", ["-C", dir, "rev-parse", "--verify", `${commit}^{tree}`], { encoding: "utf8" }).trim();
 }
