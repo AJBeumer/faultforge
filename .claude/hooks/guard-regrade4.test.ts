@@ -158,6 +158,12 @@ describe("a move whose destination can't be read touches every reviewed repo (re
     expect(bash(`gh pr create -R ${LAB} --title "Tidy" --body 'then git -C "$X" status'`)).toBeUndefined();
   });
 
+  it("still sees a real move after text that looks like a flag (Qodo on PR 322, second review)", () => {
+    expect(bash(`printf ' --message x'; cd "$DIR" && git push --force origin main`)).toMatch(/Force pushes/);
+    expect(bash(`printf " -m x"; cd "$DIR" && git push --force origin main`)).toMatch(/Force pushes/);
+    expect(unreadableMove('echo "$(cd "$DIR" && git push origin main)"', ELSEWHERE)).toBe(true);
+  });
+
   it("reads single-quoted text and a lone % as written (Qodo on PR 322)", () => {
     expect(unreadableMove("cd '$DIR'", ELSEWHERE)).toBe(false);
     expect(unreadableMove("git -C '$(x)' status", ELSEWHERE)).toBe(false);

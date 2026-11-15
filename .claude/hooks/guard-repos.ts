@@ -6,7 +6,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { outsidePostedText } from "./guard-posted.ts";
 import { globMatches, hasWildcard } from "./shell-glob.ts";
 import { quotedSpans } from "./shell-scan.ts";
 
@@ -280,7 +279,7 @@ export interface Navigation {
  * `unreadable` says one was seen. At most `MAX_MOVES` folders are read in all; a wildcard that names more is
  * unreadable too, so the guard never walks up from each of thousands of matches (Qodo on PR 322).
  */
-export function navigation(command: string, cwd: string): Navigation {
+export function navigation(command: string, cwd: string, acts: (index: number) => boolean = () => true): Navigation {
   const targets: string[] = [];
   let unreadable = false;
   // The folders an unquoted path names from `from`: its wildcard matches, or the path itself.
@@ -298,7 +297,7 @@ export function navigation(command: string, cwd: string): Navigation {
   let here = cwd;
   for (const m of [...command.matchAll(MOVE)].slice(0, MAX_MOVES)) {
     const path = m[1] ?? m[2] ?? m[3] ?? "";
-    if (!path) continue;
+    if (!path || !acts(m.index ?? 0)) continue;
     if (unreadablePath(path, m[2] !== undefined)) {
       unreadable = true;
       continue;
@@ -340,15 +339,12 @@ export function navigationTargets(command: string, cwd: string): string[] {
  * can't widen a write to every reviewed repo (Qodo on PR 322).
  */
 export function unreadableMove(command: string, cwd: string): boolean {
-  const acted = outsidePostedText(command);
-  let text = "";
-  let at = 0;
-  for (const span of quotedSpans(acted)) {
-    if (span.kind !== "single" && span.kind !== "comment") continue;
-    text += `${acted.slice(at, span.start)} `;
-    at = span.end;
-  }
-  return navigation(text + acted.slice(at), cwd).unreadable;
+  // A move counts unless its first word sits in quoted text, a heredoc body or a comment that runs nothing. The
+  // spans are read from the command as written, never after posted values are cut out of it: a cut can shift a
+  // quote and hide a real move (Qodo on PR 322, second review). Text that runs a substitution still counts.
+  const text = new Array<boolean>(command.length).fill(false);
+  for (const span of quotedSpans(command)) if (!span.runs) text.fill(true, span.start, span.end);
+  return navigation(command, cwd, (index) => !text[index]).unreadable;
 }
 
 /** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
