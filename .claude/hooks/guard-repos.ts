@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { globMatches, hasWildcard } from "./shell-glob.ts";
+import { quotedSpans, substitutions } from "./shell-scan.ts";
 
 export interface Reviewed {
   /** owner/name on GitHub */
@@ -158,10 +160,7 @@ function remotesOf(dotGit: string): string[] {
     const config = readFileSync(join(gitDir, "config"), "utf8");
     // A URL rewrite or an included file changes what the remote really is: ask git then (Qodo on PR 265).
     if (/insteadof|^\s*\[include/im.test(config) || globalRewrites()) return gitRemotes(gitDir);
-    return [...config.matchAll(/^\s*(?:push)?url\s*=\s*(.+?)\s*$/gim)].flatMap((m) => {
-      const repo = /github\.com[/:]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(m[1] ?? "")?.[1];
-      return repo ? [repo.toLowerCase()] : [];
-    });
+    return [...config.matchAll(/^\s*(?:push)?url\s*=\s*(.+?)\s*$/gim)].flatMap((m) => githubRepos(m[1] ?? ""));
   } catch {
     return [];
   }
@@ -183,10 +182,27 @@ function globalRewrites(): boolean {
 /** The GitHub repos git itself reports as a git folder's remotes, URL rewrites applied. */
 function gitRemotes(gitDir: string): string[] {
   const result = spawnSync("git", ["--git-dir", gitDir, "remote", "-v"], { encoding: "utf8", timeout: 5000 });
-  return (result.stdout ?? "").split("\n").flatMap((line) => {
-    const repo = /github\.com[/:]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?\s/i.exec(`${line} `)?.[1];
-    return repo ? [repo.toLowerCase()] : [];
-  });
+  return (result.stdout ?? "").split("\n").flatMap((line) => githubRepos(line));
+}
+
+/**
+ * A GitHub URL in any spelling git or gh takes (re-grade 4): a scheme or none (`https`, `http`, `ssh`, `git`), a
+ * user (`git@`), a host of `github.com` or one under it (`www.`, `ssh.`), a port (`:443`), then the repo after
+ * `/` or the scp-style `:`, with or without `.git` and a closing slash, in any case. Groups: owner, name.
+ * A port is only read as one when an `owner/name` follows it; otherwise `:1234/x` is the scp form's owner.
+ * The host must be the URL's host: at the start of a word, after a scheme's `//`, or after a user's `@`, never
+ * inside another host's path (`gitlab.com/github.com/o/n`; Qodo on PR 322).
+ */
+export const GITHUB_URL = String.raw`(?<=^|[\s"'=<(@]|\/\/)(?:[\w-]+\.)*github\.com(?::\d+(?=\/[\w.-]+\/))?[\/:]+([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\/"'\s?#)]|$)`;
+
+/** Every GitHub repo the text names by URL, as `owner/name` in lower case. */
+export function githubRepos(text: string): string[] {
+  return [...text.matchAll(new RegExp(GITHUB_URL, "gi"))].map((m) => `${m[1]}/${m[2]}`.toLowerCase());
+}
+
+/** The GitHub repo a remote URL points at, as `owner/name` in lower case, or undefined for another host. */
+export function githubRepo(url: string): string | undefined {
+  return githubRepos(url)[0];
 }
 
 /** The path with its nearest existing folder resolved through links; the rest as written. */
@@ -241,35 +257,97 @@ export function moveCount(command: string): number {
 }
 
 /**
+ * True when a move's path can't be read before the shell runs: built from a variable, a substitution or cmd's
+ * `%NAME%`, or `-`, the previous folder. Single-quoted text is literal to the shell, `$` and all (Qodo on PR 322).
+ */
+function unreadablePath(path: string, singleQuoted: boolean): boolean {
+  if (path === "-") return true;
+  return !singleQuoted && /[$`]|%[A-Za-z_]\w*%/.test(path);
+}
+
+/** Where a command moves (see `navigation`): the folders it reaches, and whether one of them can't be read. */
+export interface Navigation {
+  targets: string[];
+  unreadable: boolean;
+}
+
+/**
  * The folders a command moves into or points git at, in order, each resolved from the folder the one
  * before left it in: `cd`, `pushd`, `Set-Location`, `git -C`, `--work-tree`, `--git-dir`, `GIT_DIR=` and
- * `GIT_WORK_TREE=`. A path built from a variable can't be resolved here and is left out. At most
- * `MAX_MOVES` are read.
+ * `GIT_WORK_TREE=`. An unquoted wildcard path is expanded against the folders that exist, as the shell does
+ * (re-grade 4). A path built from a variable or a substitution can't be resolved here: it is left out, and
+ * `unreadable` says one was seen. At most `MAX_MOVES` folders are read in all; a wildcard that names more is
+ * unreadable too, so the guard never walks up from each of thousands of matches (Qodo on PR 322).
  */
-export function navigationTargets(command: string, cwd: string): string[] {
+export function navigation(command: string, cwd: string, acts: (index: number) => boolean = () => true): Navigation {
   const targets: string[] = [];
+  let unreadable = false;
+  // The folders an unquoted path names from `from`: its wildcard matches, or the path itself.
+  const expand = (path: string, from: string, quoted: boolean): string[] => {
+    // The home folder is written ~ (Qodo on PR 265).
+    const full = path.startsWith("~") ? join(homedir(), path.slice(1)) : resolve(from, path);
+    if (quoted || !hasWildcard(path)) return [full];
+    const found = globMatches(full, from);
+    if (!found || targets.length + found.length > MAX_MOVES) {
+      unreadable = true;
+      return [];
+    }
+    return found.length ? found : [full];
+  };
   let here = cwd;
   for (const m of [...command.matchAll(MOVE)].slice(0, MAX_MOVES)) {
     const path = m[1] ?? m[2] ?? m[3] ?? "";
-    if (!path || /[$`%]/.test(path) || path === "-") continue;
-    // The home folder is written ~ (Qodo on PR 265).
-    const resolved = path.startsWith("~") ? join(homedir(), path.slice(1)) : resolve(here, path);
-    targets.push(resolved);
-    if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved;
+    if (!path || !acts(m.index ?? 0)) continue;
+    if (unreadablePath(path, m[2] !== undefined)) {
+      unreadable = true;
+      continue;
+    }
+    const resolved = expand(path, here, m[3] === undefined);
+    targets.push(...resolved);
+    if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved[0] ?? here;
     // Each further `-C` of the same git call is resolved from the one before, as git does (Qodo on PR 265).
-    if (/^git\s/i.test(m[0])) {
-      let dir = resolved;
+    if (/^git\s/i.test(m[0]) && resolved.length) {
+      let dir = resolved[0] ?? here;
       const option = /\s+-C\s*(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/y;
       option.lastIndex = (m.index ?? 0) + m[0].length;
       for (let c = option.exec(command); c; c = option.exec(command)) {
         const next = c[1] ?? c[2] ?? c[3] ?? "";
-        if (/[$`%]/.test(next) || targets.length >= MAX_MOVES) break;
-        dir = resolve(dir, next);
-        targets.push(dir);
+        if (unreadablePath(next, c[2] !== undefined)) {
+          unreadable = true;
+          break;
+        }
+        if (targets.length >= MAX_MOVES) break;
+        const nested = expand(next, dir, c[3] === undefined);
+        if (!nested.length) break;
+        dir = nested[0] ?? dir;
+        targets.push(...nested);
       }
     }
   }
-  return targets;
+  return { targets, unreadable };
+}
+
+/** The folders a command moves into or points git at; see `navigation`. */
+export function navigationTargets(command: string, cwd: string): string[] {
+  return navigation(command, cwd).targets;
+}
+
+/**
+ * True when the command moves into a folder the guard can't read before it runs (`cd "$DIR"`, `git -C $(…)`,
+ * a wildcard with too many matches): a write after it may land in any reviewed checkout (re-grade 4). Only
+ * where the shell acts on it: a move written in a message, a single-quoted string or a comment is text, so it
+ * can't widen a write to every reviewed repo (Qodo on PR 322).
+ */
+export function unreadableMove(command: string, cwd: string, depth = 0): boolean {
+  // A move counts unless its first word sits in quoted text, a heredoc body or a comment that runs nothing. The
+  // spans are read from the command as written, never after posted values are cut out of it: a cut can shift a
+  // quote and hide a real move (Qodo on PR 322, second review). Text that runs a substitution still counts.
+  const text = new Array<boolean>(command.length).fill(false);
+  for (const span of quotedSpans(command)) if (!span.runs) text.fill(true, span.start, span.end);
+  if (navigation(command, cwd, (index) => !text[index]).unreadable) return true;
+  // Quotes inside a substitution belong to its own command, not the string around it: each command a
+  // substitution runs is read again on its own (Qodo on PR 322, third review).
+  return depth < 3 && substitutions(command, true).some((s) => unreadableMove(s.inner, cwd, depth + 1));
 }
 
 /** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
