@@ -217,7 +217,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
           scriptViolation(command, cwd, env),
           homeSecretCommand(command, env) && HOME_SECRET_REASON,
           gitGuardViolation(command, tool !== "PowerShell", cwd),
-          doorKindViolation(readings(command)),
+          doorKindViolation(command),
         ])
           if (reason && !reasons.includes(reason)) reasons.push(reason);
       }
