@@ -13,7 +13,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
-import { applyTestChange, loadTemplates, type Proof, proofCorpus, testChangeFileProblem } from "./inject-template.ts";
+import {
+  applyTestChange,
+  commitBody,
+  loadTemplates,
+  type Proof,
+  proofCorpus,
+  testChangeFileProblem,
+} from "./inject-template.ts";
 import { eventProblems } from "./ledger-append.ts";
 import { answerKeyEntryProblem } from "./ledger-schemas.ts";
 import type { Outcome } from "./run-outcome.ts";
@@ -535,5 +542,33 @@ describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
     const w = world({ bug: { testChange: { file: "test/sum.test.ts" } } });
     expect(w.inject()).toBe(1);
     expect(w.errors.join("\n")).toContain("fails the schema");
+  });
+});
+
+describe("a case commit has an ordinary body: one sentence from the ticket's what (#321)", () => {
+  it("commits the template's message with the first sentence of its ticket's what as the body", () => {
+    const w = world({
+      bug: { ticket: { title: "Tidy the sum", what: "Tidy the sum.  Keep it short.", criteria: ["c"] } },
+    });
+    expect(w.inject()).toBe(0);
+    expect(w.gitCalls.find((c) => c[0] === "commit")).toEqual([
+      "commit",
+      "--quiet",
+      "--all",
+      "-m",
+      "Tidy the sum",
+      "-m",
+      "Tidy the sum.",
+    ]);
+  });
+
+  it.each([
+    ["Tidy it.", "Tidy it."],
+    ["Return the total\nas before", "Return the total as before."],
+    ["Call the list `own` in listBookings. Nothing else changes.", "Call the list `own` in listBookings."],
+    ["Accept v1.2 ids. Then tidy.", "Accept v1.2 ids."],
+    ["  Handle an empty list!  More text.", "Handle an empty list!"],
+  ])("reads %j as %j", (what, body) => {
+    expect(commitBody(what)).toBe(body);
   });
 });

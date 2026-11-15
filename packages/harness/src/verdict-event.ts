@@ -23,6 +23,8 @@ export interface AdjudicationEvent {
   ruleVersion?: string;
   disposition: string;
   reason: string;
+  /** Who drafted `reason`: the owner, or an agent whose draft the owner accepted (#321). Absent on earlier events. */
+  reasonDraftedBy?: "owner" | "agent";
   judgements: Judgement[];
   /** The event id of the earlier verdict this one replaces, given with `--supersede`. */
   supersedes?: string;

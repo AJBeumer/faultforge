@@ -141,3 +141,23 @@ describe("latestEvent (AUD-N8)", () => {
     );
   });
 });
+
+describe("who drafted a verdict's reason stays out of the record (#321)", () => {
+  // The record schema's `human` block takes no other field (additionalProperties: false, in versions 1 and 2), and
+  // every published record must keep its bytes. So case:build leaves reasonDraftedBy in the audit log only.
+  it.each(["sabotage", "control"] as const)("builds the same %s record with or without it", (kind) => {
+    const disposition = kind === "sabotage" ? "confirmed_missed" : "confirmed_clean";
+    const plain = inputs(kind, disposition, "complete", []);
+    const drafted = inputs(kind, disposition, "complete", []);
+    drafted.events = drafted.events.map((e) =>
+      e.type === "case.adjudicated" ? { ...e, reasonDraftedBy: "agent", amendedReasonDraftedBy: "owner" } : e,
+    );
+    const record = buildCaseRecord(drafted);
+    expect(JSON.stringify(record)).toBe(JSON.stringify(buildCaseRecord(plain)));
+    expect(JSON.stringify(record)).not.toContain("DraftedBy");
+    expect(validateCaseRecord(record)).toEqual([]);
+    expect(
+      validateCaseRecord({ ...record, human: { ...(record.human as object), reasonDraftedBy: "agent" } }),
+    ).not.toEqual([]);
+  });
+});
