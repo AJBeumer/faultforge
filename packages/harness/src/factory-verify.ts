@@ -20,6 +20,8 @@ export interface Verification {
   revertCheckRecord?: string | null;
   /** Why the PR waits for the owner whatever the agent reported, such as a change to the reviewer's rules (#215). */
   ownerGates?: string[];
+  /** The commit verified: the agent's last pushed commit. The check-defining files are compared at it (#341). */
+  head?: string;
 }
 
 /** Problems with a PR's checks: none may be pending or failed, and at least one must have run. */
@@ -177,7 +179,10 @@ export function verifyPrWith(
   // checkout's own (mutable, untracked) `origin`, says where the trusted fetch must come from.
   const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
   if (!labRepo)
-    return { problems: ['factory.json names no repo at path ".", so there\'s nowhere trusted to fetch main from'] };
+    return {
+      head: pushed,
+      problems: ['factory.json names no repo at path ".", so there\'s nowhere trusted to fetch main from'],
+    };
   let trustedLab: string;
   try {
     trustedLab = buildTrustedCheckout(
@@ -187,7 +192,7 @@ export function verifyPrWith(
       repo.path === "." ? undefined : { remoteUrl: trustedRemoteUrl(github), path: repo.path },
     );
   } catch (error) {
-    return { problems: [error instanceof Error ? error.message : String(error)] };
+    return { head: pushed, problems: [error instanceof Error ? error.message : String(error)] };
   }
 
   const problems: string[] = [];
@@ -232,7 +237,10 @@ export function verifyPrWith(
       3: "Qodo skipped the review of the head commit",
     };
     if (review.status !== 0)
-      return { problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`, ...problems] };
+      return {
+        head: pushed,
+        problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`, ...problems],
+      };
     // Read again after the review: state, head and checks must all be of the pushed commit.
     const view = io.ghJson<Parameters<typeof prViewProblems>[0]>(
       "pr",
@@ -297,5 +305,5 @@ export function verifyPrWith(
     const leftover = removeTrustedCheckout(verifyRoot);
     if (leftover) console.error(leftover);
   }
-  return { problems, revertCheckRecord, ownerGates };
+  return { problems, revertCheckRecord, ownerGates, head: pushed };
 }

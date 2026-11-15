@@ -12,6 +12,11 @@ export interface RepoConfig {
   start: { command: string; port: number; health: string } | null;
   tickets: { sections: string[]; checklist: string };
   board: boolean;
+  /** The files that decide whether the check passes, compared after every factory run (#341,
+   * `factory-check-files.ts`): `files` compared whole, `scripts` (`package.json` files) by their `scripts` field
+   * only. Regular expressions on repo-relative paths. Required by the schema; optional here so a test's made-up
+   * config needs none (a run without it fails closed). */
+  checkFiles?: { files: string; scripts: string };
 }
 
 export interface FactoryConfig {
@@ -41,6 +46,13 @@ export function configProblems(config: unknown): string[] {
       new RegExp(repo.tests);
     } catch {
       problems.push(`${key}: tests "${repo.tests}" is not a valid regular expression`);
+    }
+    for (const [name, pattern] of Object.entries(repo.checkFiles ?? {})) {
+      try {
+        new RegExp(pattern, "i");
+      } catch {
+        problems.push(`${key}: checkFiles.${name} "${pattern}" is not a valid regular expression`);
+      }
     }
   }
   return problems;

@@ -11,7 +11,8 @@ The same tick also runs on the owner's PC (`npm run factory:tick`, below), with 
 | `ready-for-agent` | the owner | Start a run. Only counts when the repo owner added it. |
 | `agent-working` | the runner | A run has claimed the ticket. |
 | `agent-done` | the runner | The PR is ready for the owner to merge, or waits at an owner gate (a change to the reviewer's rules). |
-| `agent-needs-help` | the runner | The run stopped: the ticket wasn't ready, a limit was hit, the review didn't settle, `main` moved, or something failed. The comment says which. |
+| `agent-needs-help` | the runner | The run stopped: the ticket wasn't ready, a limit was hit, the review didn't settle, `main` moved, the run changed how the check decides, or something failed. The comment says which. |
+| `touches-check` | the owner | The ticket is meant to change a file that decides the check (step 9). Only counts when the repo owner added it before the agent started. |
 
 ## What one tick does
 
@@ -34,6 +35,17 @@ The same tick also runs on the owner's PC (`npm run factory:tick`, below), with 
    | `rules:propose` (once, after a finished run) | the runner's own process - `factory-tick.ts` already had it imported and loaded before this run's workspace, let alone the agent, ever existed | nothing the agent wrote during the run can reach code that was loaded before the run began |
    | every `gh`/`git` call in the audit, the ticket-change check, relabelling, commenting and saving evidence | the runner's own process, reading GitHub and the owner's real checkouts directly | these only read state or move already-tracked files; none of them runs a script from the pull request's own branch. A lab ticket's evidence is committed through `<lab>/private` only while its git hooks and config are as they were before the agent started (#335) |
    | `factory:keep` (Actions, after the tick) | a copy of the harness made before the sandbox was set up, in the runner's own temp folder, with a fresh clone of the private repo made after every process of `ffagent` was stopped | the agent could write the workspace's checkouts, their scripts, packages and `.git`; it never had the copy (#335) |
+
+   **The files that decide the check** (#341). The agent can build a command at run time that no text rule can read, so it could weaken the check and still look green: a changed Vitest, Biome or TypeScript config, a `package.json` script, the check workflow, or the check's own scripts. So before a PR can count, the runner compares those files itself, between the commit the run started from (`main`) and the commit it just verified (the agent's last push; `refs/pull/<n>/head` only when verification stopped before it had one). It fetches just those two commits from GitHub into a new git repository with no inherited config, never reading the agent's worktree, its index or its `.git`. Which files count is per repo in `factory.json`, under `checkFiles`: `files` is a regular expression for files compared whole, and `scripts` one for `package.json` files compared by their `scripts` field only, so a dependency change still passes (the lockfile is a dependency change too). In this repo the list also holds `factory.json` and the check's own scripts with every module they load; a test keeps that list complete. A file that is there but can't be read makes the outcome `unread`, never `unchanged`. The run log's `check-files` event gives the outcome:
+
+   | Outcome | Means | The run |
+   |---|---|---|
+   | `unchanged` | no check-defining file changed | goes on |
+   | `allowed` | some changed, and the owner put `touches-check` on the ticket before the agent started; the event records the paths, who set the label and when | goes on |
+   | `check-weakened` | some changed without that label; the event lists the paths | ends `agent-needs-help`, and the comment names the paths |
+   | `unread` | the runner couldn't compare them (a fetch failed, no base commit, no `checkFiles` setting) | ends `agent-needs-help`: not knowing is never read as "nothing changed" |
+
+   The agent works as the owner's login, so a `touches-check` label added during the run never counts (the audit flags that change to the ticket too). A local run takes the same path; nothing stops the owner editing those files by hand.
 10. **Report.** First the run log and transcript are pushed to the private repo. Only then is the ticket labelled: `agent-done` when they were saved, `agent-needs-help` when the save failed or was blocked, or the run needed help anyway. Every relabel adds the new label before it removes the old one, so a failure in between leaves a ticket with two labels, never none. Then a comment with the reason and the PR, the `finished` event, and a second copy of the log, so the saved log ends with the label the ticket shows. Worktrees are removed after a good run and kept after one that needs help.
 
 The `/factory` loop inside the run keeps its own limits: at most three review rounds, and it stops at every owner gate.

@@ -18,6 +18,10 @@
       "guard": "lab",
       "check": "npm run check",
       "tests": "(\\.test\\.ts$|/fixtures/|^packages/[^/]+/test/)",
+      "checkFiles": {
+        "files": "((^|/)(biome\\.jsonc?|\\.npmrc|\\.gitignore|tsconfig[^/]*\\.json|(vite|vitest)[^/]*\\.config\\.[cm]?[jt]s|vitest\\.workspace\\.[cm]?[jt]s)$|^\\.github/workflows/check\\.yml$|^factory\\.json$|^schemas/factory\\.v1\\.json$|^packages/harness/src/(vitest-run|docs-check|docs-check-cli|drive-spelling|cli-entry|factory-config|jsonl|ledger|paths|templates)\\.ts$)",
+        "scripts": "(^|/)package\\.json$"
+      },
       "start": null,
       "tickets": {
         "sections": ["Result", "Done when", "Must not break"],
@@ -31,6 +35,10 @@
       "guard": "reviewed",
       "check": "npm run check",
       "tests": "(^test/|\\.test\\.ts$)",
+      "checkFiles": {
+        "files": "((^|/)(biome\\.jsonc?|\\.npmrc|\\.gitignore|tsconfig[^/]*\\.json|(vite|vitest)[^/]*\\.config\\.[cm]?[jt]s|vitest\\.workspace\\.[cm]?[jt]s)$|^\\.github/workflows/check\\.yml$)",
+        "scripts": "(^|/)package\\.json$"
+      },
       "start": {
         "command": "npx tsx src/server.ts",
         "port": 3000,
