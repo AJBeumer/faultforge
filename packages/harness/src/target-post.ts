@@ -36,7 +36,7 @@ import { type FactoryConfig, loadFactory } from "./factory-config.ts";
 import { CALL_TIMEOUT_MS, runExternal } from "./github.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
 import { ROOT } from "./paths.ts";
-import { type Git, pushArgs, readPush } from "./target-post-push.ts";
+import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
 
 export const KINDS = [
   "issue-create",
@@ -77,11 +77,15 @@ export class Refused extends Error {}
 /** Thrown when gh or git failed after the checks passed (exit 3). */
 export class SendFailed extends Error {}
 
-const realGh: Gh = (args, input) =>
-  runExternal(`gh ${args.slice(0, 2).join(" ")}`, "gh", args, CALL_TIMEOUT_MS, {
+/** gh with no host or repo from the environment: the post names github.com and the repo itself. */
+const realGh: Gh = (args, input) => {
+  const { GH_HOST: _host, GH_REPO: _repo, ...env } = process.env;
+  return runExternal(`gh ${args.slice(0, 2).join(" ")}`, "gh", args, CALL_TIMEOUT_MS, {
     maxBuffer: 16 * 1024 * 1024,
+    env,
     ...(input === undefined ? {} : { input }),
   });
+};
 const realGit: Git = (cwd, args) =>
   runExternal(`git ${args[0] ?? ""}`, "git", ["-C", cwd, ...args], 300_000, { maxBuffer: 256 * 1024 * 1024 });
 
@@ -111,7 +115,8 @@ export function ghCall(post: Post): { args: string[]; input?: string } {
   const [group, verb] = post.kind.split("-") as [string, string];
   const args = [group, verb];
   if (post.number !== undefined) args.push(String(post.number));
-  args.push("--repo", post.repo);
+  // The host named too: gh would otherwise take it from GH_HOST or its config.
+  args.push("--repo", `github.com/${post.repo}`);
   if (post.kind === "pr-create") args.push("--base", post.base ?? "main", "--head", post.head ?? "");
   if (post.title !== undefined) args.push("--title", post.title);
   if (post.kind === "pr-close") return { args: [...args, "--comment", post.body ?? ""] };
@@ -137,7 +142,7 @@ export function sendPost(post: Post, deps: Deps = {}): string {
       throw new SendFailed(`git push failed: ${errorText(error)}`);
     }
   }
-  const problems = textProblems(postPieces(post), env);
+  const problems = postProblems(post, env);
   if (problems.length) throw new Refused(refusal(problems));
   const { args, input } = ghCall(post);
   try {
@@ -149,7 +154,13 @@ export function sendPost(post: Post, deps: Deps = {}): string {
 
 /** The problems a post's own text has, without sending it: a caller can refuse before it records an attempt. */
 export function postProblems(post: Post, env: NodeJS.ProcessEnv = process.env): string[] {
-  return textProblems(postPieces(post), env);
+  // A head or base must be a plain branch of the reviewed repo: `owner:branch` would open a PR from a fork,
+  // whose commits never went through the door's push checks.
+  const branches = [post.head, post.base].flatMap((name) => {
+    const problem = name === undefined ? undefined : branchNameProblem(name);
+    return problem ? [problem] : [];
+  });
+  return [...branches, ...textProblems(postPieces(post), env)];
 }
 
 function refusal(problems: string[]): string {

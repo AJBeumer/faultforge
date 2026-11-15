@@ -89,7 +89,7 @@ describe("case:pr (#251, AUD-M5)", () => {
       "pr",
       "create",
       "--repo",
-      "Owner/target",
+      "github.com/Owner/target",
       "--base",
       "main",
       "--head",

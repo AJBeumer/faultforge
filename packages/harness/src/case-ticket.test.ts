@@ -215,7 +215,7 @@ describe("run", () => {
         "issue",
         "create",
         "--repo",
-        "AJBeumer/faultforge-target",
+        "github.com/AJBeumer/faultforge-target",
         "--title",
         TICKET.title,
         "--body-file",

@@ -49,31 +49,44 @@ const SHA = "a".repeat(40);
 const BASE_SHA = "b".repeat(40);
 
 /**
- * A fake git for a checkout whose origin is `url`, with branch `tidy` at SHA, one commit origin lacks (SHA, with
- * `message`), changing `files`. Records every call.
+ * A fake git for a checkout whose origin is `url`, with branch `tidy` at SHA, one commit the remote lacks (SHA, with
+ * `message`), changing `changed` (a null content is a deletion). The remote's `main` is at BASE_SHA. Records every
+ * call.
  */
-function fakeGit(message = "Tidy the lookup\n", changed: Record<string, string> = { "src/a.ts": "export {};\n" }) {
+function fakeGit(
+  message = "Tidy the lookup\n",
+  changed: Record<string, string | null> = { "src/a.ts": "export {};\n" },
+) {
   const calls: string[][] = [];
   let url = "https://github.com/Owner/app.git";
+  let rewrites = "";
   const git: Git = (_cwd, args) => {
     calls.push(args);
     const a = args.join(" ");
     if (a.startsWith("remote get-url")) return `${url}\n`;
-    if (a.startsWith("fetch")) return "";
+    if (a.startsWith("config --get-regexp")) {
+      if (!rewrites) throw new Error("exit 1");
+      return rewrites;
+    }
+    if (a.startsWith("ls-remote")) return `${BASE_SHA}\trefs/heads/main\n`;
     if (a.startsWith("rev-parse")) return `${SHA}\n`;
     if (a.startsWith("rev-list")) return `${SHA}\n`;
     if (a.startsWith("log -1")) return `Ann <ann@example.com>\nAnn <ann@example.com>\n${message}`;
-    if (a.startsWith("diff-tree")) return `${Object.keys(changed).join("\0")}\0`;
+    if (a.startsWith("diff-tree")) {
+      return Object.entries(changed)
+        .map(([path, text]) => `${text === null ? "D" : "M"}\0${path}\0`)
+        .join("");
+    }
     if (a.startsWith("cat-file blob")) {
       const path = (args[2] ?? "").slice(SHA.length + 1);
       const text = changed[path];
-      if (text === undefined) throw new Error("no such blob");
+      if (text === undefined || text === null) throw new Error("no such blob");
       return text;
     }
     if (a.startsWith("push")) return "";
     throw new Error(`unexpected git ${a}`);
   };
-  return { git, calls, setUrl: (u: string) => (url = u) };
+  return { git, calls, setUrl: (u: string) => (url = u), setRewrites: (r: string) => (rewrites = r) };
 }
 
 function run(argv: string[], deps: { gh?: Gh; git?: Git } = {}) {
@@ -94,19 +107,32 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
     expect(out).toContain("/issues/7");
     expect(fake.calls).toEqual([
       {
-        args: ["issue", "create", "--repo", "Owner/app", "--title", "Add a booking note", "--body-file", "-"],
+        args: [
+          "issue",
+          "create",
+          "--repo",
+          "github.com/Owner/app",
+          "--title",
+          "Add a booking note",
+          "--body-file",
+          "-",
+        ],
         input: "### What\nA note.\n",
       },
     ]);
   });
 
   const KINDS: [string, string[], string[]][] = [
-    ["issue-edit", ["--number", "3"], ["issue", "edit", "3", "--repo", "Owner/app"]],
-    ["issue-comment", ["--number", "3"], ["issue", "comment", "3", "--repo", "Owner/app"]],
-    ["pr-create", ["--head", "tidy"], ["pr", "create", "--repo", "Owner/app", "--base", "main", "--head", "tidy"]],
-    ["pr-edit", ["--number", "4"], ["pr", "edit", "4", "--repo", "Owner/app"]],
-    ["pr-comment", ["--number", "4"], ["pr", "comment", "4", "--repo", "Owner/app"]],
-    ["pr-close", ["--number", "4"], ["pr", "close", "4", "--repo", "Owner/app"]],
+    ["issue-edit", ["--number", "3"], ["issue", "edit", "3", "--repo", "github.com/Owner/app"]],
+    ["issue-comment", ["--number", "3"], ["issue", "comment", "3", "--repo", "github.com/Owner/app"]],
+    [
+      "pr-create",
+      ["--head", "tidy"],
+      ["pr", "create", "--repo", "github.com/Owner/app", "--base", "main", "--head", "tidy"],
+    ],
+    ["pr-edit", ["--number", "4"], ["pr", "edit", "4", "--repo", "github.com/Owner/app"]],
+    ["pr-comment", ["--number", "4"], ["pr", "comment", "4", "--repo", "github.com/Owner/app"]],
+    ["pr-close", ["--number", "4"], ["pr", "close", "4", "--repo", "github.com/Owner/app"]],
   ];
 
   for (const [kind, options, start] of KINDS) {
@@ -203,7 +229,6 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
         "https://github.com/Owner/app.git",
         `${SHA}:refs/heads/tidy`,
       ]);
-      expect(fake.calls.some((c) => c[0] === "fetch")).toBe(true);
     });
 
     it("refuses a commit message, a file's content or a file's path that gives the case away", () => {
@@ -251,11 +276,63 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
       expect(run(["push", "--branch", "tidy"], { git }).code).toBe(3);
     });
 
-    it("checks only commits origin doesn't have yet", () => {
+    it("checks every commit the remote itself doesn't have, never trusting local remote-tracking refs", () => {
       const fake = fakeGit();
       run(["push", "--branch", "tidy"], { git: fake.git });
-      expect(fake.calls).toContainEqual(["rev-list", SHA, "--not", "--remotes=origin"]);
-      expect(fake.calls.some((c) => c.includes(BASE_SHA))).toBe(false);
+      expect(fake.calls).toContainEqual(["ls-remote", "https://github.com/Owner/app.git"]);
+      expect(fake.calls).toContainEqual(["rev-list", "--ignore-missing", SHA, "--not", BASE_SHA]);
+      expect(fake.calls.some((c) => c.some((w) => w.includes("--remotes")))).toBe(false);
     });
+
+    it("refuses a deleted file whose path gives the case away (the diff shows its name)", () => {
+      const fake = fakeGit("Tidy\n", { "docs/planted-bugs.md": null });
+      const { code, err } = run(["push", "--branch", "tidy"], { git: fake.git });
+      expect(code).toBe(2);
+      expect(err).toMatch(/path in .*: says planted/);
+      expect(fake.calls.some((c) => c[0] === "cat-file")).toBe(false);
+    });
+
+    it("refuses an origin on another host that only mentions github.com, and a git URL rewrite", () => {
+      for (const url of [
+        "https://evil.example//github.com/Owner/app",
+        "https://evil.example/github.com/Owner/app.git",
+        "git@evil.example:github.com/Owner/app.git",
+      ]) {
+        const fake = fakeGit();
+        fake.setUrl(url);
+        expect(run(["push", "--branch", "tidy"], { git: fake.git }).code, url).toBe(2);
+        expect(fake.calls.some((c) => c[0] === "push")).toBe(false);
+      }
+      const rewritten = fakeGit();
+      rewritten.setRewrites("url.https://evil.example/.pushinsteadof https://github.com/\n");
+      expect(run(["push", "--branch", "tidy"], { git: rewritten.git }).code).toBe(2);
+      expect(rewritten.calls.some((c) => c[0] === "push")).toBe(false);
+    });
+
+    it("takes GitHub's own remote spellings", () => {
+      for (const url of ["git@github.com:Owner/app.git", "ssh://git@ssh.github.com:443/Owner/app.git"]) {
+        const fake = fakeGit();
+        fake.setUrl(url);
+        expect(run(["push", "--branch", "tidy"], { git: fake.git }).code, url).toBe(0);
+      }
+    });
+  });
+
+  it("pr-create refuses a head from a fork (owner:branch), whose commits never went through the door", () => {
+    const fake = fakeGh();
+    const { code } = run(
+      ["pr-create", "--head", "someone:tidy", "--title-file", file("Tidy"), "--body-file", file("ok")],
+      {
+        gh: fake.gh,
+      },
+    );
+    expect(code).toBe(2);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("names github.com in --repo, so GH_HOST can't send the post to another host", () => {
+    const fake = fakeGh();
+    run(["issue-comment", "--number", "2", "--body-file", file("ok")], { gh: fake.gh });
+    expect(fake.calls[0]?.args).toContain("github.com/Owner/app");
   });
 });

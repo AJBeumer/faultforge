@@ -4,11 +4,10 @@
  * every file it adds or changes, and that file's content at that commit. These are the texts the door checks; the
  * push then sends exactly the commit it read, to exactly the URL it checked, so nothing can change in between.
  *
- * "The remote doesn't have yet" is read after `git fetch --prune` from the remote: a stale or hand-made
+ * "The remote doesn't have yet" is the remote's own answer (`git ls-remote`), so a stale or hand-made
  * remote-tracking ref can't hide a commit from the check. Every git call goes through `Git`, so tests use a fake.
  * Anything git can't read (a file in a submodule, a branch that isn't there) is a problem: the door then refuses.
  */
-import { githubRepos } from "../../../.claude/hooks/guard-repos.ts";
 
 /** Runs git in `cwd` with `args` and returns stdout; throws when git fails. */
 export type Git = (cwd: string, args: string[]) => string;
@@ -38,7 +37,22 @@ const lines = (text: string) =>
     .map((line) => line.trim())
     .filter(Boolean);
 
-/** Every URL `origin` fetches from and pushes to: all must name `repo`, or the push could go somewhere else. */
+/**
+ * A remote URL on github.com itself, as `owner/name` in lower case, or undefined. The host must be exactly GitHub's
+ * (https, `git@github.com:` or ssh, with GitHub's ssh-over-443 host), never a URL that only mentions it in its path.
+ */
+export function githubRemote(url: string): string | undefined {
+  const m =
+    /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@(?:ssh\.)?github\.com(?::443)?\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
+      url,
+    );
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : undefined;
+}
+
+/**
+ * Every URL `origin` fetches from and pushes to: all must be `repo` on github.com, or the push could go somewhere
+ * else. A URL rewrite in git's config (`url.<base>.insteadOf`, `pushInsteadOf`) could send it elsewhere too.
+ */
 function originUrls(checkout: string, repo: string, git: Git): { url?: string; problem?: string } {
   let fetched: string[];
   let pushed: string[];
@@ -49,13 +63,24 @@ function originUrls(checkout: string, repo: string, git: Git): { url?: string; p
     return { problem: `${checkout} has no origin remote git can read` };
   }
   const urls = [...fetched, ...pushed];
-  const elsewhere = urls.filter((url) => githubRepos(url)[0] !== repo.toLowerCase());
-  if (!pushed.length || elsewhere.length) return { problem: `${checkout}'s origin isn't only ${repo}` };
+  const elsewhere = urls.filter((url) => githubRemote(url) !== repo.toLowerCase());
+  if (!pushed.length || elsewhere.length) return { problem: `${checkout}'s origin isn't only ${repo} on github.com` };
+  let rewrites = "";
+  try {
+    rewrites = git(checkout, ["config", "--get-regexp", String.raw`^url\..*\.(insteadof|pushinsteadof)$`]);
+  } catch {
+    // git exits 1 when no key matches: no rewrite.
+  }
+  if (rewrites.trim())
+    return { problem: `${checkout}'s git config rewrites remote URLs, so the push could go elsewhere` };
   return { url: pushed[0] };
 }
 
-/** The files a commit adds or changes (against each parent, so a merge's too), with no deletions. */
-function changedFiles(checkout: string, commit: string, git: Git): string[] {
+/**
+ * Every path a commit touches (against each parent, so a merge's too), and whether it still has content there: a
+ * deleted path's name shows in the diff too, so it is checked like any other.
+ */
+function touchedFiles(checkout: string, commit: string, git: Git): { path: string; deleted: boolean }[] {
   const out = git(checkout, [
     "diff-tree",
     "-r",
@@ -63,12 +88,26 @@ function changedFiles(checkout: string, commit: string, git: Git): string[] {
     "--root",
     "--no-commit-id",
     "--no-renames",
-    "--name-only",
+    "--name-status",
     "-z",
-    "--diff-filter=d",
     commit,
-  ]);
-  return [...new Set(out.split("\0").filter(Boolean))];
+  ]).split("\0");
+  const found = new Map<string, boolean>();
+  for (let i = 0; i + 1 < out.length; i += 2) {
+    const path = out[i + 1] ?? "";
+    if (path) found.set(path, (found.get(path) ?? true) && out[i] === "D");
+  }
+  return [...found].map(([path, deleted]) => ({ path, deleted }));
+}
+
+/**
+ * The commits on the remote, by its own answer (`git ls-remote` on the checked URL), never by local
+ * remote-tracking refs, which a narrowed refspec or a hand-made ref could leave pointing at a new commit.
+ */
+function remoteHeads(checkout: string, url: string, git: Git): string[] {
+  return lines(git(checkout, ["ls-remote", url]))
+    .map((line) => line.split(/\s+/)[0] ?? "")
+    .filter((sha) => /^[0-9a-f]{40,64}$/.test(sha));
 }
 
 /**
@@ -81,13 +120,15 @@ export function readPush(checkout: string, branch: string, repo: string, git: Gi
   if (named) return { pieces, problems: [named] };
   const origin = originUrls(checkout, repo, git);
   if (origin.problem) return { pieces, problems: [origin.problem] };
+  const url = origin.url as string;
   let commit: string;
   let fresh: string[];
   try {
-    git(checkout, ["fetch", "--quiet", "--prune", "origin"]);
     commit = git(checkout, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]).trim();
     if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new Error("not a commit");
-    fresh = lines(git(checkout, ["rev-list", commit, "--not", "--remotes=origin"]));
+    // A remote commit this checkout doesn't have can't be in the branch's history: `--ignore-missing` skips it.
+    const known = remoteHeads(checkout, url, git);
+    fresh = lines(git(checkout, ["rev-list", "--ignore-missing", commit, "--not", ...known]));
   } catch {
     return { pieces, problems: [`can't read local branch ${branch} or what origin already has`] };
   }
@@ -96,15 +137,15 @@ export function readPush(checkout: string, branch: string, repo: string, git: Gi
     const short = sha.slice(0, 12);
     try {
       pieces.push([`commit ${short}`, git(checkout, ["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", sha])]);
-      for (const path of changedFiles(checkout, sha, git)) {
+      for (const { path, deleted } of touchedFiles(checkout, sha, git)) {
         pieces.push([`path in ${short}`, path]);
-        pieces.push([`${path} at ${short}`, git(checkout, ["cat-file", "blob", `${sha}:${path}`])]);
+        if (!deleted) pieces.push([`${path} at ${short}`, git(checkout, ["cat-file", "blob", `${sha}:${path}`])]);
       }
     } catch {
       problems.push(`can't read commit ${short} or one of its files`);
     }
   }
-  return { pieces, problems, url: origin.url, commit };
+  return { pieces, problems, url, commit };
 }
 
 /** The push itself: the commit that was read, to the URL that was checked, never forced, tags and submodules left. */
