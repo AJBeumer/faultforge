@@ -143,8 +143,13 @@ export function proxyEnv(port: number): Record<string, string> {
   };
 }
 
-/** Variables that name the runner's own user or its folders, which the agent's user gets its own of. */
-const RUNNER_ONLY = /^(PATH|HOME|USER|LOGNAME|XDG_\w+)$/;
+/**
+ * Variables that name the runner's own user or its folders, which the agent's user gets its own of. The temp
+ * folder too: the runner's can be one only it may write in.
+ */
+const RUNNER_ONLY = /^(PATH|HOME|USER|LOGNAME|TMPDIR|TMP|TEMP|XDG_\w+)$/;
+/** The agent's temp folder: the system's, where every user may write (sticky, so not into another's files). */
+export const SANDBOX_TMP = "/tmp";
 
 /**
  * The command that starts `binary` as the agent's user: `sudo -n -u ffagent`, keeping the agent's environment by
@@ -170,6 +175,7 @@ export function sandboxedCommand(
       `HOME=${SANDBOX_HOME}`,
       `USER=${SANDBOX_USER}`,
       `LOGNAME=${SANDBOX_USER}`,
+      `TMPDIR=${SANDBOX_TMP}`,
       binary,
       ...args,
     ],

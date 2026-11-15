@@ -181,12 +181,13 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       spawnSync("chmod", ["-R", "a+rwX", dir]);
       writeFileSync(
         join(dir, "probe.test.mjs"),
-        `it("reaches ${BLOCKED}", async () => { const r = await fetch("https://${BLOCKED}/"); expect(r.status).toBe(200); });\n`,
+        // Passes only when vitest really ran it and the request really failed: nothing else can make it pass.
+        `it("can't reach ${BLOCKED}", async () => { await expect(fetch("https://${BLOCKED}/")).rejects.toThrow(); });\n`,
       );
       const { status, out } = await asAgent("npx", ["vitest", "run", "--root", dir, "--globals"], { cwd: ROOT });
-      expect(status).not.toBe(0);
-      expect(out).toMatch(/1 failed/);
-      expect(out).not.toMatch(/1 passed/);
+      expect(out).toMatch(/1 passed/);
+      expect(out).not.toMatch(/failed/);
+      expect(status).toBe(0);
     });
 
     it("and no name can be looked up for it, so DNS carries nothing out", async () => {
@@ -288,48 +289,12 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const agentLike = { ...agentEnv(process.env, {}).env, ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" };
       const version = await asAgent(claude, ["--version"]);
       expect(version.out, JSON.stringify(version)).toContain("2.1.197");
-      const { status, out } = await asAgent(
-        claude,
-        ["-p", "Reply with OK", "--output-format", "stream-json", "--verbose", "--debug"],
-        {
-          env: agentLike,
-        },
-      );
-      // For comparison when it fails: the same call written to a file by a shell as the agent, and as the runner.
-      const file = join(work, "claude-out.txt");
-      const viaFile = await asAgent(
-        "/bin/sh",
-        [
-          "-c",
-          `tty; echo "stdin: $(readlink /proc/self/fd/0)"; "${claude}" -p "Reply with OK" --output-format json < /dev/null > "${file}" 2>&1; echo "nulled exit $?"; cat "${file}"; GITHUB_ACTIONS=true "${claude}" -p "Reply with OK" --output-format json < /dev/null > "${file}" 2>&1; echo "gha exit $?"; cat "${file}"; ps -o pid,pgid,sid,tty,stat,comm -u "$(id -un)" 2>&1 | head; ls -t "$HOME"/.claude/debug/ | head -3`,
-        ],
-        { env: agentLike },
-      );
-      const asRunner = await new Promise<string>((done) => {
-        const child = spawn(claude, ["-p", "Reply with OK", "--output-format", "json"], {
-          cwd: work,
-          env: { ...process.env, ...proxyEnv(proxy.port), ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" },
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        let text = "";
-        child.stdout.on("data", (c) => {
-          text += c;
-        });
-        child.stderr.on("data", (c) => {
-          text += c;
-        });
-        child.on("close", (code) => done(`exit ${code}: ${text}`));
+      const { status, out } = await asAgent(claude, ["-p", "Reply with OK", "--output-format", "json"], {
+        env: agentLike,
       });
-      const seen = JSON.stringify({
-        status,
-        counts: proxy.counts(),
-        refused: refused.slice(before),
-        out: out.slice(-3000),
-        viaFile: viaFile.out.slice(-9000),
-        asRunner: asRunner.slice(-2000),
-      });
-      if (!/invalid x-api-key|Invalid API key|authentication_error|401/i.test(out)) console.log(viaFile.out);
-      expect(out, seen).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
+      const seen = JSON.stringify({ status, counts: proxy.counts(), refused: refused.slice(before), out });
+      expect(out, seen).toMatch(/Invalid API key/);
+      expect(out, seen).toContain('"api_error_status":401');
       expect(proxy.counts().allowed).toBeGreaterThan(allowedBefore);
       expect(refused.slice(before)).toEqual([]);
     }, 300_000);

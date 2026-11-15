@@ -184,6 +184,7 @@ describe("the agent's launch", () => {
     HOME: "/home/runner",
     GH_TOKEN: "ghp_secret",
     XDG_RUNTIME_DIR: "/run/user/1001",
+    TMPDIR: "/home/runner/work/_temp/only-mine",
   };
 
   it("runs it as the sandbox user, keeping variables by name only: no value is on the command line", () => {
@@ -195,6 +196,8 @@ describe("the agent's launch", () => {
     expect(launch.args).toContain("PATH=/opt/node/bin:/usr/bin");
     expect(launch.args).toContain(`HOME=${SANDBOX_HOME}`);
     expect(launch.args.join(" ")).not.toMatch(/\/home\/runner|XDG_RUNTIME_DIR/);
+    // Its own temp folder, never the runner's, which it may not be able to write in.
+    expect(launch.args).toContain("TMPDIR=/tmp");
     expect(launch.args.slice(-3)).toEqual(["claude", "-p", "x"]);
   });
 
