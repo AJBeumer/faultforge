@@ -55,6 +55,8 @@ describe("an aliased network call is still a network call (Qodo on PR 310)", () 
     "python3 /dev/stdin <<'EOF'\nimport urllib.request\nEOF",
     "node /dev/stdin <<EOF\nfetch('https://example.com')\nEOF",
     "echo \"fetch('https://example.com')\" | node /dev/fd/0",
+    // A later inline flag doesn't drop the code piped in (Qodo on PR 313).
+    "echo \"fetch('https://example.com')\" | node /dev/stdin -e 1",
     "NODE_OPTIONS='--import=data:text/javascript,fetch(\"https://example.com\")' node x.mjs",
     'python3 -m timeit "import urllib.request"',
   ])("refuses network code fed as a file from stdin: %s (Qodo on PR 312)", (command) => {
