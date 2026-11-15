@@ -84,7 +84,7 @@ jobs:
     timeout-minutes: 165
     # The tick's exit code, for the alert job (#308).
     outputs:
-      code: ${{ steps.tick.outputs.code }}
+      code: ${{ steps.tick.outputs.code || steps.unreported.outputs.code }}
     # Secrets are given to the steps that need them, never to the whole job, and no checkout keeps its token
     # in .git/config: git authenticates through gh, which reads GH_TOKEN from the environment at push time.
     steps:
@@ -162,13 +162,16 @@ jobs:
           echo "reported=true" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           exit "$code"
-      # A tick step that was cancelled or hit its time limit never reached its own report above.
+      # A tick step that was cancelled or hit its time limit never reached its own report above. It hands on
+      # `stopped`, so the alert job raises one for it too (Qodo on PR 310).
       - name: Report a tick that stopped without reporting
+        id: unreported
         if: always() && steps.tick.outcome != 'skipped' && steps.tick.outputs.reported != 'true'
         run: |
           line="Factory tick, run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT: stopped without reporting (cancelled or out of time)"
           echo "::error title=Factory tick::$line"
           echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+          echo "code=stopped" >> "$GITHUB_OUTPUT"
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
       # Only after the tick, when no agent runs any more: the keep step below writes through this checkout.
@@ -201,13 +204,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # A tick that couldn't set up (exit 2) or failed (exit 3) opens the lab's alert issue, or comments on the open
-  # one (#308). Exit 1 is a ticket that needs help, which the ticket itself reports. issues: write for this job
+  # A tick that couldn't set up (exit 2), failed (exit 3) or stopped without reporting (cancelled or out of time)
+  # opens the lab's alert issue, or comments on the open one (#308). Exit 1 is a ticket that needs help, which the ticket itself reports. issues: write for this job
   # alone, with the lab's own token; the tick's job keeps its own permissions.
   alert:
     name: Alert on a failed tick
     needs: tick
-    if: always() && (needs.tick.outputs.code == '2' || needs.tick.outputs.code == '3')
+    if: always() && (needs.tick.outputs.code == '2' || needs.tick.outputs.code == '3' || needs.tick.outputs.code == 'stopped')
     permissions:
       contents: read
       issues: write
