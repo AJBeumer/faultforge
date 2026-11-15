@@ -143,7 +143,9 @@ export function guardSwitchOff(command: string, backticks = true, cwd?: string):
     if (name === "git") continue;
     const paths = rest.map((w) => w.replace(/^\d*[<>]+/, "")).filter((w) => w && !w.startsWith("-"));
     const linked = cwd !== undefined && paths.some((w) => !/[$`%]/.test(w) && linkIntoGit(resolve(cwd, w)));
-    if (inside || folder || linked || paths.some((w) => wildcardGit(w, backticks))) return SWITCH_OFF;
+    // A wildcard is read as the shell joins its quoted parts: `.g''*` is `.g*` (Qodo on PR 333).
+    const globbed = paths.some((w) => wildcardGit(w.replace(/["'`]/g, ""), backticks));
+    if (inside || folder || linked || globbed) return SWITCH_OFF;
   }
   return undefined;
 }

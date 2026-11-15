@@ -320,3 +320,9 @@ describe("holes Qodo found in the third review of PR 333", () => {
     expect(ask2(`gh issue comment 3 -R ${L} -b "x-secret-v1"`, lab.dir)).toMatch(/still private/);
   });
 });
+
+describe("a hole Qodo found in the fourth review of PR 333", () => {
+  it.each([".g''*/hooks/*", '.g""i?/hooks/pre-push', ".'g'*/config"])("refuses rm -rf %s", (path) => {
+    expect(bash(`rm -rf ${path}`, LAB.dir)).toMatch(/git-level guard/);
+  });
+});
