@@ -5,6 +5,8 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
+import { copyOutEdit } from "./guard-answer-key.ts";
+import { addressesQodo, mcpCaseProblem, QODO_REASON } from "./guard-cases.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
 import { gitFolderEdit } from "./guard-hooks.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";
@@ -21,6 +23,7 @@ import {
   stripReviewedNames,
   within,
 } from "./guard-repos.ts";
+import { selfFileEdit } from "./guard-self.ts";
 import { joinedWords } from "./shell-scan.ts";
 
 /** What one decision is made against: the folder the tool runs in, the repos under guard, and the environment. */
@@ -50,6 +53,9 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
   // A git folder's hooks and config decide what git runs: no edit there could keep the git-level guard (re-grade 6).
   const gitFolder = gitFolderEdit(path);
   if (gitFolder) deny(gitFolder);
+  // Nor the guard's own files in the checkout it runs from (re-grade 6: H12).
+  const self = selfFileEdit(path, ctx.env);
+  if (self) deny(self);
   const text = [
     args.content,
     args.new_string,
@@ -58,6 +64,9 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
+  // Nor a copy of the answer key, the audit log or a private template outside private storage (Q21).
+  const copy = copyOutEdit(path, text, ctx.env);
+  if (copy) deny(copy);
   // A private id belongs only in private storage, or in a folder no git checkout holds (a temp or scratch folder;
   // #318): a file in any checkout could be committed and pushed under a clean message (Qodo on PR 265).
   if (ctx.names?.(text) && !within(path, privateRoot(ctx.env)) && !outsideEveryCheckout(ctx, path)) {
@@ -121,6 +130,10 @@ export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   if (!repo) return;
   const found = telltales(stripReviewedNames(ctx.reviewed, text));
   if (found.length) deny(`${tool} would put a hint into ${repo.name} (${found.join(", ")}).`);
+  if (addressesQodo(text)) deny(QODO_REASON);
+  // Nor may it merge a case PR or move a case branch, as the shell may not (Qodo on PR 337).
+  const action = mcpCaseProblem(ctx.env, tool, args ?? {}, repo);
+  if (action) deny(action);
 }
 
 /**

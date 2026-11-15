@@ -16,7 +16,10 @@
  * to any repo but private storage, that names a template still held in private storage (guard-private.ts).
  * Everywhere, it blocks code it can't read before it runs (shell-exec.ts): text built at run time run as a
  * shell (`… | base64 -d | bash`, `bash -c "$(…)"`, `eval`), and inline interpreter code that makes a network
- * call (`node -e "fetch(…)"`), which could post without gh.
+ * call (`node -e "fetch(…)"`), which could post without gh. Since re-grade 6 it also keeps the guard's own files as
+ * they are in the checkout it runs from (guard-self.ts), keeps the answer key, the audit log and private templates
+ * in private storage and out of every commit (guard-answer-key.ts), and keeps recorded case PRs unmerged, their
+ * branches in place and Qodo unaddressed in a reviewed repo (guard-cases.ts).
  *
  * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
  * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
@@ -27,8 +30,16 @@
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { assetFiles } from "./guard-assets.ts";
-import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames, writerStep } from "./guard-content.ts";
+import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./guard-answer-key.ts";
+import { addressesQodo, caseActionProblem, QODO_REASON } from "./guard-cases.ts";
+import {
+  chainProblem,
+  DEFAULT_BUDGET_MS,
+  withDeadline,
+  withPrivateCopies,
+  withPrivateNames,
+  writerStep,
+} from "./guard-content.ts";
 import {
   aliasProblem,
   shellReading,
@@ -36,18 +47,13 @@ import {
   unreadableDestination,
   unreadablePost,
 } from "./guard-expand.ts";
-import { BuiltText, builtText, referencedFiles, scriptProblem, stdinFiles, Unreadable } from "./guard-files.ts";
+import { BuiltText, referencedFiles, scriptProblem, Unreadable } from "./guard-files.ts";
 import { historyProblem } from "./guard-history.ts";
 import { guardSwitchOff } from "./guard-hooks.ts";
 import { pendingProblem } from "./guard-pending.ts";
-import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
-import {
-  onlyPrivateRepo,
-  PRIVATE_ID_REASON,
-  privateIdMatcher,
-  privateRoot,
-  privateTemplateIds,
-} from "./guard-private.ts";
+import { outsidePostedText } from "./guard-posted.ts";
+import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
+import { checkPrivateFiles, checkPrivateIds, postedPieces, UNREADABLE_VARIABLE } from "./guard-private-posts.ts";
 import {
   explicitDestinations,
   graphqlMutation,
@@ -67,10 +73,9 @@ import {
   navigationTargets,
   type Reviewed,
   reviewedRepos,
-  stripReviewedNames,
   unreadableMove,
-  within,
 } from "./guard-repos.ts";
+import { selfShellProblem } from "./guard-self.ts";
 import {
   type Context,
   checkFileEdit,
@@ -112,16 +117,19 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     const ctx: Context = { cwd, reviewed, env, names, backticks: tool !== "PowerShell" };
     // One deadline for the whole decision, every scan in it included (audit N-4).
     // Pending content may not carry a private id either (Qodo on PR 265).
+    // Nor a copy of the answer key, the audit log or a private template (re-grade 6, Q21).
     withDeadline(guardBudget(env), () =>
-      withPrivateNames(names, () => {
-        if (tool === "Bash" || tool === "PowerShell") {
-          checkShell(ctx, String(args.command ?? ""));
-        } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
-          checkFileEdit(ctx, args);
-        } else if (tool.startsWith("mcp__")) {
-          checkOtherTool(ctx, tool, args);
-        }
-      }),
+      withPrivateNames(names, () =>
+        withPrivateCopies(lazyCopyTest(env), () => {
+          if (tool === "Bash" || tool === "PowerShell") {
+            checkShell(ctx, String(args.command ?? ""));
+          } else if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) {
+            checkFileEdit(ctx, args);
+          } else if (tool.startsWith("mcp__")) {
+            checkOtherTool(ctx, tool, args);
+          }
+        }),
+      ),
     );
     return ALLOW;
   } catch (error) {
@@ -154,66 +162,6 @@ function failed(error: unknown): Decision {
 function isChained(command: string): boolean {
   return /;|&&|\|\||\||(?<![&>])&(?![&>])|\n|\$\(|`/.test(blankQuoted(command).trim());
 }
-
-/**
- * Every text a command would post, each judged on its own: the command itself (as written and with its
- * quote marks joined), flag values, heredoc bodies, posted files, and files a substitution reads. A commit
- * joins every `-m` and `-F` into one message, so those are also judged together. With `strict`, text built by
- * any other command is refused (#242): everywhere in a post to a reviewed repo, and in the posted values of a
- * lab post while private templates exist (`everywhere` false; #285).
- */
-function postedPieces(ctx: Context, command: string, strict = false, everywhere = strict): string[] {
-  const pieces = [stripReviewedNames(ctx.reviewed, command), stripReviewedNames(ctx.reviewed, joinedWords(command))];
-  pieces.push(...postedText(command), ...referencedFiles(ctx.cwd, command), ...stdinFiles(ctx.cwd, command));
-  // A gist's files and a release's assets are posted too (re-grade 3).
-  pieces.push(...assetFiles(ctx.cwd, command, ctx.backticks).map((asset) => asset.text));
-  pieces.push(...builtText(ctx.cwd, command, strict, ctx.backticks, everywhere));
-  for (const commit of commitSteps(command)) {
-    pieces.push([...commitMessages(commit), ...referencedFiles(ctx.cwd, commit)].join("\n"));
-  }
-  // A GraphQL mutation names itself with the keyword `mutation`, which is not a hint; the text it posts is.
-  // Only the operation keyword, where a query starts: a body's own "mutation" still counts (Qodo on PR 266).
-  const keyword = /((?:\bquery["']?\s*[=:]\s*["']?|^["']?)\s*)mutation(?=\s*[\w({])/;
-  return graphqlMutation(command) ? pieces.map((piece) => piece.replace(keyword, "$1 ")) : pieces;
-}
-
-/**
- * No post anywhere but private storage may name a template that is still private (AUD-H1): not to a
- * reviewed repo, and not to the lab, whose PRs the reviewer can read too. The id is never printed.
- */
-function checkPrivateIds(ctx: Context, command: string, readable: boolean) {
-  const names = ctx.names;
-  // Where the post goes, read as the shell reads it, so a fake --repo in a body can't claim private storage.
-  const outside = outsidePostedText(command);
-  const real = [...explicitDestinations(outside), ...urlDestinations(outside)];
-  // A destination must really be named (outside posted text), and none, in either reading, may be public.
-  const destinations = real.length ? [...explicitDestinations(command), ...real] : [];
-  if (!names || onlyPrivateRepo(command, ctx.cwd, privateRoot(ctx.env), destinations)) return;
-  // Read as strictly as a post to a reviewed repo (#285): text a program builds (printf, base64) or a variable
-  // the command doesn't set can't be checked for an id, so it isn't posted.
-  if (readable && unreadablePost(command)) deny(UNREADABLE_VARIABLE);
-  if ([command, joinedWords(command), ...postedPieces(ctx, command, true, false)].some(names)) deny(PRIVATE_ID_REASON);
-}
-
-/**
- * A gist or a release may not publish a file from private storage (re-grade 3), unless the release goes to the
- * private repo itself. A gist is readable by anyone with its link, so it never counts as private.
- */
-function checkPrivateFiles(ctx: Context, command: string) {
-  const root = privateRoot(ctx.env);
-  const leaving = assetFiles(ctx.cwd, command, ctx.backticks).filter((asset) => within(asset.path, root));
-  if (!leaving.length) return;
-  const outside = outsidePostedText(command);
-  const destinations = [...explicitDestinations(outside), ...urlDestinations(outside)];
-  const gist = leaving.some((asset) => asset.gist);
-  if (gist || !destinations.length || !onlyPrivateRepo(command, ctx.cwd, root, destinations)) {
-    deny("This would publish a file from private storage. Nothing there may leave it.");
-  }
-}
-
-/** The denial for a post whose text is a shell variable the command doesn't set. */
-const UNREADABLE_VARIABLE =
-  "This post's text comes from a shell variable the command doesn't set, so the guard can't read it. Write the text in the command, or in a file passed with --body-file.";
 
 /**
  * A shell command, judged as written and as the shell would read it (#285): ANSI-C strings decoded, the
@@ -309,6 +257,12 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   // Wherever it runs: the git-level guard stays on, the private repo private, and lab history out (re-grade 6).
   const moved = guardSwitchOff(command, ctx.backticks, ctx.cwd) ?? historyProblem(ctx, command);
   if (moved) deny(moved);
+  // The guard's own files stay as they are, and private storage stays in it (re-grade 6: H12 to H18, Q21).
+  const own =
+    selfShellProblem(command, ctx.cwd, ctx.env, ctx.backticks) ??
+    copyOutProblem(command, ctx.cwd, ctx.env, ctx.backticks) ??
+    labCommitProblem(ctx, command);
+  if (own) deny(own);
   if (writes) checkPrivateIds(ctx, command, readable);
   const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);
 
@@ -349,6 +303,11 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   if (rawApiWrite(command)) {
     deny(`Post to ${repo.name} with gh, where the guard can read the text, not with a raw API call.`);
   }
+  // A case PR is never merged, nor its recorded branch deleted or moved (re-grade 6: Q23, Q24, H15).
+  for (const r of touched) {
+    const action = caseActionProblem(ctx, command, r);
+    if (action) deny(action);
+  }
 
   // Inside a reviewed checkout, a chain that mentions git may hold only steps that can't change the
   // checkout's content behind the guard's back (it looks before the command runs): no copies, redirects,
@@ -380,12 +339,15 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
 
   // Each piece is judged on its own: a title ending in one word and a body starting with the next must
   // not join into a phrase that neither field holds.
-  const found = [...new Set(postedPieces(ctx, command, true).flatMap((piece) => telltales(piece)))];
+  const pieces = postedPieces(ctx, command, true);
+  const found = [...new Set(pieces.flatMap((piece) => telltales(piece)))];
   if (found.length) {
     deny(
       `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
     );
   }
+  // Nor a word to Qodo, on any PR or issue there (re-grade 6: Q25, Q26).
+  if (pieces.some(addressesQodo)) deny(QODO_REASON);
 
   // The command's own text is clean; now what would travel: the content pending in every reviewed
   // checkout, read from git, whatever the text says about where it runs.

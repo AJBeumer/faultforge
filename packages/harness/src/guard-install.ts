@@ -9,8 +9,8 @@
  * its checkout's hooks folder, and stores where the checking script lives in the checkout's local git
  * config (`review-guard.script`). The hooks name nothing but that setting, so their text gives nothing
  * away, and neither leaves the machine: hooks and local config are never pushed. In the lab it writes
- * `commit-msg` and `pre-push` only, which refuse a link to a reviewed repo's issue or PR in a commit message
- * made or pushed there. In the private checkout (`private/`, when it is a git checkout) it writes `pre-push` only,
+ * `pre-commit`, `commit-msg` and `pre-push`, which refuse a link to a reviewed repo's issue or PR in a commit
+ * message made or pushed there, and a copy of private storage in a commit (re-grade 6). In the private checkout (`private/`, when it is a git checkout) it writes `pre-push` only,
  * and records the `origin` URL in `review-guard.origin`: a push to any other remote or URL is refused, so the
  * private history goes nowhere else. Running it again writes the same files. A hook file this command didn't write
  * is never overwritten.
@@ -29,7 +29,7 @@ import { privateDir, ROOT } from "./paths.ts";
 export const MARKER = "# Installed by guard:install.";
 export const HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
 /** The lab's hooks: its commits may say anything except link a reviewed repo's issue or PR (re-grade 5). */
-export const LAB_HOOKS = ["commit-msg", "pre-push"] as const;
+export const LAB_HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
 /** The private checkout's hook: its history goes only to the origin recorded at install (re-grade 6). */
 export const PRIVATE_HOOKS = ["pre-push"] as const;
 /** Which hooks a checkout gets: a reviewed repo's full guard, the lab's link check, or the private remote check. */
@@ -42,7 +42,7 @@ export const ORIGIN_KEY = "review-guard.origin";
 
 /**
  * The text of one hook: it finds the script through the checkout's local config and passes git's arguments on.
- * In the lab it names the lab's stage (`lab-commit-msg`, `lab-pre-push`).
+ * In the lab it names the lab's stage (`lab-pre-commit`, `lab-commit-msg`, `lab-pre-push`).
  */
 export function hookText(stage: (typeof HOOKS)[number], role: Role = "reviewed"): string {
   return [
