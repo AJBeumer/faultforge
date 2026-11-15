@@ -248,17 +248,23 @@ export function codeReadings(code: string): string[] {
   return [...new Set([code, decode(code), decode(code.replace(/\\\\/g, "\\"))])];
 }
 
-/** The start of a file path in a module name: `./`, `../`, `/`, `\` or a drive. A path is never a builtin module. */
-const PATH_START = String.raw`(?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])`;
+/** The start of a file path in a module name: `./`, `../`, `/` or a drive. A path is never a builtin module. */
+const PATH_START = String.raw`(?:\.{1,2}\/|\/|[A-Za-z]:\/)`;
+
+/**
+ * A string literal as JavaScript reads it: closed by the quote that opened it, never the other kind (Qodo on PR
+ * 323). One with a backslash is not taken at all, so no escape can move where it ends.
+ */
+const literal = (start = "") => String.raw`(?:'${start}[^'\n\\]*'|"${start}[^"\n\\]*")`;
 
 /**
  * `require` or `import()` of a file path built from a literal path and plain names (#318): `require('./' + f)`,
  * `require('../d/' + f + '.json')`, `` require(`./${f}`) ``. Whatever the names hold, the result starts with the
  * path, so it can't name a builtin such as child_process. A call, an operator other than `+`, or code in a
- * template's `${…}` is no plain name, so it is not taken.
+ * template's `${…}` is no plain name, so it is not taken. Paths use forward slashes: a backslash is an escape.
  */
 const PATH_REQUIRE = new RegExp(
-  String.raw`\b(?:require|import)\s*\(\s*(?:["']${PATH_START}[^"'\n]*["'](?:\s*\+\s*(?:[\w$]+(?:\.[\w$]+)*|["'][^"'\n]*["']))*|\x60${PATH_START}(?:[^\x60$\\]|\$\{\s*[\w$]+(?:\.[\w$]+)*\s*\})*\x60)\s*\)`,
+  String.raw`\b(?:require|import)\s*\(\s*(?:${literal(PATH_START)}(?:\s*\+\s*(?:[\w$]+(?:\.[\w$]+)*|${literal()}))*|\x60${PATH_START}(?:[^\x60$\\]|\$\{\s*[\w$]+(?:\.[\w$]+)*\s*\})*\x60)\s*\)`,
   "g",
 );
 

@@ -18,7 +18,8 @@ export interface Reviewed {
   checkout: string;
 }
 
-const LAB_ROOT = join(import.meta.dirname, "../..");
+/** This repository's root: the lab checkout the hooks run from. */
+export const LAB_ROOT = join(import.meta.dirname, "../..");
 
 /** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
 const TARGET: Reviewed = {

@@ -3,7 +3,7 @@
  * reads files and prints, and a file outside every checkout (a temp or scratch folder) that names a private
  * template. The private id is made up.
  */
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -53,6 +53,10 @@ describe("inline node code that only reads files and prints is allowed (#318)", 
     `node -e "require('./' + f.slice(2)).execSync('ls')"`,
     'node -e \'require(`./${require("child_process").execSync("ls")}`)\'',
     `node -e "const m = 'child_' + 'process'; require(m)"`,
+    // Quotes of two kinds: JavaScript reads `'./a" + '` as one string (Qodo on PR 323).
+    "node <<'EOF'\nrequire('./a\" + ', require(`child_process`).execSync(`calc`))//')\nEOF",
+    "node <<'EOF'\nrequire('./a\" + ', require(`child_${'process'}`).execSync(`calc`))//')\nEOF",
+    `node -e "require('./a\\\\' + require('child_process'))"`,
   ])("still refuses code that starts a program: %s", (command) => {
     expect(bash(command)).toBe(BUILT_CODE_REASON);
   });
@@ -102,5 +106,30 @@ describe("a file outside every checkout may name a private template (#318)", () 
     const link = join(mkdtempSync(join(tmpdir(), "guard-scratch-link-")), "docs");
     symlinkSync(join(lab.dir, "docs"), link, "junction");
     expect(decision("Write", { file_path: join(link, "notes.md"), content: "x-secret-v1" })).toMatch(/still private/);
+  });
+
+  it("still refuses one through a link that leads nowhere yet, or a file that is a link (Qodo on PR 323)", () => {
+    const lab = tempRepo();
+    const scratch = mkdtempSync(join(tmpdir(), "guard-scratch-dangling-"));
+    symlinkSync(join(lab.dir, "not-yet"), join(scratch, "later"), "junction");
+    expect(decision("Write", { file_path: join(scratch, "later", "x.md"), content: "x-secret-v1" })).toMatch(
+      /still private/,
+    );
+    writeFileSync(join(lab.dir, "notes.md"), "notes\n");
+    try {
+      symlinkSync(join(lab.dir, "notes.md"), join(scratch, "notes.md"), "file");
+    } catch {
+      return; // this machine may not make file links (Windows without the right); the folder link above still ran
+    }
+    expect(
+      decision("Edit", { file_path: join(scratch, "notes.md"), old_string: "notes", new_string: "x-secret-v1" }),
+    ).toMatch(/still private/);
+  });
+
+  it("still refuses one in a folder named like the lab, even one that doesn't exist yet", () => {
+    for (const name of ["FaultForge", "faultforge"]) {
+      const file = join(SCRATCH, name, "docs", "notes.md");
+      expect(decision("Write", { file_path: file, content: "x-secret-v1" })).toMatch(/still private/);
+    }
   });
 });
