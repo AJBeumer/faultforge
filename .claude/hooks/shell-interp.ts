@@ -78,11 +78,13 @@ const SUBPROCESS_CODE: [interpreter: RegExp, code: RegExp][] = [
       [
         String.raw`\bchild_process\b|\bworker_threads\b|["'\x60](node:)?vm["'\x60]`,
         String.raw`\b(eval|Function)\s*\(|\bnew\s+Function\b`,
-        // A module named by anything but one literal: `require('child_' + 'process')`, `import(x)`.
-        String.raw`\b(require|import|getBuiltinModule)\s*\(\s*(?!["'\x60][^"'\x60+]*["'\x60]\s*\))`,
+        // A module named by anything but one literal: `require('child_' + 'process')`, `import(x)`, and a template
+        // literal that builds part of its name (`child_${x}`; #318). A file path (`'./' + f`) is blanked first.
+        String.raw`\b(require|import|getBuiltinModule)\s*\(\s*(?!["'][^"'+]*["']\s*\)|\x60[^\x60$+]*\x60\s*\))`,
         String.raw`\b(globalThis|global|process|module|self|window)\s*\[`,
         String.raw`\bprocess\s*\.\s*(binding|_linkedBinding|dlopen)\b|\bBun\s*\.\s*(spawn\w*|\$)|\bDeno\s*\.\s*(run|Command)\b`,
-        String.raw`\bReflect\b|\bgetOwnPropertyDescriptors?\b|\bwith\s*\(|\\u\{?[0-9a-fA-F]`,
+        // An escape in a name (`fetch`) is read decoded instead (`jsUnescaped`; #318).
+        String.raw`\bReflect\b|\bgetOwnPropertyDescriptors?\b|\bwith\s*\(`,
         String.raw`\b(globalThis|global|self|window)\b(?!\s*\.)`,
       ].join("|"),
     ),
@@ -230,10 +232,50 @@ function interpreterRuns(command: string, backticks: boolean): { name: string; c
   );
 }
 
+/**
+ * Code's escapes decoded, as JavaScript reads them in names and strings: `t`, `\u{74}`, `\x74`, and octal
+ * `\164`. Read beside the code as written, and again with the shell's `\\` taken as one backslash, so a name
+ * spelled with an escape (`fetch`, `'child\x5fprocess'`) is the name it spells (#318).
+ */
+export function codeReadings(code: string): string[] {
+  const decode = (text: string) =>
+    text
+      .replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g, (whole, braced, four, two) => {
+        const point = Number.parseInt(braced ?? four ?? two, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : whole;
+      })
+      .replace(/\\([0-7]{1,3})/g, (_whole, octal) => String.fromCharCode(Number.parseInt(octal, 8) & 0xff));
+  return [...new Set([code, decode(code), decode(code.replace(/\\\\/g, "\\"))])];
+}
+
+/** The start of a file path in a module name: `./`, `../`, `/` or a drive. A path is never a builtin module. */
+const PATH_START = String.raw`(?:\.{1,2}\/|\/|[A-Za-z]:\/)`;
+
+/**
+ * A string literal as JavaScript reads it: closed by the quote that opened it, never the other kind (Qodo on PR
+ * 323). One with a backslash is not taken at all, so no escape can move where it ends.
+ */
+const literal = (start = "") => String.raw`(?:'${start}[^'\n\\]*'|"${start}[^"\n\\]*")`;
+
+/**
+ * `require` or `import()` of a file path built from a literal path and plain names (#318): `require('./' + f)`,
+ * `require('../d/' + f + '.json')`, `` require(`./${f}`) ``. Whatever the names hold, the result starts with the
+ * path, so it can't name a builtin such as child_process. A call, an operator other than `+`, or code in a
+ * template's `${…}` is no plain name, so it is not taken. Paths use forward slashes: a backslash is an escape.
+ */
+const PATH_REQUIRE = new RegExp(
+  String.raw`\b(?:require|import)\s*\(\s*(?:${literal(PATH_START)}(?:\s*\+\s*(?:[\w$]+(?:\.[\w$]+)*|${literal()}))*|\x60${PATH_START}(?:[^\x60$\\]|\$\{\s*[\w$]+(?:\.[\w$]+)*\s*\})*\x60)\s*\)`,
+  "g",
+);
+
 /** True when inline code in a language interpreter starts a program or runs code it builds. */
 export function subprocessCode(command: string, backticks: boolean): boolean {
   return interpreterRuns(command, backticks).some(({ name, code }) =>
-    SUBPROCESS_CODE.some(([interpreter, pattern]) => interpreter.test(name) && pattern.test(code)),
+    SUBPROCESS_CODE.some(
+      ([interpreter, pattern]) =>
+        interpreter.test(name) &&
+        codeReadings(code).some((text) => pattern.test(text.replace(PATH_REQUIRE, "require('./file')"))),
+    ),
   );
 }
 
@@ -245,7 +287,7 @@ export function interpreterPipelines(command: string, backticks = true): string[
 /** Why the command may not run because inline interpreter code in it makes a network call, or undefined. */
 export function inlineNetworkProblem(command: string, backticks = true): string | undefined {
   for (const text of new Set([command, decodeAnsiC(command)])) {
-    for (const code of interpreterPipelines(text, backticks)) {
+    for (const code of interpreterPipelines(text, backticks).flatMap(codeReadings)) {
       const calls = [...code.matchAll(new RegExp(INLINE_NETWORK_CODE.source, "g"))].length;
       if (calls && !onlyLocalCalls(code, calls)) return INLINE_NETWORK_REASON;
     }

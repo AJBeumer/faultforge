@@ -2,15 +2,18 @@
  * The guard's checks for file edits, MCP tools and links, and the deny they end with. Split from
  * guard-target.ts, which may not pass 400 lines (CLAUDE.md, module size rule).
  */
-import { resolve } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";
 import { PRIVATE_ID_REASON, privateRoot } from "./guard-private.ts";
 import {
+  checkoutAt,
   esc,
   existingFolder,
   inCheckout,
+  LAB_ROOT,
   linkPattern,
   locate,
   type Reviewed,
@@ -51,9 +54,11 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
-  // A private id belongs only in private storage: a file anywhere else could be committed and pushed under a
-  // clean message (Qodo on PR 265).
-  if (ctx.names?.(text) && !within(path, privateRoot(ctx.env))) deny(PRIVATE_ID_REASON);
+  // A private id belongs only in private storage, or in a folder no git checkout holds (a temp or scratch folder;
+  // #318): a file in any checkout could be committed and pushed under a clean message (Qodo on PR 265).
+  if (ctx.names?.(text) && !within(path, privateRoot(ctx.env)) && !outsideEveryCheckout(ctx, path)) {
+    deny(PRIVATE_ID_REASON);
+  }
   const repo = ctx.reviewed.find((r) => inCheckout(path, r)) ?? locate(existingFolder(path), ctx.reviewed);
   if (!repo) return;
   const found = telltales(text);
@@ -62,6 +67,41 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
       `This edit would put a hint into ${repo.name} (${found.join(", ")}). Keep its files free of any mention of the lab.`,
     );
   }
+}
+
+/**
+ * True when no git checkout holds the file, as written or where its folder really is (through a link), and it
+ * names neither the lab's folder nor a reviewed checkout's (#318). A path written inside private storage whose
+ * real place is elsewhere is a link out of private storage: never taken (Qodo on PR 265). Nor is a path whose
+ * file or a folder on the way to it is a link that leads nowhere yet, whose place can't be read (Qodo on PR 323).
+ */
+function outsideEveryCheckout(ctx: Context, path: string): boolean {
+  const priv = resolve(privateRoot(ctx.env));
+  const rel = relative(priv, path);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return false;
+  if (ctx.reviewed.some((r) => inCheckout(path, r))) return false;
+  // By name too, as reviewed checkouts are found: a lab folder that isn't there yet is still the lab.
+  const labNames = new Set(["faultforge", basename(LAB_ROOT).toLowerCase()]);
+  if (path.split(/[\\/]/).some((part) => labNames.has(part.toLowerCase())) || within(path, LAB_ROOT)) return false;
+  for (let part = path; ; part = dirname(part)) {
+    let link = false;
+    let exists = true;
+    try {
+      link = lstatSync(part).isSymbolicLink();
+    } catch {
+      exists = false;
+    }
+    if (link) return false;
+    if (exists || dirname(part) === part) break;
+  }
+  const folder = existingFolder(path);
+  let real = folder;
+  try {
+    real = realpathSync.native(folder);
+  } catch {
+    return false;
+  }
+  return checkoutAt(folder) === undefined && checkoutAt(real) === undefined;
 }
 
 /**
