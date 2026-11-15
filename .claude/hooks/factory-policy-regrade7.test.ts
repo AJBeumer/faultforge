@@ -65,6 +65,8 @@ describe("a run can't read another process's environment through ps (re-grade 7)
     // From inline code (Qodo on PR 339, second round).
     "node -e \"require('child_process').execFileSync('ps',['e'])\"",
     "python3 -c \"import subprocess; subprocess.run(['ps', 'eww'])\"",
+    // An option before the e, from inline code (Qodo on PR 339, third round).
+    "node -e \"require('child_process').execFileSync('ps',['-p','1','e'])\"",
   ])("refuses %s", (command) => {
     expect(policy("Bash", { command })).toMatch(/environment \(ps e, ps eww\)/);
   });
@@ -120,6 +122,13 @@ describe("a run can't change the check script (re-grade 7)", () => {
     expect(names).toContain("prea");
     expect(names).not.toContain("pree");
     expect(names).not.toContain("poste");
+  });
+
+  it("reads t and tst as test only in npm's shorthand, never after run (Qodo on PR 339, third round)", () => {
+    expect(checkScriptNames({ check: "npm run t && node --run tst" })).toContain("t");
+    expect(checkScriptNames({ check: "npm run t && node --run tst" })).toContain("tst");
+    expect(checkScriptNames({ check: "npm t" })).toContain("test");
+    expect(checkScriptNames({ check: "npm run t" })).not.toContain("test");
   });
 
   it("refuses adding a precheck script, which npm runs before the check (Qodo on PR 339)", () => {

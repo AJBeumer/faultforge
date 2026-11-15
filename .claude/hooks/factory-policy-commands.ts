@@ -133,11 +133,12 @@ export function commandViolations(raw: string, ticket?: string): string[] {
   for (const command of readings(raw)) {
     for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
   }
-  // ps reads its option values whole (`-o pid,user`): all of them in the shell's readings, and in code's reading
-  // (punctuation as spaces, so `execFileSync('ps', ['e'])` reads `ps e`) the words before its first option.
+  // ps reads its option values whole (`-o pid,user`), so the shell's readings keep their punctuation. A command
+  // that runs an interpreter is read as code too (punctuation as spaces: `execFileSync('ps', ['-p', '1', 'e'])` reads
+  // `ps -p 1 e`), where a format list split at its commas may be refused: code fails closed (Qodo on PR 339).
   const shell = continued(raw).flatMap((text) => [text, spokenWords(text)]);
-  if (shell.some((text) => psReadsEnvironment(text, true)) || shell.map(codeAsWords).some((t) => psReadsEnvironment(t)))
-    reasons.push(PS_ENV_REASON);
+  const code = INTERPRETER.test(raw) ? shell.map(codeAsWords) : [];
+  if ([...shell, ...code].some(psReadsEnvironment)) reasons.push(PS_ENV_REASON);
   return reasons;
 }
 
@@ -145,17 +146,15 @@ export function commandViolations(raw: string, ticket?: string): string[] {
  * True when a step runs ps with a BSD-style `e`, which prints each process's environment: `ps e`, `ps eww`,
  * `ps auxe`, `ps -p 1 e` (re-grade 7). Wherever ps stands in the step (`A=1 ps e`, `sh -c "ps e"`), so a message
  * that says "ps" with a word holding an `e` after it is refused too: it fails closed. An option that takes a value
- * (`-o`, `-eo`, `--sort`) skips that one word, so `ps -eo pid,user` passes. Without `whole`, only the words before
- * ps's first option are read, as a value split at its commas would look like more words.
+ * (`-o`, `-eo`, `--sort`) skips that one word, so `ps -eo pid,user` passes.
  */
-function psReadsEnvironment(text: string, whole = false): boolean {
+function psReadsEnvironment(text: string): boolean {
   return steps(text).some((step) => {
     const all = joinedWords(step).split(/\s+/).filter(Boolean);
     const at = all.findIndex((w) => (w.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "").toLowerCase() === "ps");
     if (at < 0) return false;
     for (let i = at + 1; i < all.length; i++) {
       const w = all[i] ?? "";
-      if (!whole && w.startsWith("-")) return false;
       if (PS_VALUE_OPTION.test(w)) i++;
       else if (/^[a-z]*e[a-z]*$/i.test(w)) return true;
     }

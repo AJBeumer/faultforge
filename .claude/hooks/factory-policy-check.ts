@@ -34,7 +34,7 @@ export function checkScriptNames(scripts: Scripts): Set<string> {
   // Each name with whether its pre and post scripts run with it: true when a package manager runs it.
   const todo: [string, boolean][] = [["check", true]];
   const runs =
-    /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+--run[=\s]+([\w:.-]+)/g;
+    /\b(npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+--run[=\s]+([\w:.-]+)/g;
   while (todo.length) {
     const [name, called] = todo.pop() as [string, boolean];
     if (called) todo.push([`pre${name}`, false], [`post${name}`, false]);
@@ -43,8 +43,10 @@ export function checkScriptNames(scripts: Scripts): Set<string> {
     const body = scripts[name];
     if (typeof body !== "string") continue;
     for (const m of body.matchAll(runs)) {
-      const next = m[1] ?? m[2] ?? "";
-      todo.push([next === "t" || next === "tst" ? "test" : next, m[1] !== undefined]);
+      const [, manager, run, script, byNode] = m;
+      // `npm t` and `npm tst` are npm's (and pnpm's) names for test; `npm run t` runs a script named t (Qodo on PR 339).
+      const alias = /^p?npm$/.test(manager ?? "") && !run && (script === "t" || script === "tst");
+      todo.push([alias ? "test" : (script ?? byNode ?? ""), manager !== undefined]);
     }
   }
   return names;
