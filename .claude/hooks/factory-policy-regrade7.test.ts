@@ -62,8 +62,11 @@ describe("a run can't read another process's environment through ps (re-grade 7)
     "A=1 ps e",
     'sh -c "ps e"',
     "timeout 5 ps e",
+    // From inline code (Qodo on PR 339, second round).
+    "node -e \"require('child_process').execFileSync('ps',['e'])\"",
+    "python3 -c \"import subprocess; subprocess.run(['ps', 'eww'])\"",
   ])("refuses %s", (command) => {
-    expect(policy("Bash", { command })).toMatch(/environment/);
+    expect(policy("Bash", { command })).toMatch(/environment \(ps e, ps eww\)/);
   });
 
   it.each([
@@ -113,6 +116,10 @@ describe("a run can't change the check script (re-grade 7)", () => {
       check: "npm --silent run a && npm -s test && yarn b && pnpm c && bun run d && node --run e",
     });
     for (const name of ["a", "test", "b", "c", "d", "e"]) expect(names).toContain(name);
+    // node --run runs no pre or post script (Qodo on PR 339, second round).
+    expect(names).toContain("prea");
+    expect(names).not.toContain("pree");
+    expect(names).not.toContain("poste");
   });
 
   it("refuses adding a precheck script, which npm runs before the check (Qodo on PR 339)", () => {

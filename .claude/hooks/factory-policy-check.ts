@@ -25,12 +25,13 @@ function scriptsOf(text: string): Scripts | undefined {
 /**
  * The names of `check` and every script it runs: `npm run <name>` with or without flags on either side of `run`
  * (`npm -s run lint`, `npm run -s lint`), `npm test` and `npm t`, yarn's, pnpm's and bun's shorthand
- * (`yarn lint`), and `node --run lint`. Each with its `pre` and `post` script, which npm runs around it (Qodo on
- * PR 339). A word that names no script (`npm ci`) adds a name nothing holds, which is harmless.
+ * (`yarn lint`), and `node --run lint`. A script a package manager runs comes with its `pre` and `post` script,
+ * which npm runs around it; `node --run` runs neither (Qodo on PR 339). A word that names no script (`npm ci`)
+ * adds a name nothing holds, which is harmless.
  */
 export function checkScriptNames(scripts: Scripts): Set<string> {
   const names = new Set<string>();
-  // Each name with whether it was called (true) or is only the pre or post script of one, which has none of its own.
+  // Each name with whether its pre and post scripts run with it: true when a package manager runs it.
   const todo: [string, boolean][] = [["check", true]];
   const runs =
     /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+--run[=\s]+([\w:.-]+)/g;
@@ -43,7 +44,7 @@ export function checkScriptNames(scripts: Scripts): Set<string> {
     if (typeof body !== "string") continue;
     for (const m of body.matchAll(runs)) {
       const next = m[1] ?? m[2] ?? "";
-      todo.push([next === "t" || next === "tst" ? "test" : next, true]);
+      todo.push([next === "t" || next === "tst" ? "test" : next, m[1] !== undefined]);
     }
   }
   return names;
