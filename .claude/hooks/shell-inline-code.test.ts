@@ -77,6 +77,8 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     "python3 -m pytest -k ctypes tests",
     "npx tsx packages/harness/src/x.ts | grep 'eval('",
     "node scripts/build.js --mode subprocess",
+    // A later step is not the code an option variable hands Python (Qodo on PR 312, fourth review).
+    "PYTHONPATH=src python3 -m pytest tests; grep 'subprocess' README.md",
   ])("the guard allows %s, and the factory policy doesn't take it for built code", (command) => {
     expect(guard(command)).toBeUndefined();
     // A run may still not run a script directly (its own rule): only the built-code reason is gone.
@@ -101,6 +103,9 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     // A module that runs code it is given, and code handed over in an option (Qodo on PR 312).
     'python3 -m timeit "import subprocess"',
     "echo 'import subprocess' | python3 -m code",
+    // An interpreter named after a prefix's value runs its own inline code (Qodo on PR 312, fourth review).
+    `npx --package tsx tsx -e "require('child_process').execSync('ls')"`,
+    `npx -p tsx tsx -e "require('child_process')"`,
     "node --import 'data:text/javascript,require(\"child_process\")' x.mjs",
     "NODE_OPTIONS='--require ./x.cjs --eval require(\"child_process\")' node x.mjs",
     "echo 'import subprocess' | python3 /dev/stdin",

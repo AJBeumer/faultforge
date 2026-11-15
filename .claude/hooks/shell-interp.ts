@@ -169,7 +169,11 @@ function stepCode(step: Step, before: Step[], name: string): string {
   // A script that is stdin by another name (`/dev/stdin`, `/dev/fd/0`) or a path built at run time is no file
   // to read: its code is what is fed in, as with no script at all (Qodo on PR 312).
   const named = all[script !== undefined && /^--$/.test(all[script] ?? "") ? script + 1 : (script ?? -1)] ?? "";
-  if (script !== undefined && !STDIN_SCRIPT.test(named.replace(/["']/g, ""))) return all.slice(at, script).join(" ");
+  // A "script" that is itself an interpreter's name follows a prefix's value (`npx --package tsx tsx -e …`): that
+  // second one is the program, so the whole step is read (Qodo on PR 312, fourth review).
+  const second = INTERPRETERS.test(programName(named));
+  if (script !== undefined && !second && !STDIN_SCRIPT.test(named.replace(/["']/g, "")))
+    return all.slice(at, script).join(" ");
   return [...before.map((s) => s.text), step.text].join(" | ");
 }
 
@@ -196,12 +200,24 @@ function interpreterRuns(command: string, backticks: boolean): { name: string; c
     if (step.piped && last) last.push(step);
     else pipelines.push([step]);
   }
+  // With an option variable, the code is the command up to and including the interpreter's step: a step after it
+  // can't hand it code (Qodo on PR 312, fourth review).
+  let from = 0;
   return pipelines.flatMap((pipeline) =>
     pipeline.flatMap((step, i) => {
+      const found = command.indexOf(step.text, from);
+      if (found >= 0) from = found + step.text.length;
       const all = words(step.text.split("\n")[0] ?? "");
       const name = programName(all[programAt(all).at] ?? "");
       if (!INTERPRETERS.test(name)) return [];
-      return [{ name, code: options ? command : stepCode(step, pipeline.slice(0, i), name) }];
+      return [
+        {
+          name,
+          code: options
+            ? command.slice(0, found >= 0 ? from : command.length)
+            : stepCode(step, pipeline.slice(0, i), name),
+        },
+      ];
     }),
   );
 }
