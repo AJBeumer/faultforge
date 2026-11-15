@@ -9,213 +9,39 @@
  *    starts another program (`system`, `subprocess`, `child_process`) or runs code it builds (`exec`, `eval`):
  *    counted as built code (re-grade 3);
  *  - inline code in an interpreter that makes a network call: it can post to a reviewed repo without gh, where
- *    the guard reads nothing.
+ *    the guard reads nothing (shell-interp.ts, exported here again).
  * Both are refused outright: a decoder can be anything (`base64 -d`, `xxd -r`, `rev`, `openssl enc -d`,
  * `printf '\x..'`), so the rule is about where the text goes, not how it was made.
  */
-import { decodeAnsiC, spokenWords } from "./shell-decode.ts";
-import { quotedSpans, substitutions } from "./shell-scan.ts";
+import { decodeAnsiC } from "./shell-decode.ts";
+import { subprocessCode } from "./shell-interp.ts";
+import { substitutions } from "./shell-scan.ts";
+import { programAt, programName, type Step, steps, words } from "./shell-words.ts";
+
+export {
+  INLINE_NETWORK_REASON,
+  inlineNetworkProblem,
+  interpreterPipelines,
+  LOCAL_HOSTS,
+  NETWORK_CODE,
+  onlyLocalCalls,
+} from "./shell-interp.ts";
 
 /** The denial for text run as shell code. It never quotes the command, which could hold a private id. */
 export const BUILT_CODE_REASON =
   "This command runs text it builds or reads at run time as shell code: a decoded string, a substitution or a variable piped or passed to a shell, eval or source, or run as the command, or inline interpreter code that starts another program. No hook can read that code before it runs. Run the command itself, written out.";
-
-/** The denial for inline interpreter code that makes a network call. */
-export const INLINE_NETWORK_REASON =
-  "This command runs inline code (node -e, python -c, perl -e, ruby -e, or code fed on stdin) that makes a network call. It could post anywhere without gh, where the guard can read the text. Use gh for GitHub; only the app on localhost may be reached from code.";
 
 /** Programs that run their input as shell code. */
 const SHELLS = /^(bash|sh|zsh|dash|ksh|mksh|ash|fish|pwsh|powershell|cmd)$/i;
 /** Builtins that run their arguments, or a file they name, as shell code. */
 const EVALS = /^(eval|iex|invoke-expression)$/i;
 const SOURCES = /^(source|\.)$/i;
-/** Words that run the next word as the program. `xargs` also feeds it its own input. */
-const PREFIXES =
-  /^(sudo|doas|env|exec|command|builtin|nohup|time|nice|stdbuf|timeout|setsid|ionice|taskset|xargs|wsl|busybox|npx|pnpx|bunx|!|\(|\{)$/i;
-/** Language interpreters whose inline code can make a network call. */
-const INTERPRETERS = /^(node|nodejs|deno|bun|tsx|ts-node|python\d*(\.\d+)?|py|perl|ruby|irb|php)$/i;
-
-/**
- * Network calls from code (#243; perl and ruby added): `fetch(`, Node's `http.request` and its modules,
- * Python's `urllib`, `requests`, `http.client` and `socket`, Perl's LWP, HTTP::Tiny and IO::Socket, Ruby's
- * `net/http`, `open-uri` and TCPSocket, PHP's curl and sockets, a browser-style request or socket.
- */
-export const NETWORK_CODE = new RegExp(
-  [
-    String.raw`\bfetch\s*\(`,
-    String.raw`\bhttps?\s*\.\s*(request|get)\s*\(`,
-    String.raw`\b(require|import)\s*\(\s*["'\x60]?(node:)?(https?|net|tls|dgram|undici)\b`,
-    String.raw`\bfrom\s+["'\x60](node:)?(https?|net|tls|dgram|undici)["'\x60]`,
-    String.raw`\bnet\s*\.\s*(connect|createConnection)\b`,
-    String.raw`\burllib\b|\bhttp\.client\b`,
-    String.raw`\brequests\s*\.\s*(get|post|put|patch|delete|head|request|Session)\b`,
-    String.raw`\bimport\s+(requests|socket|httpx|aiohttp)\b`,
-    String.raw`\bfrom\s+(requests|socket|httpx|aiohttp|urllib[\w.]*|http\.client)\s+import\b`,
-    String.raw`\bsocket\s*\.\s*(socket|create_connection)\b`,
-    String.raw`\b(require|import)\s*\(\s*["'\x60](axios|node-fetch|got|superagent|ky|needle)["'\x60]`,
-    String.raw`\bfrom\s+["'\x60](axios|node-fetch|got|superagent|ky|needle)["'\x60]`,
-    String.raw`\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bDeno\s*\.\s*connect\b`,
-    String.raw`\bLWP\b|\bHTTP::Tiny\b|\bIO::Socket\b|\bNet::HTTP\b|\bHTTP::Request\b|\buse\s+Socket\b|-MSocket\b`,
-    String.raw`\bnet/http\b|\bopen-uri\b|\bURI\s*\.\s*open\b|\bTCPSocket\b|\bSocket\s*\.\s*tcp\b|-rsocket\b`,
-    String.raw`\bcurl_init\b|\bfsockopen\b|\bstream_socket_client\b|\bfile_get_contents\s*\(\s*["']https?:`,
-  ].join("|"),
-);
-
-/** Hosts code may reach: only the app a run starts for a live check. */
-export const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
-
-/**
- * True when every network call in `text` names a local URL of its own: at least one URL, none of them
- * elsewhere, and no more calls than URLs (one localhost URL beside a call whose address is built at run time
- * vouches for nothing; Qodo on PR 270).
- */
-export function onlyLocalCalls(text: string, calls: number): boolean {
-  const hosts = [...text.matchAll(/\b(?:https?|ftp|wss?):\/\/([^/\s:'"`]+|\[[^\]]+\])/gi)].map((m) =>
-    (m[1] ?? "").toLowerCase(),
-  );
-  return hosts.length > 0 && hosts.every((h) => LOCAL_HOSTS.has(h)) && calls <= hosts.length;
-}
-
-/** Index of the `)` closing the `$(` at `i`, past quoted text inside it, or the end of the text. */
-function closeSubstitution(s: string, i: number): number {
-  let depth = 0;
-  for (let j = i + 1; j < s.length; j++) {
-    const c = s[j];
-    if (c === "\\") j++;
-    else if (c === "'") {
-      const end = s.indexOf("'", j + 1);
-      if (end < 0) return s.length;
-      j = end;
-    } else if (c === '"') j = closeDouble(s, j);
-    else if (c === "(") depth++;
-    else if (c === ")" && --depth === 0) return j;
-  }
-  return s.length;
-}
-
-/** Index of the `"` closing the one at `i`, past substitutions inside it, or the end of the text. */
-function closeDouble(s: string, i: number): number {
-  for (let j = i + 1; j < s.length; j++) {
-    const c = s[j];
-    if (c === "\\") j++;
-    else if (c === "$" && s[j + 1] === "(") j = closeSubstitution(s, j);
-    else if (c === '"') return j;
-  }
-  return s.length;
-}
-
-/** One simple command: its text, and whether a pipe feeds it the output of the step before. */
-interface Step {
-  text: string;
-  piped: boolean;
-}
-
-/**
- * The command's simple commands, split at `|`, `||`, `&&`, `;`, `&` and new lines outside quotes, substitutions
- * and heredoc bodies (a heredoc's body stays with the command it feeds). `backticks` is bash's reading; to
- * PowerShell a backtick escapes the next character.
- */
-function steps(command: string, backticks: boolean): Step[] {
-  const literal = new Array<boolean>(command.length).fill(false);
-  for (const span of quotedSpans(command))
-    if (span.kind === "heredoc" || span.kind === "comment") literal.fill(true, span.start, span.end);
-  const found: Step[] = [];
-  let start = 0;
-  let piped = false;
-  const cut = (end: number, next: boolean) => {
-    const text = command.slice(start, end).trim();
-    if (text) found.push({ text, piped });
-    piped = next;
-  };
-  for (let i = 0; i < command.length; i++) {
-    if (literal[i]) continue;
-    const c = command[i];
-    const next = command[i + 1];
-    if (c === "\\" || (c === "`" && !backticks)) i++;
-    else if (c === "'") i = command.indexOf("'", i + 1) < 0 ? command.length : command.indexOf("'", i + 1);
-    else if (c === '"') i = closeDouble(command, i);
-    else if (c === "$" && next === "(") i = closeSubstitution(command, i);
-    else if (c === "`") i = command.indexOf("`", i + 1) < 0 ? command.length : command.indexOf("`", i + 1);
-    else if (c === "|") {
-      const or = next === "|";
-      cut(i, !or);
-      if (or || next === "&") i++;
-      start = i + 1;
-    } else if (c === "&" && command[i - 1] !== ">" && next !== ">" && (backticks || next === "&")) {
-      // To PowerShell a lone `&` is the call operator, not a separator.
-      cut(i, false);
-      if (next === "&") i++;
-      start = i + 1;
-    } else if (c === ";" || c === "\n") {
-      cut(i, false);
-      start = i + 1;
-    }
-  }
-  cut(command.length, false);
-  return found;
-}
-
-/** The step's words as the shell splits them, quotes and substitutions kept whole in their word. */
-function words(step: string): string[] {
-  const out: string[] = [];
-  let word = "";
-  for (let i = 0; i < step.length; i++) {
-    const c = step[i] ?? "";
-    let end = i;
-    if (/\s/.test(c)) {
-      if (word) out.push(word);
-      word = "";
-      continue;
-    }
-    if (c === "\\") end = i + 1;
-    else if (c === "'") end = step.indexOf("'", i + 1) < 0 ? step.length : step.indexOf("'", i + 1);
-    else if (c === '"') end = closeDouble(step, i);
-    else if (c === "$" && step[i + 1] === "(") end = closeSubstitution(step, i);
-    else if (c === "`") end = step.indexOf("`", i + 1) < 0 ? step.length : step.indexOf("`", i + 1);
-    word += step.slice(i, end + 1);
-    i = end;
-  }
-  if (word) out.push(word);
-  return out;
-}
 
 /** The text with single-quoted parts blanked: what is left is what the shell expands. */
 const expanding = (text: string) => text.replace(/'[^']*'/g, "''");
 
 /** True when the shell builds part of the text at run time: a substitution, a backtick, a variable. */
 const BUILT = /\$\(|`|\$\{?[A-Za-z_]|<\(|%[A-Za-z_]\w*%/;
-
-/** A program's name as a word: quotes and escapes removed, its folder and `.exe` dropped. */
-function programName(word: string): string {
-  return (
-    spokenWords(word)
-      .replace(/^[({!]+/, "")
-      .split(/[\\/]/)
-      .pop() ?? ""
-  )
-    .replace(/\.exe$/i, "")
-    .toLowerCase();
-}
-
-/** Where the step's program is, past variable assignments and words that run the next word. */
-function programAt(all: string[]): { at: number; xargs: boolean } {
-  let at = 0;
-  let xargs = false;
-  while (at < all.length) {
-    const word = all[at] ?? "";
-    if (/^[A-Za-z_]\w*=/.test(word)) at++;
-    else if (PREFIXES.test(programName(word)) || /^[({!]$/.test(word)) {
-      if (/^xargs$/i.test(programName(word))) xargs = true;
-      at++;
-      // A prefix's own flags and values: `timeout 5`, `nice -n 5`, `xargs -I{}`, `npx --yes`.
-      while (at < all.length && /^(-|\d+(\.\d+)?[smhd]?$)/.test(all[at] ?? "")) {
-        if (/^-(n|I|u|g|S|C|k|s)$/.test(all[at] ?? "") && at + 1 < all.length) at++;
-        at++;
-      }
-    } else break;
-  }
-  return { at, xargs };
-}
 
 /** True when the step only echoes a literal: text the hooks read as written. */
 function literalEcho(step: string): boolean {
@@ -276,47 +102,6 @@ function stepProblem(step: Step, before: Step | undefined, backticks: boolean, d
   return false;
 }
 
-/**
- * Code in a language interpreter that starts another program, or runs code it builds (re-grade 3): no hook reads
- * what that program is. One pattern per family, chosen by the interpreter's name, so a template literal in
- * `node -e` or a regex's `.exec(` isn't taken for Perl's backticks or a shell call.
- */
-const SUBPROCESS_CODE: [interpreter: RegExp, code: RegExp][] = [
-  [
-    /^(node|nodejs|deno|bun|tsx|ts-node)$/,
-    new RegExp(
-      [
-        String.raw`\bchild_process\b|\bworker_threads\b|["'\x60](node:)?vm["'\x60]`,
-        String.raw`\b(eval|Function)\s*\(|\bnew\s+Function\b`,
-        // A module named by anything but one literal: `require('child_' + 'process')`, `import(x)`.
-        String.raw`\b(require|import|getBuiltinModule)\s*\(\s*(?!["'\x60][^"'\x60+]*["'\x60]\s*\))`,
-        String.raw`\b(globalThis|global|process|module|self|window)\s*\[`,
-        String.raw`\bprocess\s*\.\s*(binding|_linkedBinding|dlopen)\b|\bBun\s*\.\s*(spawn\w*|\$)|\bDeno\s*\.\s*(run|Command)\b`,
-      ].join("|"),
-    ),
-  ],
-  [
-    /^(python\d*(\.\d+)?|py)$/,
-    /\bos\s*\.\s*(system|popen|exec\w*|spawn\w*|fork\w*|posix_spawn\w*)\b|\bsubprocess\b|\bpty\b|\bfrom\s+os\s+import\b|\b(exec|eval|compile|getattr|__import__)\s*\(|\bimportlib\b|\bctypes\b|\bmultiprocessing\b/,
-  ],
-  [/^perl$/, /\b(system|exec|qx|readpipe|eval|fork)\b|`|\bopen\b[^;]*\||\bIPC::/],
-  [
-    /^(ruby|irb)$/,
-    /\b(system|exec|spawn|fork|eval|\w*_eval|send|public_send|__send__)\b|`|%x[{([<|!]|\bIO\s*\.\s*popen\b|\bOpen3\b|\bKernel\b|\bPTY\b/,
-  ],
-  [
-    /^php$/,
-    /\b(shell_exec|exec|system|passthru|popen|proc_open|pcntl_exec|eval|assert|create_function|call_user_func\w*)\s*\(|`/,
-  ],
-];
-
-/** True when inline code in a language interpreter starts a program or runs code it builds. */
-function subprocessCode(command: string, backticks: boolean): boolean {
-  return interpreterRuns(command, backticks).some(({ name, code }) =>
-    SUBPROCESS_CODE.some(([interpreter, pattern]) => interpreter.test(name) && pattern.test(code)),
-  );
-}
-
 /** True when the command runs built text as shell code, read as written and with ANSI-C strings decoded. */
 function builtCode(command: string, backticks: boolean, depth = 0): boolean {
   for (const text of new Set([command, decodeAnsiC(command)])) {
@@ -332,43 +117,4 @@ function builtCode(command: string, backticks: boolean, depth = 0): boolean {
 /** Why the command may not run because it runs text built at run time as shell code, or undefined. */
 export function builtCodeProblem(command: string, backticks = true): string | undefined {
   return builtCode(command, backticks) ? BUILT_CODE_REASON : undefined;
-}
-
-/**
- * Each pipeline of the command that runs a language interpreter, as one text (its code may come from a step
- * that pipes it in, or from a heredoc), or none.
- */
-export function interpreterPipelines(command: string, backticks = true): string[] {
-  return [...new Set(interpreterRuns(command, backticks).map((run) => run.code))];
-}
-
-/** Each interpreter a pipeline runs, by name, with the pipeline's whole text as its code. */
-function interpreterRuns(command: string, backticks: boolean): { name: string; code: string }[] {
-  const pipelines: Step[][] = [];
-  for (const step of steps(command, backticks)) {
-    const last = pipelines[pipelines.length - 1];
-    if (step.piped && last) last.push(step);
-    else pipelines.push([step]);
-  }
-  return pipelines.flatMap((pipeline) => {
-    const code = pipeline.map((step) => step.text).join(" | ");
-    return pipeline
-      .map((step) => {
-        const all = words(step.text);
-        return programName(all[programAt(all).at] ?? "");
-      })
-      .filter((name) => INTERPRETERS.test(name))
-      .map((name) => ({ name, code }));
-  });
-}
-
-/** Why the command may not run because inline interpreter code in it makes a network call, or undefined. */
-export function inlineNetworkProblem(command: string, backticks = true): string | undefined {
-  for (const text of new Set([command, decodeAnsiC(command)])) {
-    for (const code of interpreterPipelines(text, backticks)) {
-      const calls = [...code.matchAll(new RegExp(NETWORK_CODE.source, "g"))].length;
-      if (calls && !onlyLocalCalls(code, calls)) return INLINE_NETWORK_REASON;
-    }
-  }
-  return undefined;
 }

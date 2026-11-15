@@ -27,6 +27,7 @@
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
 import { telltales } from "../../packages/harness/src/neutral.ts";
+import { assetFiles } from "./guard-assets.ts";
 import { chainProblem, DEFAULT_BUDGET_MS, withDeadline, withPrivateNames, writerStep } from "./guard-content.ts";
 import {
   aliasProblem,
@@ -35,7 +36,7 @@ import {
   unreadableDestination,
   unreadablePost,
 } from "./guard-expand.ts";
-import { assetFiles, BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
+import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
 import {
@@ -161,7 +162,7 @@ function postedPieces(ctx: Context, command: string, strict = false, everywhere 
   const pieces = [stripReviewedNames(ctx.reviewed, command), stripReviewedNames(ctx.reviewed, joinedWords(command))];
   pieces.push(...postedText(command), ...referencedFiles(ctx.cwd, command), ...stdinFiles(ctx.cwd, command));
   // A gist's files and a release's assets are posted too (re-grade 3).
-  pieces.push(...assetFiles(ctx.cwd, command).map((asset) => asset.text));
+  pieces.push(...assetFiles(ctx.cwd, command, ctx.backticks).map((asset) => asset.text));
   pieces.push(...builtText(ctx.cwd, command, strict, ctx.backticks, everywhere));
   for (const commit of commitSteps(command)) {
     pieces.push([...commitMessages(commit), ...referencedFiles(ctx.cwd, commit)].join("\n"));
@@ -196,10 +197,11 @@ function checkPrivateIds(ctx: Context, command: string, readable: boolean) {
  */
 function checkPrivateFiles(ctx: Context, command: string) {
   const root = privateRoot(ctx.env);
-  if (!assetFiles(ctx.cwd, command).some((asset) => within(asset.path, root))) return;
+  const leaving = assetFiles(ctx.cwd, command, ctx.backticks).filter((asset) => within(asset.path, root));
+  if (!leaving.length) return;
   const outside = outsidePostedText(command);
   const destinations = [...explicitDestinations(outside), ...urlDestinations(outside)];
-  const gist = /\bgh\s+gist\b/.test(joinedWords(command));
+  const gist = leaving.some((asset) => asset.gist);
   if (gist || !destinations.length || !onlyPrivateRepo(command, ctx.cwd, root, destinations)) {
     deny("This would publish a file from private storage. Nothing there may leave it.");
   }
@@ -221,7 +223,9 @@ function checkShell(ctx: Context, command: string) {
   // inline interpreter code that reaches the network, which can post without gh.
   const unread = builtCodeProblem(command, ctx.backticks) ?? inlineNetworkProblem(command, ctx.backticks);
   if (unread) deny(unread);
-  // A private id in inline code is checked too: the code could post it any way it likes (#299).
+  // A private id in inline code is checked too: the code could post it any way it likes (#299). Only the code
+  // an interpreter is handed: a script's path and arguments are the owner's local work (`npx tsx x.ts --template
+  // <id>`), and a post that names the id is refused where it is posted (Qodo on PR 310).
   const names = ctx.names;
   if (names && interpreterPipelines(command, ctx.backticks).some((code) => names(code) || names(joinedWords(code))))
     deny(PRIVATE_ID_REASON);
@@ -284,7 +288,9 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   const writes = isWrite(command);
   if (writes && readable && unreadableDestination(command))
     deny("This write names its repo with a shell variable the command doesn't set. Name the repo as owner/name.");
-  if (writes) checkPrivateFiles(ctx, command);
+  // Whether or not the command reads as a write: a gist or a release found as the shell reads its words is one,
+  // however it is spelled (`g\h gist create`; Qodo on PR 310).
+  checkPrivateFiles(ctx, command);
   if (writes) checkPrivateIds(ctx, command, readable);
   const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);
 
