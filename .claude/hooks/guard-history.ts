@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { referencedFiles } from "./guard-files.ts";
 import { configReads } from "./guard-hooks.ts";
 import { outsidePostedText } from "./guard-posted.ts";
-import { privateOrigin, privateRoot, pushUrl } from "./guard-private.ts";
+import { privateOrigin, privateRoot, pushUrls } from "./guard-private.ts";
 import { checkoutAt, githubRepos, inCheckout, locate, type Reviewed, within } from "./guard-repos.ts";
 import type { Context } from "./guard-tools.ts";
 import { joinedWords } from "./shell-scan.ts";
@@ -105,10 +105,11 @@ function pushRemote(args: string[]): string | undefined {
 /** True when a remote word is a URL or a path, not a remote's name. */
 const isLocation = (remote: string) => /[/\\:]|^\.\.?$/.test(remote);
 
-/** The URL a push to `remote` from `dir` goes to: git's own answer for a remote's name, else the word itself. */
-function remoteUrl(dir: string, remote: string): string {
-  if (isLocation(remote)) return remote;
-  return pushUrl(dir, remote) || remote;
+/** Every URL a push to `remote` from `dir` goes to: git's own answer for a remote's name, else the word itself. */
+function remoteUrls(dir: string, remote: string, push = true): string[] {
+  if (isLocation(remote)) return [remote];
+  const urls = pushUrls(dir, remote, push);
+  return urls.length ? urls : [remote];
 }
 
 /** The reviewed repo a URL or local path names, if any. */
@@ -126,7 +127,7 @@ function reviewedAt(url: string, dir: string, reviewed: Reviewed[]): Reviewed | 
 function ownCheckout(dir: string, r: Reviewed): boolean {
   if (inCheckout(dir, r) || within(dir, r.checkout)) return true;
   const found = checkoutAt(dir);
-  return found !== undefined && githubRepos(remoteUrl(found.root, "origin")).includes(r.github.toLowerCase());
+  return found !== undefined && remoteUrls(found.root, "origin").flatMap(githubRepos).includes(r.github.toLowerCase());
 }
 
 /** A field that makes a repo public, in an API write: `private=false`, `"private": false`, `visibility: PUBLIC`. */
@@ -156,8 +157,11 @@ function privateProblem(call: Call, root: string): string | undefined {
     const remote = pushRemote(call.args) ?? "origin";
     if (remote === "origin") return undefined;
     if (!call.dir || unreadable(remote)) return PUBLISH;
-    const github = githubRepos(remoteUrl(call.dir, remote));
-    if (!github.length || github.some((repo) => !own.includes(repo))) return PUBLISH;
+    // Each push URL must be the private repo's own: git pushes to every one of them.
+    for (const url of remoteUrls(call.dir, remote)) {
+      const github = githubRepos(url);
+      if (!github.length || github.some((repo) => !own.includes(repo))) return PUBLISH;
+    }
   }
   if (inPrivate && call.dir !== undefined) {
     if (sub === "remote" && /^(add|set-url|rename|remove|rm)$/.test(verb)) return PUBLISH;
@@ -172,8 +176,14 @@ function privateProblem(call: Call, root: string): string | undefined {
       githubRepos(w).some((repo) => own.includes(repo)) ||
       within(resolve(call.dir ?? "", w.replace(/^file:\/\//i, "")), root);
     // A remote's name is read as the URL it fetches from (`git fetch private`; Qodo on PR 333).
-    const fetched = (w: string) => (isLocation(w) ? w : pushUrl(call.dir ?? "", w, false) || w);
-    if (named.some((w) => reaches(w) || reaches(fetched(w)))) return PUBLISH;
+    if (
+      named.some((w) =>
+        remoteUrls(call.dir ?? "", w, false)
+          .concat(w)
+          .some(reaches),
+      )
+    )
+      return PUBLISH;
   }
   return undefined;
 }
@@ -196,9 +206,13 @@ function reviewedProblem(ctx: Context, call: Call): string | undefined {
     return named ? fromElsewhere(named) : undefined;
   }
   if (unreadable(remote)) return undefined;
-  const target = reviewedAt(remoteUrl(call.dir, remote), call.dir, ctx.reviewed);
-  if (!target || ownCheckout(call.dir, target)) return undefined;
-  return fromElsewhere(target);
+  const dir = call.dir;
+  // Any one of a remote's push URLs is enough: git pushes to all of them (Qodo on PR 333).
+  for (const url of remoteUrls(dir, remote)) {
+    const target = reviewedAt(url, dir, ctx.reviewed);
+    if (target && !ownCheckout(dir, target)) return fromElsewhere(target);
+  }
+  return undefined;
 }
 
 const TRANSFER =

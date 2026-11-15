@@ -45,14 +45,22 @@ export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string 
   return dirname(resolve(labRoot, evidence));
 }
 
-/** The URL git would push to (or with `push` false, fetch from) for `remote` in `dir`, or empty when it has none. */
-export function pushUrl(dir: string, remote: string, push = true): string {
-  const r = spawnSync("git", ["-C", dir, "remote", "get-url", ...(push ? ["--push"] : []), remote], {
+/**
+ * Every URL git would push to (or with `push` false, fetch from) for `remote` in `dir`: a remote may have several
+ * push URLs, and git pushes to all of them (Qodo on PR 333). Empty when it has none.
+ */
+export function pushUrls(dir: string, remote: string, push = true): string[] {
+  const r = spawnSync("git", ["-C", dir, "remote", "get-url", "--all", ...(push ? ["--push"] : []), remote], {
     encoding: "utf8",
     timeout: 4000,
     windowsHide: true,
   });
-  return r.status === 0 ? r.stdout.trim() : "";
+  return r.status === 0
+    ? r.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+    : [];
 }
 
 /**
@@ -61,7 +69,7 @@ export function pushUrl(dir: string, remote: string, push = true): string {
  */
 export function privateOrigin(root: string): string[] {
   const found = checkoutAt(root);
-  return found && within(found.root, root) ? githubRepos(pushUrl(found.root, "origin")) : [];
+  return found && within(found.root, root) ? pushUrls(found.root, "origin").flatMap(githubRepos) : [];
 }
 
 /** The ids of templates that are in private storage and not yet in `templates/seed/`. */

@@ -259,3 +259,31 @@ describe("holes Qodo found in the first review of PR 333", () => {
     expect(bash(`gh issue transfer 5 ${T.toUpperCase()} -R other-owner/source`)).toMatch(/transferred/);
   });
 });
+
+describe("holes Qodo found in the second review of PR 333", () => {
+  it("lets a wildcard that can't match a dot folder through", () => {
+    expect(bash("rm -rf dist/*", LAB.dir)).toBeUndefined();
+    expect(bash("rm -f *.log", LAB.dir)).toBeUndefined();
+    expect(bash("rm {.git,x}/hooks/pre-push", LAB.dir)).toMatch(/git-level guard/);
+  });
+
+  it("reads every push URL of a remote, not only its first", () => {
+    const lab = tempRepo(true);
+    lab.git("remote", "add", "both", `https://github.com/${L}.git`);
+    lab.git("remote", "set-url", "--add", "--push", "both", `https://github.com/${L}.git`);
+    lab.git("remote", "set-url", "--add", "--push", "both", `https://github.com/${T}.git`);
+    expect(bash("git push both HEAD:refs/heads/tidy", lab.dir)).toMatch(/only from its own checkout/);
+    const priv = join(lab.dir, "private");
+    mkdirSync(priv);
+    execFileSync("git", ["init", "-q", "-b", "main", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", `https://github.com/${P}.git`]);
+    execFileSync("git", ["-C", priv, "remote", "add", "backup", `https://github.com/${P}.git`]);
+    execFileSync("git", ["-C", priv, "remote", "set-url", "--add", "--push", "backup", `https://github.com/${P}.git`]);
+    execFileSync("git", ["-C", priv, "remote", "set-url", "--add", "--push", "backup", `https://github.com/${L}.git`]);
+    const env: NodeJS.ProcessEnv = { ...process.env, FAULTFORGE_CONFIG: CONFIG, FAULTFORGE_PRIVATE_DIR: priv };
+    delete env.FAULTFORGE_FACTORY_RUN;
+    const payload = JSON.stringify({ tool_name: "Bash", cwd: priv, tool_input: { command: "git push backup main" } });
+    const decision = decide(payload, env);
+    expect(decision.kind === "deny" ? decision.reason : decision.kind).toMatch(/stays private/);
+  });
+});

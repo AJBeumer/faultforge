@@ -108,7 +108,8 @@ function linkIntoGit(path: string): boolean {
 function wildcardGit(word: string): boolean {
   if (!hasWildcard(word)) return false;
   return word.split(/[/\\]+/).some((segment) => {
-    if (!hasWildcard(segment)) return false;
+    // The shell's wildcards skip names that start with a dot unless the pattern starts with one (Qodo on PR 333).
+    if (!hasWildcard(segment) || !/^[.{]/.test(segment)) return false;
     const pattern = segment
       .replace(/[.+^$()|\\]/g, "\\$&")
       .replace(/\*/g, ".*")
