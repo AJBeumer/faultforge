@@ -15,8 +15,8 @@ function isolatedEnv(home: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1" };
 }
 
-/** `git`, with no config inherited beyond what `isolatedEnv` allows. */
-function gitIsolated(cwd: string, home: string, args: string[], timeoutMs: number): string {
+/** `git`, with no config inherited beyond what `isolatedEnv` allows. Also used by `factory-check-files.ts`. */
+export function gitIsolated(cwd: string, home: string, args: string[], timeoutMs: number): string {
   return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], timeoutMs, {
     stdio: ["ignore", "pipe", "pipe"],
     env: isolatedEnv(home),
