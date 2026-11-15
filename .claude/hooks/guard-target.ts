@@ -2,7 +2,7 @@
  * Claude Code PreToolUse hook. Keeps the reviewed repositories free of hints for the reviewer.
  *
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. For each, it blocks:
- *  - force pushes, and pushes that delete or mirror
+ *  - force pushes, pushes that delete or mirror, and API calls that move or delete a ref
  *  - commits, pushes, PRs, comments and API writes whose text, or whose posted files, name the lab or the bug
  *  - file edits by the Edit and Write tools whose new content does the same
  *  - any `git commit` or `git push`, wherever it runs, while a reviewed checkout holds pending content
@@ -36,7 +36,7 @@ import {
   unreadableDestination,
   unreadablePost,
 } from "./guard-expand.ts";
-import { BuiltText, builtText, referencedFiles, stdinFiles, Unreadable } from "./guard-files.ts";
+import { BuiltText, builtText, referencedFiles, scriptProblem, stdinFiles, Unreadable } from "./guard-files.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
 import {
@@ -52,6 +52,7 @@ import {
   isWrite,
   rawApiWrite,
   rewritesHistory,
+  rewritesRefs,
   skipsGitGuard,
   urlDestinations,
 } from "./guard-reach.ts";
@@ -235,6 +236,9 @@ function checkShell(ctx: Context, command: string) {
   const names = ctx.names;
   const inline = codes.flatMap((code) => interpreterPipelines(code, ctx.backticks));
   if (names && inline.some((code) => names(code) || names(joinedWords(code)))) deny(PRIVATE_ID_REASON);
+  // A script file can post without gh too: read where it could reach a reviewed repo (re-grade 5).
+  const script = scriptProblem(ctx.cwd, joined, ctx.reviewed, Boolean(ctx.env.FAULTFORGE_FACTORY_RUN), ctx.backticks);
+  if (script) deny(script);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
   const read = shellReading(command);
   const readAlias = aliasProblem(read);
@@ -329,9 +333,12 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     deny(`In ${repo.name}, git's own guard hooks must run: no --no-verify, no commit -n, and no other core.hooksPath.`);
   }
   // A flag from a variable the command doesn't set (`git push $FLAG`) could be --force (#285).
-  if (rewritesHistory(command, readable)) {
+  // GitHub's API moves and deletes refs too, where no git hook runs (re-grade 5). Only a GraphQL call's files are
+  // read for it: `grep -F x` names no posted file (Qodo on PR 329).
+  const queries = /\bgraphql\b/.test(command) ? referencedFiles(ctx.cwd, command) : [];
+  if (rewritesHistory(command, readable) || rewritesRefs(command, queries)) {
     deny(
-      `Force pushes to ${repo.name} are not allowed, nor pushes that delete or mirror: its history is evidence for recorded cases.`,
+      `Force pushes to ${repo.name} are not allowed, nor pushes or API calls that delete, mirror or move a ref: its history is evidence for recorded cases.`,
     );
   }
   if (rawApiWrite(command)) {

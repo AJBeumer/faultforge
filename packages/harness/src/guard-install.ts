@@ -1,15 +1,18 @@
 /**
- * Installs the git-level guard in every reviewed checkout named in `factory.json` (#191).
+ * Installs the git-level guard in every reviewed checkout named in `factory.json` (#191), and the lab's own
+ * link check in the checkout marked `"guard": "lab"` (re-grade 5).
  *
  *   npm run guard:install
  *
  * For each repo with `"guard": "reviewed"`, writes `pre-commit`, `commit-msg` and `pre-push` hooks into
  * its checkout's hooks folder, and stores where the checking script lives in the checkout's local git
  * config (`review-guard.script`). The hooks name nothing but that setting, so their text gives nothing
- * away, and neither leaves the machine: hooks and local config are never pushed. Running it again writes
- * the same files. A hook file this command didn't write is never overwritten.
+ * away, and neither leaves the machine: hooks and local config are never pushed. In the lab it writes
+ * `commit-msg` and `pre-push` only, which refuse a link to a reviewed repo's issue or PR in a commit message
+ * made or pushed there. Running it again writes the same files. A hook file this command didn't write is never
+ * overwritten.
  *
- * Exit codes: 0 installed in every reviewed checkout; 1 refused somewhere: a hook file that isn't ours is
+ * Exit codes: 0 installed in every reviewed checkout and the lab; 1 refused somewhere: a hook file that isn't ours is
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
  * unexpected error, even while loading (`npm run guard:install` runs `guard-install-cli.ts`).
  */
@@ -22,24 +25,32 @@ import { ROOT } from "./paths.ts";
 /** The first line after the shebang of every hook this command writes: how a rerun knows its own files. */
 export const MARKER = "# Installed by guard:install.";
 export const HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
+/** The lab's hooks: its commits may say anything except link a reviewed repo's issue or PR (re-grade 5). */
+export const LAB_HOOKS = ["commit-msg", "pre-push"] as const;
+/** Which hooks a checkout gets: a reviewed repo's full guard, or the lab's link check. */
+export type Role = "reviewed" | "lab";
+const hooksFor = (role: Role): readonly (typeof HOOKS)[number][] => (role === "lab" ? LAB_HOOKS : HOOKS);
 export const CONFIG_KEY = "review-guard.script";
 
-/** The text of one hook: it finds the script through the checkout's local config and passes git's arguments on. */
-export function hookText(stage: (typeof HOOKS)[number]): string {
+/**
+ * The text of one hook: it finds the script through the checkout's local config and passes git's arguments on.
+ * In the lab it names the lab's stage (`lab-commit-msg`, `lab-pre-push`).
+ */
+export function hookText(stage: (typeof HOOKS)[number], role: Role = "reviewed"): string {
   return [
     "#!/bin/sh",
     MARKER,
     "# Checks what this commit or push would carry. With no script configured, it refuses.",
     `script="$(git config --get ${CONFIG_KEY})" || { echo "review guard: not configured, so refused" >&2; exit 1; }`,
-    `exec node "$script" ${stage} "$(git rev-parse --show-toplevel)" "$@"`,
+    `exec node "$script" ${role === "lab" ? "lab-" : ""}${stage} "$(git rev-parse --show-toplevel)" "$@"`,
     "",
   ].join("\n");
 }
 
 export class InstallRefused extends Error {}
 
-/** Installs the three hooks in one checkout, pointing them at `script`. Returns the hooks folder. */
-export function installHooks(checkout: string, script: string): string {
+/** Installs the role's hooks in one checkout, pointing them at `script`. Returns the hooks folder. */
+export function installHooks(checkout: string, script: string, role: Role = "reviewed"): string {
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   let hooksPath = "";
@@ -54,15 +65,15 @@ export function installHooks(checkout: string, script: string): string {
   mkdirSync(dir, { recursive: true });
   // Ours only when it starts with our exact header and is a plain file: a hook that merely mentions the
   // marker, or a symlink whose write would land elsewhere, is someone else's (Qodo on PR 213).
-  for (const stage of HOOKS) {
+  for (const stage of hooksFor(role)) {
     const file = join(dir, stage);
     if (!existsSync(file)) continue;
     const ours = !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8").startsWith(`#!/bin/sh\n${MARKER}\n`);
     if (!ours) throw new InstallRefused(`${file} exists and wasn't written by guard:install; move it first`);
   }
-  for (const stage of HOOKS) {
+  for (const stage of hooksFor(role)) {
     const file = join(dir, stage);
-    writeFileSync(file, hookText(stage));
+    writeFileSync(file, hookText(stage, role));
     chmodSync(file, 0o755);
   }
   git("config", "--local", CONFIG_KEY, script.replace(/\\/g, "/"));
@@ -74,7 +85,7 @@ export function installHooks(checkout: string, script: string): string {
  * each of the three hooks present as this command wrote it, and the script setting naming a file that
  * exists. Anything git can't answer counts as missing.
  */
-export function guardProblem(checkout: string): string | undefined {
+export function guardProblem(checkout: string, role: Role = "reviewed"): string | undefined {
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const setting = (key: string) => {
@@ -89,10 +100,10 @@ export function guardProblem(checkout: string): string | undefined {
     if (hooksPath) return `${checkout} sets core.hooksPath (${hooksPath}), so git skips the guard's hooks`;
     const relative = git("rev-parse", "--git-path", "hooks");
     const dir = isAbsolute(relative) ? relative : resolve(checkout, relative);
-    for (const stage of HOOKS) {
+    for (const stage of hooksFor(role)) {
       const file = join(dir, stage);
       const ours =
-        existsSync(file) && !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8") === hookText(stage);
+        existsSync(file) && !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8") === hookText(stage, role);
       if (!ours) return `${checkout} has no guard ${stage} hook`;
       // Git skips a hook it can't run, without a word (Qodo on PR 266).
       if (process.platform !== "win32" && !(statSync(file).mode & 0o111)) return `${file} is not executable`;
@@ -116,23 +127,31 @@ export function guardInstalled(checkout: string): boolean {
   return guardProblem(checkout) === undefined;
 }
 
-/** Why each reviewed checkout in `factory` lacks the git-level guard, resolved from `root`; empty when all have it. */
+/**
+ * Why each reviewed checkout in `factory` lacks the git-level guard, or the lab its link check (Qodo on PR 329),
+ * resolved from `root`; empty when all have them.
+ */
 export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT): string[] {
-  return Object.values(factory.repos)
-    .filter((repo) => repo.guard === "reviewed")
-    .flatMap((repo) => guardProblem(resolve(root, repo.path)) ?? []);
+  return Object.values(factory.repos).flatMap((repo) => guardProblem(resolve(root, repo.path), repo.guard) ?? []);
 }
 
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export function main(): number {
-  const script = resolve(ROOT, ".claude", "hooks", "git-guard.ts");
+  return installAll(loadFactory(), ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"));
+}
+
+/**
+ * Installs the hooks in every checkout `factory` marks reviewed or lab, resolved from `root`, pointing them at
+ * `script`. Returns the command's exit code.
+ */
+export function installAll(factory: FactoryConfig, root: string, script: string): number {
   let code = 0;
-  for (const [key, repo] of Object.entries(loadFactory().repos)) {
-    if (repo.guard !== "reviewed") continue;
-    const checkout = resolve(ROOT, repo.path);
+  for (const [key, repo] of Object.entries(factory.repos)) {
+    if (repo.guard !== "reviewed" && repo.guard !== "lab") continue;
+    const checkout = resolve(root, repo.path);
     try {
       if (!existsSync(checkout)) throw new Error(`no checkout at ${checkout}`);
-      console.log(`[guard:install] ${key}: hooks in ${installHooks(checkout, script)}`);
+      console.log(`[guard:install] ${key}: hooks in ${installHooks(checkout, script, repo.guard)}`);
     } catch (error) {
       const refused = error instanceof InstallRefused;
       console.error(

@@ -79,7 +79,7 @@ export function rawApiWrite(command: string): boolean {
   const words = joinedWords(command);
   return (
     /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b[^|;&\n]*github\.com/i.test(words) &&
-    /(?:\s-X\s*\w|--request|\s-d\b|--data|--json|--form|\s-F\b|-Method|-Body|--post-data|--method|\s(?:POST|PATCH|PUT|DELETE)\b)/i.test(
+    /(?:\s-X\s*\w|--request|\s-d\b|--data|--json|--form|\s-F\b|-Method|-Body|-InFile|--post-data|--post-file|--body-file|--upload-file|\s-T\b|--method|\s(?:POST|PATCH|PUT|DELETE)\b)/i.test(
       words,
     )
   );
@@ -128,6 +128,40 @@ export function rewritesHistory(command: string, variablesForce = false): boolea
     return /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
       args,
     );
+  });
+}
+
+/**
+ * True when the command rewrites or deletes a ref through GitHub's API, where no git hook runs (re-grade 5): a
+ * `gh api` write to `git/refs/<ref>` (an existing ref: PATCH moves it, DELETE removes it), any `git/refs` write
+ * with a `force` field, a GraphQL `updateRef`, `updateRefs` or `deleteRef`, or `gh repo sync --force`. Creating
+ * a new ref (`POST git/refs`) and reading refs stay allowed. `files` are the texts the command posts from files
+ * (a GraphQL query read with `-F query=@q.graphql` or `--input`; Qodo on PR 329).
+ */
+export function rewritesRefs(command: string, files: string[] = []): boolean {
+  const c = joinedWords(command).replace(/\\(?=\w)/g, "");
+  const refMutation = /\b(?:updateRefs?|deleteRef)\b/;
+  // A query file's comments and string values are no fields: a read that mentions a mutation in them is a read.
+  const fields = files.map((text) => text.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/#[^\n]*/g, ""));
+  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...fields].some((text) => refMutation.test(text))) return true;
+  return segments(c).some(({ text }) => {
+    if (/\bgh\s+repo\s+sync\b/.test(text)) return /\s--force\b/.test(text);
+    const gh = /\bgh\s+api\b/.exec(text);
+    if (!gh) return false;
+    const args = text.slice(gh.index);
+    // Any owner and name, gh's `{owner}/{repo}` and `:owner/:repo` placeholders included (Qodo on PR 329).
+    const route = /(?:^|\s|=)\/?repos\/[^/\s]+\/[^/\s]+\/git\/refs(\/\S*)?/.exec(args);
+    if (!route) return false;
+    // Every method flag, in any spelling (`-X=DELETE`, `-X GET -X DELETE`): any write among them counts.
+    const methods = [...args.matchAll(/(?:\s-X\s*=?\s*|\s--method[=\s]+)(\w+)/g)].map((m) =>
+      (m[1] ?? "").toUpperCase(),
+    );
+    const sends = /\s-[fF]|--field|--raw-field|--input/.test(args);
+    const writes = methods.length ? methods.some((m) => !/^(GET|HEAD)$/.test(m)) : sends;
+    if (!writes) return false;
+    // `git/refs/heads/x` names an existing ref; `git/refs` alone, with or without a trailing slash, is the list.
+    const existing = Boolean(route[1] && route[1] !== "/");
+    return existing || /\bforce\s*=/.test(args);
   });
 }
 

@@ -11,7 +11,9 @@ import {
   HOOKS,
   hookText,
   InstallRefused,
+  installAll,
   installHooks,
+  LAB_HOOKS,
   MARKER,
   unguardedCheckouts,
 } from "./guard-install.ts";
@@ -137,7 +139,41 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
       },
     } as unknown as FactoryConfig;
     const problems = unguardedCheckouts(factory, tmpdir());
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain(bare.dir);
+    // The bare lab lacks its link check, and the second reviewed checkout its guard.
+    expect(problems).toHaveLength(2);
+    expect(problems.every((p) => p.includes(bare.dir))).toBe(true);
+  });
+});
+
+describe("the lab's own hooks (re-grade 5)", () => {
+  const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
+  writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
+
+  it("installs commit-msg and pre-push in the lab, calling the lab's stages, and no pre-commit", () => {
+    const { dir } = repo();
+    const hooks = installHooks(dir, script, "lab");
+    expect(LAB_HOOKS).toEqual(["commit-msg", "pre-push"]);
+    expect(readFileSync(join(hooks, "commit-msg"), "utf8")).toBe(hookText("commit-msg", "lab"));
+    expect(hookText("commit-msg", "lab")).toContain("lab-commit-msg");
+    expect(hookText("pre-push", "lab")).toContain("lab-pre-push");
+    expect(existsSync(join(hooks, "pre-commit"))).toBe(false);
+    expect(guardProblem(dir, "lab")).toBeUndefined();
+    expect(guardProblem(dir)).toMatch(/no guard pre-commit hook/);
+  });
+
+  it("is installed by guard:install in the checkout marked lab, beside the reviewed ones' hooks", () => {
+    const labRepo = repo();
+    const reviewed = repo();
+    const factory = {
+      evidence: "private/raw-artifacts",
+      repos: {
+        lab: { github: "o/lab", path: labRepo.dir, guard: "lab" },
+        one: { github: "o/one", path: reviewed.dir, guard: "reviewed" },
+      },
+    } as unknown as FactoryConfig;
+    expect(installAll(factory, tmpdir(), script)).toBe(0);
+    expect(guardProblem(labRepo.dir, "lab")).toBeUndefined();
+    expect(guardProblem(reviewed.dir)).toBeUndefined();
+    expect(unguardedCheckouts(factory, tmpdir())).toEqual([]);
   });
 });
