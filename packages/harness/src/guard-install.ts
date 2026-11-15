@@ -1,6 +1,7 @@
 /**
- * Installs the git-level guard in every reviewed checkout named in `factory.json` (#191), and the lab's own
- * link check in the checkout marked `"guard": "lab"` (re-grade 5).
+ * Installs the git-level guard in every reviewed checkout named in `factory.json` (#191), the lab's own
+ * link check in the checkout marked `"guard": "lab"` (re-grade 5), and the private checkout's remote check
+ * (re-grade 6).
  *
  *   npm run guard:install
  *
@@ -9,10 +10,12 @@
  * config (`review-guard.script`). The hooks name nothing but that setting, so their text gives nothing
  * away, and neither leaves the machine: hooks and local config are never pushed. In the lab it writes
  * `commit-msg` and `pre-push` only, which refuse a link to a reviewed repo's issue or PR in a commit message
- * made or pushed there. Running it again writes the same files. A hook file this command didn't write is never
- * overwritten.
+ * made or pushed there. In the private checkout (`private/`, when it is a git checkout) it writes `pre-push` only,
+ * and records the `origin` URL in `review-guard.origin`: a push to any other remote or URL is refused, so the
+ * private history goes nowhere else. Running it again writes the same files. A hook file this command didn't write
+ * is never overwritten.
  *
- * Exit codes: 0 installed in every reviewed checkout and the lab; 1 refused somewhere: a hook file that isn't ours is
+ * Exit codes: 0 installed in every reviewed checkout, the lab and the private checkout; 1 refused somewhere: a hook file that isn't ours is
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
  * unexpected error, even while loading (`npm run guard:install` runs `guard-install-cli.ts`).
  */
@@ -20,17 +23,22 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { type FactoryConfig, loadFactory } from "./factory-config.ts";
-import { ROOT } from "./paths.ts";
+import { privateDir, ROOT } from "./paths.ts";
 
 /** The first line after the shebang of every hook this command writes: how a rerun knows its own files. */
 export const MARKER = "# Installed by guard:install.";
 export const HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
 /** The lab's hooks: its commits may say anything except link a reviewed repo's issue or PR (re-grade 5). */
 export const LAB_HOOKS = ["commit-msg", "pre-push"] as const;
-/** Which hooks a checkout gets: a reviewed repo's full guard, or the lab's link check. */
-export type Role = "reviewed" | "lab";
-const hooksFor = (role: Role): readonly (typeof HOOKS)[number][] => (role === "lab" ? LAB_HOOKS : HOOKS);
+/** The private checkout's hook: its history goes only to the origin recorded at install (re-grade 6). */
+export const PRIVATE_HOOKS = ["pre-push"] as const;
+/** Which hooks a checkout gets: a reviewed repo's full guard, the lab's link check, or the private remote check. */
+export type Role = "reviewed" | "lab" | "private";
+const hooksFor = (role: Role): readonly (typeof HOOKS)[number][] =>
+  role === "lab" ? LAB_HOOKS : role === "private" ? PRIVATE_HOOKS : HOOKS;
 export const CONFIG_KEY = "review-guard.script";
+/** Where the private checkout's `origin` pointed when the guard was installed: the one place its history goes. */
+export const ORIGIN_KEY = "review-guard.origin";
 
 /**
  * The text of one hook: it finds the script through the checkout's local config and passes git's arguments on.
@@ -42,7 +50,7 @@ export function hookText(stage: (typeof HOOKS)[number], role: Role = "reviewed")
     MARKER,
     "# Checks what this commit or push would carry. With no script configured, it refuses.",
     `script="$(git config --get ${CONFIG_KEY})" || { echo "review guard: not configured, so refused" >&2; exit 1; }`,
-    `exec node "$script" ${role === "lab" ? "lab-" : ""}${stage} "$(git rev-parse --show-toplevel)" "$@"`,
+    `exec node "$script" ${role === "reviewed" ? "" : `${role}-`}${stage} "$(git rev-parse --show-toplevel)" "$@"`,
     "",
   ].join("\n");
 }
@@ -60,6 +68,15 @@ export function installHooks(checkout: string, script: string, role: Role = "rev
     // not set: git uses the hooks folder in the git directory
   }
   if (hooksPath) throw new InstallRefused(`${checkout} sets core.hooksPath (${hooksPath}); install there by hand`);
+  // The private checkout's one destination, read before anything is written (re-grade 6).
+  let origin = "";
+  if (role === "private") {
+    try {
+      origin = git("remote", "get-url", "--push", "origin");
+    } catch {
+      throw new InstallRefused(`${checkout} has no origin remote, so there is no place its history may go`);
+    }
+  }
   const relative = git("rev-parse", "--git-path", "hooks");
   const dir = isAbsolute(relative) ? relative : resolve(checkout, relative);
   mkdirSync(dir, { recursive: true });
@@ -77,6 +94,7 @@ export function installHooks(checkout: string, script: string, role: Role = "rev
     chmodSync(file, 0o755);
   }
   git("config", "--local", CONFIG_KEY, script.replace(/\\/g, "/"));
+  if (role === "private") git("config", "--local", ORIGIN_KEY, origin);
   return dir;
 }
 
@@ -116,6 +134,7 @@ export function guardProblem(checkout: string, role: Role = "reviewed"): string 
     const guard =
       basename(script) === "git-guard.ts" && /export function check\(stage/.test(readFileSync(script, "utf8"));
     if (!guard) return `${checkout}'s guard hooks run ${script}, which is not the git-level guard`;
+    if (role === "private" && !setting(ORIGIN_KEY)) return `${checkout} has no recorded origin (${ORIGIN_KEY})`;
     return undefined;
   } catch (error) {
     return `${checkout} can't be read by git (${(error as Error).message.split("\n")[0]})`;
@@ -137,21 +156,25 @@ export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT):
 
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export function main(): number {
-  return installAll(loadFactory(), ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"));
+  return installAll(loadFactory(), ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"), privateDir());
 }
 
 /**
- * Installs the hooks in every checkout `factory` marks reviewed or lab, resolved from `root`, pointing them at
- * `script`. Returns the command's exit code.
+ * Installs the hooks in every checkout `factory` marks reviewed or lab, resolved from `root`, and in the private
+ * checkout `priv` when it is one (a public clone has none), pointing them at `script`. Returns the command's exit
+ * code.
  */
-export function installAll(factory: FactoryConfig, root: string, script: string): number {
+export function installAll(factory: FactoryConfig, root: string, script: string, priv?: string): number {
   let code = 0;
-  for (const [key, repo] of Object.entries(factory.repos)) {
-    if (repo.guard !== "reviewed" && repo.guard !== "lab") continue;
-    const checkout = resolve(root, repo.path);
+  const targets: [string, string, Role][] = Object.entries(factory.repos)
+    .filter(([, repo]) => repo.guard === "reviewed" || repo.guard === "lab")
+    .map(([key, repo]) => [key, resolve(root, repo.path), repo.guard]);
+  // Only its own checkout: a private folder that isn't one would borrow the lab's hooks folder.
+  if (priv && existsSync(join(priv, ".git"))) targets.push(["private", priv, "private"]);
+  for (const [key, checkout, role] of targets) {
     try {
       if (!existsSync(checkout)) throw new Error(`no checkout at ${checkout}`);
-      console.log(`[guard:install] ${key}: hooks in ${installHooks(checkout, script, repo.guard)}`);
+      console.log(`[guard:install] ${key}: hooks in ${installHooks(checkout, script, role)}`);
     } catch (error) {
       const refused = error instanceof InstallRefused;
       console.error(

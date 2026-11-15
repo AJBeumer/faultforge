@@ -54,7 +54,9 @@ describe("text built from a file is read and checked (#242)", () => {
 
   it("refuses a body built by a program, as a substitution or a pipe", () => {
     expect(bash(`gh pr create ${R} --title Tidy --body "$(node -e "console.log('hi')")"`)).toMatch(/can't check/);
-    expect(bash(`node gen.js | gh pr create ${R} --title Tidy --body-file -`)).toMatch(/piped in|must run on its own/);
+    expect(bash(`node gen.js | gh pr create ${R} --title Tidy --body-file -`)).toMatch(
+      /piped in|must run on its own|runs a script/,
+    );
   });
 
   it("refuses a program's output wherever it sits in a post to a reviewed repo (Qodo on PR 266)", () => {
@@ -63,7 +65,9 @@ describe("text built from a file is read and checked (#242)", () => {
     );
     expect(bash(`gh label create "$(node -e 'x')" ${R}`)).toMatch(/can't check/);
     expect(bash(`gh pr create ${R} --title Tidy --body="Notes"$(cat ${giveaway})`)).toMatch(/says planted|can't check/);
-    expect(bash(`node gen.js | cat | gh pr comment 1 ${R} --body-file -`)).toMatch(/piped in|must run on its own/);
+    expect(bash(`node gen.js | cat | gh pr comment 1 ${R} --body-file -`)).toMatch(
+      /piped in|must run on its own|runs a script/,
+    );
     expect(bash(`cat <(node gen.js) | gh pr comment 1 ${R} --body-file -`)).toMatch(/program|must run on its own/);
     expect(powershell(`gh pr comment 1 ${R} --body (node -e "x")`)).toMatch(/program/);
   });
@@ -129,7 +133,7 @@ describe("git's own guard can't be switched off in a reviewed checkout (#242)", 
     "git push --no-verif origin tidy",
     'git -c "$KEY=/dev/null" push origin tidy',
   ])("denies %s", (command) => {
-    expect(bash(command, TARGET)).toMatch(/guard hooks must run/);
+    expect(bash(command, TARGET)).toMatch(/guard hooks must run|git-level guard/);
   });
 
   it("allows -n inside a message, and --no-verify outside a reviewed checkout", () => {
@@ -160,7 +164,7 @@ describe("holes found in the second review of PR 266", () => {
   it("refuses a post chained after a step that could rewrite the file it reads", () => {
     const notes = file("Small cleanup.\n");
     expect(bash(`node gen.js > ${notes}; gh pr comment 1 ${R} --body "$(cat ${notes})"`)).toMatch(
-      /must run on its own/,
+      /must run on its own|runs a script/,
     );
   });
 
@@ -195,6 +199,6 @@ describe("holes found in the third review of PR 266", () => {
     "HOME=/tmp git commit -m Tidy",
     "XDG_CONFIG_HOME=/tmp git push origin tidy",
   ])("refuses %s in a reviewed checkout", (command) => {
-    expect(bash(command, TARGET)).toMatch(/guard hooks must run/);
+    expect(bash(command, TARGET)).toMatch(/guard hooks must run|git-level guard/);
   });
 });

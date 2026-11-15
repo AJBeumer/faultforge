@@ -369,7 +369,7 @@ describe("holes Qodo found in the second version (PR 265)", () => {
     const priv = privateCheckout();
     const extra = { FAULTFORGE_PRIVATE_DIR: priv };
     const url = `git -C "${at(priv)}" push https://github.com/AJBeumer/faultforge.git x-secret-v1`;
-    expect(bash(url, LAB, extra)).toMatch(/still private/);
+    expect(bash(url, LAB, extra)).toMatch(/still private|stays private/);
     expect(bash(`cd "${at(priv)}" && GIT_DIR=../.git git commit -m "x-secret-v1"`, LAB, extra)).toMatch(
       /still private/,
     );

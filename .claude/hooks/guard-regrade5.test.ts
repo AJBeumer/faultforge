@@ -171,8 +171,11 @@ describe("a script file run where it could post to a reviewed repo is read first
     expect(bash("node sum.mjs", ELSEWHERE, RUN)).toBeUndefined();
   });
 
-  it("leaves the owner's own scripts alone outside a run and outside a reviewed checkout", () => {
-    expect(bash("node post.mjs")).toBeUndefined();
+  it("leaves the owner's own scripts alone outside a run and outside a reviewed checkout, unless one names a reviewed repo", () => {
+    expect(bash("node sum.mjs")).toBeUndefined();
+    expect(bash("python post.py")).toBeUndefined();
+    // Re-grade 6: a script whose text names a reviewed repo is read and refused from any folder.
+    expect(bash("node post.mjs")).toMatch(/runs a script/);
   });
 
   it("finds the script a runner is given, past options and redirects, and none for code from stdin", () => {

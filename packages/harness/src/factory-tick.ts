@@ -12,8 +12,9 @@
  *  4. Claim it: `agent-working`, and a comment on the ticket.
  *  5. Check Qodo's configuration against the snapshot (`qodo:check`). A difference or a failed check
  *     (`qodo-check.ts`) ends the run `agent-needs-help` here, before a workspace is ever built.
- *  6. Fresh worktrees of every repo from `origin/main`, and of the private repo on its own branch,
- *     laid out like the owner's folders, so the owner's working trees are never touched.
+ *  6. Fresh worktrees of every repo from `origin/main`, laid out like the owner's folders, so the owner's
+ *     working trees are never touched. Only a lab ticket's run also gets a private worktree on its own branch;
+ *     a target ticket's run gets none (AUD-H2).
  *  7. Run `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
  *     the factory policy hook switched on.
  *  8. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's

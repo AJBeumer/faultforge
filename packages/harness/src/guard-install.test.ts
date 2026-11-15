@@ -15,6 +15,8 @@ import {
   installHooks,
   LAB_HOOKS,
   MARKER,
+  ORIGIN_KEY,
+  PRIVATE_HOOKS,
   unguardedCheckouts,
 } from "./guard-install.ts";
 import { telltales } from "./neutral.ts";
@@ -175,5 +177,46 @@ describe("the lab's own hooks (re-grade 5)", () => {
     expect(guardProblem(labRepo.dir, "lab")).toBeUndefined();
     expect(guardProblem(reviewed.dir)).toBeUndefined();
     expect(unguardedCheckouts(factory, tmpdir())).toEqual([]);
+  });
+});
+
+describe("the private checkout's own hook (re-grade 6)", () => {
+  const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
+  writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
+
+  it("installs pre-push only, calling the private stage, and records the origin URL", () => {
+    const { dir, git } = repo();
+    git("remote", "add", "origin", "https://github.com/o/x-private.git");
+    const hooks = installHooks(dir, script, "private");
+    expect(PRIVATE_HOOKS).toEqual(["pre-push"]);
+    expect(readFileSync(join(hooks, "pre-push"), "utf8")).toBe(hookText("pre-push", "private"));
+    expect(hookText("pre-push", "private")).toContain("private-pre-push");
+    expect(existsSync(join(hooks, "commit-msg"))).toBe(false);
+    expect(git("config", "--get", ORIGIN_KEY)).toBe("https://github.com/o/x-private.git");
+    expect(guardProblem(dir, "private")).toBeUndefined();
+  });
+
+  it("refuses a private checkout with no origin, and counts one with no recorded origin as unguarded", () => {
+    const bare = repo();
+    expect(() => installHooks(bare.dir, script, "private")).toThrow(/no origin/);
+    const unrecorded = repo();
+    unrecorded.git("remote", "add", "origin", "https://github.com/o/x-private.git");
+    installHooks(unrecorded.dir, script, "private");
+    unrecorded.git("config", "--unset", ORIGIN_KEY);
+    expect(guardProblem(unrecorded.dir, "private")).toMatch(/no recorded origin/);
+  });
+
+  it("is installed by guard:install in the private checkout when there is one, and skipped when there isn't", () => {
+    const labRepo = repo();
+    const priv = join(labRepo.dir, "private");
+    const factory = {
+      evidence: "private/raw-artifacts",
+      repos: { lab: { github: "o/lab", path: labRepo.dir, guard: "lab" } },
+    } as unknown as FactoryConfig;
+    expect(installAll(factory, tmpdir(), script, priv)).toBe(0);
+    execFileSync("git", ["init", "-q", "-b", "main", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/o/x-private.git"]);
+    expect(installAll(factory, tmpdir(), script, priv)).toBe(0);
+    expect(guardProblem(priv, "private")).toBeUndefined();
   });
 });

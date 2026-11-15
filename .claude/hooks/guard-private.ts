@@ -9,10 +9,11 @@
  * folder (`private/` by default), as `packages/harness/src/paths.ts` resolves it. Where there is no private
  * folder (public CI, a fresh clone) there is nothing to protect, so the check is skipped.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { leetReadings, normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
-import { checkoutAt, within } from "./guard-repos.ts";
+import { checkoutAt, githubRepos, within } from "./guard-repos.ts";
 import { blankQuoted, gitSteps, quotedMask } from "./shell-scan.ts";
 
 const LAB_ROOT = join(import.meta.dirname, "../..");
@@ -44,6 +45,25 @@ export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string 
   return dirname(resolve(labRoot, evidence));
 }
 
+/** The URL git would push to for `remote` in the checkout at `dir`, or empty when it has none. */
+export function pushUrl(dir: string, remote: string): string {
+  const r = spawnSync("git", ["-C", dir, "remote", "get-url", "--push", remote], {
+    encoding: "utf8",
+    timeout: 4000,
+    windowsHide: true,
+  });
+  return r.status === 0 ? r.stdout.trim() : "";
+}
+
+/**
+ * The GitHub repo (owner/name, lower case) the private checkout's `origin` names, as a list: empty when `root`
+ * holds no checkout of its own (a plain folder would borrow the lab's remotes) or it has no origin on GitHub.
+ */
+export function privateOrigin(root: string): string[] {
+  const found = checkoutAt(root);
+  return found && within(found.root, root) ? githubRepos(pushUrl(found.root, "origin")) : [];
+}
+
 /** The ids of templates that are in private storage and not yet in `templates/seed/`. */
 export function privateTemplateIds(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string[] {
   const dir = join(privateRoot(env, labRoot), "templates");
@@ -62,8 +82,9 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
   const pattern = privateIdPattern(ids);
   // Leetspeak too (#285): the text and the ids are read the same way, so `x-s3cr3t-v1` meets `x-secret-v1`.
   const folded = privateIdPattern(ids.flatMap(leetReadings));
+  // Written backwards too (re-grade 6): `1v-terces-x` is `x-secret-v1` read from the end.
   return (text) =>
-    [...new Set([text, percentDecoded(text)])].some((each) => {
+    [...new Set([text, percentDecoded(text)].flatMap((each) => [each, [...each].reverse().join("")]))].some((each) => {
       const seen = normalizeLookalikes(each);
       return pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading));
     });
@@ -124,8 +145,8 @@ function steps(command: string): string[] {
  */
 export function onlyPrivateRepo(command: string, cwd: string, root: string, destinations: string[]): boolean {
   // Only the private folder's own checkout counts: a plain folder would borrow the lab's remotes (Qodo on PR 265).
-  const found = checkoutAt(root);
-  const own = found && within(found.root, root) ? found.remotes : [];
+  // Its `origin` only: another remote in it (the lab, say) is not private storage (re-grade 6).
+  const own = privateOrigin(root);
   // Every destination named anywhere, a URL given to git included, must be the private repo (Qodo on PR 265).
   if (destinations.some((d) => !own.includes(d.toLowerCase()))) return false;
   // Words in a message don't run: only a tool outside quoted text needs a destination (Qodo on PR 265).

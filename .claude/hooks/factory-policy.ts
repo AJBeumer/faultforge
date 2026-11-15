@@ -16,6 +16,9 @@
  *    `ssh`) or by code (`fetch(`, `http.request`)
  *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
  *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
+ *  - switching off git's own guard hooks anywhere, the lab included: `--no-verify`, `core.hooksPath`, the guard's
+ *    settings, or a file in a `.git` folder (re-grade 6)
+ *  - reading the owner's secrets in the home folder (factory-policy-home.ts, re-grade 6)
  *  - text built at run time run as shell code: `… | base64 -d | bash`, `bash -c "$(…)"`, `eval`, `$(…)` as
  *    the command (shell-exec.ts, #299)
  *  - reading `/proc`, the answer key, the audit log and the templates with any tool, and in a target ticket's
@@ -36,12 +39,15 @@ import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { commandViolations, readings } from "./factory-policy-commands.ts";
+import { HOME_SECRET_REASON, homeSecretCommand } from "./factory-policy-home.ts";
 import {
   guardrailWriteViolation,
   privateCommandViolation,
   readViolation,
   scriptViolation,
 } from "./factory-policy-paths.ts";
+import { gitFolderEdit, guardSwitchOff } from "./guard-hooks.ts";
+import { skipsGitGuard } from "./guard-reach.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 import { builtCodeProblem } from "./shell-exec.ts";
 import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
@@ -138,6 +144,9 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
   if ([resolve(path), real].some((p) => /(^|[/\\])packages[/\\]harness[/\\]src[/\\]neutral\.ts$/i.test(p))) {
     return "the agent can't change the giveaway word list (neutral.ts) the guard hooks read";
   }
+  // A git folder's hooks and config decide whether git runs the guard (re-grade 6).
+  if (gitFolderEdit(path))
+    return "the agent can't change a file in a .git folder (its hooks and config run the git-level guard)";
   if ([resolve(path), real].some((p) => /(^|[/\\])\.github[/\\]workflows([/\\]|$)/i.test(p))) {
     return "the agent can't change the workflows (.github/workflows): the owner does, with a token that may";
   }
@@ -147,6 +156,16 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
   }
   if (inside(real, realTarget(runRoot)) || inside(real, realTarget(temp))) return undefined;
   return `only files under the run's folder may change, not ${path}`;
+}
+
+/**
+ * Why a shell command may not run because it would switch off git's own guard hooks, anywhere in a run, the lab
+ * included (re-grade 6): `--no-verify`, a commit's `-n`, `core.hooksPath`, or a change to the guard's settings or
+ * a git folder's hooks or config.
+ */
+export function gitGuardViolation(command: string, backticks = true): string | undefined {
+  if (!skipsGitGuard(command) && !guardSwitchOff(command, backticks)) return undefined;
+  return "git's own guard hooks run for every commit and push: no --no-verify, no commit -n, no core.hooksPath, and no change to review-guard.* or a .git folder's hooks or config";
 }
 
 /**
@@ -191,6 +210,8 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
           guardrailWriteViolation(command, cwd),
           privateCommandViolation(command, env, cwd),
           scriptViolation(command, cwd, env),
+          homeSecretCommand(command, env) && HOME_SECRET_REASON,
+          gitGuardViolation(command, tool !== "PowerShell"),
         ])
           if (reason && !reasons.includes(reason)) reasons.push(reason);
       }
