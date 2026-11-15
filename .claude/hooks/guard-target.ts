@@ -65,6 +65,7 @@ import {
   type Reviewed,
   reviewedRepos,
   stripReviewedNames,
+  unreadableMove,
   within,
 } from "./guard-repos.ts";
 import {
@@ -78,7 +79,7 @@ import {
 } from "./guard-tools.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
 import { builtCodeProblem, inlineNetworkProblem, interpreterPipelines } from "./shell-exec.ts";
-import { blankQuoted, joinedWords, MAX_COMMAND_CHARS } from "./shell-scan.ts";
+import { blankQuoted, joinContinuations, joinedWords, MAX_COMMAND_CHARS } from "./shell-scan.ts";
 
 /**
  * The decision's time budget. `FAULTFORGE_GUARD_BUDGET_MS` may shorten it, for tests, never lengthen it past the
@@ -221,14 +222,19 @@ function checkShell(ctx: Context, command: string) {
   if (alias) deny(alias);
   // Code no rule can read before it runs, wherever the command runs (#299): built text run as a shell, and
   // inline interpreter code that reaches the network, which can post without gh.
-  const unread = builtCodeProblem(command, ctx.backticks) ?? inlineNetworkProblem(command, ctx.backticks);
-  if (unread) deny(unread);
+  // Both as written and with its line continuations joined, as the shell runs it (re-grade 4).
+  const joined = joinContinuations(command);
+  const codes = joined === command ? [command] : [command, joined];
+  for (const code of codes) {
+    const unread = builtCodeProblem(code, ctx.backticks) ?? inlineNetworkProblem(code, ctx.backticks);
+    if (unread) deny(unread);
+  }
   // A private id in inline code is checked too: the code could post it any way it likes (#299). Only the code
   // an interpreter is handed: a script's path and arguments are the owner's local work (`npx tsx x.ts --template
   // <id>`), and a post that names the id is refused where it is posted (Qodo on PR 310).
   const names = ctx.names;
-  if (names && interpreterPipelines(command, ctx.backticks).some((code) => names(code) || names(joinedWords(code))))
-    deny(PRIVATE_ID_REASON);
+  const inline = codes.flatMap((code) => interpreterPipelines(code, ctx.backticks));
+  if (names && inline.some((code) => names(code) || names(joinedWords(code)))) deny(PRIVATE_ID_REASON);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
   const read = shellReading(command);
   const readAlias = aliasProblem(read);
@@ -263,16 +269,19 @@ function reach(ctx: Context, command: string, writes: boolean) {
   const enters = (r: Reviewed) => entersCheckout(command, r) || entered.some((e) => e.github === r.github);
   const isHere = (r: Reviewed) => here?.github === r.github;
   const mutation = writes && graphqlMutation(command);
+  // A write after a move the guard can't read (`cd "$DIR"`, `git -C $(…)`) may land in any of them (re-grade 4).
+  const anywhere = writes && unreadableMove(command, cwd);
   const touched = reviewed
     .filter(
       (r) =>
         mutation ||
+        anywhere ||
         destinations.includes(r.github.toLowerCase()) ||
         enters(r) ||
         (!realDestinations.length && isHere(r)),
     )
     .map((r) => entered.find((e) => e.github === r.github) ?? (isHere(r) && here ? here : r));
-  return { destinations, touched, mutation, isHere, runsIn: (r: Reviewed) => isHere(r) || enters(r) };
+  return { destinations, touched, mutation, isHere, runsIn: (r: Reviewed) => anywhere || isHere(r) || enters(r) };
 }
 
 function checkCommand(ctx: Context, command: string, readable: boolean) {
