@@ -187,6 +187,37 @@ export function setupPlan(input: SetupInput): Step[] {
   return steps;
 }
 
+/**
+ * Undoes `setupPlan(input)` on a machine that is kept (the integration test on a developer's Linux box; a CI VM is
+ * thrown away): the user's processes and the user, both chains, the D-Bus policy and every ACL entry it added.
+ * Every step is tried, whatever an earlier one did.
+ */
+export function teardownPlan(input: SetupInput): Step[] {
+  const u = SANDBOX_USER;
+  const sudo = (...argv: string[]) => ["sudo", "-n", ...argv];
+  const step = (...argv: string[]): Step => ({ argv: sudo(...argv), mayFail: true });
+  const steps: Step[] = [step("pkill", "-KILL", "-u", u)];
+  for (const bin of ["iptables", "ip6tables"])
+    steps.push(
+      step(bin, "-w", "-D", ...ownerRule()),
+      step(bin, "-w", "-F", SANDBOX_CHAIN),
+      step(bin, "-w", "-X", SANDBOX_CHAIN),
+    );
+  if (input.exists("/run/dbus/system_bus_socket"))
+    steps.push(step("rm", "-f", DBUS_POLICY_FILE), step("systemctl", "reload", "dbus"));
+  for (const socket of RESOLVER_SOCKETS) if (input.exists(socket)) steps.push(step("setfacl", "-x", `u:${u}`, socket));
+  for (const dir of new Set([...input.dirs, ...input.readDirs].flatMap(ancestors)))
+    if (!input.othersEnter(dir)) steps.push(step("setfacl", "-x", `u:${u}`, dir));
+  for (const dir of input.dirs)
+    steps.push(
+      step("setfacl", "-R", "-x", `u:${u}`, dir),
+      step("find", dir, "-type", "d", "-exec", "setfacl", "-x", `d:u:${u},d:u:${input.runner}`, "{}", "+"),
+    );
+  for (const dir of input.readDirs) steps.push(step("setfacl", "-R", "-x", `u:${u}`, dir));
+  steps.push(step("userdel", "--remove", u));
+  return steps;
+}
+
 /** Runs the plan; returns the first failure, or null. */
 export function runPlan(sh: Sh, plan: Step[]): string | null {
   for (const step of plan) {

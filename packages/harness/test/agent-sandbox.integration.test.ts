@@ -4,7 +4,8 @@
  * program reaches for it, through the proxy or around it; the hosts on it must still work.
  *
  * Linux only, with passwordless sudo, and only in CI or with FAULTFORGE_SANDBOX_TEST=1: it makes a system user,
- * iptables chains and ACLs, which a developer's own machine shouldn't get by surprise. Skipped otherwise.
+ * iptables chains and ACLs, which a developer's own machine shouldn't get by surprise, and takes them all away
+ * again when it ends. Skipped otherwise.
  * `SANDBOX_TEST_GH_TOKEN`, when set (CI gives the job's read-only token), lets `gh api` read a repo.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -19,11 +20,16 @@ import { allowList, type EgressProxy, proxyEnv, sandboxedCommand, startEgressPro
 import {
   nodePrefix,
   othersEnter,
+  ownerRule,
   realSh,
   runPlan,
+  SANDBOX_CHAIN,
+  SANDBOX_USER,
+  type SetupInput,
   sandboxProblems,
   setupPlan,
   stopAgentProcesses,
+  teardownPlan,
 } from "../src/factory-sandbox-setup.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
@@ -54,29 +60,36 @@ describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux
   let proxy: EgressProxy;
   const refused: string[] = [];
 
+  let input: SetupInput;
+
   beforeAll(async () => {
     work = mkdtempSync(join(tmpdir(), "ff-sandbox-"));
-    const failed = runPlan(
-      realSh,
-      setupPlan({
-        dirs: [work],
-        // The repo for vitest, read-only, as Node's install is.
-        readDirs: [nodePrefix(), ROOT],
-        runner: process.env.USER ?? "runner",
-        gitconfig: null,
-        exists: existsSync,
-        othersEnter,
-      }),
-    );
-    expect(failed).toBeNull();
+    input = {
+      dirs: [work],
+      // The repo for vitest, read-only, as Node's install is.
+      readDirs: [nodePrefix(), ROOT],
+      runner: process.env.USER ?? "runner",
+      gitconfig: null,
+      exists: existsSync,
+      othersEnter,
+    };
+    expect(runPlan(realSh, setupPlan(input))).toBeNull();
     expect(sandboxProblems()).toEqual([]);
     proxy = await startEgressProxy(allowList(loadFactory()), (line) => refused.push(line));
   }, 300_000);
 
+  // The machine is left as it was: no user, no chain, no OUTPUT rule (Qodo on PR 334).
   afterAll(async () => {
     stopAgentProcesses();
     await proxy?.close();
-  });
+    if (!input) return;
+    runPlan(realSh, teardownPlan(input));
+    expect(spawnSync("id", ["-u", SANDBOX_USER]).status).not.toBe(0);
+    for (const bin of ["iptables", "ip6tables"]) {
+      expect(spawnSync("sudo", ["-n", bin, "-w", "-C", ...ownerRule()]).status).not.toBe(0);
+      expect(spawnSync("sudo", ["-n", bin, "-w", "-S", SANDBOX_CHAIN]).status).not.toBe(0);
+    }
+  }, 120_000);
 
   /**
    * Runs a command as the agent's user, as the tick starts the agent: behind the proxy, or with no proxy at all.
@@ -288,7 +301,10 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const allowedBefore = proxy.counts().allowed;
       const claude = join(cli, "node_modules/.bin/claude");
       // The environment the tick gives the agent (factory-agent-env.ts), with a key the API will refuse.
-      const agentLike = { ...agentEnv(process.env, {}).env, ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" };
+      // Never a real credential: agentEnv would pass CLAUDE_CODE_OAUTH_TOKEN ahead of the key (Qodo on PR 334).
+      const { CLAUDE_CODE_OAUTH_TOKEN: _real, ...runner } = process.env;
+      const agentLike = { ...agentEnv(runner, {}).env, ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" };
+      expect(agentLike).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
       const version = await asAgent(claude, ["--version"]);
       expect(version.out, JSON.stringify(version)).toContain("2.1.197");
       const { status, out } = await asAgent(claude, ["-p", "Reply with OK", "--output-format", "json"], {

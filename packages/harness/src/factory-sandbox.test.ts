@@ -12,6 +12,8 @@ import {
   hostAllowed,
   LOCAL_NOTICE,
   localSandbox,
+  PROXY_LIMITS,
+  type ProxyLimits,
   proxyEnv,
   sandboxedCommand,
   sandboxFor,
@@ -134,9 +136,13 @@ describe("the egress proxy", () => {
     return typeof address === "object" && address ? address.port : 0;
   }
 
-  async function proxy(allow: string[], port?: number): Promise<{ proxy: EgressProxy; refused: string[] }> {
+  async function proxy(
+    allow: string[],
+    port?: number,
+    limits?: ProxyLimits,
+  ): Promise<{ proxy: EgressProxy; refused: string[] }> {
     const refused: string[] = [];
-    const started = await startEgressProxy(allow, (line) => refused.push(line), port);
+    const started = await startEgressProxy(allow, (line) => refused.push(line), port, limits);
     open.push(started);
     return { proxy: started, refused };
   }
@@ -175,6 +181,29 @@ describe("the egress proxy", () => {
 
   it("tunnels only to port 443 unless a test says otherwise", () => {
     expect(ALLOWED_PORT).toBe(443);
+    expect(PROXY_LIMITS).toEqual({ headBytes: 8192, headMs: 30_000, connections: 256 });
+  });
+
+  it("refuses a request head over the size limit, before keeping it (Qodo on PR 334)", async () => {
+    const { proxy: p, refused } = await proxy(["localhost"], undefined, { ...PROXY_LIMITS, headBytes: 100 });
+    expect(await ask(p.port, `CONNECT localhost:443 HTTP/1.1\r\nX: ${"a".repeat(200)}`)).toMatch(/^HTTP\/1\.1 403/);
+    expect(refused).toEqual(["(request head too long)"]);
+  });
+
+  it("drops a client that never finishes its request, and holds no more connections than its limit", async () => {
+    const { proxy: p } = await proxy(["localhost"], undefined, { headBytes: 8192, headMs: 200, connections: 1 });
+    const started = Date.now();
+    // A partial request, never finished: closed by the proxy, not by the 2 s give-up in `ask`.
+    expect(await ask(p.port, "CONNECT local")).toBe("");
+    expect(Date.now() - started).toBeLessThan(1500);
+    // One idle client holds the only slot: a second is closed at once.
+    const idle = net.connect(p.port, "127.0.0.1");
+    await new Promise((ready) => idle.once("connect", ready));
+    idle.write("CONNECT local");
+    const second = Date.now();
+    expect(await ask(p.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toBe("");
+    expect(Date.now() - second).toBeLessThan(1500);
+    idle.destroy();
   });
 });
 

@@ -421,6 +421,24 @@ Picked up.`,
     expect(setupRefusal({ unguarded: () => [] })).toBeNull();
   });
 
+  it("says where guard:install writes when FAULTFORGE_PRIVATE_DIR moves it off the checkout the tick pushes (Qodo on PR 334)", () => {
+    const pushed = join(LAB_ROOT, "private");
+    const problem = `${pushed} has no guard pre-push hook`;
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", join(tmpdir(), "elsewhere-private"));
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce(["faultforge-target: no guard hooks", problem]);
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual([
+      "faultforge-target: no guard hooks",
+      `${problem} (guard:install writes to ${join(tmpdir(), "elsewhere-private")}, set by FAULTFORGE_PRIVATE_DIR: run it with that unset)`,
+    ]);
+    // Pointing at the same folder, the problem is reported as it is.
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", pushed);
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce([problem]);
+    expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual([problem]);
+  });
+
   it("a local tick reports a private checkout without its pre-push hook before a run starts (PR 333)", async () => {
     // The wiring: the deps hand the private checkout over, and its problem refuses the tick.
     vi.mocked(unguardedCheckouts).mockReturnValueOnce(["private: no pre-push hook"]);

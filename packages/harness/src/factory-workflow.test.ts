@@ -110,7 +110,7 @@ describe("factory workflow", () => {
     const keep = steps.findIndex((step) => step.includes("npm run -s factory:keep"));
     expect(tick).toBeGreaterThan(0);
     expect(keep).toBeGreaterThan(tick);
-    expect(steps[keep]).toMatch(/\n {8}if: always\(\)\n/);
+    expect(steps[keep]).toContain("\n        if: always() && steps.stop.outcome == 'success'\n");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
     expect(steps[keep]).toContain("FAULTFORGE_RUNS_DIR: ${{ runner.temp }}/faultforge-runs");
     // The public artifact still never holds a transcript.
@@ -153,7 +153,8 @@ describe("factory workflow", () => {
     const only = privateCheckouts[0];
     expect(only?.i).toBeGreaterThan(tick);
     expect(only?.i).toBeLessThan(keep);
-    expect(only?.step).toMatch(/\n {8}if: always\(\)\n/);
+    // Runs whatever happened, but never while a process of the agent's user is left (Qodo on PR 334).
+    expect(only?.step).toContain("\n        if: always() && steps.stop.outcome == 'success'\n");
     // The tick clones it itself, by name, when a lab ticket or its own steps need it.
     expect(steps[tick] ?? "").toContain("FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private");
   });
@@ -233,6 +234,7 @@ describe("factory workflow", () => {
     // fails while a process of the agent's user is left.
     const stopStep = withoutComments(steps[stop] ?? "");
     expect(stopStep).toMatch(/\n {8}if: always\(\)\n/);
+    expect(stopStep).toContain("\n        id: stop\n");
     expect(stopStep).not.toMatch(/npm |npx |tsx |node |working-directory/);
     expect(stopStep).toContain("sudo -n pkill -KILL -u ffagent");
     expect(stopStep).toMatch(/pgrep -u ffagent[\s\S]*exit 1/);

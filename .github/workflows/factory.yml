@@ -184,6 +184,7 @@ jobs:
       # running when the private repo is checked out below (#330). Plain shell, not a script from the checkout,
       # which the agent could have changed.
       - name: Stop the agent's sandbox
+        id: stop
         if: always()
         run: |
           id -u ffagent >/dev/null 2>&1 || exit 0
@@ -193,9 +194,11 @@ jobs:
           exit 1
       # A cancelled or timed-out job, or a tick that crashed, never pushed its last copy: the transcript and
       # event log of any run that didn't log `saved` go to a branch of the private repo, never to an artifact.
-      # Only after the tick, when no agent runs any more: the keep step below writes through this checkout.
+      # Only after the tick, when no agent runs any more: the keep step below writes through this checkout. Never
+      # while a process of the agent's user is left: the workspace's inherited ACL would let it read the private
+      # repo (Qodo on PR 334). The job then fails, and the logs stay in the run's own folder.
       - name: Check out private storage for the logs
-        if: always()
+        if: always() && steps.stop.outcome == 'success'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: AJBeumer/faultforge-private
@@ -204,7 +207,7 @@ jobs:
           token: ${{ secrets.FACTORY_GH_TOKEN }}
           persist-credentials: false
       - name: Keep the logs of a run that didn't save them
-        if: always()
+        if: always() && steps.stop.outcome == 'success'
         working-directory: FaultForge
         env:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}

@@ -20,10 +20,10 @@ import { sandboxFor } from "./factory-sandbox.ts";
 import { earlierPrs, type OpenPr } from "./factory-settle.ts";
 import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
-import { fingerprints, PRIVATE_KEY, type RunMode, teardown, worktreeFor } from "./factory-workspace.ts";
+import { fingerprints, PRIVATE_KEY, type RunMode, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
 import { gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
-import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, runsDir } from "./paths.ts";
+import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
 import { checkTicket } from "./ticket-ready.ts";
 import { ghSnapshot } from "./ticket-snapshot.ts";
@@ -47,7 +47,19 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     mode,
     // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242), and in
     // the private checkout too, whose pre-push hook sends its history only to its recorded origin (PR 333).
-    unguarded: () => unguardedCheckouts(factory, LAB_ROOT, privateRepo),
+    // The tick pushes through `privateRepo`, so that is the one checked. `guard:install` writes to `privateDir()`,
+    // which FAULTFORGE_PRIVATE_DIR can move elsewhere: then the refusal says so, or its advice could never clear it
+    // (Qodo on PR 334).
+    unguarded: () => {
+      const problems = unguardedCheckouts(factory, LAB_ROOT, privateRepo);
+      const installs = privateDir();
+      if (samePath(installs, privateRepo)) return problems;
+      return problems.map((problem) =>
+        problem.startsWith(privateRepo)
+          ? `${problem} (guard:install writes to ${installs}, set by FAULTFORGE_PRIVATE_DIR: run it with that unset)`
+          : problem,
+      );
+    },
     // GitHub reads get three tries in `github.ts` itself: one transient failure must not cost the tick (AUD-N10).
     // The same reads the recovery dry run makes (`factory-recover.ts`).
     claimMode: githubRecoveryReads.claimMode,

@@ -47,6 +47,14 @@ export interface EgressProxy {
   close(): Promise<void>;
 }
 
+/** What one program can hold of the proxy: its request head's size and time, and open connections in all. */
+export interface ProxyLimits {
+  headBytes: number;
+  headMs: number;
+  connections: number;
+}
+export const PROXY_LIMITS: ProxyLimits = { headBytes: 8192, headMs: 30_000, connections: 256 };
+
 /**
  * Starts the allow-listing proxy on 127.0.0.1, on a free port. `onRefused` hears each refused request line
  * (which can carry data a program tried to send out, so it belongs in private storage only).
@@ -56,6 +64,7 @@ export function startEgressProxy(
   onRefused: (line: string) => void,
   /** Only the tests change it, to tunnel to a server of their own. */
   port = ALLOWED_PORT,
+  limits: ProxyLimits = PROXY_LIMITS,
 ): Promise<EgressProxy> {
   let allowed = 0;
   let refused = 0;
@@ -64,6 +73,8 @@ export function startEgressProxy(
     sockets.add(client);
     client.on("close", () => sockets.delete(client));
     client.on("error", () => client.destroy());
+    // A client that never finishes its request is dropped, so idle ones can't pile up (Qodo on PR 334).
+    client.setTimeout(limits.headMs, () => client.destroy());
     let head = Buffer.alloc(0);
     const refuse = (line: string) => {
       refused++;
@@ -71,16 +82,16 @@ export function startEgressProxy(
       client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     };
     const onData = (chunk: Buffer) => {
+      // Measured before it is kept: a request head never grows past the limit in memory.
+      if (head.length + chunk.length > limits.headBytes) {
+        client.off("data", onData);
+        return refuse("(request head too long)");
+      }
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
-      if (end === -1) {
-        if (head.length > 8192) {
-          client.off("data", onData);
-          refuse("(request head too long)");
-        }
-        return;
-      }
+      if (end === -1) return;
       client.off("data", onData);
+      client.setTimeout(0);
       const line = head.subarray(0, head.indexOf("\r\n")).toString("latin1");
       const target = connectTarget(line);
       if (!target || !hostAllowed(allow, target.host, target.port, port)) return refuse(line);
@@ -108,6 +119,7 @@ export function startEgressProxy(
     };
     client.on("data", onData);
   });
+  server.maxConnections = limits.connections;
   return new Promise((ready, fail) => {
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {

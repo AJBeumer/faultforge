@@ -17,6 +17,7 @@ import {
   sandboxProblems,
   setupPlan,
   stopAgentProcesses,
+  teardownPlan,
 } from "./factory-sandbox-setup.ts";
 
 const work = resolve("/work/ws");
@@ -109,6 +110,35 @@ describe("setupPlan (#330)", () => {
       `sudo -n -u ${SANDBOX_USER} /usr/bin/env HOME=${SANDBOX_HOME} git config --global --add safe.directory *`,
     );
     expect(lines({ gitconfig: null }).join("\n")).not.toContain(" install ");
+  });
+});
+
+describe("teardownPlan (Qodo on PR 334)", () => {
+  const down = (over: Partial<SetupInput> = {}) => teardownPlan(input(over));
+
+  it("undoes every kind of change the setup makes, each step tried whatever an earlier one did", () => {
+    const plan = down();
+    expect(plan.every((s) => s.mayFail && s.argv[0] === "sudo" && s.argv[1] === "-n")).toBe(true);
+    const all = plan.map((s) => s.argv.join(" "));
+    expect(all[0]).toBe(`sudo -n pkill -KILL -u ${SANDBOX_USER}`);
+    expect(all.at(-1)).toBe(`sudo -n userdel --remove ${SANDBOX_USER}`);
+    for (const bin of ["iptables", "ip6tables"]) {
+      expect(all).toContain(`sudo -n ${bin} -w -D ${ownerRule().join(" ")}`);
+      expect(all).toContain(`sudo -n ${bin} -w -X ${SANDBOX_CHAIN}`);
+    }
+    expect(all).toContain(`sudo -n rm -f ${DBUS_POLICY_FILE}`);
+    for (const socket of RESOLVER_SOCKETS) expect(all).toContain(`sudo -n setfacl -x u:${SANDBOX_USER} ${socket}`);
+    expect(all).toContain(`sudo -n setfacl -R -x u:${SANDBOX_USER} ${work}`);
+    expect(all).toContain(`sudo -n setfacl -R -x u:${SANDBOX_USER} ${resolve("/opt/node")}`);
+    expect(all).toContain(`sudo -n find ${work} -type d -exec setfacl -x d:u:${SANDBOX_USER},d:u:runner {} +`);
+    for (const above of ancestors(work)) expect(all).toContain(`sudo -n setfacl -x u:${SANDBOX_USER} ${above}`);
+  });
+
+  it("touches only what the setup touched: no bus or socket it never changed, no folder others could enter", () => {
+    const open = resolve("/work");
+    const all = down({ exists: () => false, othersEnter: (dir) => dir === open }).map((s) => s.argv.join(" "));
+    expect(all.join("\n")).not.toMatch(/dbus|resolve|nscd/);
+    expect(all).not.toContain(`sudo -n setfacl -x u:${SANDBOX_USER} ${open}`);
   });
 });
 
