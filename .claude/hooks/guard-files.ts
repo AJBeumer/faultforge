@@ -287,7 +287,8 @@ const WRITE_API =
  * what a script posts, so where a run could reach a reviewed repo (inside its checkout, after a move into one,
  * or anywhere in an unattended factory run, `run`) a script is refused when it can't be read, or when its text
  * names a reviewed repo or something that writes to GitHub. The file is never named: its path could hold a
- * private id. Elsewhere the owner's own scripts run as they are.
+ * private id. Elsewhere, in an owner's session, a script is read when the command names a reviewed repo (it may pass
+ * the name on), and refused anywhere when its own text names one (re-grade 6); other scripts run as they are.
  */
 export function scriptProblem(
   cwd: string,
@@ -297,16 +298,17 @@ export function scriptProblem(
   backticks: boolean,
 ): string | undefined {
   const files = scriptFiles(command, backticks);
-  if (!files.length) return undefined;
-  // A move the guard can't read (`cd "$DIR"`) may land in a reviewed checkout (re-grade 4).
+  if (!files.length || !reviewed.length) return undefined;
+  const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
+  // A move the guard can't read (`cd "$DIR"`) may land in a reviewed checkout (re-grade 4). A command that names a
+  // reviewed repo may hand it to the script (re-grade 6).
   const near =
     run ||
+    names.test(command) ||
     locate(cwd, reviewed) !== undefined ||
     navigationTargets(command, cwd).some((path) => locate(path, reviewed)) ||
     reviewed.some((r) => entersCheckout(command, r)) ||
     unreadableMove(command, cwd);
-  if (!near) return undefined;
-  const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
   for (const { file, optional } of files) {
     let texts: string[] = [];
     let failed = false;
@@ -315,6 +317,8 @@ export function scriptProblem(
     } catch {
       failed = true;
     }
+    // Elsewhere, a script that names a reviewed repo is refused; any other runs as it is, unread or not (re-grade 6).
+    if (!near && !texts.some((t) => names.test(t))) continue;
     // A `python -m` module that isn't a local file is installed code, not a script written here.
     if (optional && !failed && !texts.length) continue;
     const why = !texts.length

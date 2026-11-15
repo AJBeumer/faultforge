@@ -16,7 +16,7 @@
 import { decodeAnsiC } from "./shell-decode.ts";
 import { subprocessCode } from "./shell-interp.ts";
 import { blankQuoted, substitutions } from "./shell-scan.ts";
-import { programAt, programName, type Step, steps, words } from "./shell-words.ts";
+import { programAt, programName, type Step, steps, unquote, words } from "./shell-words.ts";
 
 export {
   INLINE_NETWORK_REASON,
@@ -54,7 +54,6 @@ function literalEcho(step: string): boolean {
 }
 
 /** The code a word holds once its quotes are removed: what a shell given it would run. */
-const unquote = (word: string) => word.replace(/^'([^']*)'$/s, "$1").replace(/^"(.*)"$/s, "$1");
 
 /** True when the step runs built text as shell code. `before` is the step a pipe feeds it from. */
 function stepProblem(step: Step, before: Step | undefined, backticks: boolean, depth: number): boolean {

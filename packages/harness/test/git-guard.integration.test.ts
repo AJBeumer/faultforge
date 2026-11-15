@@ -203,3 +203,39 @@ describe("the lab's own hooks, run by git itself (re-grade 5)", () => {
     expect(status("push", "-q", "origin", "main")).not.toBe(0);
   }, 60_000);
 });
+
+describe("where the lab's and the private checkout's history may go, as git runs the hooks (re-grade 6)", () => {
+  /** A clone with a bare origin and the hooks of `role` installed. */
+  function clone(role: "lab" | "private") {
+    const { dir, git, status } = guarded();
+    // `guarded()` installs a reviewed repo's hooks; this clone gets the role's own, as guard:install does.
+    for (const stage of ["pre-commit", "commit-msg", "pre-push"])
+      rmSync(join(dir, ".git", "hooks", stage), { force: true });
+    installHooks(dir, SCRIPT, role);
+    return { dir, git, status };
+  }
+
+  it("refuses a private push to any remote but the recorded origin, and allows the origin", () => {
+    const { git, status } = clone("private");
+    const other = mkdtempSync(join(tmpdir(), "git-guard-other-"));
+    scratch.push(other);
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", other]);
+    expect(status("push", "-q", other, "main")).not.toBe(0);
+    git("remote", "add", "lab", other);
+    expect(status("push", "-q", "lab", "main")).not.toBe(0);
+    expect(execFileSync("git", ["-C", other, "branch", "--list"], { encoding: "utf8" })).toBe("");
+    writeFileSync(join(git("rev-parse", "--show-toplevel"), "e.md"), "Notes\n");
+    git("add", "e.md");
+    git("commit", "-q", "-m", "Notes");
+    expect(status("push", "-q", "origin", "main")).toBe(0);
+  }, 60_000);
+
+  it("refuses a lab push into a checkout of a reviewed repo", () => {
+    const { status } = clone("lab");
+    const target = join(mkdtempSync(join(tmpdir(), "git-guard-reviewed-")), "faultforge-target");
+    scratch.push(target);
+    execFileSync("git", ["init", "-q", "-b", "main", target]);
+    expect(status("push", "-q", target, "HEAD:refs/heads/tidy")).not.toBe(0);
+    expect(execFileSync("git", ["-C", target, "branch", "--list"], { encoding: "utf8" })).toBe("");
+  }, 60_000);
+});

@@ -39,6 +39,9 @@ function closeDouble(s: string, i: number): number {
   return s.length;
 }
 
+/** A word with one level of single or double quotes around it removed. */
+export const unquote = (word: string) => word.replace(/^'([^']*)'$/s, "$1").replace(/^"(.*)"$/s, "$1");
+
 /** One simple command: its text, and whether a pipe feeds it the output of the step before. */
 export interface Step {
   text: string;
