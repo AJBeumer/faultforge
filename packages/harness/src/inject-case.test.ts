@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runEntry } from "./cli-entry.ts";
+import { otherDriveSpelling } from "./drive-spelling.ts";
 import { type InjectArgs, type InjectDeps, main, run, variantFailure } from "./inject-case.ts";
 import {
   applyTestChange,
@@ -260,6 +262,33 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(w.inject({ validateOnly: true, caseId: undefined })).toBe(0);
     expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
     expect(w.gitCalls.some((c) => c[0] === "commit")).toBe(false);
+  });
+});
+
+describe("inject: the target's real spelling, drive letter included (#316)", () => {
+  it("hands git, every step and every proof the real path, however --target spells the drive", () => {
+    const w = world();
+    const real = realpathSync.native(w.target);
+    const seen = new Set<string>();
+    const git = w.deps.git;
+    w.deps.git = (dir, ...args) => {
+      seen.add(dir);
+      return git(dir, ...args);
+    };
+    const step = w.deps.runStep;
+    w.deps.runStep = (places, ...rest) => {
+      seen.add(places.targetDir);
+      return step(places, ...rest);
+    };
+    const proof = w.deps.runProof;
+    w.deps.runProof = (places, ...rest) => {
+      seen.add(places.targetDir);
+      return proof(places, ...rest);
+    };
+    // On Windows the other drive letter case; elsewhere a path with a `..` in it, which resolves to the same.
+    const spelled = otherDriveSpelling(w.target) ?? join(w.target, "src", "..");
+    expect(w.inject({ target: spelled, validateOnly: true, caseId: undefined })).toBe(0);
+    expect([...seen]).toEqual([real]);
   });
 });
 

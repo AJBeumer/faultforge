@@ -25,6 +25,8 @@ export interface Span {
   body?: { start: number; end: number };
   /** True when the shell would run a command inside: `$(…)` or a backtick, in double quotes or an expanding body. */
   runs: boolean;
+  /** For a heredoc, true when its delimiter is quoted, so its body is taken as written. */
+  quoted?: boolean;
 }
 
 const OPENER = /<<(-?)[ \t]*((?:\\.|[^\s<>|;&()])+)/y;
@@ -72,6 +74,7 @@ export function quotedSpans(command: string): Span[] {
           kind: "heredoc",
           body: { start: bodyStart, end: bodyEnd },
           runs: !doc.quoted && RUNS.test(text),
+          quoted: doc.quoted,
         });
       }
       // `at` is the closing delimiter's line end (its newline is kept as a command separator), or the next line.
@@ -129,6 +132,36 @@ export function quotedSpans(command: string): Span[] {
     i++;
   }
   return spans;
+}
+
+/**
+ * The command with its line continuations joined, as the shell joins them before it reads words (re-grade 4):
+ * a backslash followed by a new line is removed, outside single quotes, comments and heredoc bodies with a
+ * quoted delimiter, where it stays as written. An escaped backslash (`\\`) before a new line is no continuation.
+ */
+export function joinContinuations(command: string): string {
+  if (!/\\\r?\n/.test(command)) return command;
+  const literal = new Array<boolean>(command.length).fill(false);
+  for (const span of quotedSpans(command)) {
+    if (span.kind === "single" || span.kind === "comment") literal.fill(true, span.start, span.end);
+    if (span.kind === "heredoc" && span.quoted && span.body) literal.fill(true, span.body.start, span.body.end);
+  }
+  let out = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i] ?? "";
+    if (c !== "\\" || literal[i]) {
+      out += c;
+      continue;
+    }
+    const next = command[i + 1];
+    if (next === "\n") i += 1;
+    else if (next === "\r" && command[i + 2] === "\n") i += 2;
+    else {
+      out += c + (next ?? "");
+      i += 1;
+    }
+  }
+  return out;
 }
 
 /** The heredoc bodies only, as `{ start, end }` of their text. */

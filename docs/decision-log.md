@@ -439,3 +439,16 @@ Recorded after the owner confirmed every verdict.
 
 - **What the earlier entry got wrong.** The entry for FF-0024 to FF-0027 says the reasons are marked as the agent's drafts "as the 14 November entry requires". That stretches what the 14 November entry promised. It said that from the next case on the owner writes each verdict reason, and that the record says when a reason was drafted by the agent. For these four cases the owner again chose the agent's drafts, read them, and confirmed each one, so the first half of that promise wasn't kept. The second half was: each reason says so. The verdicts and the match results are unaffected; an independent re-score agrees with all four.
 - **What changes.** `verdict` gets a structured field that records who wrote a reason, so the record no longer depends on a phrase in free text. Whether the owner writes the reasons of later cases is the owner's call, and the field records which.
+
+## 15 November: what else can reach a target review (configuration v10)
+
+The 14 November corrections listed some of Qodo's channels as unverified. The owner read them in Qodo's settings, for the workspace and for `faultforge-target`, and the screenshots are kept in private storage. The API answers are saved there too.
+
+- **Verified closed.**
+  - There are no cross-repository relations in the workspace: the relation graph has no nodes and no edges.
+  - Automatic approval of suggested rules and of rules from repository files is off, and so is mining rules from review history and approving them automatically.
+  - The target has no `REVIEW.md`, and of the files Qodo imports rules from it holds only `AGENTS.md`, whose rules are the recorded ones.
+  - The target's repository settings don't override the workspace's.
+- **Verified open.** Web search during review is on, for the workspace and the target. It matches the only earlier capture (2 November), so every case so far ran with it, and it stays on so that results stay comparable. A review could in principle search the public web, this repository included. This repository holds the method and adjudicated results, never an unreviewed case, template or answer.
+- **Not verifiable.** Whether Qodo indexes PR history for the target. The read-only tool for it answered "service unreachable", as it has since 9 November. It stays listed as unverified.
+- **Not done.** A separate Qodo workspace for this repository. The lab and the target share one, which is why Qodo writes lab-scoped rules from this repository's own files. Those rules are scoped to this repository, and `qodo:check` confirms before every case that none reaches the target.
