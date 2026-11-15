@@ -328,6 +328,7 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
         viaFile: viaFile.out.slice(-9000),
         asRunner: asRunner.slice(-2000),
       });
+      if (!/invalid x-api-key|Invalid API key|authentication_error|401/i.test(out)) console.log(viaFile.out);
       expect(out, seen).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
       expect(proxy.counts().allowed).toBeGreaterThan(allowedBefore);
       expect(refused.slice(before)).toEqual([]);

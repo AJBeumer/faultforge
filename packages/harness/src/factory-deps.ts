@@ -45,8 +45,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     mode,
-    // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242).
-    unguarded: () => unguardedCheckouts(factory, LAB_ROOT),
+    // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242), and in
+    // the private checkout too, whose pre-push hook sends its history only to its recorded origin (PR 333).
+    unguarded: () => unguardedCheckouts(factory, LAB_ROOT, privateRepo),
     // GitHub reads get three tries in `github.ts` itself: one transient failure must not cost the tick (AUD-N10).
     // The same reads the recovery dry run makes (`factory-recover.ts`).
     claimMode: githubRecoveryReads.claimMode,

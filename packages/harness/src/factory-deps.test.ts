@@ -411,7 +411,7 @@ Picked up.`,
 
   it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself (#242)", () => {
     expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual(["faultforge-target: no guard hooks"]);
-    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT);
+    expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT, join(LAB_ROOT, "private"));
     expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(
       /^factory:tick refused: faultforge-target: no guard hooks. Run npm run guard:install first.$/,
     );
@@ -419,6 +419,24 @@ Picked up.`,
     expect(setupRefusal(realDeps(FACTORY, OPTIONS, "ci"))).toBeNull();
     expect(vi.mocked(unguardedCheckouts)).not.toHaveBeenCalled();
     expect(setupRefusal({ unguarded: () => [] })).toBeNull();
+  });
+
+  it("a local tick reports a private checkout without its pre-push hook before a run starts (PR 333)", async () => {
+    // The wiring: the deps hand the private checkout over, and its problem refuses the tick.
+    vi.mocked(unguardedCheckouts).mockReturnValueOnce(["private: no pre-push hook"]);
+    expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(/^factory:tick refused: private: no pre-push hook\./);
+    // And the real check finds it: a private checkout with no hooks at all is reported.
+    const real = (await vi.importActual<typeof import("./guard-install.ts")>("./guard-install.ts")).unguardedCheckouts;
+    const lab = mkdtempSync(join(tmpdir(), "ff-deps-priv-"));
+    onTestFinished(() => rmSync(lab, { recursive: true, force: true }));
+    const priv = join(lab, "private");
+    mkdirSync(priv);
+    expect(
+      (await vi.importActual<typeof import("./factory-exec.ts")>("./factory-exec.ts")).git(priv, "init", "-q"),
+    ).toBe("");
+    const none: FactoryConfig = { ...FACTORY, repos: {} };
+    expect(real(none, lab)).toEqual([]);
+    expect(real(none, lab, priv)).toHaveLength(1);
   });
 
   it("takes the lock in the runs folder when local, and never holds one in CI", () => {
