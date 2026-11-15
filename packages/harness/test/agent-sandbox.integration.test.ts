@@ -13,13 +13,13 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { agentEnv } from "../src/factory-agent-env.ts";
 import { loadFactory } from "../src/factory-config.ts";
 import { allowList, type EgressProxy, proxyEnv, sandboxedCommand, startEgressProxy } from "../src/factory-sandbox.ts";
 import {
   nodePrefix,
   realSh,
   runPlan,
-  SANDBOX_USER,
   sandboxProblems,
   setupPlan,
   stopAgentProcesses,
@@ -284,13 +284,15 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const before = refused.length;
       const allowedBefore = proxy.counts().allowed;
       const claude = join(cli, "node_modules/.bin/claude");
+      // The environment the tick gives the agent (factory-agent-env.ts), with a key the API will refuse.
+      const agentLike = { ...agentEnv(process.env, {}).env, ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" };
       const version = await asAgent(claude, ["--version"]);
       expect(version.out, JSON.stringify(version)).toContain("2.1.197");
       const { status, out } = await asAgent(
         claude,
         ["-p", "Reply with OK", "--output-format", "stream-json", "--verbose", "--debug"],
         {
-          env: { ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" },
+          env: agentLike,
         },
       );
       // For comparison when it fails: the same call written to a file by a shell as the agent, and as the runner.
@@ -298,7 +300,7 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const viaFile = await asAgent(
         "/bin/sh",
         ["-c", `"${claude}" -p "Reply with OK" --output-format json > "${file}" 2>&1; echo "exit $?"; cat "${file}"`],
-        { env: { ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" } },
+        { env: agentLike },
       );
       const asRunner = await new Promise<string>((done) => {
         const child = spawn(claude, ["-p", "Reply with OK", "--output-format", "json"], {
