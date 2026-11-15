@@ -30,7 +30,22 @@ FaultForge replaces the guessing with evidence.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
 3. **Prove it.** The answer key lives in a private ledger outside the repository, so the reviewer never gets a hint. Every finding is matched against it with a fixed rule: right file, overlapping lines, right kind of problem.
 
-Every case is written to an append-only log, and every number in a report can be traced back to it. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches. Seven have been published so far: six clean, and one that Qodo skipped, so it counts as neither.
+Every case is written to an append-only log, and every number in a report can be traced back to it. The private history is anchored here, in [`docs/ledger-anchors.txt`](docs/ledger-anchors.txt), so it can't be rewritten unnoticed. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches.
+
+## Results so far
+
+Published cases only. Held-out cases are reported with the final benchmark. The [decision log](docs/decision-log.md) has every case, each correction, and why.
+
+| Set | Bugs | Controls |
+|---|---|---|
+| FF-0001 (Qodo configuration v1, no rules, reported apart) | 1 of 1 detected | none |
+| Benchmark v1: FF-0002 to FF-0019 | 10 of 10 distinct bugs detected (11 runs; FF-0019 reruns FF-0015) | 6 clean, 1 inconclusive (Qodo skipped the review) |
+| Benchmark v2: FF-0024 to FF-0027 | 2 of 2 detected | 2 clean |
+
+How to read these numbers:
+- **What the catches rest on.** In benchmark v1, most catches were Qodo checking the diff against its ticket or a house rule that stated the broken behaviour, not finding the bug unaided. Benchmark v2 was designed against that: tickets that don't state the oracle, controls that change behaviour and carry a test, and results split by Qodo's own source label. In v2, one catch was Qodo's own issue finding, on behaviour no target rule states; the other was a house-rule finding.
+- **Sample size.** These are small diffs in a 450-line app. A clean sweep is a lower bound, not a rate.
+- **Where the corrections are.** An independent audit on 14 November found the gaps behind these caveats. They are corrected in the decision log, never by editing earlier entries.
 
 ```mermaid
 flowchart TB
@@ -112,7 +127,7 @@ Halfway through the month, the factory gets a new member that doesn't trust anyo
 | 6 | Qodo's Agentic Toolbox connected; the first check through it found Qodo had derived 14 active rules from `CLAUDE.md` on ordinary pushes, and configuration v6 was restored; every answer from Codebase Wisdom checked against the code (13 of 13 verified, [claims](docs/evidence/day-06/claims.md)); all 49 open tickets triaged ([triage](docs/evidence/day-06/triage.md)); ticket [#4](https://github.com/AJBeumer/faultforge/issues/4) rewritten from the evidence ([report](docs/wisdom-day-6.md)); then the tool itself measured: three tickets with a planted stale premise and one control, investigated blind through Qodo's read tools, 3 of 3 caught and 0 false alarms ([experiment](docs/evidence/day-06/premise-experiment/)) | Done ([decision log](docs/decision-log.md#day-6-ask-your-codebase-before-you-build)) |
 | 7 | Review Resolver on a real PR: the Day 6 gate ticket built in session, five Qodo rounds (11, 2, 2, 2, 0 findings) read through the toolbox, a blind second reviewer of the same diff (12 findings, 6 in common), 9 of 17 Qodo findings reproduced by a failing test before the fix, the rest listed with the reason, `revert:check` 7 ([PR #149](https://github.com/AJBeumer/faultforge/pull/149), [scorecard](docs/evidence/day-07/)) | Done ([decision log](docs/decision-log.md#day-7-close-the-feedback-loop)) |
 | 8 | Local review before commit, a check that it happened, and seven more cases: four bugs detected, two controls clean, one inconclusive | Done ([decision log](docs/decision-log.md#day-8-review-before-you-commit), [cases](docs/decision-log.md#cases-ff-0002-to-ff-0008-results-so-far-12-november)) |
-| 9 to 14 | More bug templates, first measured baseline | Planned |
+| 9 to 14 | Harder bug templates and benchmark v1 frozen ([cases](docs/decision-log.md#13-november-development-cases-ff-0009-to-ff-0019-benchmark-v1)); a full independent audit of all three repositories, fixed through tickets in four rounds of PRs and re-graded independently; benchmark v2 designed, pre-registered and anchored before its first case, then its development cases run ([v2 method](docs/decision-log.md#14-november-benchmark-v2-method-decided-before-any-v2-case), [results](docs/decision-log.md#15-november-benchmark-v2-development-cases-ff-0024-to-ff-0027)) | Done |
 | 15 | Devil's Advocate challenges its first real Qodo finding with a test | Planned |
 | 16 to 30 | Evidence, replay, one-command audit, final benchmark | Planned |
 
@@ -141,7 +156,7 @@ git clone https://github.com/AJBeumer/faultforge-target ../faultforge-target
 npm run inject -- --template idempotency-guard-bypass-v1 --target ../faultforge-target --case FF-0001
 ```
 
-The command applies the template on a new branch in the target (`tidy-replay-lookup`), runs the hidden proof test on `main` and on the branch, runs the target's own tests and typecheck, and keeps the branch only if the proof test passes on `main` and fails on the branch. It then switches the target back to `main`. It takes a few seconds and prints what it proved and the path of the answer key. Here, it creates a `private/` folder, which git ignores: the answer key (`ground-truth.jsonl`), an audit event (`audit-events.jsonl`), and the run's logs and diff under `raw-artifacts/FF-0001/`, which it does not announce. Nothing is pushed anywhere. Running the same template again doesn't need the old branch deleted: it picks a free name itself (a numeric suffix on the base name) and leaves the old one as evidence. A one-command audit for your own repository is planned (see Status).
+The command applies the template on a new branch in the target (`tidy-replay-lookup`), runs the hidden proof test on `main` and on the branch, runs the target's own tests and typecheck, and keeps the branch only if the proof test passes on `main` and fails on the branch. It then switches the target back to `main`. On today's target the planted variant also fails one of the target's own tests, a replay test added after this case ran on 2 November. That is recorded, not refused, because a bug that a test catches is still a bug. It takes a few seconds and prints what it proved and the path of the answer key. Here, it creates a `private/` folder, which git ignores: the answer key (`ground-truth.jsonl`), an audit event (`audit-events.jsonl`), and the run's logs and diff under `raw-artifacts/FF-0001/`, which it does not announce. Nothing is pushed anywhere. Running the same template again doesn't need the old branch deleted: it picks a free name itself (a numeric suffix on the base name) and leaves the old one as evidence. A one-command audit for your own repository is planned (see Status).
 
 ## Repository layout
 
@@ -153,7 +168,8 @@ The command applies the template on a new branch in the target (`tidy-replay-loo
 | `schemas/` | JSON Schemas for the case record (v1 and v2), the bug template and `factory.json` |
 | `factory.json` | The two repositories the factory works in, described once |
 | `docs/CHARTER.md` | The plan: goals, principles, method, roadmap |
-| `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons |
+| `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons, and dated corrections |
+| `docs/ledger-anchors.txt` | Commit ids of the private history, so a rewrite of it is detected |
 | `CLAUDE.md`, `.claude/` | Rules and tooling for the coding agent that helps build this project, including a hook that blocks hints from reaching the target repository |
 
 ## Stack
