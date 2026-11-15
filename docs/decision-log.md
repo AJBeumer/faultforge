@@ -452,3 +452,13 @@ The 14 November corrections listed some of Qodo's channels as unverified. The ow
 - **Verified open.** Web search during review is on, for the workspace and the target. It matches the only earlier capture (2 November), so every case so far ran with it, and it stays on so that results stay comparable. A review could in principle search the public web, this repository included. This repository holds the method and adjudicated results, never an unreviewed case, template or answer.
 - **Not verifiable.** Whether Qodo indexes PR history for the target. The read-only tool for it answered "service unreachable", as it has since 9 November. It stays listed as unverified.
 - **Not done.** A separate Qodo workspace for this repository. The lab and the target share one, which is why Qodo writes lab-scoped rules from this repository's own files. Those rules are scoped to this repository, and `qodo:check` confirms before every case that none reaches the target.
+
+## 15 November: corrections after the fifth re-grade
+
+- **Case commits had no body.** The v2 method entry promised development cases with an ordinary PR shape, including a commit body. The cases FF-0024 to FF-0027 ran before `inject` could write one, so every one of their commits has a title and no body. Their tickets, tests and review effort were as described. `inject` now writes a body from the ticket (PR 324), for cases from here on.
+- **How v2's draws were made.** The method entry says the run order and the held-out choice follow fixed rules, seeded and hashed before use. Two weaknesses:
+  - The seed was a commit id the agent running the draw created, so it could in principle be chosen.
+  - A candidate's content was changed in the same commit that computed the draw.
+
+  The changes had recorded reasons, and nothing shows a draw was steered. But neither draw is immune to steering, and the final report states this next to the results it affects. From now on, every candidate is committed and anchored before the draw, and the seed is one the drawer can't choose.
+- **One channel dropped.** The entry on what can reach a target review omits workspace memory, which the 14 November corrections had listed as unverified. The owner found no memory setting in Qodo's portal. That shows no switch exists to read; it doesn't prove the channel closed. Workspace memory stays listed as unverified.
