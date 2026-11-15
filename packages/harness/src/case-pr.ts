@@ -11,9 +11,10 @@
  * Reads the case's answer-key entry (branch, injected commit, template) and its `case.ticket-created` event (the
  * target ticket the PR closes), and checks that the template and proofs are still the ones the case was
  * planted from (the injection event's hash). The title is the template's commit message; the body is the
- * sentence given, then `Closes #N`. Both are checked for giveaway words and for links to a GitHub issue or
- * PR, as `case:ticket` checks its text: this command calls `gh` itself, where the interactive guard hook
- * can't see it.
+ * sentence given, then `Closes #N`. Both are checked for links to a GitHub issue or PR and for the template's
+ * own names, as `case:ticket` checks its text, and the PR is opened through the one door to the reviewed
+ * repository (`target-post.ts`, #340), whose checks (giveaway words, private ids, Qodo) run before anything is
+ * marked or sent, and again on the exact text it sends.
  *
  * The branch must already be pushed, with the injected commit as its head (`gh api` reads it). Then the
  * Qodo configuration check runs here (`qodo:check`'s `checkLiveQodoConfig`), so the version recorded is one
@@ -33,22 +34,22 @@
  *
  * An unexpected error, even while loading, is 2 too: `npm run case:pr` runs `case-pr-cli.ts`.
  */
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { ISSUE_OR_PR_LINK } from "./case-ticket.ts";
 import { errorText as message } from "./error-text.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "./factory-config.ts";
+import { gh as ghRead } from "./github.ts";
 import { type LedgerEntry, readAuditLog, readLedger } from "./ledger.ts";
 import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { injectionHashProblem, isToolWritten } from "./ledger-hashes.ts";
-import { telltales } from "./neutral.ts";
 import { TOOL } from "./provenance.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
+import { type Gh, ghCall, type Post, postProblems, Refused, sendPost } from "./target-post.ts";
 import { privateDir, templateDir } from "./templates.ts";
 
 export interface PrArgs {
@@ -105,8 +106,8 @@ export interface PrOptions {
   log?: (line: string) => void;
   error?: (line: string) => void;
   factory?: FactoryConfig;
-  /** Stands in for `gh`; the tests fake it. */
-  gh?: (args: string[]) => string;
+  /** Stands in for `gh`, for its reads and for the door's one write; the tests fake it. */
+  gh?: Gh;
   /** Stands in for the live Qodo check; the tests fake it. */
   qodoCheck?: (privateRoot: string) => Promise<QodoCheckOutcome>;
   now?: () => string;
@@ -120,7 +121,8 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  const gh = options.gh ?? ((a: string[]) => execFileSync("gh", a, { encoding: "utf8", timeout: 60_000 }));
+  // Reads only: `isReadCall` lets github.ts retry them. The PR itself is opened through the door.
+  const gh = options.gh ?? ((a: string[]) => ghRead(...a));
   const now = options.now ?? (() => new Date().toISOString());
   const { caseId } = args;
   const root = privateDir(env);
@@ -180,12 +182,16 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
     return refuse(`${caseId}'s template ${String(entry.templateId)} or its commit message can't be read`);
   }
   const body = `${args.body} Closes #${ticket}`;
-  const giveaways = [title, body].flatMap((text) => [
-    ...telltales(text),
-    ...(ISSUE_OR_PR_LINK.test(text) ? ["links to a GitHub issue or PR"] : []),
-    // The template's own names, which templateTelltales refuses in every field the reviewer sees (Qodo on PR 269).
-    ...names.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map(() => "names the template"),
-  ]);
+  const post: Post = { kind: "pr-create", repo: target, base: "main", head: branch, title, body };
+  const giveaways = [
+    // The door's own checks, run before anything is marked (#340): giveaway words, private ids, Qodo.
+    ...postProblems(post, env),
+    ...[title, body].flatMap((text) => [
+      ...(ISSUE_OR_PR_LINK.test(text) ? ["links to a GitHub issue or PR"] : []),
+      // The template's own names, which templateTelltales refuses in every field the reviewer sees (Qodo on PR 269).
+      ...names.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map(() => "names the template"),
+    ]),
+  ];
   if (giveaways.length) return refuse(`the PR text would give the case away (${giveaways.join("; ")})`);
 
   let pushed: string;
@@ -203,11 +209,10 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   }
   const qodoConfiguration = checked.snapshotVersion;
   const qodoState = relative(root, checked.evidenceDir).replace(/\\/g, "/");
-  const command = ["pr", "create", "--repo", target, "--base", "main", "--head", branch];
-  command.push("--title", title, "--body", body);
   if (args.dryRun) {
+    const { args: command } = ghCall(post);
     log(
-      `[case:pr] dry run, Qodo matches ${qodoConfiguration}; would run: gh ${command.map((a) => JSON.stringify(a)).join(" ")}`,
+      `[case:pr] dry run, Qodo matches ${qodoConfiguration}; would run: gh ${command.map((a) => JSON.stringify(a)).join(" ")} with the body ${JSON.stringify(body)}`,
     );
     return 0;
   }
@@ -232,8 +237,13 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
       return 2;
     }
     try {
-      url = gh(command).trim();
+      url = sendPost(post, { gh: options.gh, env }).trim();
     } catch (e) {
+      if (e instanceof Refused) {
+        // Nothing was sent, so the marker would only block a fixed rerun.
+        rmSync(marker, { force: true });
+        return refuse(`the PR text would give the case away (${message(e)})`);
+      }
       error(`case:pr: gh pr create failed (check GitHub; if it opened, record it with --existing): ${message(e)}`);
       return 2;
     }

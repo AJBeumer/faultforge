@@ -7,8 +7,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { addressesQodo } from "../../packages/harness/src/neutral.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { addressesQodo, caseRecords } from "./guard-cases.ts";
+import { caseRecords } from "./guard-cases.ts";
 import { decide } from "./guard-target.ts";
 
 const T = "AJBeumer/faultforge-target";

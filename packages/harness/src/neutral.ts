@@ -265,3 +265,18 @@ export function templateTelltales(template: {
     ownNames.filter((name) => text.toLowerCase().includes(name.toLowerCase())).map((name) => `names ${name}`);
   return fields.flatMap(([field, text]) => [...telltales(text), ...named(text)].map((reason) => `${field}: ${reason}`));
 }
+
+/** Qodo's chat commands, as a line's or a quoted value's first word; a path (`/test/x.ts`) is none. */
+const QODO_COMMANDS =
+  /(^|["'=])\s*\/(ask|review|improve|describe|implement|analyze|test|add_docs|update_changelog|similar_issue|generate_labels|help|help_docs|config|checks|compliance|reflect|reflect_and_review|answer|agentic_\w+|custom_prompt|find_similar|generate_tests|issue|qodo)\b(?![/.-])/im;
+
+/**
+ * True when a text addresses Qodo: a mention, or a line that is one of its commands. Qodo learns from every chat in
+ * a reviewed repo, which would bias later cases, so nothing posted there may address it (re-grade 6: Q25, Q26).
+ */
+export function addressesQodo(text: string): boolean {
+  return /(^|[^\w.-])@qodo/i.test(text) || QODO_COMMANDS.test(text);
+}
+
+export const QODO_REASON =
+  "This would address Qodo in a reviewed repo. Chatting with Qodo there teaches it, which would bias later cases: post nothing to it.";
