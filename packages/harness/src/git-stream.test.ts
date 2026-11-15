@@ -1,7 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eachGitLine, isRunning, LineReader, TEMP_PREFIX } from "./git-stream.ts";
 
@@ -10,16 +20,44 @@ function listing(root: string): string[] {
   return readdirSync(root, { recursive: true }).map(String).sort();
 }
 
+/**
+ * A repository at `dir` with one commit of a long file. Git's automatic maintenance is off in it: after a commit,
+ * git starts `git maintenance run --auto`, and from git 2.47 that runs detached, so it holds
+ * `.git/objects/maintenance.lock` for a moment after the commit has returned. A test that lists the repository
+ * then saw the lock come or go on its own (Linux CI on PR 346, #348). `env` lets a test trace the setup's git.
+ */
+function makeRepo(dir: string, env: NodeJS.ProcessEnv = process.env): void {
+  const git = (...args: string[]) => execFileSync("git", args, { env, stdio: "ignore" });
+  git("init", "-q", dir);
+  git("-C", dir, "config", "maintenance.auto", "false");
+  writeFileSync(join(dir, "f.txt"), `${"é".repeat(700_000)}\nsecond\n`);
+  git("-C", dir, "add", "f.txt");
+  git("-C", dir, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "one");
+}
+
+describe("the test repository (#348)", () => {
+  it("starts no git maintenance, which could write in its git folder while a test lists it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "git-stream-test-"));
+    const trace = join(mkdtempSync(join(tmpdir(), "git-stream-trace-")), "trace.txt");
+    try {
+      makeRepo(dir, { ...process.env, GIT_TRACE: trace });
+      const ran = readFileSync(trace, "utf8");
+      expect(ran).toMatch(/built-in: git commit/);
+      expect(ran).not.toMatch(/\bmaintenance run\b|\bgc --auto\b/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dirname(trace), { recursive: true, force: true });
+    }
+  });
+});
+
 describe("eachGitLine (AUD-N6, Qodo on PR 280)", () => {
   let dir: string;
   let temp: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "git-stream-test-"));
     temp = mkdtempSync(join(tmpdir(), "git-stream-temp-"));
-    execFileSync("git", ["init", "-q", dir]);
-    writeFileSync(join(dir, "f.txt"), `${"é".repeat(700_000)}\nsecond\n`);
-    execFileSync("git", ["-C", dir, "add", "f.txt"]);
-    execFileSync("git", ["-C", dir, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "one"]);
+    makeRepo(dir);
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
