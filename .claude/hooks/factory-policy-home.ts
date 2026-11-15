@@ -90,10 +90,13 @@ export function homeSecretCommand(command: string, env: NodeJS.ProcessEnv): stri
   let text = [command, expanded, spokenWords(expanded)].join("\n").replace(/\\/g, "/").toLowerCase();
   for (const ok of allowed(env)) for (const spelling of spellings(ok)) text = text.split(spelling).join(" ");
   const literal = homes(env).flatMap(spellings);
-  const named = HOME_WORD.test(text) || literal.some((home) => text.includes(home));
+  // A bare `cd` (or `pushd`) moves to the home folder without naming it (Qodo on PR 333).
+  const bareMove = /(?:^|[;&|(\n])\s*(?:cd|pushd|chdir)\s*(?=$|[;&|)\n])/m.test(text);
+  const named = bareMove || HOME_WORD.test(text) || literal.some((home) => text.includes(home));
   if (!named) return undefined;
-  // The home folder alone: `~` or `$HOME` with no path after it, or its literal path ending there.
+  // The home folder alone: `~` or `$HOME` with no path after it, its literal path ending there, or a bare `cd`.
   const alone =
+    bareMove ||
     /(?:^|[\s"'=:(])~(?=[\s"')]|$)|\$\{?home\}?(?![/\w])|%userprofile%(?![/\w])|\$env:userprofile(?![/\w])/i.test(
       text,
     ) ||

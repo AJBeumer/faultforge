@@ -307,7 +307,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   // however it is spelled (`g\h gist create`; Qodo on PR 310).
   checkPrivateFiles(ctx, command);
   // Wherever it runs: the git-level guard stays on, the private repo private, and lab history out (re-grade 6).
-  const moved = guardSwitchOff(command, ctx.backticks) ?? historyProblem(ctx, command);
+  const moved = guardSwitchOff(command, ctx.backticks, ctx.cwd) ?? historyProblem(ctx, command);
   if (moved) deny(moved);
   if (writes) checkPrivateIds(ctx, command, readable);
   const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);

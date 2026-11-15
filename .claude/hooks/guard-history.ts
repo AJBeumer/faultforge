@@ -16,12 +16,13 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { referencedFiles } from "./guard-files.ts";
+import { configReads } from "./guard-hooks.ts";
 import { outsidePostedText } from "./guard-posted.ts";
 import { privateOrigin, privateRoot, pushUrl } from "./guard-private.ts";
 import { checkoutAt, githubRepos, inCheckout, locate, type Reviewed, within } from "./guard-repos.ts";
 import type { Context } from "./guard-tools.ts";
 import { joinedWords } from "./shell-scan.ts";
-import { programAt, programName, steps, words } from "./shell-words.ts";
+import { programAt, programName, steps, unquote, words } from "./shell-words.ts";
 
 /** One git or gh step: the program, its words after the program, and the folder it runs in (undefined: unknown). */
 interface Call {
@@ -31,7 +32,6 @@ interface Call {
   dir: string | undefined;
 }
 
-const unquote = (word: string) => word.replace(/^'([^']*)'$/s, "$1").replace(/^"(.*)"$/s, "$1");
 const unreadable = (word: string) => /[$`%]/.test(word);
 
 /** Programs that send an HTTP request, whose payload could make a repo public. */
@@ -162,8 +162,8 @@ function privateProblem(call: Call, root: string): string | undefined {
   if (inPrivate && call.dir !== undefined) {
     if (sub === "remote" && /^(add|set-url|rename|remove|rm)$/.test(verb)) return PUBLISH;
     const settings = call.args.slice(1).filter((w) => !w.startsWith("-"));
-    const reads = call.args.some((w) => /^(--get\S*|--list|-l|get|list)$/.test(w));
-    if (sub === "config" && !reads && settings.some((w) => /^(remote|url|branch)\./i.test(w))) return PUBLISH;
+    if (sub === "config" && !configReads(call.args.slice(1)) && settings.some((w) => /^(remote|url|branch)\./i.test(w)))
+      return PUBLISH;
   }
   // A copy of the private history in another checkout could be pushed anywhere.
   if (/^(clone|fetch|pull|submodule|remote)$/.test(sub) && call.dir && !within(call.dir, root)) {
@@ -171,7 +171,9 @@ function privateProblem(call: Call, root: string): string | undefined {
     const reaches = (w: string) =>
       githubRepos(w).some((repo) => own.includes(repo)) ||
       within(resolve(call.dir ?? "", w.replace(/^file:\/\//i, "")), root);
-    if (named.some(reaches)) return PUBLISH;
+    // A remote's name is read as the URL it fetches from (`git fetch private`; Qodo on PR 333).
+    const fetched = (w: string) => (isLocation(w) ? w : pushUrl(call.dir ?? "", w, false) || w);
+    if (named.some((w) => reaches(w) || reaches(fetched(w)))) return PUBLISH;
   }
   return undefined;
 }
@@ -180,9 +182,11 @@ function privateProblem(call: Call, root: string): string | undefined {
 function reviewedProblem(ctx: Context, call: Call): string | undefined {
   const [sub = "", verb = ""] = call.args;
   if (call.program === "gh" && sub === "issue" && verb === "transfer") {
-    const destination = positionals(call.args, 2, /^(-R|--repo)$/)[1] ?? "";
-    const name = destination.split("/").pop()?.toLowerCase() ?? "";
-    if (unreadable(destination) || ctx.reviewed.some((r) => r.name.toLowerCase() === name)) return TRANSFER;
+    // `owner/name` must be the reviewed repo itself; a bare name may be under any owner (Qodo on PR 333).
+    const destination = (positionals(call.args, 2, /^(-R|--repo)$/)[1] ?? "").toLowerCase();
+    const reviewed = (r: Reviewed) =>
+      destination.includes("/") ? destination === r.github.toLowerCase() : destination === r.name.toLowerCase();
+    if (unreadable(destination) || ctx.reviewed.some(reviewed)) return TRANSFER;
   }
   if (call.program !== "git" || sub !== "push") return undefined;
   const remote = pushRemote(call.args) ?? "origin";

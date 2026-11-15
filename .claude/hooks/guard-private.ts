@@ -45,9 +45,9 @@ export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string 
   return dirname(resolve(labRoot, evidence));
 }
 
-/** The URL git would push to for `remote` in the checkout at `dir`, or empty when it has none. */
-export function pushUrl(dir: string, remote: string): string {
-  const r = spawnSync("git", ["-C", dir, "remote", "get-url", "--push", remote], {
+/** The URL git would push to (or with `push` false, fetch from) for `remote` in `dir`, or empty when it has none. */
+export function pushUrl(dir: string, remote: string, push = true): string {
+  const r = spawnSync("git", ["-C", dir, "remote", "get-url", ...(push ? ["--push"] : []), remote], {
     encoding: "utf8",
     timeout: 4000,
     windowsHide: true,

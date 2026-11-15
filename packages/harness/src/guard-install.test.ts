@@ -220,3 +220,24 @@ describe("the private checkout's own hook (re-grade 6)", () => {
     expect(guardProblem(priv, "private")).toBeUndefined();
   });
 });
+
+describe("unguardedCheckouts reports the private checkout (Qodo on PR 333)", () => {
+  const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
+  writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
+
+  it("names a private checkout whose hook is gone, and nothing once it is installed", () => {
+    const lab = repo();
+    installHooks(lab.dir, script, "lab");
+    const priv = join(lab.dir, "private");
+    execFileSync("git", ["init", "-q", "-b", "main", priv]);
+    execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/o/x-private.git"]);
+    const factory = {
+      evidence: "private/raw-artifacts",
+      repos: { lab: { github: "o/lab", path: lab.dir, guard: "lab" } },
+    } as unknown as FactoryConfig;
+    expect(unguardedCheckouts(factory, tmpdir(), priv)).toEqual([expect.stringMatching(/no guard pre-push hook/)]);
+    installHooks(priv, script, "private");
+    expect(unguardedCheckouts(factory, tmpdir(), priv)).toEqual([]);
+    expect(unguardedCheckouts(factory, tmpdir(), join(tmpdir(), "no-such-private"))).toEqual([]);
+  });
+});

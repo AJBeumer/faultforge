@@ -4,7 +4,7 @@
  * (N-C), script files that post from outside a reviewed checkout, and a private id written backwards.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -207,5 +207,55 @@ describe("a private id written backwards is still the id (re-grade 6)", () => {
   it("refuses it in a lab post", () => {
     expect(bash(`gh pr create -R ${L} -t x -b "uses 1v-terces-x"`)).toMatch(/still private/);
     expect(bash(`gh pr create -R ${L} -t x -b "uses 1V_TERCES_X"`)).toMatch(/still private/);
+  });
+});
+
+describe("holes Qodo found in the first review of PR 333", () => {
+  it.each([
+    "find .git -name pre-push -delete",
+    "rm .git/h*/pre-push",
+    "mv .git/[h]ooks x",
+    "cd .git;rm hooks/pre-push",
+    "rm .g*/hooks/pre-push",
+    "rm -f .gi?/config",
+    "echo $(git config --unset review-guard.script)",
+    "cat `git config --unset review-guard.script`",
+    "git config core.hooksPath get",
+    "git config core.hooksPath list",
+  ])("refuses %s", (command) => {
+    expect(bash(command, TARGET_REPO.dir)).toMatch(/git-level guard/);
+  });
+
+  it("refuses a change through a link that leads into a .git folder", () => {
+    const repo = tempRepo();
+    try {
+      symlinkSync(join(repo.dir, ".git", "config"), join(repo.dir, "settings"));
+    } catch {
+      return; // this machine can't make links
+    }
+    expect(ask("Write", { file_path: join(repo.dir, "settings"), content: "x" }, repo.dir)).toMatch(/\.git folder/);
+    expect(bash("echo x > settings", repo.dir)).toMatch(/git-level guard/);
+  });
+
+  it("still lets the newer read form of git config through", () => {
+    expect(bash("git config get core.hooksPath", LAB.dir)).toBeUndefined();
+    expect(bash("git config list", LAB.dir)).toBeUndefined();
+  });
+
+  it("refuses a private remote re-pointed with a value that reads like a read", () => {
+    expect(bash(`git config remote.origin.pushurl https://github.com/${L}.git list`, PRIVATE)).toMatch(/stays private/);
+  });
+
+  it("reads a named remote a fetch copies from", () => {
+    const lab = tempRepo();
+    lab.git("remote", "add", "copy", PRIVATE);
+    expect(bash("git fetch copy", lab.dir)).toMatch(/stays private/);
+    lab.git("remote", "add", "gh", `https://github.com/${P}.git`);
+    expect(bash("git pull gh main", lab.dir)).toMatch(/stays private/);
+  });
+
+  it("compares a transfer's owner as well as its name", () => {
+    expect(bash("gh issue transfer 5 other-owner/faultforge-target -R other-owner/source")).toBeUndefined();
+    expect(bash(`gh issue transfer 5 ${T.toUpperCase()} -R other-owner/source`)).toMatch(/transferred/);
   });
 });

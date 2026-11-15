@@ -148,10 +148,15 @@ export function guardInstalled(checkout: string): boolean {
 
 /**
  * Why each reviewed checkout in `factory` lacks the git-level guard, or the lab its link check (Qodo on PR 329),
- * resolved from `root`; empty when all have them.
+ * resolved from `root`, and the private checkout `priv` its remote check when it is a checkout (Qodo on PR 333);
+ * empty when all have them. A caller that has the private checkout passes it.
  */
-export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT): string[] {
-  return Object.values(factory.repos).flatMap((repo) => guardProblem(resolve(root, repo.path), repo.guard) ?? []);
+export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT, priv?: string): string[] {
+  const problems = Object.values(factory.repos).flatMap(
+    (repo) => guardProblem(resolve(root, repo.path), repo.guard) ?? [],
+  );
+  const privateProblem = priv && existsSync(join(priv, ".git")) ? guardProblem(priv, "private") : undefined;
+  return privateProblem ? [...problems, privateProblem] : problems;
 }
 
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */

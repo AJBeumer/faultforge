@@ -163,8 +163,8 @@ export function editViolation(path: string, runRoot: string | undefined, temp = 
  * included (re-grade 6): `--no-verify`, a commit's `-n`, `core.hooksPath`, or a change to the guard's settings or
  * a git folder's hooks or config.
  */
-export function gitGuardViolation(command: string, backticks = true): string | undefined {
-  if (!skipsGitGuard(command) && !guardSwitchOff(command, backticks)) return undefined;
+export function gitGuardViolation(command: string, backticks = true, cwd?: string): string | undefined {
+  if (!skipsGitGuard(command) && !guardSwitchOff(command, backticks, cwd)) return undefined;
   return "git's own guard hooks run for every commit and push: no --no-verify, no commit -n, no core.hooksPath, and no change to review-guard.* or a .git folder's hooks or config";
 }
 
@@ -211,7 +211,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
           privateCommandViolation(command, env, cwd),
           scriptViolation(command, cwd, env),
           homeSecretCommand(command, env) && HOME_SECRET_REASON,
-          gitGuardViolation(command, tool !== "PowerShell"),
+          gitGuardViolation(command, tool !== "PowerShell", cwd),
         ])
           if (reason && !reasons.includes(reason)) reasons.push(reason);
       }

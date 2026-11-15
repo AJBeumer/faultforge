@@ -108,3 +108,16 @@ describe("a run never reads the owner's secrets in the home folder (re-grade 6)"
       expect(homeSecretCommand(command, ENV)).toBeUndefined();
   });
 });
+
+describe("a bare cd names the home folder too (Qodo on PR 333)", () => {
+  it.each(["cd && cat .ssh/id_ed25519", "cd; cat .qodo/config", "cd\ncat .ssh/id_rsa", "pushd && ls"])(
+    "refuses %j",
+    (command) => {
+      expect(homeSecretCommand(command, ENV)).toMatch(/home folder/);
+    },
+  );
+
+  it("still lets a cd with a folder through", () => {
+    expect(homeSecretCommand("cd src && cat index.ts", ENV)).toBeUndefined();
+  });
+});
