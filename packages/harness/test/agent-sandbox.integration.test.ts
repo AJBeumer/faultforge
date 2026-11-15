@@ -283,14 +283,23 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       spawnSync("chmod", ["-R", "a+rX", cli]);
       const before = refused.length;
       const allowedBefore = proxy.counts().allowed;
-      const { out } = await asAgent(
-        join(cli, "node_modules/.bin/claude"),
-        ["-p", "Reply with OK", "--output-format", "json"],
+      const claude = join(cli, "node_modules/.bin/claude");
+      const version = await asAgent(claude, ["--version"]);
+      expect(version.out, JSON.stringify(version)).toContain("2.1.197");
+      const { status, out } = await asAgent(
+        claude,
+        ["-p", "Reply with OK", "--output-format", "stream-json", "--verbose", "--debug"],
         {
           env: { ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" },
         },
       );
-      expect(out).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
+      const seen = JSON.stringify({
+        status,
+        counts: proxy.counts(),
+        refused: refused.slice(before),
+        out: out.slice(-6000),
+      });
+      expect(out, seen).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
       expect(proxy.counts().allowed).toBeGreaterThan(allowedBefore);
       expect(refused.slice(before)).toEqual([]);
     }, 300_000);
