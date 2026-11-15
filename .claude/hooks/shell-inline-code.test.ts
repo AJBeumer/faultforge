@@ -51,6 +51,14 @@ describe("an aliased network call is still a network call (Qodo on PR 310)", () 
     expect(policy(command)).toBeDefined();
   });
 
+  it.each([
+    "python3 /dev/stdin <<'EOF'\nimport urllib.request\nEOF",
+    "node /dev/stdin <<EOF\nfetch('https://example.com')\nEOF",
+    "echo \"fetch('https://example.com')\" | node /dev/fd/0",
+  ])("refuses network code fed as a file from stdin: %s (Qodo on PR 312)", (command) => {
+    expect(guard(command)).toBe(INLINE_NETWORK_REASON);
+  });
+
   it("lets a run alias fetch for the app on localhost", () => {
     expect(policy(`node -e "const f = fetch; f('http://localhost:3000/bookings')"`)).toBeUndefined();
   });
@@ -86,6 +94,10 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     `node --require ./x.js -e "require('child_process')"`,
     "perl -e 'system(\"ls\")'",
     "ruby -e 'system(\"ls\")'",
+    // Code from stdin or a substitution named as the script (Qodo on PR 312).
+    "python3 <(echo 'import subprocess')",
+    "echo 'import subprocess' | python3 /dev/stdin",
+    "node /dev/stdin <<'EOF'\nrequire('child_process')\nEOF",
   ])("still refuse inline code that starts a program: %s", (command) => {
     expect(guard(command)).toBe(BUILT_CODE_REASON);
     expect(policy(command)).toBeDefined();

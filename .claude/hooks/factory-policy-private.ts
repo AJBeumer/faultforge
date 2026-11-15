@@ -230,13 +230,19 @@ const VARIABLE_REASON =
  * path spelled `$FAULTFORGE_RUN_ROOT/lab/private` is judged as the folder it is. A variable can't be expanded
  * here when it is edited on the way (`${NAME%%:*}`) or named through another (`${!name}`): when that variable
  * holds a private checkout or a folder above one, the command is refused, and so is one that reads a variable
- * naming a checkout any other way (`printenv NAME`, `process.env.NAME`).
+ * naming a checkout any other way (`printenv NAME`, `process.env.NAME`). The run's own folder is set aside, as
+ * the path rules set it aside: its ticket file sits in the runs folder, a checkout (Qodo on PR 312), but its own
+ * private worktree still counts.
  */
-function expandVariables(command: string, env: NodeJS.ProcessEnv, checkouts: string[]) {
+function expandVariables(command: string, env: NodeJS.ProcessEnv) {
+  const { checkouts, own, nested } = runFolders(env);
   const touches = (name: string, holders: boolean) =>
     (env[name] ?? "").split(delimiter).some((part) => {
       const path = part.trim();
-      return isAbsolute(path) && checkouts.some((c) => inside(path, c) || (holders && inside(c, path)));
+      if (!isAbsolute(path)) return false;
+      if (nested.some((c) => inside(path, c) || (holders && inside(c, path)))) return true;
+      if (own && inside(path, own)) return false;
+      return checkouts.some((c) => inside(path, c) || (holders && inside(c, path)));
     });
   // A value's backslashes would read as escapes to the word rules below: a path's folders are split by `/`.
   const slashed = (value: string | undefined) => (value ?? "").replace(/\\/g, "/");
@@ -263,7 +269,7 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv,
   if ([command, spokenWords(command)].some((r) => ANSWER_FILES.test(r))) return answer;
   const { checkouts, own, nested } = runFolders(env);
   if (!checkouts.length) return undefined;
-  const expanded = expandVariables(command, env, checkouts);
+  const expanded = expandVariables(command, env);
   if (expanded.problem) return expanded.problem;
   const spoken = spokenWords(expanded.text);
   const readings = [command, spokenWords(command), expanded.text, spoken];

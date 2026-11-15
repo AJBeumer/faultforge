@@ -141,6 +141,8 @@ function stepCode(step: Step, before: Step[], name: string): string {
   let script: number | undefined;
   for (let i = at + 1; i < all.length && family; i++) {
     const word = spokenWords(all[i] ?? "");
+    // A process substitution is a file whose text a program writes: as good as code from stdin.
+    if (/^[<>]\(/.test(all[i] ?? "")) break;
     if (/^\d*(<|>|&>)/.test(word)) {
       // A redirect: its file is the next word when the operator stands alone.
       if (/^\d*(<{1,3}|>{1,2}|&>{1,2})$/.test(word)) i++;
@@ -160,9 +162,15 @@ function stepCode(step: Step, before: Step[], name: string): string {
     script = i;
     break;
   }
-  if (script !== undefined) return all.slice(at, script).join(" ");
+  // A script that is stdin by another name (`/dev/stdin`, `/dev/fd/0`) or a path built at run time is no file
+  // to read: its code is what is fed in, as with no script at all (Qodo on PR 312).
+  const named = all[script !== undefined && /^--$/.test(all[script] ?? "") ? script + 1 : (script ?? -1)] ?? "";
+  if (script !== undefined && !STDIN_SCRIPT.test(named.replace(/["']/g, ""))) return all.slice(at, script).join(" ");
   return [...before.map((s) => s.text), step.text].join(" | ");
 }
+
+/** A script path that reads stdin or a program's output, or that the shell builds at run time. */
+const STDIN_SCRIPT = /^(\/dev\/(stdin|fd\/\d+)|\/proc\/(self|\d+)\/fd\/\d+)$|^[<>]\(|[$`]/;
 
 /** Each interpreter the command runs, by name, with the code it runs (`stepCode`). */
 function interpreterRuns(command: string, backticks: boolean): { name: string; code: string }[] {

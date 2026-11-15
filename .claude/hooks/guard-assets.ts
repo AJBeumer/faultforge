@@ -123,5 +123,17 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
       if (index > 0) for (const dir of folders(cwd, command)) add(dir, true, false);
     });
   }
+  // Text can reach a gist or a release in more ways than a pipe: a subshell (`(cat f) | gh gist create`), a group,
+  // a process substitution (`<(cat f)`), a here-string of a substitution. So in a command that publishes, every
+  // file or folder any word names, read as the shell splits it at those marks, counts too (Qodo on PR 312).
+  const runs = pipelines.flat().flatMap((step) => publishes(step) ?? []);
+  if (runs.length) {
+    const gist = runs.some((run) => run.gist);
+    for (const word of spokenWords(command).split(/[\s;&|()<>{}]+/)) {
+      const value = word.replace(/^--?[\w-]+=/, "");
+      if (!value || value.startsWith("-") || /[$`]/.test(value)) continue;
+      for (const path of named(cwd, command, value)) add(path, gist, false);
+    }
+  }
   return assets;
 }

@@ -19,6 +19,11 @@ describe("braces", () => {
     expect(braces("a{b}c")).toEqual(["a{b}c"]);
     expect(braces("plain")).toEqual(["plain"]);
   });
+
+  it("says when a list has more words than it expands, never a partial list (Qodo on PR 312)", () => {
+    expect(braces(`{docs,private}${"{,}".repeat(11)}`)).toBeUndefined();
+    expect(globMatches(`{docs,private}/a.md${"{,}".repeat(11)}`, ROOT)).toBeUndefined();
+  });
 });
 
 describe("globMatches", () => {

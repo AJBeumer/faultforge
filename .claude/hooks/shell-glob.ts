@@ -12,8 +12,11 @@ export const hasWildcard = (word: string) => /[*?[{]/.test(word);
 /** The most paths one word is expanded to before the caller is told it can't be listed. */
 export const MAX_MATCHES = 2000;
 
-/** Brace expansion: `a{b,c}d` is `abd` and `acd`, nested lists included, up to `MAX_MATCHES` words. */
-export function braces(word: string): string[] {
+/**
+ * Brace expansion: `a{b,c}d` is `abd` and `acd`, nested lists included. Undefined when it would make more than
+ * `MAX_MATCHES` words: a partial list would leave the rest unchecked (Qodo on PR 312).
+ */
+export function braces(word: string): string[] | undefined {
   const open = word.indexOf("{");
   if (open < 0) return [word];
   let depth = 0;
@@ -23,14 +26,16 @@ export function braces(word: string): string[] {
     if (c === "{") depth++;
     else if (c === "}" && --depth === 0) {
       // A list with no comma (`{x}`) is the shell's literal text: only the rest of the word is expanded.
-      if (!commas.length) return braces(word.slice(i + 1)).map((rest) => word.slice(0, i + 1) + rest);
+      if (!commas.length) return braces(word.slice(i + 1))?.map((rest) => word.slice(0, i + 1) + rest);
       const cuts = [open, ...commas, i];
       const out: string[] = [];
-      for (let k = 0; k + 1 < cuts.length && out.length < MAX_MATCHES; k++) {
+      for (let k = 0; k + 1 < cuts.length; k++) {
         const part = word.slice((cuts[k] ?? 0) + 1, cuts[k + 1]);
-        out.push(...braces(word.slice(0, open) + part + word.slice(i + 1)));
+        const more = braces(word.slice(0, open) + part + word.slice(i + 1));
+        if (!more || out.length + more.length > MAX_MATCHES) return undefined;
+        out.push(...more);
       }
-      return out.slice(0, MAX_MATCHES);
+      return out;
     } else if (c === "," && depth === 1) commas.push(i);
   }
   return [word];
@@ -66,7 +71,9 @@ function segmentPattern(segment: string): RegExp {
 export function globMatches(word: string, cwd: string): string[] | undefined {
   const found = new Set<string>();
   let looked = 0;
-  for (const variant of braces(word)) {
+  const variants = braces(word);
+  if (!variants) return undefined;
+  for (const variant of variants) {
     const full = isAbsolute(variant) ? variant : resolve(cwd, variant);
     const root = parse(full).root;
     let current = [root];

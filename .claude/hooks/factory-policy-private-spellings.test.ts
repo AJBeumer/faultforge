@@ -40,6 +40,7 @@ const ENV = {
   FAULTFORGE_TICKET_NUMBER: "7",
   FAULTFORGE_PRIVATE_CHECKOUTS: [OWNER_PRIVATE, RUNS, OWN_PRIVATE].join(delimiter),
   FAULTFORGE_GUARD_PRIVATE_DIR: OWNER_PRIVATE,
+  FAULTFORGE_TICKET_FILE: join(RUN, "ticket.md"),
 };
 
 function bash(command: string, cwd = LAB): string | undefined {
@@ -60,6 +61,7 @@ describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 3
     "cd ${FAULTFORGE_RUN_ROOT%/}/lab/private && ls",
     "x=FAULTFORGE_GUARD_PRIVATE_DIR; cd ${!x} && ls",
     "cd $(echo $FAULTFORGE_GUARD_PRIVATE_DIR) && ls",
+    `node -e "console.log(process.env.FAULTFORGE_GUARD_PRIVATE_DIR)"`,
   ])("refuses %s", (command) => {
     expect(bash(command)).toBeDefined();
   });
@@ -68,6 +70,9 @@ describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 3
     'cat "$FAULTFORGE_RUN_ROOT/lab/docs/notes.md"',
     "cd $FAULTFORGE_RUN_ROOT/lab/packages && ls",
     'echo "$FAULTFORGE_TICKET_NUMBER"',
+    // The run's own files, though the runs folder they sit in is a checkout (Qodo on PR 312).
+    `node -e "console.log(process.env.FAULTFORGE_TICKET_FILE)"`,
+    'cat "$FAULTFORGE_TICKET_FILE"',
   ])("allows %s", (command) => {
     expect(bash(command)).toBeUndefined();
   });
@@ -85,6 +90,8 @@ describe("a wildcard before the private folder's name doesn't hide it (Qodo on P
     "cd p[r]ivate && ls",
     "cat {private,docs}/README.md",
     "ls priv*",
+    // A brace list past the most the policy expands still names the private worktree (Qodo on PR 312).
+    `cat {docs,private}/README.md${"{,}".repeat(11)}`,
   ])("refuses %s", (command) => {
     expect(bash(command)).toBeDefined();
   });
