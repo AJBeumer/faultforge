@@ -151,6 +151,7 @@ function fake(
       return AGENT_OK;
     },
     verifyPr: () => ({ problems: [] }),
+    checkFiles: () => ({ base: "b".repeat(40), head: "c".repeat(40), changed: [] }),
     audit: () => [],
     saveEvidence: (runId, w) => {
       calls.push(`save ${w ? "with" : "without"} workspace`);
@@ -444,11 +445,66 @@ describe("tick: stop paths", () => {
       "agent-started",
       "agent-finished",
       "audited",
+      "check-files",
       "verified",
       "finished",
       "saved",
       "cleanup",
     ]);
+    expect(f.events.find((e) => e.event === "check-files")).toMatchObject({ pr: 19, outcome: "unchanged" });
+  });
+
+  describe("the files that decide the check (#341)", () => {
+    const ticket = (events: IssueEvent[] = []) => ({
+      "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z"), ...events] },
+    });
+    const changed = (paths: string[]) => () => ({ base: "b".repeat(40), head: "c".repeat(40), changed: paths });
+
+    it("fails a run whose PR changes one, with check-weakened and the paths in the run log", async () => {
+      const f = fake(ticket(), { checkFiles: changed(["vitest.config.ts"]) });
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      expect(f.events.find((e) => e.event === "check-files")).toMatchObject({
+        pr: 19,
+        outcome: "check-weakened",
+        changed: ["vitest.config.ts"],
+      });
+      const finished = f.events.find((e) => e.event === "finished");
+      expect(finished?.label).toBe(LABELS.help);
+      expect(finished?.reason).toMatch(/check-weakened: .*`vitest\.config\.ts`/);
+      expect(f.calls).not.toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`);
+    });
+
+    it("allows the change when the owner labelled the ticket touches-check before the run, and logs it", async () => {
+      const f = fake(ticket([labelled("owner", "2026-11-09T08:05:00Z", "touches-check")]), {
+        checkFiles: changed(["package.json"]),
+      });
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+      expect(f.events.find((e) => e.event === "check-files")).toMatchObject({
+        outcome: "allowed",
+        changed: ["package.json"],
+        label: "touches-check",
+        by: "owner",
+        at: "2026-11-09T08:05:00Z",
+      });
+    });
+
+    it("doesn't count the label when someone else added it, or it was added once the agent had started", async () => {
+      for (const event of [
+        labelled("someone", "2026-11-09T08:05:00Z", "touches-check"),
+        labelled("owner", "2026-11-09T09:45:00Z", "touches-check"),
+      ]) {
+        const f = fake(ticket([event]), { checkFiles: changed(["biome.json"]) });
+        expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+        expect(f.events.find((e) => e.event === "check-files")?.outcome).toBe("check-weakened");
+      }
+    });
+
+    it("fails closed when the runner can't read the files", async () => {
+      const f = fake(ticket(), { checkFiles: () => ({ error: "couldn't fetch the pull request" }) });
+      expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+      expect(f.events.find((e) => e.event === "check-files")).toMatchObject({ outcome: "unread" });
+      expect(f.events.find((e) => e.event === "finished")?.reason).toMatch(/couldn't compare the files/);
+    });
   });
 
   it("sets agent-done only after the evidence is saved, and a failed save ends agent-needs-help (#245)", async () => {

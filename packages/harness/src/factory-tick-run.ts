@@ -1,9 +1,11 @@
 /**
  * The agent's part of a factory tick (`factory-tick.ts`), once the ticket is claimed and its workspace built:
  * step 7, run the agent on the ticket's checked text (`runOnTicket`), and step 8, don't take its word for the
- * result: audit what changed while it ran and verify the PR it names (`checkRun`).
+ * result: audit what changed while it ran, compare the files that decide the check (`factory-check-files.ts`) and
+ * verify the PR it names (`checkRun`).
  */
 import type { AgentRun } from "./factory-agent.ts";
+import { checkFilesProblems } from "./factory-check-files.ts";
 import {
   type AgentResult,
   type Candidate,
@@ -87,13 +89,15 @@ export function checkRun(run: ClaimedRun, outcome: AgentOutcome, minutes: number
     outcome.agent,
     outcome.result,
     (pr) => {
+      // The files that decide the check, compared by the runner itself before the PR can count (#341).
+      const weakened = checkFilesProblems(deps, ws, pick, pr, owner, outcome.from, log);
       const verification = deps.verifyPr(ws, pick.repoKey, pr);
       log("verified", {
         pr,
         problems: verification.problems,
         revertCheckRecord: verification.revertCheckRecord ?? null,
       });
-      return verification;
+      return { ...verification, problems: [...weakened, ...verification.problems] };
     },
     pick.github,
     minutes,

@@ -5,6 +5,7 @@
  * gives the real ones.
  */
 import type { AgentRun } from "./factory-agent.ts";
+import type { CheckFilesReading } from "./factory-check-files.ts";
 import type { EvidencePush } from "./factory-evidence.ts";
 import type { HooksReport } from "./factory-hooks.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
@@ -76,6 +77,9 @@ export interface TickDeps {
     log: Logger,
   ): Promise<AgentRun>;
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
+  /** The files that decide the check which differ between the run's base and the PR's head, read by the runner
+   * from GitHub, never from the agent's worktree (#341, `factory-check-files.ts`). */
+  checkFiles(ws: Workspace, repoKey: string, pr: number): CheckFilesReading;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
   /** Saves the run log (and the agent's transcript) to the private repo, and publishes what's allowed. */

@@ -6,6 +6,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileS
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
+import { readCheckFiles } from "./factory-check-files.ts";
 import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
@@ -222,6 +223,16 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         repoKey,
         pr,
         mode === "ci",
+      );
+    },
+    checkFiles(ws, repoKey, pr) {
+      const repo = factory.repos[repoKey];
+      return readCheckFiles(
+        repo?.checkFiles,
+        `https://github.com/${repo?.github}.git`,
+        ws.mainAtStart[repoKey],
+        pr,
+        join(runs, `check-files-${basename(ws.root)}-${repoKey}-pr${pr}`),
       );
     },
     record(runId, event) {
