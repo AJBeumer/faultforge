@@ -3,22 +3,24 @@
  * `npm run target:post` (`packages/harness/src/target-post.ts`), which checks the exact text it sends. So the guard
  * no longer reads what a raw write to a reviewed repository would say: it refuses the raw write and names the door.
  *
- *  - `doorCommand`: a command that is exactly `npm run target:post -- <plain words>`, run from the lab's own
- *    checkout whose `package.json` still runs the door, passes without its text being read.
+ *  - `doorCommand`: a command that is exactly `npm run target:post -- <plain words>` on one line, run from the lab's
+ *    own checkout whose `package.json` still runs the door and nothing before or after it, passes without its text
+ *    being read.
  *  - `sendsRaw`: a command that sends to a remote some other way: a push, a gh call that isn't a known read, or an
  *    HTTP write. The guard refuses it where it reaches a reviewed repo.
  *  - `mcpReads`: an MCP tool whose name says it only reads; any other tool naming a reviewed repo is refused.
  * Script files that could write to a reviewed repo are refused in guard-files.ts (`scriptProblem`), and inline
  * interpreter code that starts a program or reaches the network everywhere, in shell-exec.ts.
  */
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { type Call, calls } from "./guard-history.ts";
-import { isSend } from "./guard-reach.ts";
+import { HTTP_CLIENT, httpSends, isSend } from "./guard-reach.ts";
 import { LAB_ROOT } from "./guard-repos.ts";
+import { gitSteps, joinedWords, quotedSpans } from "./shell-scan.ts";
 
 /** What `package.json` must run for `target:post`: the door, and nothing else. */
-export const DOOR_SCRIPT = "tsx packages/harness/src/target-post-cli.ts";
+export const DOOR_SCRIPT = "node packages/harness/src/target-post-cli.ts";
 
 /** The refusal for a raw write to a reviewed repo. */
 export function doorReason(name: string): string {
@@ -29,9 +31,9 @@ export function doorReason(name: string): string {
 export const UNKNOWN_DESTINATION =
   "This sends to a repo the guard can't read from the command (a shell variable, a script, built text). If it is a reviewed repo, use npm run target:post; otherwise name the repo as owner/name in the command.";
 
-/** One plain argument: a word without shell syntax, or a quoted one without expansions. */
-const ARG = String.raw`(?:[\w./:=@+,~-]+|'[^']*'|"[^"$\x60\\]*")`;
-const DOOR = new RegExp(String.raw`^npm\s+run\s+target:post(?:\s+--(?:\s+${ARG})*)?\s*$`);
+/** One plain argument: a word without shell syntax, or a quoted one without expansions. Never a line break. */
+const ARG = String.raw`(?:[\w./:=@+,~-]+|'[^'\n\r]*'|"[^"$\x60\\\n\r]*")`;
+const DOOR = new RegExp(String.raw`^npm[ \t]+run[ \t]+target:post(?:[ \t]+--(?:[ \t]+${ARG})*)?[ \t]*$`);
 
 const same = (a: string, b: string) => {
   try {
@@ -42,15 +44,21 @@ const same = (a: string, b: string) => {
 };
 
 /**
- * True when the command is exactly the door: `npm run target:post -- …` with plain arguments (no expansion,
- * redirect or second command), run from `root`, the lab checkout the guard runs from, whose `package.json` runs
- * `DOOR_SCRIPT` for it. Anything else is judged like any other command.
+ * True when the command is exactly the door: `npm run target:post -- …` on one line with plain arguments (no
+ * expansion, redirect, line break or second command), run from `root`, the lab checkout the guard runs from, whose
+ * `package.json` runs `DOOR_SCRIPT` for it with no `pre` or `post` script around it, and whose `.npmrc` sets no
+ * shell, node option or script setting that could run something else. Anything else is judged like any other
+ * command.
  */
 export function doorCommand(command: string, cwd: string, root = LAB_ROOT): boolean {
   if (!DOOR.test(command.trim()) || !same(cwd, root)) return false;
   try {
     const scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
-    return scripts["target:post"] === DOOR_SCRIPT;
+    if (scripts["target:post"] !== DOOR_SCRIPT || scripts["pretarget:post"] || scripts["posttarget:post"]) return false;
+    const npmrc = join(root, ".npmrc");
+    return !(
+      existsSync(npmrc) && /script-shell|node-options|ignore-scripts|scripts-prepend/i.test(readFileSync(npmrc, "utf8"))
+    );
   } catch {
     return false;
   }
@@ -79,41 +87,61 @@ export function ghReads(args: string[]): boolean {
   return GH_READS.test(words.slice(0, 2).join(" ")) || GH_READS.test(words[0] ?? "");
 }
 
-/** Options that make an HTTP client send a body or another method than GET. */
-const WEB_WRITE =
-  /^(-X|--request|-d|--data\S*|--json|--form|-F|--post-data|--post-file|--upload-file|-T|--method|-Method|-Body|-InFile)$|^(-X|--request=|--data\S*=|-d)./i;
-
-/** True when an HTTP call sends something: a body, or a method other than GET or HEAD. */
+/** True when an HTTP call sends something (`httpSends`), read with the client it runs. */
 function webSends(call: Call): boolean {
-  return call.args.some((a, i) => {
-    if (!WEB_WRITE.test(a)) return false;
-    const value = /^(-X|--request|-Method|--method)$/i.test(a) ? (call.args[i + 1] ?? "") : "";
-    return !/^(GET|HEAD)$/i.test(value);
-  });
+  return httpSends(HTTP_CLIENT.exec(` ${call.text}`)?.[1] ?? "curl", call.args);
 }
 
 /**
- * True when the command sends to a remote other than through the door: a push or any gh or raw API write
- * (`isSend`), a gh call that isn't a known read (`ghReads`, so `gh pr -R o/n merge` counts), or an HTTP client that
- * sends a body or a method.
+ * True when the command pushes: git's own subcommand is `push` or `send-pack` (so `push` in a commit message,
+ * `git stash push` or `git config push.default` is none), or, as written with quoted text blanked, a git step
+ * names one in a spelling the parser didn't follow.
+ */
+function pushes(command: string, found: Call[]): boolean {
+  if (found.some((call) => call.program === "git" && /^(push|send-pack)$/.test(call.args[0] ?? ""))) return true;
+  // Quoted text with a space in it is a message, not a word; quote marks inside a word (`pu''sh`) join it.
+  let text = command;
+  for (const span of quotedSpans(command).reverse()) {
+    if (/\s/.test(command.slice(span.start + 1, span.end - 1))) {
+      text = `${text.slice(0, span.start)} ${text.slice(span.end)}`;
+    }
+  }
+  const words = joinedWords(text);
+  return gitSteps(words, /(?<![\w./-])(?<!\bstash\s+)(push|send-pack)(?![\w.-])/).length > 0;
+}
+
+/**
+ * True when the command sends to a remote other than through the door: a push, a gh or raw API write (`isSend`), a
+ * gh call that isn't a known read (`ghReads`, so `gh pr -R o/n merge` counts), or an HTTP client that sends a body
+ * or a method.
  */
 export function sendsRaw(command: string, cwd: string, backticks: boolean): boolean {
   if (isSend(command)) return true;
-  return calls(command, cwd, backticks).some((call) =>
+  const found = calls(command, cwd, backticks);
+  if (pushes(command, found)) return true;
+  return found.some((call) =>
     call.program === "gh" ? !ghReads(call.args) : call.program === "web" ? webSends(call) : false,
   );
 }
 
-/** True when an HTTP write in the command goes to a URL the guard can't read (a variable or built text). */
+/** True when an HTTP write in the command has an argument the guard can't read: its URL could be any repo's. */
 export function webToUnknown(command: string, cwd: string, backticks: boolean): boolean {
   return calls(command, cwd, backticks).some(
-    (call) =>
-      call.program === "web" && webSends(call) && !call.args.some((a) => /^https?:\/\//i.test(a) && !/[$`%]/.test(a)),
+    (call) => call.program === "web" && webSends(call) && call.args.some((a) => /[$`%]/.test(a)),
   );
 }
 
-/** True when an MCP tool's name says it only reads (`get_`, `list_`, `search_`, `read_` and the like). */
+/**
+ * True when an MCP tool's name says it only reads: a reading verb among its words (`get_issue`, `issue_read`,
+ * `list_pull_requests`) and no writing one.
+ */
 export function mcpReads(tool: string): boolean {
-  const name = tool.split("__").at(-1) ?? "";
-  return /^(get|list|search|read|view|fetch|download)(_|$)/i.test(name);
+  const words = (tool.split("__").at(-1) ?? "").toLowerCase().split(/[_-]/);
+  const reads = words.some((w) => /^(get|list|search|read|view|fetch|download)$/.test(w));
+  const writes = words.some((w) =>
+    /^(create|update|delete|add|push|merge|write|edit|close|comment|remove|set|fork|lock|reopen|submit|assign|dismiss|upload|rename|transfer)$/.test(
+      w,
+    ),
+  );
+  return reads && !writes;
 }

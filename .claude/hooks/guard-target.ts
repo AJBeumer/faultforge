@@ -39,7 +39,7 @@ import { DEFAULT_BUDGET_MS, withDeadline, withPrivateCopies, withPrivateNames } 
 import { doorCommand, doorReason, sendsRaw, UNKNOWN_DESTINATION, webToUnknown } from "./guard-door.ts";
 import { aliasProblem, shellReading, UnknownRepository, unreadableDestination } from "./guard-expand.ts";
 import { BuiltText, scriptProblem, Unreadable } from "./guard-files.ts";
-import { historyProblem } from "./guard-history.ts";
+import { calls, historyProblem } from "./guard-history.ts";
 import { guardSwitchOff } from "./guard-hooks.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { outsidePostedText } from "./guard-posted.ts";
@@ -283,11 +283,17 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     const action = caseActionProblem(ctx, command, r);
     if (action) deny(action);
   }
-  // Links still go one way: a commit's message may link only to the repo whose checkout the command runs in. One
-  // that only names a reviewed repo in its text (a fake `--repo`) is a lab commit, judged as one (Qodo, 77c1f44).
+  // Links still go one way: a commit's message may link only to the repo whose checkout its git calls all run in,
+  // wherever the command starts (`git -C <other checkout>`; Qodo on PR 344). One that only names a reviewed repo in
+  // its text (a fake `--repo`) is a lab commit, judged as one (Qodo, 77c1f44).
   if (writes) {
-    const here = locate(ctx.cwd, ctx.reviewed);
-    checkLinks(ctx, command, here ? ctx.reviewed.filter((r) => r.github !== here.github) : ctx.reviewed);
+    const homes = new Set(
+      calls(command, ctx.cwd, ctx.backticks)
+        .filter((call) => call.program === "git")
+        .map((call) => (call.dir === undefined ? undefined : locate(call.dir, ctx.reviewed)?.github)),
+    );
+    const home = homes.size === 1 ? [...homes][0] : undefined;
+    checkLinks(ctx, command, home ? ctx.reviewed.filter((r) => r.github !== home) : ctx.reviewed);
     // A local commit's, tag's or note's own message is read as git's commit-msg hook reads it: an early refusal,
     // and the denial the factory's hook self-test probes for (factory-hooks.ts). Each piece on its own.
     const found = [...new Set(postedPieces(ctx, command, true).flatMap((piece) => telltales(piece)))];

@@ -5,8 +5,9 @@
  * through `target-post.ts` or is listed with its reason.
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { OWN_FILES } from "../../../.claude/hooks/guard-self.ts";
 
 const SRC = import.meta.dirname;
 
@@ -48,6 +49,22 @@ describe("one door to the reviewed repository (#340)", () => {
       const text = readFileSync(join(SRC, file), "utf8");
       expect(text, file).toMatch(/\bsendPost\(/);
       expect(text, file).not.toMatch(/child_process/);
+    }
+  });
+
+  it("imports only files the guard holds, so no module it loads can change what it sends (Qodo on PR 344)", () => {
+    const root = join(SRC, "../../..");
+    const held = (path: string) => {
+      const rel = relative(root, path).replace(/\\/g, "/").toLowerCase();
+      return OWN_FILES.some((own) => (own.endsWith("/") ? rel.startsWith(own) : rel === own));
+    };
+    const door = readdirSync(SRC).filter((f) => /^target-post[\w-]*\.ts$/.test(f) && !f.endsWith(".test.ts"));
+    expect(door.sort()).toEqual(["target-post-cli.ts", "target-post-push.ts", "target-post.ts"]);
+    for (const file of door) {
+      expect(held(join(SRC, file)), file).toBe(true);
+      const imports = [...readFileSync(join(SRC, file), "utf8").matchAll(/from "(\.[^"]+)"|import\("(\.[^"]+)"\)/g)];
+      for (const m of imports)
+        expect(held(resolve(SRC, m[1] ?? m[2] ?? "")), `${file} imports ${m[1] ?? m[2]}`).toBe(true);
     }
   });
 });

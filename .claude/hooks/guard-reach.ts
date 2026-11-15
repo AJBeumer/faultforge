@@ -74,15 +74,53 @@ export function graphqlMutation(command: string): boolean {
   return rawApiWrite(command) && /api\.github\.com\/graphql\b/i.test(joinedWords(command));
 }
 
+/** The HTTP clients the guard reads: curl, wget, PowerShell's web calls, httpie and xh. */
+export const HTTP_CLIENT =
+  /(?:^|[\s/\\])(curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|https?|xh)(?:\.exe)?(?=\s|$)/i;
+
+/**
+ * True when an HTTP client's arguments send something: a body, a form, an upload, or a method other than GET or
+ * HEAD (#340). curl's short options are read alone or combined (`-d`, `-sd`, `-sX POST`, `-XPOST`) and in their own
+ * case, so `-f`, `-D` and `-x` stay reads; a PowerShell parameter (`-Headers`) is a word, not a cluster. httpie and xh
+ * send a body for a data item (`key=value`, `key:=json`, `field@file`) or a method word.
+ */
+export function httpSends(client: string, args: string[]): boolean {
+  const method = (value: string) => !/^(GET|HEAD)$/i.test(value);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (/^--(data\S*|json|form\S*|upload-file|post-data|post-file|body-data|body-file)(=|$)/.test(a)) return true;
+    if (/^-(Body|InFile|Form)$/i.test(a)) return true;
+    const named = /^(?:--request|--method|-Method)(?:[=:](.*))?$/i.exec(a);
+    if (named) {
+      if (method(named[1] ?? args[i + 1] ?? "")) return true;
+      continue;
+    }
+    const short = /^-([a-zA-Z]+)(.*)$/.exec(a);
+    if (/^curl/i.test(client) && short && !/^[A-Z][a-z]{2,}/.test(short[1] ?? "")) {
+      const letters = short[1] ?? "";
+      const x = letters.indexOf("X");
+      const data = letters.search(/[dFT]/);
+      if (data >= 0 && (x < 0 || data < x)) return true;
+      if (x >= 0 && method(`${letters.slice(x + 1)}${short[2] ?? ""}` || (args[i + 1] ?? ""))) return true;
+    }
+  }
+  if (!/^(https?|xh)$/i.test(client)) return false;
+  const items = args.filter((a) => !a.startsWith("-"));
+  return (
+    args.some((a) => /^(--form|-f|--raw|--multipart)$/.test(a)) ||
+    /^(POST|PUT|PATCH|DELETE)$/i.test(items[0] ?? "") ||
+    items.some((a) => !/:\/\//.test(a) && /^[^=:@\s]+(?:==?|:=|:=@|=@|@)/.test(a))
+  );
+}
+
 /** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */
 function rawApiWrite(command: string): boolean {
-  const words = joinedWords(command);
-  return (
-    wordThen(words, /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b/i, /github\.com/i) &&
-    /(?:\s-X\s*\w|--request|\s-d\b|--data|--json|--form|\s-F\b|-Method|-Body|-InFile|--post-data|--post-file|--body-file|--upload-file|\s-T\b|--method|\s(?:POST|PATCH|PUT|DELETE)\b)/i.test(
-      words,
-    )
-  );
+  return segments(joinedWords(command)).some(({ text }) => {
+    const client = HTTP_CLIENT.exec(text);
+    if (!client) return false;
+    const after = text.slice(client.index + client[0].length);
+    return /github\.com/i.test(after) && httpSends(client[1] ?? "", after.trim().split(/\s+/));
+  });
 }
 
 /**
@@ -97,8 +135,9 @@ export function isWrite(command: string): boolean {
 }
 
 /**
- * True when the command sends something to a remote: a push, or any gh or raw API write. A commit, tag or note is a
- * write too (`isWrite`), but one that stays in the checkout until a push sends it.
+ * True when the command makes a gh or raw API write. With a push (guard-door.ts reads git's own subcommand for
+ * that), that is everything that sends to a remote; a commit, tag or note stays in the checkout until a push sends
+ * it.
  */
 export function isSend(command: string): boolean {
   const unescaped = command.replace(/\\(?=[\w-])/g, "");
@@ -107,14 +146,12 @@ export function isSend(command: string): boolean {
 
 /** True when `c`, the command with its quotes removed, writes to a repo; `command` is as written. */
 function writes(c: string, command: string): boolean {
-  return gitSteps(c, /\b(commit|tag|notes)\b/).length > 0 || sends(c, command);
+  return gitSteps(c, /\b(commit|push|tag|notes|send-pack)\b/).length > 0 || sends(c, command);
 }
 
-/** True when `c`, the command with its quotes removed, sends to a remote; `command` is as written. */
+/** True when `c`, the command with its quotes removed, makes a gh or raw API write; `command` is as written. */
 function sends(c: string, command: string): boolean {
   return (
-    // A push as its own word: `pre-push` in a hook's path is no push.
-    gitSteps(c, /(?<![\w./-])(push|send-pack)\b/).length > 0 ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge|develop|lock|unlock|transfer|pin|delete)\b/.test(
       c,
     ) ||
@@ -122,7 +159,10 @@ function sends(c: string, command: string): boolean {
     /\bgh\s+(label|release)\s+(create|edit|upload|clone)\b/.test(c) ||
     /\bgh\s+repo\s+(edit|rename|create|delete|archive|unarchive|sync|fork)\b/.test(c) ||
     /\bgh\s+(workflow\s+run|run\s+rerun|gist\s+(create|edit)|secret\s+set|variable\s+set)\b/.test(c) ||
-    (/\bgh\s+api\b/.test(c) && /(\s-X\s*\w|--method|\s-[fF]|--field|--raw-field|--input|\bgraphql\b)/.test(c)) ||
+    // A method other than GET or HEAD, a field, an input or GraphQL: `-X GET` reads.
+    (/\bgh\s+api\b/.test(c) &&
+      (/(\s-[fF]|--field|--raw-field|--input|\bgraphql\b)/.test(c) ||
+        /(?:\s-X\s*=?\s*|--method[=\s]+)(?!(?:GET|HEAD)\b)\w/i.test(c))) ||
     rawApiWrite(command)
   );
 }

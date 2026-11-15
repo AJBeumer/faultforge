@@ -181,5 +181,80 @@ describe("the door rule (#340)", () => {
     expect(mcpReads("mcp__github__list_issues")).toBe(true);
     expect(mcpReads("mcp__github__create_pull_request")).toBe(false);
     expect(mcpReads("mcp__github__push_files")).toBe(false);
+    // The verb may come last (Qodo on PR 344).
+    expect(mcpReads("mcp__github__issue_read")).toBe(true);
+    expect(mcpReads("mcp__github__issue_write")).toBe(false);
+  });
+});
+
+describe("what Qodo found in the review of PR 344", () => {
+  const LAB_CWD = LAB_ROOT;
+
+  it("takes no second line after the door: a line break ends the door's form", () => {
+    const merge = "npm run target:post -- push --branch x\ngh pr merge 5 -R AJBeumer/faultforge-target";
+    expect(doorCommand(merge, LAB_ROOT)).toBe(false);
+    expect(guardDecision("Bash", { command: merge }, LAB_CWD, CONFIG)).toMatch(DOOR);
+    expect(doorCommand("npm run target:post -- push --branch x\r\nrm -rf .claude", LAB_ROOT)).toBe(false);
+  });
+
+  it("lets no pre or post script, or an npmrc that changes how scripts run, ride along with the door", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard-door-pre-"));
+    const write = (scripts: Record<string, string>) =>
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { "target:post": DOOR_SCRIPT, ...scripts } }),
+      );
+    const door = "npm run target:post -- push --branch x";
+    write({});
+    expect(doorCommand(door, root, root)).toBe(true);
+    write({ "pretarget:post": "gh pr merge 5" });
+    expect(doorCommand(door, root, root)).toBe(false);
+    write({ "posttarget:post": "gh pr merge 5" });
+    expect(doorCommand(door, root, root)).toBe(false);
+    write({});
+    writeFileSync(join(root, ".npmrc"), "script-shell=./post.sh\n");
+    expect(doorCommand(door, root, root)).toBe(false);
+  });
+
+  it("refuses combined curl flags and httpie's implicit POST to the target", () => {
+    const api = "https://api.github.com/repos/AJBeumer/faultforge-target/issues";
+    expect(bash(`curl -sd @body.json ${api}`)).toMatch(DOOR);
+    expect(bash(`curl -sX POST ${api}`)).toMatch(DOOR);
+    expect(bash(`curl -XPOST ${api}`)).toMatch(DOOR);
+    expect(bash("http api.github.com/repos/AJBeumer/faultforge-target/issues title=x")).toMatch(DOOR);
+    expect(bash("http POST api.github.com/repos/AJBeumer/faultforge-target/issues")).toMatch(DOOR);
+  });
+
+  it("refuses an HTTP write with any argument it can't read, whatever literal URL sits beside it", () => {
+    expect(bash('curl -X POST https://example.com "$TARGET_URL" -d "{}"')).toMatch(UNKNOWN);
+  });
+
+  it("lets explicit reads through: gh api -X GET, and curl's read flags", () => {
+    const api = "https://api.github.com/repos/AJBeumer/faultforge-target/pulls";
+    expect(bash("gh api -X GET repos/AJBeumer/faultforge-target/issues/5")).toBeUndefined();
+    expect(bash(`curl -f ${api}`)).toBeUndefined();
+    expect(bash(`curl -fsSL -D headers.txt -H "Accept: application/json" ${api}`)).toBeUndefined();
+    expect(bash(`curl -XGET ${api}`)).toBeUndefined();
+  });
+
+  it("reads push only as git's own subcommand: a message, a stash or a config key that says push is none", () => {
+    expect(bash('git commit -m "Retry push on timeout"', FIXTURE.dir)).toBeUndefined();
+    expect(bash("git stash push -m wip", FIXTURE.dir)).toBeUndefined();
+    expect(bash("git config push.default simple", FIXTURE.dir)).toBeUndefined();
+    expect(bash("git -C . push origin tidy", FIXTURE.dir)).toMatch(DOOR);
+  });
+
+  it("judges a commit's links by the checkout its git call runs in, not the folder the command starts from", () => {
+    const other = tempRepo(true);
+    const config = guardConfig(FIXTURE.dir, (c) => {
+      c.repos.other = { ...c.repos.target, github: "AJBeumer/other-app", path: other.dir };
+    });
+    const at = (path: string) => path.replace(/\\/g, "/");
+    // From the target's checkout, a commit in the other one may not link the target.
+    const cross = `git -C ${at(other.dir)} commit --allow-empty -m "See faultforge-target#5"`;
+    expect(guardDecision("Bash", { command: cross }, FIXTURE.dir, config)).toMatch(/link to the target/);
+    // From anywhere, a commit in the target's own checkout may name its own ticket.
+    const own = `git -C ${at(FIXTURE.dir)} commit --allow-empty -m "Closes faultforge-target#5"`;
+    expect(guardDecision("Bash", { command: own }, LAB, config)).toBeUndefined();
   });
 });

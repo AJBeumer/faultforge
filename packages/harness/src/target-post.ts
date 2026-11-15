@@ -13,8 +13,9 @@
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
  *
  * Every kind takes `--repo owner/name`, which must be a repo `factory.json` marks `"guard": "reviewed"`; without it,
- * the one reviewed repo. Text comes only from files, read as UTF-8; a title is one line. A push sends the branch's
- * commit from `--checkout` (by default the repo's checkout in `factory.json`) to its origin, never forced.
+ * faultforge-target, which the guard always counts as reviewed. Text comes only from files, read as UTF-8; a title is
+ * one line. A push sends the branch's commit from `--checkout` (by default the repo's checkout in `factory.json`) to
+ * its origin, never forced.
  *
  * The checks, on each piece on its own: the giveaway words (`neutral.ts`'s `telltales`), a private template's id,
  * and words addressed to Qodo. A push's pieces are its branch name and, for every commit the remote doesn't have,
@@ -27,16 +28,21 @@
  * GitHub before retrying: a write that failed may still have landed). An unexpected error, even while loading, is 2
  * too: `npm run target:post` runs `target-post-cli.ts`.
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "../../../.claude/hooks/guard-private.ts";
-import { errorText } from "./error-text.ts";
-import { type FactoryConfig, loadFactory } from "./factory-config.ts";
-import { CALL_TIMEOUT_MS, runExternal } from "./github.ts";
+import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
-import { ROOT } from "./paths.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
+
+// The door imports only the guard's own files (guard-self.ts holds them) and Node's: a module it imported that a
+// session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
+// guard does, from factory.json with the target always among them, and runs with node, not a package's runner.
+
+/** An error's message, or the thrown value as text. */
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export const KINDS = [
   "issue-create",
@@ -80,14 +86,16 @@ export class SendFailed extends Error {}
 /** gh with no host or repo from the environment: the post names github.com and the repo itself. */
 const realGh: Gh = (args, input) => {
   const { GH_HOST: _host, GH_REPO: _repo, ...env } = process.env;
-  return runExternal(`gh ${args.slice(0, 2).join(" ")}`, "gh", args, CALL_TIMEOUT_MS, {
+  return execFileSync("gh", args, {
+    encoding: "utf8",
+    timeout: 60_000,
     maxBuffer: 16 * 1024 * 1024,
     env,
     ...(input === undefined ? {} : { input }),
   });
 };
 const realGit: Git = (cwd, args) =>
-  runExternal(`git ${args[0] ?? ""}`, "git", ["-C", cwd, ...args], 300_000, { maxBuffer: 256 * 1024 * 1024 });
+  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 300_000, maxBuffer: 256 * 1024 * 1024 });
 
 /** The problems with each piece, as `label: reason`; empty when every piece reads as an ordinary change. */
 export function textProblems(pieces: [string, string][], env: NodeJS.ProcessEnv = process.env): string[] {
@@ -187,13 +195,11 @@ function readTitle(path: string): string {
   return title;
 }
 
-/** The reviewed repos in `factory`, by `owner/name`. */
-function reviewedRepos(factory: FactoryConfig) {
-  return Object.values(factory.repos).filter((r) => r.guard === "reviewed");
-}
-
-/** The post a command line asks for, its text read from its files. Throws `Usage` when it can't make one. */
-export function parsePost(argv: string[], factory: FactoryConfig, root = ROOT): Post {
+/**
+ * The post a command line asks for, its text read from its files, to one of `reviewed` (the first unless `--repo`
+ * names another). Throws `Usage` when it can't make one.
+ */
+export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   const [kind, ...rest] = argv;
   if (!KINDS.includes(kind as Kind)) throw new Usage(`the first word must be one of: ${KINDS.join(", ")}`);
   let values: Record<string, string | undefined>;
@@ -211,12 +217,10 @@ export function parsePost(argv: string[], factory: FactoryConfig, root = ROOT): 
   } catch (error) {
     throw new Usage(errorText(error));
   }
-  const reviewed = reviewedRepos(factory);
-  const repo = values.repo ? reviewed.find((r) => r.github.toLowerCase() === values.repo?.toLowerCase()) : undefined;
-  if (values.repo ? !repo : reviewed.length !== 1) {
-    throw new Usage(`--repo must name a reviewed repo: ${reviewed.map((r) => r.github).join(", ")}`);
-  }
-  const target = repo ?? (reviewed[0] as (typeof reviewed)[number]);
+  const target = values.repo
+    ? reviewed.find((r) => r.github.toLowerCase() === values.repo?.toLowerCase())
+    : reviewed[0];
+  if (!target) throw new Usage(`--repo must name a reviewed repo: ${reviewed.map((r) => r.github).join(", ")}`);
   const post: Post = { kind: kind as Kind, repo: target.github };
   const allowed: Record<Kind, string[]> = {
     "issue-create": ["title-file", "body-file"],
@@ -253,7 +257,7 @@ export function parsePost(argv: string[], factory: FactoryConfig, root = ROOT): 
   if (post.kind === "push") {
     needs("branch");
     post.branch = values.branch;
-    post.checkout = resolve(values.checkout ?? resolve(root, target.path));
+    post.checkout = resolve(values.checkout ?? target.checkout);
   }
   return post;
 }
@@ -261,13 +265,13 @@ export function parsePost(argv: string[], factory: FactoryConfig, root = ROOT): 
 /** The command: `target-post-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export function main(
   argv: string[],
-  deps: Deps & { factory?: FactoryConfig; log?: (line: string) => void; error?: (line: string) => void } = {},
+  deps: Deps & { reviewed?: Reviewed[]; log?: (line: string) => void; error?: (line: string) => void } = {},
 ): number {
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   let post: Post;
   try {
-    post = parsePost(argv, deps.factory ?? loadFactory());
+    post = parsePost(argv, deps.reviewed ?? reviewedRepos(process.env.FAULTFORGE_CONFIG));
   } catch (e) {
     if (!(e instanceof Usage)) throw e;
     error(`target:post: ${e.message}`);
