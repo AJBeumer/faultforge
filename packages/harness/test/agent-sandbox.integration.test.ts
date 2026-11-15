@@ -299,7 +299,10 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const file = join(work, "claude-out.txt");
       const viaFile = await asAgent(
         "/bin/sh",
-        ["-c", `"${claude}" -p "Reply with OK" --output-format json > "${file}" 2>&1; echo "exit $?"; cat "${file}"`],
+        [
+          "-c",
+          `"${claude}" -p "Reply with OK" --output-format json > "${file}" 2>&1; echo "exit $?"; cat "${file}"; id; ls -la "$HOME" "$HOME/.claude" 2>&1 | head -30; tail -n 60 "$HOME"/.claude/debug/*.txt 2>&1 | cut -c1-300`,
+        ],
         { env: agentLike },
       );
       const asRunner = await new Promise<string>((done) => {
@@ -322,7 +325,7 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
         counts: proxy.counts(),
         refused: refused.slice(before),
         out: out.slice(-3000),
-        viaFile: viaFile.out.slice(-2000),
+        viaFile: viaFile.out.slice(-9000),
         asRunner: asRunner.slice(-2000),
       });
       expect(out, seen).toMatch(/invalid x-api-key|Invalid API key|authentication_error|401/i);
