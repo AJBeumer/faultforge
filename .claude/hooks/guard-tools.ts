@@ -6,6 +6,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
+import { gitFolderEdit } from "./guard-hooks.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";
 import { PRIVATE_ID_REASON, privateRoot } from "./guard-private.ts";
 import {
@@ -46,6 +47,9 @@ export function deny(reason: string): never {
 
 export function checkFileEdit(ctx: Context, args: ToolInput) {
   const path = resolve(ctx.cwd, String(args.file_path ?? args.notebook_path ?? ""));
+  // A git folder's hooks and config decide what git runs: no edit there could keep the git-level guard (re-grade 6).
+  const gitFolder = gitFolderEdit(path);
+  if (gitFolder) deny(gitFolder);
   const text = [
     args.content,
     args.new_string,

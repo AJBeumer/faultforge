@@ -8,6 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import { HOME_SECRET_REASON, homeSecretPath } from "./factory-policy-home.ts";
 import { ANSWER_FILES, globBase, inside, privateReadViolation, real } from "./factory-policy-private.ts";
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
 import { quotedMask } from "./shell-scan.ts";
@@ -70,6 +71,9 @@ export function readViolation(
     return "no reading process files under /proc";
   if ([...texts, ...resolved].some((t) => ANSWER_FILES.test(t)))
     return "no run reads the answer key, the audit log or the templates";
+  // The owner's secrets in the home folder, read as written (`~/…`) and where the path really leads (re-grade 6).
+  if ([...named.filter((t) => t.startsWith("~")), ...resolved].some((p) => homeSecretPath(p, env)))
+    return HOME_SECRET_REASON;
   // A Grep pattern is what it looks for in a file, not a path: searching code for a name reads no private file.
   const pathTexts = tool === "Grep" ? texts.filter((t) => t !== pattern) : texts;
   return privateReadViolation(tool, pathTexts, resolved, env);

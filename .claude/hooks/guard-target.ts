@@ -37,6 +37,8 @@ import {
   unreadablePost,
 } from "./guard-expand.ts";
 import { BuiltText, builtText, referencedFiles, scriptProblem, stdinFiles, Unreadable } from "./guard-files.ts";
+import { historyProblem } from "./guard-history.ts";
+import { guardSwitchOff } from "./guard-hooks.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { commitMessages, commitSteps, outsidePostedText, postedText } from "./guard-posted.ts";
 import {
@@ -304,6 +306,9 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   // Whether or not the command reads as a write: a gist or a release found as the shell reads its words is one,
   // however it is spelled (`g\h gist create`; Qodo on PR 310).
   checkPrivateFiles(ctx, command);
+  // Wherever it runs: the git-level guard stays on, the private repo private, and lab history out (re-grade 6).
+  const moved = guardSwitchOff(command, ctx.backticks, ctx.cwd) ?? historyProblem(ctx, command);
+  if (moved) deny(moved);
   if (writes) checkPrivateIds(ctx, command, readable);
   const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);
 

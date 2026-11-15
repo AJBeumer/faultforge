@@ -24,6 +24,8 @@ const decide = (tool: string, toolInput: object, cwd = HARNESS, config = DEFAULT
   guardDecision(tool, toolInput, cwd, config);
 
 const bash = (command: string, cwd?: string) => decide("Bash", { command }, cwd);
+/** A push to a reviewed repo from another folder: refused before its flags are read (re-grade 6). */
+const ELSEWHERE_PUSH = /Force pushes|only from its own checkout/;
 
 describe("guard-target hook", () => {
   describe("blocks", () => {
@@ -42,8 +44,8 @@ describe("guard-target hook", () => {
     });
 
     it("a force push to the target by URL, from anywhere", () => {
-      expect(bash("git push https://github.com/AJBeumer/faultforge-target.git +main")).toMatch(/Force pushes/);
-      expect(bash("git push --force https://github.com/AJBeumer/faultforge-target.git main")).toMatch(/Force pushes/);
+      expect(bash("git push https://github.com/AJBeumer/faultforge-target.git +main")).toMatch(ELSEWHERE_PUSH);
+      expect(bash("git push --force https://github.com/AJBeumer/faultforge-target.git main")).toMatch(ELSEWHERE_PUSH);
     });
 
     it("a comment with a case id posted through gh api", () => {
@@ -225,7 +227,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
       /hint into other-app/,
     );
     expect(bash3("git push --force https://github.com/AJBeumer/other-app.git main")).toMatch(
-      /Force pushes to other-app/,
+      /Force pushes to other-app|other-app only from its own checkout/,
     );
     expect(bash3('gh issue create --repo AJBeumer/faultforge --title "x" --body "see other-app#2"')).toMatch(
       /link to the target/,
@@ -288,7 +290,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   it("still blocks a target force push chained after a command for this repo (Qodo, 2e15454)", () => {
     const command =
       "gh issue list --repo AJBeumer/faultforge; git push --force https://github.com/AJBeumer/faultforge-target.git main";
-    expect(bash(command)).toMatch(/Force pushes|separate commands/);
+    expect(bash(command)).toMatch(/Force pushes|separate commands|only from its own checkout/);
   });
 
   it("still blocks a target force push via cd, chained after a post here", () => {
@@ -694,8 +696,8 @@ describe("guard-target hook reads posted text as written: a repo name next to a 
     expect(bash(`gh pr create --repo AJBeumer/faultforge-target --title "Tidy" --body-file ${body}`)).toBeUndefined();
     expect(bash(`gh pr create --repo AJBeumer/faultforge-target ${ownTicket}`, TARGET)).toBeUndefined();
     expect(bash(`gh pr create ${ownTicket.replace("https://github.com/", "")}`, TARGET)).toBeUndefined();
-    expect(bash("git push https://github.com/AJBeumer/faultforge-target.git HEAD")).toBeUndefined();
-    expect(bash("git push git@github.com:AJBeumer/faultforge-target.git HEAD")).toBeUndefined();
+    expect(bash("git push https://github.com/AJBeumer/faultforge-target.git HEAD", TARGET)).toBeUndefined();
+    expect(bash("git push git@github.com:AJBeumer/faultforge-target.git HEAD", TARGET)).toBeUndefined();
     expect(bash("cd D:/Projects/FaultForge/../faultforge-target && git status")).toBeUndefined();
     expect(
       bash('cd D:/Projects/FaultForge/../faultforge-target && git commit -m "Shorten README intro"'),

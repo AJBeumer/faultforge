@@ -2,11 +2,12 @@
  * The lab's own git hooks (re-grade 5): links go one way, so a lab commit message may name target work as plain
  * text, never link a reviewed repo's issue or PR. git runs these for every commit and push, whatever started it.
  */
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { tempRepo } from "./fixtures.ts";
-import { check, LINK_REASON } from "./git-guard.ts";
+import { check, LINK_REASON, OTHER_REMOTE, PRIVATE_ID, REVIEWED_REMOTE } from "./git-guard.ts";
 
 const ZERO = "0".repeat(40);
 const T = "AJBeumer/faultforge-target";
@@ -93,5 +94,89 @@ describe("the lab's pre-push asks the remote what it has (Qodo on PR 329)", () =
     const next = old.git("rev-parse", "HEAD").trim();
     const oldUrl = old.git("remote", "get-url", "origin").trim();
     expect(check("lab-pre-push", old.dir, oldUrl, update(next, ZERO, "refs/heads/new"))).toBeUndefined();
+  });
+});
+
+describe("the lab's history never goes to a reviewed repo (re-grade 6)", () => {
+  it.each([`https://github.com/${T}.git`, `git@github.com:${T}.git`, `ssh://git@ssh.github.com:443/${T}`])(
+    "refuses a push to %s",
+    (url) => {
+      const { dir, base, head } = lab("Tidy for target 3");
+      expect(check("lab-pre-push", dir, "t", update(head, base), url)?.reasons).toEqual([REVIEWED_REMOTE]);
+    },
+  );
+
+  it("refuses a push to a local checkout of a reviewed repo", () => {
+    const target = tempRepo();
+    target.git("remote", "add", "origin", `https://github.com/${T}.git`);
+    const { dir, base, head } = lab("Tidy for target 3");
+    expect(check("lab-pre-push", dir, target.dir, update(head, base), target.dir)?.reasons).toEqual([REVIEWED_REMOTE]);
+  });
+
+  it("still lets a push go to the lab's own remote", () => {
+    const { dir, git, base, head } = lab("Tidy for target 3");
+    const url = git("remote", "get-url", "origin").trim();
+    expect(check("lab-pre-push", dir, "origin", update(head, base), url)).toBeUndefined();
+  });
+});
+
+describe("a lab commit may not name a private template (re-grade 6)", () => {
+  const priv = mkdtempSync(join(tmpdir(), "git-guard-private6-"));
+  mkdirSync(join(priv, "templates", "x-secret-v1"), { recursive: true });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["Notes for x-secret-v1\n", "Notes for 1v-terces-x\n", "Notes for X_SECRET_V1\n"])(
+    "refuses the commit message %j",
+    (message) => {
+      vi.stubEnv("FAULTFORGE_PRIVATE_DIR", priv);
+      const { dir } = tempRepo();
+      const file = join(dir, "MSG");
+      writeFileSync(file, message);
+      expect(check("lab-commit-msg", dir, file)?.reasons).toEqual([PRIVATE_ID]);
+    },
+  );
+
+  it("refuses a pushed commit whose message names one", () => {
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", priv);
+    const { dir, base, head } = lab("Notes for x-secret-v1");
+    expect(check("lab-pre-push", dir, "origin", update(head, base))?.reasons).toEqual([PRIVATE_ID]);
+  });
+
+  it("still allows a message that names no private template", () => {
+    vi.stubEnv("FAULTFORGE_PRIVATE_DIR", priv);
+    const { dir } = tempRepo();
+    const file = join(dir, "MSG");
+    writeFileSync(file, "Tidy the notes\n");
+    expect(check("lab-commit-msg", dir, file)).toBeUndefined();
+  });
+});
+
+describe("the private checkout's history goes only to its recorded origin (re-grade 6)", () => {
+  const ORIGIN = "https://github.com/AJBeumer/x-private.git";
+  function priv(recorded = true) {
+    const repo = tempRepo();
+    if (recorded) repo.git("config", "review-guard.origin", ORIGIN);
+    return repo;
+  }
+
+  it("allows the recorded origin, in any spelling of the same repo", () => {
+    const { dir } = priv();
+    expect(check("private-pre-push", dir, "origin", "", ORIGIN)).toBeUndefined();
+    expect(check("private-pre-push", dir, "x", "", "git@github.com:AJBeumer/x-private.git")).toBeUndefined();
+  });
+
+  it.each([
+    "https://github.com/AJBeumer/faultforge.git",
+    `https://github.com/${T}.git`,
+    "D:/somewhere/else.git",
+    "https://gitlab.com/AJBeumer/x-private.git",
+  ])("refuses a push to %s", (url) => {
+    const { dir } = priv();
+    expect(check("private-pre-push", dir, "lab", "", url)?.reasons).toEqual([OTHER_REMOTE]);
+  });
+
+  it("refuses everything when no origin was recorded", () => {
+    const { dir } = priv(false);
+    expect(check("private-pre-push", dir, "origin", "", ORIGIN)?.reasons).toEqual([OTHER_REMOTE]);
   });
 });

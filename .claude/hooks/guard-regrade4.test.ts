@@ -110,11 +110,14 @@ describe("every GitHub remote spelling reads as owner/name (re-grade 4)", () => 
     `git push --force git@ssh.github.com:${T}.git main`,
     `git push --force SSH://GIT@SSH.GITHUB.COM:443/${T.toUpperCase()}.GIT main`,
   ])("refuses a force push to the URL in %s", (command) => {
-    expect(bash(command)).toMatch(/Force pushes/);
+    expect(bash(command)).toMatch(/Force pushes|only from its own checkout/);
+    expect(bash(command, TARGET_REPO.dir)).toMatch(/Force pushes/);
   });
 
   it("refuses a giveaway branch pushed to an SSH URL with a port", () => {
-    expect(bash(`git push ssh://git@ssh.github.com:443/${T}.git HEAD:planted-bug`)).toMatch(/says planted/);
+    expect(bash(`git push ssh://git@ssh.github.com:443/${T}.git HEAD:planted-bug`, TARGET_REPO.dir)).toMatch(
+      /says planted/,
+    );
   });
 });
 

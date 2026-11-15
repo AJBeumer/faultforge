@@ -8,11 +8,17 @@
  *   node git-guard.ts pre-push   <checkout> <remote> <url>   what this push sends (git's updates on stdin), and
  *                                                           every unpushed commit and local branch and tag name
  *
- * In the lab's own checkout it installs two more (re-grade 5), which only refuse a link to a reviewed repo's
- * issue or PR, because links go one way:
+ * In the lab's own checkout it installs two more (re-grade 5), which refuse a link to a reviewed repo's issue or
+ * PR, because links go one way, and a private template's id (re-grade 6). The lab's pre-push also refuses a remote
+ * that is a reviewed repo, by URL or local path: the lab's history never goes there (re-grade 6).
  *
  *   node git-guard.ts lab-commit-msg <checkout> <message file>   the commit message
- *   node git-guard.ts lab-pre-push   <checkout> <remote> <url>   the messages of the commits this push sends
+ *   node git-guard.ts lab-pre-push   <checkout> <remote> <url>   where the push goes, and the messages it sends
+ *
+ * In the private checkout it installs one (re-grade 6), which refuses a push to anything but the `origin` URL
+ * `guard:install` recorded (`review-guard.origin`), so the private history goes nowhere else:
+ *
+ *   node git-guard.ts private-pre-push <checkout> <remote> <url>
  *
  * The checks are the Claude Code guard's own (guard-content.ts), read from git at the moment the content
  * would travel. A push must also keep the reviewed repo's history (re-grade 3): it may not delete a ref, and
@@ -20,12 +26,14 @@
  * the hook both commits for every ref, so this holds however the push was started: a script, a subprocess, a
  * folder the Claude Code guard couldn't resolve, or a URL it didn't recognise.
  *
- * Exit codes: 0 nothing in it names the lab or the bug (in the lab: links a reviewed repo's issue or PR), and no
+ * Exit codes: 0 nothing in it names the lab or the bug (in the lab: links a reviewed repo's issue or PR, names a
+ * private template, or goes to a reviewed repo; in the private checkout: goes anywhere but its origin), and no
  * push rewrites or deletes history; 1 refused: something does, or the content or history could not be read, or
  * the call was malformed. A hook that can't check refuses: git then stops the commit or push.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   DEFAULT_BUDGET_MS,
   type Pending,
@@ -38,15 +46,48 @@ import {
   withPrivateNames,
 } from "./guard-content.ts";
 import { privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
-import { linkPattern, reviewedRepos } from "./guard-repos.ts";
+import { githubRepos, linkPattern, locate, reviewedRepos } from "./guard-repos.ts";
 import { firstLine, isEntry } from "./hook-io.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
-export function check(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
+export function check(stage: string, checkout: string, arg?: string, stdin = "", url?: string): Pending | undefined {
   // One deadline for every scan this hook runs (audit N-4).
   // Private template ids may not travel either (AUD-H1); none are known where there is no private folder.
   const names = privateIdMatcher(privateTemplateIds(process.env));
-  return withDeadline(DEFAULT_BUDGET_MS, () => withPrivateNames(names, () => checkNow(stage, checkout, arg, stdin)));
+  return withDeadline(DEFAULT_BUDGET_MS, () =>
+    withPrivateNames(names, () => checkNow(stage, checkout, arg, stdin, url ?? arg, names)),
+  );
+}
+
+/** The reason the lab's pre-push gives for a remote that is a reviewed repo (re-grade 6). */
+export const REVIEWED_REMOTE = "goes to a reviewed repo";
+/** The reason the private checkout's pre-push gives for any remote but its recorded origin (re-grade 6). */
+export const OTHER_REMOTE = "goes somewhere other than the private repo's origin";
+/** The reason a lab message gives when it names a private template. */
+export const PRIVATE_ID = "names a private template";
+
+/** True when a push URL (or local path) is a reviewed repo: by GitHub URL in any spelling, or by its checkout. */
+function reviewedRemote(checkout: string, url: string): boolean {
+  const reviewed = reviewedRepos(process.env.FAULTFORGE_CONFIG);
+  const github = githubRepos(url);
+  if (github.length) return reviewed.some((r) => github.includes(r.github.toLowerCase()));
+  if (/^[\w+.-]+:\/\//.test(url) && !/^file:/i.test(url)) return false;
+  return locate(resolve(checkout, url.replace(/^file:\/\//i, "")), reviewed) !== undefined;
+}
+
+/**
+ * Why a push from the private checkout goes somewhere it may not, or undefined (re-grade 6): the URL must be the
+ * origin `guard:install` recorded, as written or as the same GitHub repo. With nothing recorded, nothing may go.
+ */
+function privatePush(checkout: string, url: string): Pending | undefined {
+  const r = spawnSync("git", ["-C", checkout, "config", "--get", "review-guard.origin"], {
+    encoding: "utf8",
+    timeout: DEFAULT_BUDGET_MS,
+  });
+  const origin = r.status === 0 ? r.stdout.trim() : "";
+  const [mine, theirs] = [githubRepos(origin), githubRepos(url)];
+  const same = origin === url || (mine.length > 0 && theirs.length > 0 && theirs.every((repo) => mine.includes(repo)));
+  return origin && same ? undefined : { reasons: [OTHER_REMOTE], where: HISTORY };
 }
 
 /** The one reason the lab's hooks give: links go one way. */
@@ -95,17 +136,40 @@ function pushedMessages(checkout: string, remote: string, updates: PushUpdate[])
  * The lab's own hooks (re-grade 5): a commit message, or the messages of the commits a push sends, may not link
  * a reviewed repo's issue or PR, where GitHub would show the lab on its timeline. The lab's own words are free.
  */
-function checkLab(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
+function checkLab(
+  stage: string,
+  checkout: string,
+  arg: string | undefined,
+  stdin: string,
+  url: string | undefined,
+  names: ((text: string) => boolean) | undefined,
+): Pending | undefined {
   if (!arg) throw new Error(`${stage} needs the argument git passes`);
+  // The lab's history never goes to a reviewed repo, by URL or by a remote that points there (re-grade 6).
+  if (stage === "lab-pre-push" && reviewedRemote(checkout, url ?? arg))
+    return { reasons: [REVIEWED_REMOTE], where: HISTORY };
   const [text, where] =
     stage === "lab-commit-msg"
       ? [readFileSync(arg, "utf8"), "the commit message"]
       : [pushedMessages(checkout, arg, parseUpdates(stdin)), "a commit this push sends"];
-  return linksReviewed(text) ? { reasons: [LINK_REASON], where } : undefined;
+  if (linksReviewed(text)) return { reasons: [LINK_REASON], where };
+  // A lab commit is public: it may not name a private template either (re-grade 6).
+  return names?.(text) ? { reasons: [PRIVATE_ID], where } : undefined;
 }
 
-function checkNow(stage: string, checkout: string, arg?: string, stdin = ""): Pending | undefined {
-  if (stage === "lab-commit-msg" || stage === "lab-pre-push") return checkLab(stage, checkout, arg, stdin);
+function checkNow(
+  stage: string,
+  checkout: string,
+  arg: string | undefined,
+  stdin: string,
+  url: string | undefined,
+  names: ((text: string) => boolean) | undefined,
+): Pending | undefined {
+  if (stage === "lab-commit-msg" || stage === "lab-pre-push") return checkLab(stage, checkout, arg, stdin, url, names);
+  if (stage === "private-pre-push") {
+    if (!url) throw new Error("private-pre-push needs the URL git passes");
+    return privatePush(checkout, url);
+  }
   let pending: Pending;
   if (stage === "pre-commit") pending = pendingIndex(checkout);
   else if (stage === "pre-push") {
@@ -159,12 +223,19 @@ export function parseUpdates(stdin: string): PushUpdate[] {
 }
 
 function main(): number {
-  const [stage = "", checkout = "", arg] = process.argv.slice(2);
+  const [stage = "", checkout = "", arg, url] = process.argv.slice(2);
   try {
     if (!checkout) throw new Error("usage: git-guard.ts <[lab-]pre-commit|commit-msg|pre-push> <checkout> [arg]");
-    const push = stage === "pre-push" || stage === "lab-pre-push";
-    const found = check(stage, checkout, arg, push ? readFileSync(0, "utf8") : "");
+    const push = /pre-push$/.test(stage);
+    const found = check(stage, checkout, arg, push ? readFileSync(0, "utf8") : "", url);
     if (!found) return 0;
+    if (found.reasons.includes(REVIEWED_REMOTE) || found.reasons.includes(OTHER_REMOTE)) {
+      const why = found.reasons.includes(OTHER_REMOTE)
+        ? "the private history goes only to its own origin"
+        : "a reviewed repo gets history only from its own checkout";
+      console.error(`review guard: refused. This push ${found.reasons.join(", ")}: ${why}.`);
+      return 1;
+    }
     if (found.reasons.includes(LINK_REASON)) {
       console.error(
         `review guard: refused. ${found.where} ${LINK_REASON}, which would show on its timeline. Name the work as plain text instead, like "target 3".`,
@@ -178,7 +249,7 @@ function main(): number {
       return 1;
     }
     // A branch named after a private template would be printed in `where`: never print it (Qodo on PR 265).
-    const where = found.reasons.includes("names a private template") ? "what this would send" : found.where;
+    const where = found.reasons.includes(PRIVATE_ID) ? "what this would send" : found.where;
     console.error(
       `review guard: refused. ${where} would give the change away (${found.reasons.join(", ")}). Remove it and try again.`,
     );
