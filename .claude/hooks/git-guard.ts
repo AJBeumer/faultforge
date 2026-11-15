@@ -8,10 +8,13 @@
  *   node git-guard.ts pre-push   <checkout> <remote> <url>   what this push sends (git's updates on stdin), and
  *                                                           every unpushed commit and local branch and tag name
  *
- * In the lab's own checkout it installs two more (re-grade 5), which refuse a link to a reviewed repo's issue or
+ * In the lab's own checkout it installs three more (re-grade 5), which refuse a link to a reviewed repo's issue or
  * PR, because links go one way, and a private template's id (re-grade 6). The lab's pre-push also refuses a remote
- * that is a reviewed repo, by URL or local path: the lab's history never goes there (re-grade 6).
+ * that is a reviewed repo, by URL or local path: the lab's history never goes there (re-grade 6). Its pre-commit and
+ * commit-msg refuse a copy of the answer key, the audit log or a private template, compared by hash
+ * (guard-answer-key.ts; re-grade 6, Q21), and the pre-commit a private template's id in a staged file.
  *
+ *   node git-guard.ts lab-pre-commit <checkout>                  the staged files and their names
  *   node git-guard.ts lab-commit-msg <checkout> <message file>   the commit message
  *   node git-guard.ts lab-pre-push   <checkout> <remote> <url>   where the push goes, and the messages it sends
  *
@@ -27,14 +30,16 @@
  * folder the Claude Code guard couldn't resolve, or a URL it didn't recognise.
  *
  * Exit codes: 0 nothing in it names the lab or the bug (in the lab: links a reviewed repo's issue or PR, names a
- * private template, or goes to a reviewed repo; in the private checkout: goes anywhere but its origin), and no
+ * private template, copies private storage, or goes to a reviewed repo; in the private checkout: goes anywhere but its origin), and no
  * push rewrites or deletes history; 1 refused: something does, or the content or history could not be read, or
  * the call was malformed. A hook that can't check refuses: git then stops the commit or push.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { labIndex, lazyCopyTest } from "./guard-answer-key.ts";
 import {
+  copyReasons,
   DEFAULT_BUDGET_MS,
   type Pending,
   type PushUpdate,
@@ -43,6 +48,7 @@ import {
   pendingPushUpdates,
   reasonsIn,
   withDeadline,
+  withPrivateCopies,
   withPrivateNames,
 } from "./guard-content.ts";
 import { privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
@@ -54,8 +60,11 @@ export function check(stage: string, checkout: string, arg?: string, stdin = "",
   // One deadline for every scan this hook runs (audit N-4).
   // Private template ids may not travel either (AUD-H1); none are known where there is no private folder.
   const names = privateIdMatcher(privateTemplateIds(process.env));
+  // Nor a copy of the answer key, the audit log or a private template (re-grade 6, Q21).
   return withDeadline(DEFAULT_BUDGET_MS, () =>
-    withPrivateNames(names, () => checkNow(stage, checkout, arg, stdin, url ?? arg, names)),
+    withPrivateNames(names, () =>
+      withPrivateCopies(lazyCopyTest(process.env), () => checkNow(stage, checkout, arg, stdin, url ?? arg, names)),
+    ),
   );
 }
 
@@ -144,6 +153,11 @@ function checkLab(
   url: string | undefined,
   names: ((text: string) => boolean) | undefined,
 ): Pending | undefined {
+  // The staged files may not copy private storage or name a private template (re-grade 6, Q21).
+  if (stage === "lab-pre-commit") {
+    const staged = labIndex(checkout, names);
+    return staged.reasons.length ? staged : undefined;
+  }
   if (!arg) throw new Error(`${stage} needs the argument git passes`);
   // The lab's history never goes to a reviewed repo, by URL or by a remote that points there (re-grade 6).
   if (stage === "lab-pre-push" && reviewedRemote(checkout, url ?? arg))
@@ -153,6 +167,7 @@ function checkLab(
       ? [readFileSync(arg, "utf8"), "the commit message"]
       : [pushedMessages(checkout, arg, parseUpdates(stdin)), "a commit this push sends"];
   if (linksReviewed(text)) return { reasons: [LINK_REASON], where };
+  if (copyReasons([text]).length) return { reasons: copyReasons([text]), where };
   // A lab commit is public: it may not name a private template either (re-grade 6).
   return names?.(text) ? { reasons: [PRIVATE_ID], where } : undefined;
 }
@@ -165,7 +180,7 @@ function checkNow(
   url: string | undefined,
   names: ((text: string) => boolean) | undefined,
 ): Pending | undefined {
-  if (stage === "lab-commit-msg" || stage === "lab-pre-push") return checkLab(stage, checkout, arg, stdin, url, names);
+  if (/^lab-(pre-commit|commit-msg|pre-push)$/.test(stage)) return checkLab(stage, checkout, arg, stdin, url, names);
   if (stage === "private-pre-push") {
     if (!url) throw new Error("private-pre-push needs the URL git passes");
     return privatePush(checkout, url);

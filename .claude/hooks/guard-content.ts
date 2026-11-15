@@ -42,6 +42,31 @@ export function withPrivateNames<T>(names: ((text: string) => boolean) | undefin
   }
 }
 
+/** Besides those, a test for text copied out of private storage, while a check that set one runs (re-grade 6, Q21). */
+let privateCopies: ((text: string) => boolean) | undefined;
+
+/**
+ * Runs `fn` with `copies` as the test every pending-content scan in it applies to each file on its own: a copy of
+ * the answer key, the audit log or a private template's file (`guard-answer-key.ts`) may not be committed.
+ */
+export function withPrivateCopies<T>(copies: ((text: string) => boolean) | undefined, fn: () => T): T {
+  const outer = privateCopies;
+  privateCopies = copies;
+  try {
+    return fn();
+  } finally {
+    privateCopies = outer;
+  }
+}
+
+/** The reason given for a file that copies private storage. Never the file or the lines it matched. */
+export const COPIES_PRIVATE = "copies the answer key, the audit log or a private template";
+
+/** The copy reason when any one of the texts is a copy of private storage. */
+export function copyReasons(texts: string[]): string[] {
+  return privateCopies && texts.some(privateCopies) ? [COPIES_PRIVATE] : [];
+}
+
 /** The reasons a text must not travel: its giveaway words, and a private template id it names (never the id). */
 export function reasonsIn(text: string): string[] {
   const found = telltales(text);
@@ -146,6 +171,15 @@ const unique = (items: string[]) => [...new Set(items)];
  * would stage it); and every ignored file when `forceIgnored` is set (`git add -f`). File names count too.
  */
 export function pendingCommit(checkout: string, forceIgnored: boolean): Pending {
+  const { files, contents } = commitFiles(checkout, forceIgnored);
+  return {
+    reasons: [...reasonsIn([...files, ...contents].join("\n")), ...copyReasons(contents)],
+    where: "the changes not yet committed",
+  };
+}
+
+/** The names and contents a commit could take from `checkout`, as `pendingCommit` describes. */
+export function commitFiles(checkout: string, forceIgnored: boolean): { files: string[]; contents: string[] } {
   const tracked = unique([
     ...list(checkout, ["diff", "HEAD", "--name-only", "--diff-filter=d"]),
     ...list(checkout, ["diff", "--cached", "--name-only", "--diff-filter=d"]),
@@ -154,15 +188,14 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
   const ignored = forceIgnored ? list(checkout, ["ls-files", "--others", "--ignored", "--exclude-standard"]) : [];
   const files = unique([...tracked, ...untracked, ...ignored]);
   if (files.length > MAX_FILES) throw new Uninspectable(`${files.length} pending files, more than the guard reads`);
-  const texts = [
-    ...files,
+  const contents = [
     ...files.map((file) => worktreeText(join(checkout, file))),
     ...blobs(
       checkout,
       tracked.map((file) => `:0:${file}`),
     ),
   ];
-  return { reasons: reasonsIn(texts.join("\n")), where: "the changes not yet committed" };
+  return { files, contents };
 }
 
 /**
@@ -171,6 +204,15 @@ export function pendingCommit(checkout: string, forceIgnored: boolean): Pending 
  * so unstaged and untracked files are not part of it.
  */
 export function pendingIndex(checkout: string): Pending {
+  const { staged, contents } = stagedTexts(checkout);
+  return {
+    reasons: [...reasonsIn([...staged, ...contents].join("\n")), ...copyReasons(contents)],
+    where: "the staged changes",
+  };
+}
+
+/** Each staged file's name, and its index copy (a submodule's entry is a commit elsewhere: its name only). */
+export function stagedTexts(checkout: string): { staged: string[]; contents: string[] } {
   const staged = list(checkout, ["diff", "--cached", "--name-only", "--diff-filter=d"]);
   if (staged.length > MAX_FILES) throw new Uninspectable(`${staged.length} staged files, more than the guard reads`);
   // A submodule's entry (mode 160000) is a commit of another repository, not file content here: only its
@@ -180,14 +222,11 @@ export function pendingIndex(checkout: string): Pending {
       .filter((line) => line.startsWith("160000 "))
       .map((line) => line.slice(line.indexOf("\t") + 1)),
   );
-  const texts = [
-    ...staged,
-    ...blobs(
-      checkout,
-      staged.filter((file) => !submodules.has(file)).map((file) => `:0:${file}`),
-    ),
-  ];
-  return { reasons: reasonsIn(texts.join("\n")), where: "the staged changes" };
+  const contents = blobs(
+    checkout,
+    staged.filter((file) => !submodules.has(file)).map((file) => `:0:${file}`),
+  );
+  return { staged, contents };
 }
 
 /**

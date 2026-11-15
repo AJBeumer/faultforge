@@ -25,7 +25,7 @@ import { joinedWords } from "./shell-scan.ts";
 import { programAt, programName, steps, unquote, words } from "./shell-words.ts";
 
 /** One git or gh step: the program, its words after the program, and the folder it runs in (undefined: unknown). */
-interface Call {
+export interface Call {
   program: "git" | "gh" | "web";
   args: string[];
   text: string;
@@ -38,7 +38,7 @@ const unreadable = (word: string) => /[$`%]/.test(word);
 const WEB = /^(curl|wget|http|https|xh|irm|iwr|invoke-restmethod|invoke-webrequest)$/;
 
 /** Every git, gh and web step the command runs, each with the folder it runs in. */
-function calls(command: string, cwd: string, backticks: boolean): Call[] {
+export function calls(command: string, cwd: string, backticks: boolean): Call[] {
   let here: string | undefined = cwd;
   const found: Call[] = [];
   for (const step of steps(command, backticks)) {

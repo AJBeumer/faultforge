@@ -151,15 +151,17 @@ describe("the lab's own hooks (re-grade 5)", () => {
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
   writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
 
-  it("installs commit-msg and pre-push in the lab, calling the lab's stages, and no pre-commit", () => {
+  it("installs pre-commit, commit-msg and pre-push in the lab, each calling the lab's stage (re-grade 6, Q21)", () => {
     const { dir } = repo();
     const hooks = installHooks(dir, script, "lab");
-    expect(LAB_HOOKS).toEqual(["commit-msg", "pre-push"]);
+    expect(LAB_HOOKS).toEqual(["pre-commit", "commit-msg", "pre-push"]);
     expect(readFileSync(join(hooks, "commit-msg"), "utf8")).toBe(hookText("commit-msg", "lab"));
+    expect(readFileSync(join(hooks, "pre-commit"), "utf8")).toBe(hookText("pre-commit", "lab"));
+    expect(hookText("pre-commit", "lab")).toContain("lab-pre-commit");
     expect(hookText("commit-msg", "lab")).toContain("lab-commit-msg");
     expect(hookText("pre-push", "lab")).toContain("lab-pre-push");
-    expect(existsSync(join(hooks, "pre-commit"))).toBe(false);
     expect(guardProblem(dir, "lab")).toBeUndefined();
+    // The reviewed repo's pre-commit is another hook: the lab's doesn't count as one.
     expect(guardProblem(dir)).toMatch(/no guard pre-commit hook/);
   });
 
