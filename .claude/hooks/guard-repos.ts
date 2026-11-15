@@ -92,7 +92,9 @@ export function linkPattern(repos: Reviewed[]): RegExp | undefined {
  */
 function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
   const folders = [repo.folder, repo.name].map(esc).join("|");
-  const lead = atSegmentStart ? "(?:^|[;&|\\n]\\s*)" : "\\b";
+  // Blanks after an operator, but not new lines: each new line is a lead of its own, and `\s*` there read a run of
+  // new lines again from every one of them, in time quadratic in its length (re-grade 7).
+  const lead = atSegmentStart ? "(?:^|[;&|\\n][^\\S\\n]*)" : "\\b";
   // `GIT_DIR=` and `GIT_WORK_TREE=` (or PowerShell's `$env:GIT_DIR =`) point git at a checkout too (AUD-M3).
   const envLead = atSegmentStart ? lead : "(?:\\$env:|\\b)";
   const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+${GIT_OPTIONS}-C\\s*|${lead}git\\s+${GIT_OPTIONS}--(?:work-tree|git-dir)[=\\s]\\s*|${envLead}GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;

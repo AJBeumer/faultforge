@@ -22,18 +22,29 @@ function scriptsOf(text: string): Scripts | undefined {
   return scripts && typeof scripts === "object" && !Array.isArray(scripts) ? (scripts as Scripts) : {};
 }
 
-/** The names of `check` and every script it runs, through `npm run <name>`, `npm run-script`, `npm test` or `npm t`. */
+/**
+ * The names of `check` and every script it runs: `npm run <name>` with or without flags on either side of `run`
+ * (`npm -s run lint`, `npm run -s lint`), `npm test` and `npm t`, yarn's, pnpm's and bun's shorthand
+ * (`yarn lint`), and `node --run lint`. Each with its `pre` and `post` script, which npm runs around it (Qodo on
+ * PR 339). A word that names no script (`npm ci`) adds a name nothing holds, which is harmless.
+ */
 export function checkScriptNames(scripts: Scripts): Set<string> {
   const names = new Set<string>();
-  const todo = ["check"];
+  // Each name with whether it was called (true) or is only the pre or post script of one, which has none of its own.
+  const todo: [string, boolean][] = [["check", true]];
+  const runs =
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+--run[=\s]+([\w:.-]+)/g;
   while (todo.length) {
-    const name = todo.pop() as string;
+    const [name, called] = todo.pop() as [string, boolean];
+    if (called) todo.push([`pre${name}`, false], [`post${name}`, false]);
     if (names.has(name)) continue;
     names.add(name);
     const body = scripts[name];
     if (typeof body !== "string") continue;
-    for (const m of body.matchAll(/\b(?:npm|pnpm|yarn)\s+(?:run(?:-script)?\s+(?:-\S+\s+)*([\w:.-]+)|(test|t)\b)/g))
-      todo.push(m[1] ?? "test");
+    for (const m of body.matchAll(runs)) {
+      const next = m[1] ?? m[2] ?? "";
+      todo.push([next === "t" || next === "tst" ? "test" : next, true]);
+    }
   }
   return names;
 }

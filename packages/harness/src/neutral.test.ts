@@ -239,3 +239,16 @@ describe("telltales read text as markdown renders it, and a dot as a separator (
     expect(readerViews("plan**ted**")).toEqual(["plan**ted**", "planted"]);
   });
 });
+
+describe("markup read as rendered, after Qodo on PR 339", () => {
+  it("leaves a named entity GitHub doesn't know as written", () => {
+    expect(renderedText("fault&bogus;forge")).toBe("fault&bogus;forge");
+    expect(telltales("fault&bogus;forge")).toEqual([]);
+    expect(telltales("led&shy;ger")).toContain("mentions the ledger");
+  });
+
+  it("reads a line-break or block tag as a new line", () => {
+    expect(renderedText("a<br>b<br/>c<p>d")).toBe("a\nb\nc\nd");
+    expect(telltales("fault<br>forge")).toContain("names the lab");
+  });
+});

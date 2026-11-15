@@ -15,7 +15,7 @@ const CHECK_SCRIPT_REASON =
 const GIT_VALUE_OPTION = /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)$/;
 /** Options of ps that take the next word as their value, so `ps -o user` names no BSD option. */
 const PS_VALUE_OPTION =
-  /^(-[oOpqugGtCsUN]|--(sort|format|pid|ppid|user|group|tty|cols|columns|rows|lines|sid|quick-pid))$/;
+  /^(-[a-zA-Z]*[oOpqugGtCsUN]|--(sort|format|pid|ppid|user|group|tty|cols|columns|rows|lines|sid|quick-pid))$/;
 
 /** A rule's test: a pattern, or a function for a test one pattern can't make in linear time. */
 type Rule = [{ test: (text: string) => boolean }, string];
@@ -133,7 +133,30 @@ export function commandViolations(raw: string, ticket?: string): string[] {
   for (const command of readings(raw)) {
     for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
   }
+  // ps reads its option values whole (`-o pid,user`), so not in the reading with punctuation as spaces.
+  if ([...new Set(continued(raw).flatMap((text) => [text, spokenWords(text)]))].some(psReadsEnvironment))
+    reasons.push(PS_ENV_REASON);
   return reasons;
+}
+
+/**
+ * True when a step runs ps with a BSD-style `e`, which prints each process's environment: `ps e`, `ps eww`,
+ * `ps auxe`, `ps -p 1 e` (re-grade 7). Wherever ps stands in the step (`A=1 ps e`, `sh -c "ps e"`), so a message
+ * that says "ps" with a word holding an `e` after it is refused too: it fails closed. An option that takes a value
+ * (`-o`, `-eo`, `--sort`) skips that one word, so `ps -eo pid,user` passes.
+ */
+function psReadsEnvironment(text: string): boolean {
+  return steps(text).some((step) => {
+    const all = joinedWords(step).split(/\s+/).filter(Boolean);
+    const at = all.findIndex((w) => (w.split(/[\\/]/).pop() ?? "").replace(/\.exe$/i, "").toLowerCase() === "ps");
+    if (at < 0) return false;
+    for (let i = at + 1; i < all.length; i++) {
+      const w = all[i] ?? "";
+      if (PS_VALUE_OPTION.test(w)) i++;
+      else if (/^[a-z]*e[a-z]*$/i.test(w)) return true;
+    }
+    return false;
+  });
 }
 
 /**
@@ -205,19 +228,6 @@ function stepViolations(command: string): string[] {
     let sub = git + 1;
     while (git >= 0 && /^-/.test(all[sub] ?? "")) sub += GIT_VALUE_OPTION.test(all[sub] ?? "") ? 2 : 1;
     if (git >= 0 && /^credential(-|$)/i.test(all[sub] ?? "")) reasons.add(CREDENTIAL_REASON);
-    // BSD-style `e` in ps prints each process's environment: `ps e`, `ps eww`, `ps auxe` (re-grade 7).
-    // Only where ps runs: first in the step, or after a word that runs the next one (`sudo ps e`), not in a message.
-    const ps = all.findIndex(
-      (w, i) =>
-        program(w) === "ps" &&
-        (i === 0 || /^(sudo|env|exec|time|nice|command|xargs|timeout|watch)$/.test(all[i - 1] ?? "")),
-    );
-    // An option's value runs to the next option: `-o pid,user` may read `-o pid user` once punctuation is spaces.
-    let value = false;
-    for (const w of ps >= 0 ? all.slice(ps + 1) : []) {
-      if (/^-/.test(w)) value = PS_VALUE_OPTION.test(w);
-      else if (!value && /^[a-z]*e[a-z]*$/i.test(w)) reasons.add(PS_ENV_REASON);
-    }
     // npm's own way to change a script: `npm pkg set scripts.check=true`, `npm pkg delete scripts.test`, `npm set-script`.
     const npm = all.findIndex((w) => /^p?npm$/.test(program(w)));
     if (npm >= 0) {
@@ -304,7 +314,11 @@ function violationsIn(command: string, ticket?: string): string[] {
  * read as spaces, so `execFileSync('g'+'h', ['pr', 'merge'])` meets the same rules as `gh pr merge`.
  */
 export function readings(raw: string): string[] {
+  return [...new Set(continued(raw).flatMap((text) => [text, spokenWords(text), codeAsWords(text)]))];
+}
+
+/** The command with each backslash or backtick before a newline read both ways: glued, and as a space. */
+function continued(raw: string): string[] {
   const continuation = /[\\`]\r?\n/g;
-  const base = [raw.replace(continuation, ""), raw.replace(continuation, " ")];
-  return [...new Set(base.flatMap((text) => [text, spokenWords(text), codeAsWords(text)]))];
+  return [raw.replace(continuation, ""), raw.replace(continuation, " ")];
 }

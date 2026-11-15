@@ -102,7 +102,10 @@ const LOOKALIKES: Record<string, string> = {
   ɑ: "a",
 };
 
-/** Named HTML entities a separator or a mark can hide behind; any other named entity reads as nothing. */
+/**
+ * Named HTML entities a separator, a mark or an invisible character can hide behind. Any other named entity is
+ * left as written: GitHub shows one it doesn't know as its own text (Qodo on PR 339).
+ */
 const ENTITIES: Record<string, string> = {
   amp: "&",
   lt: "<",
@@ -125,14 +128,26 @@ const ENTITIES: Record<string, string> = {
   period: ".",
   colon: ":",
   sol: "/",
+  shy: "",
+  zerowidthspace: "",
+  zwj: "",
+  zwnj: "",
+  nobreak: "",
+  invisibletimes: "",
+  invisiblecomma: "",
+  invisibleseparator: "",
+  applyfunction: "",
 };
+
+/** A tag that breaks a line or starts a block, read as a new line: `x-secret<br>v1` shows two lines (Qodo on PR 339). */
+const BLOCK_TAG = /<\/?(?:br|p|div|hr|li|ul|ol|h[1-6]|blockquote|pre|table|tr|td|th|details|summary)\b[^<>]*>/gi;
 
 /** Inline HTML tags GitHub renders as nothing but style, so `plan<b></b>ted` reads `planted`. */
 const INLINE_TAG =
   /<\/?(?:a|b|i|u|s|q|em|strong|ins|del|sub|sup|span|code|kbd|mark|small|big|tt|abbr|cite|dfn|var|samp|wbr|strike)\b[^<>]*>/gi;
 
 /**
- * The text as markdown renders it (re-grade 7): HTML comments and inline tags removed, HTML entities decoded
+ * The text as markdown renders it (re-grade 7): HTML comments and inline tags removed, block tags read as new lines, HTML entities decoded
  * (`&#102;`, `&#x66;`, `&amp;`), and emphasis markers removed (`**`, `__`, `~~`, backticks), so `fault<!-- -->forge`,
  * `pl&#97;nted` and `plan**ted**` read as the words they show. A dot between two letters or digits reads as a
  * space, so `answer.key` reads as two words, as a separator would.
@@ -140,9 +155,10 @@ const INLINE_TAG =
 export function renderedText(text: string): string {
   return text
     .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(BLOCK_TAG, "\n")
     .replace(INLINE_TAG, "")
     .replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z][a-z0-9]{1,31}));?/gi, (whole, dec, hex, name) => {
-      if (name) return /;$/.test(whole) ? (ENTITIES[name.toLowerCase()] ?? "") : whole;
+      if (name) return /;$/.test(whole) ? (ENTITIES[name.toLowerCase()] ?? whole) : whole;
       const code = dec ? Number(dec) : Number.parseInt(hex, 16);
       return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
     })

@@ -105,9 +105,11 @@ export function guardrailWriteViolation(command: string, cwd = ""): string | und
   if (readings.some((r) => GUARDRAILS.test(r)) || (cwd && /(^|[/\\])\.claude([/\\]|$)/i.test(resolve(cwd))))
     return "the agent can't change its own guardrails (.claude, neutral.ts) from the shell either";
   // package.json holds the check script: a shell write could make the check pass trivially, unseen (re-grade 7).
-  // The Edit and Write tools may change it, where the policy compares the scripts the check runs.
+  // The Edit and Write tools may change it, where the policy compares the scripts the check runs. Like the
+  // guardrail rule above, a command that writes anything and names package.json is refused, a read into another
+  // file included: telling which word a write lands on would need a shell parser, so it fails closed.
   if (readings.some((r) => /(?<![\w-])package\.json\b/i.test(r)))
-    return "change package.json with the Edit or Write tool, not from the shell: the policy reads its check script there";
+    return "a shell command that writes a file and names package.json can't be checked: change package.json with the Edit or Write tool (the policy reads its check script there), and read it in a command that writes nothing";
   if (/\$\(|`|\$\{?[A-Za-z_]|<\(/.test(command))
     return "a shell write whose path the shell builds ($(…), a variable) can't be checked before it runs; write files with the Write tool";
   return undefined;

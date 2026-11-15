@@ -285,3 +285,11 @@ describe("the fail-closed wrapper refuses a hook file that can't be the hook (AU
     expect(result.stderr).toMatch(/refused/);
   });
 });
+
+describe("a private id split by a line break (Qodo on PR 339)", () => {
+  it("reads <br> as the new line it shows", () => {
+    const names = privateIdMatcher(["x-secret-v1"]);
+    expect(names?.("demo x-secret<br>v1")).toBe(true);
+    expect(names?.("demo x-secret<br />v1")).toBe(true);
+  });
+});

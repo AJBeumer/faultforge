@@ -56,16 +56,29 @@ describe("a run can't read another process's environment through ps (re-grade 7)
     "ps -o pid -e e",
     "sudo ps e",
     "/bin/ps e",
+    // Behind a value, an assignment or a shell (Qodo on PR 339).
+    "ps -p 1 e",
+    "ps -o pid,args e",
+    "A=1 ps e",
+    'sh -c "ps e"',
+    "timeout 5 ps e",
   ])("refuses %s", (command) => {
     expect(policy("Bash", { command })).toMatch(/environment/);
   });
 
-  it.each(["ps aux", "ps -ef", "ps -o pid,user", "ps -o user -p 1", "ps -e | grep node", 'git commit -m "ps here"'])(
-    "lets %s through",
-    (command) => {
-      expect(policy("Bash", { command })).toBeUndefined();
-    },
-  );
+  it.each([
+    "ps aux",
+    "ps -ef",
+    "ps -o pid,user",
+    "ps -o user -p 1",
+    "ps -e | grep node",
+    // A format list after a combined option (Qodo on PR 339).
+    "ps -eo pid,user",
+    "ps -axo pid,etime,args",
+    "ps -eo pid,ppid,cmd,%mem --sort=-%mem",
+  ])("lets %s through", (command) => {
+    expect(policy("Bash", { command })).toBeUndefined();
+  });
 });
 
 describe("a run can't change the check script (re-grade 7)", () => {
@@ -87,8 +100,26 @@ describe("a run can't change the check script (re-grade 7)", () => {
     return path;
   };
 
-  it("follows the check through every script it runs", () => {
-    expect([...checkScriptNames(PKG.scripts)].sort()).toEqual(["check", "lint", "test", "typecheck"]);
+  it("follows the check through every script it runs, and each one's pre and post script", () => {
+    const names = checkScriptNames(PKG.scripts);
+    for (const name of ["check", "lint", "test", "typecheck", "precheck", "postcheck", "pretest", "postlint"])
+      expect(names).toContain(name);
+    expect(names).not.toContain("dev");
+    expect(names).not.toContain("preprecheck");
+  });
+
+  it("follows npm with flags before run, npm -s test, yarn, pnpm and bun shorthand, and node --run (Qodo on PR 339)", () => {
+    const names = checkScriptNames({
+      check: "npm --silent run a && npm -s test && yarn b && pnpm c && bun run d && node --run e",
+    });
+    for (const name of ["a", "test", "b", "c", "d", "e"]) expect(names).toContain(name);
+  });
+
+  it("refuses adding a precheck script, which npm runs before the check (Qodo on PR 339)", () => {
+    const path = pkgPath();
+    expect(
+      policy("Edit", { file_path: path, old_string: '"check":', new_string: '"precheck": "exit 0",\n    "check":' }),
+    ).toContain(CHECK_SCRIPT_EDIT);
   });
 
   it.each([
