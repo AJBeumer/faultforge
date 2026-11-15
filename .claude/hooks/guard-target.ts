@@ -29,9 +29,10 @@
  *
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
-import { telltales } from "../../packages/harness/src/neutral.ts";
+
+import { addressesQodo, QODO_REASON, telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./guard-answer-key.ts";
-import { addressesQodo, caseActionProblem, QODO_REASON } from "./guard-cases.ts";
+import { caseActionProblem } from "./guard-cases.ts";
 import {
   chainProblem,
   DEFAULT_BUDGET_MS,

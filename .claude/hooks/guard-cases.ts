@@ -68,18 +68,6 @@ export function caseRecords(env: NodeJS.ProcessEnv): CaseRecords | undefined {
   return records;
 }
 
-/** Qodo's chat commands, as a line's or a quoted value's first word; a path (`/test/x.ts`) is none. */
-const QODO_COMMANDS =
-  /(^|["'=])\s*\/(ask|review|improve|describe|implement|analyze|test|add_docs|update_changelog|similar_issue|generate_labels|help|help_docs|config|checks|compliance|reflect|reflect_and_review|answer|agentic_\w+|custom_prompt|find_similar|generate_tests|issue|qodo)\b(?![/.-])/im;
-
-/** True when a text addresses Qodo: a mention, or a line that is one of its commands. */
-export function addressesQodo(text: string): boolean {
-  return /(^|[^\w.-])@qodo/i.test(text) || QODO_COMMANDS.test(text);
-}
-
-export const QODO_REASON =
-  "This would address Qodo in a reviewed repo. Chatting with Qodo there teaches it, which would bias later cases: post nothing to it.";
-
 const MERGE_REASON =
   "This would merge a recorded case PR, or one the guard can't tell from one. A case PR is never merged: close it with an ordinary comment.";
 const BRANCH_REASON =

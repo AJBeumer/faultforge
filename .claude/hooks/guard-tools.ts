@@ -4,9 +4,9 @@
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { telltales } from "../../packages/harness/src/neutral.ts";
+import { addressesQodo, QODO_REASON, telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutEdit } from "./guard-answer-key.ts";
-import { addressesQodo, mcpCaseProblem, QODO_REASON } from "./guard-cases.ts";
+import { mcpCaseProblem } from "./guard-cases.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
 import { gitFolderEdit } from "./guard-hooks.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";

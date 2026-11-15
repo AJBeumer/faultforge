@@ -202,13 +202,14 @@ describe("run", () => {
       error: (line) => log.push(line),
       now: () => "2026-11-11T00:00:00.000Z",
       eventId: () => "event-1",
-      gh: (args) => {
-        ghCalls.push(args);
+      gh: (args, input) => {
+        ghCalls.push([...args, `stdin: ${input}`]);
         return "https://github.com/AJBeumer/faultforge-target/issues/42\n";
       },
     });
 
     expect(code).toBe(0);
+    // Through the door (#340): the body it checked goes to gh on stdin.
     expect(ghCalls).toEqual([
       [
         "issue",
@@ -217,8 +218,9 @@ describe("run", () => {
         "AJBeumer/faultforge-target",
         "--title",
         TICKET.title,
-        "--body",
-        buildBody(TARGET_REPO.tickets, TICKET),
+        "--body-file",
+        "-",
+        `stdin: ${buildBody(TARGET_REPO.tickets, TICKET)}`,
       ],
     ]);
     expect(log.join("\n")).toContain("Closes #42");

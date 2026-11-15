@@ -15,9 +15,9 @@
  * fixed, honest line that is true of every template, never content inferred from the bug.
  *
  * The ticket text is also refused if it links to any GitHub issue or PR (a URL or a short `repo#N`
- * reference): a template has no reason to need one, and spawning `gh` directly from this script, rather
- * than through a shell command, means the interactive guard hook never sees the posted text, so this
- * check stands in for it.
+ * reference): a template has no reason to need one. The issue is created through the one door to the
+ * reviewed repository (`target-post.ts`, #340), which checks the exact title and body it sends. Its checks
+ * also run before the attempt marker is written, so a refusal leaves no marker behind.
  *
  * `--dry-run` prints the issue text and the `gh` command it would run, without creating anything or
  * writing to private storage. A case already ticketed (a `case.ticket-created` audit event for it)
@@ -36,9 +36,8 @@
  *
  * An unexpected error, even while loading, is 2 too: `npm run case:ticket` runs `case-ticket-cli.ts`.
  */
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
@@ -48,6 +47,7 @@ import { appendEvent } from "./ledger-append.ts";
 import { ledgerProblemsWithHistory } from "./ledger-check.ts";
 import { injectionHashProblem, isToolWritten } from "./ledger-hashes.ts";
 import { templateTelltales } from "./neutral.ts";
+import { type Gh, type Post, postProblems, Refused, sendPost } from "./target-post.ts";
 import { templateDir as findTemplateDir, privateDir } from "./templates.ts";
 
 interface Ticket {
@@ -149,8 +149,8 @@ export interface RunOptions {
   groundTruthPath?: string;
   evidenceDir?: string;
   factory?: FactoryConfig;
-  /** Stands in for the real `gh` call; a test fakes this instead of spawning the binary. */
-  gh?: (args: string[]) => string;
+  /** Stands in for the `gh` call the door makes; a test fakes this instead of spawning the binary. */
+  gh?: Gh;
   now?: () => string;
   eventId?: () => string;
 }
@@ -169,7 +169,6 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const auditEventsPath = options.auditEventsPath ?? join(root, "audit-events.jsonl");
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
   const evidenceDir = options.evidenceDir ?? join(root, "raw-artifacts", caseId);
-  const gh = options.gh ?? ((args: string[]) => execFileSync("gh", args, { encoding: "utf8", timeout: 30_000 }));
   const now = options.now ?? (() => new Date().toISOString());
   const eventId = options.eventId ?? randomUUID;
 
@@ -249,6 +248,12 @@ export async function run(templateId: string, caseId: string, options: RunOption
   const factory = options.factory ?? loadFactory();
   const target = repoConfig(factory, "target");
   const body = buildBody(target.tickets, ticket);
+  const post: Post = { kind: "issue-create", repo: target.github, title: ticket.title, body };
+  const doorProblems = postProblems(post, env);
+  if (doorProblems.length) {
+    error(`case:ticket: refused, the ticket would give the case away (${doorProblems.join("; ")})`);
+    return 1;
+  }
 
   if (options.dryRun) {
     log(`[case:ticket] dry run, would create an issue on ${target.github}:`);
@@ -284,8 +289,14 @@ export async function run(templateId: string, caseId: string, options: RunOption
 
   let url: string;
   try {
-    url = gh(["issue", "create", "--repo", target.github, "--title", ticket.title, "--body", body]).trim();
+    url = sendPost(post, { gh: options.gh, env }).trim();
   } catch (e) {
+    if (e instanceof Refused) {
+      // Nothing was sent, so the marker would only block a fixed rerun.
+      rmSync(attempt, { force: true });
+      error(`case:ticket: refused, the ticket would give the case away (${message(e)})`);
+      return 1;
+    }
     error(
       `case:ticket: gh issue create failed (check GitHub before retrying; marker kept at ${attempt}): ${message(e)}`,
     );

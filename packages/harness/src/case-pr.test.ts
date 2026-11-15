@@ -42,8 +42,8 @@ const ARGS: PrArgs = {
 /** A fake gh: the branch and the opened PR's head are `head`, and `pr create` prints PR 31's URL. */
 function fakeGh(head = COMMIT) {
   const calls: string[][] = [];
-  const gh = (args: string[]) => {
-    calls.push(args);
+  const gh = (args: string[], input?: string) => {
+    calls.push(input === undefined ? args : [...args, `stdin: ${input}`]);
     if (args[0] === "pr") return "https://github.com/Owner/target/pull/31\n";
     return `${head}\n`;
   };
@@ -96,8 +96,9 @@ describe("case:pr (#251, AUD-M5)", () => {
       "tidy-lookup",
       "--title",
       "Tidy the booking lookup",
-      "--body",
-      "Moves the lookup into one helper. Closes #12",
+      "--body-file",
+      "-",
+      "stdin: Moves the lookup into one helper. Closes #12",
     ]);
     const opened = events.at(-1);
     expect(opened).toMatchObject({
