@@ -90,7 +90,13 @@ export function rawApiWrite(command: string): boolean {
  * input; or a raw API write.
  */
 export function isWrite(command: string): boolean {
-  const c = joinedWords(command);
+  // A backslash before a letter is no character to the shell either: `g\h` runs gh (Qodo on PR 310).
+  const unescaped = command.replace(/\\(?=[\w-])/g, "");
+  return writes(joinedWords(command), command) || (unescaped !== command && writes(joinedWords(unescaped), command));
+}
+
+/** True when `c`, the command with its quotes removed, writes to a repo; `command` is as written. */
+function writes(c: string, command: string): boolean {
   return (
     gitSteps(c, /\b(commit|push|tag|notes|send-pack)\b/).length > 0 ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge|develop|lock|unlock|transfer|pin|delete)\b/.test(

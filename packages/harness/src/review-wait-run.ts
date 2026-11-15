@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { errorText as message } from "./error-text.ts";
 import { loadFactory, repoConfig } from "./factory-config.ts";
-import { gh, ghAll } from "./github.ts";
+import { callDeadline, gh, ghAll } from "./github.ts";
 import { QodoApi } from "./qodo-api.ts";
 import { findingsFor, findingsShapeProblem, openFindings, type QodoReview, reviewEffort } from "./qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds } from "./review-feeds.ts";
@@ -91,12 +91,26 @@ export async function run(args: Args, deps: WaitScriptDeps): Promise<number> {
   } catch (e) {
     deps.error(`review:wait could not run: ${message(e)}`);
     return 2;
+  } finally {
+    callDeadline.at = undefined;
   }
 }
 
 async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScriptDeps): Promise<number> {
   const { dir, github, log } = deps;
   const deadline = deps.now() + timeoutMinutes * 60_000;
+  // The wait's own polls of the PR head end by its time limit, so a retried read can't run past it (Qodo on PR
+  // 310). Evidence reads (check suites, comment feeds, check runs) keep their full time limit: a review seen
+  // complete at the limit is still saved, never lost to the deadline (Qodo on PR 312).
+  const headBy = Date.now() + timeoutMinutes * 60_000;
+  const readHead = async () => {
+    callDeadline.at = headBy;
+    try {
+      return await deps.readHead();
+    } finally {
+      callDeadline.at = undefined;
+    }
+  };
   // A complete save is never overwritten (AUD-M26): refused before any waiting once the commit is known. An
   // unfinished one may be waited for again: it is moved, with every raw answer and feed saved beside it,
   // into a folder of its own first, so this wait overwrites none of its evidence (Qodo on PR 264).
@@ -108,7 +122,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
   };
   let headSha: string;
   if (commit === null) {
-    headSha = await deps.readHead();
+    headSha = await readHead();
     refuseExisting(headSha);
   } else {
     refuseExisting(commit);
@@ -116,7 +130,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
     const head = await waitForHead(
       commit,
       {
-        readHead: deps.readHead,
+        readHead,
         onError: (e) => deps.error(`Reading the PR head failed, trying again: ${message(e)}`),
         now: deps.now,
         sleep: deps.sleep,
@@ -187,7 +201,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
       onPoll,
       onError: (e) => deps.error(`Poll failed, trying again: ${message(e)}`),
       // With --commit, a finished review counts only if nobody pushed again meanwhile.
-      readHead: commit === null ? undefined : deps.readHead,
+      readHead: commit === null ? undefined : readHead,
       now: deps.now,
       sleep: deps.sleep,
     },

@@ -130,26 +130,40 @@ function pauseSync(ms: number): void {
  */
 export const readRetry = { tries: 3, baseMs: 2_000, pause: pauseSync };
 
+/**
+ * A wall-clock time (ms) that every `gh` call in this process must end by, or undefined for none. A call's time
+ * limit is cut to what is left, none starts after it, and a read is not tried again when its pause would end past
+ * it. review:wait sets its own time limit here while it waits, so a retried read can't run minutes past it
+ * (Qodo on PR 310).
+ */
+export const callDeadline: { at?: number } = {};
+
 /** Runs `read`, again after a growing pause while it fails transiently, up to `readRetry.tries` calls. */
 function retryRead<T>(read: () => T): T {
   for (let attempt = 1; ; attempt++) {
     try {
       return read();
     } catch (error) {
-      if (attempt >= readRetry.tries || !isTransient(error)) throw error;
-      readRetry.pause(readRetry.baseMs * 2 ** (attempt - 1));
+      const pause = readRetry.baseMs * 2 ** (attempt - 1);
+      const late = callDeadline.at !== undefined && Date.now() + pause >= callDeadline.at;
+      if (attempt >= readRetry.tries || !isTransient(error) || late) throw error;
+      readRetry.pause(pause);
     }
   }
 }
 
 /**
- * Runs `gh`, with the one time limit and a buffer large enough for a big paginated read. A read
- * (`isReadCall`) that fails transiently is tried again (`readRetry`); a write never is: one that failed
- * may still have landed, and a second would repeat it.
+ * Runs `gh`, with the one time limit (cut to `callDeadline` when one is set) and a buffer large enough for a
+ * big paginated read. A read (`isReadCall`) that fails transiently is tried again (`readRetry`); a write never
+ * is: one that failed may still have landed, and a second would repeat it.
  */
 export function gh(...args: string[]): string {
-  const call = () =>
-    runExternal(`gh ${args[0] ?? ""}`.trim(), "gh", args, CALL_TIMEOUT_MS, { maxBuffer: 64 * 1024 * 1024 });
+  const label = `gh ${args[0] ?? ""}`.trim();
+  const call = () => {
+    const left = callDeadline.at === undefined ? CALL_TIMEOUT_MS : callDeadline.at - Date.now();
+    if (left <= 0) throw new ExternalCallError(label, { code: "ETIMEDOUT" });
+    return runExternal(label, "gh", args, Math.min(CALL_TIMEOUT_MS, left), { maxBuffer: 64 * 1024 * 1024 });
+  };
   return isReadCall(args) ? retryRead(call) : call();
 }
 

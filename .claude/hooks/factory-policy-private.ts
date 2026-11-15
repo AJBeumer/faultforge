@@ -12,7 +12,8 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { spokenWords } from "./shell-decode.ts";
-import { quotedMask } from "./shell-scan.ts";
+import { globMatches, hasWildcard } from "./shell-glob.ts";
+import { joinedWords, quotedMask, quotedSpans } from "./shell-scan.ts";
 
 /** The runner's list of private checkouts a run must not read, as the agent's environment holds it. */
 export const PRIVATE_CHECKOUTS_ENV = "FAULTFORGE_PRIVATE_CHECKOUTS";
@@ -204,23 +205,86 @@ function recursiveTargets(step: string): string[] {
   return paths.length ? paths : ["."];
 }
 
-/** The folders a command may run its steps in: where it starts, and each folder a `cd` takes it to. */
+/**
+ * The folders a command may run its steps in: where it starts, and each folder a `cd` takes it to. A wildcard
+ * target is every folder it matches (Qodo on PR 310: `cd priv?te`), or the folder it starts from when there are
+ * too many to list.
+ */
 function folders(command: string, cwd: string): string[] {
   const found = [cwd];
   let here = cwd;
   for (const m of spokenWords(command).matchAll(/(?:^|[;&|(\s])(?:cd|pushd|Set-Location|sl)\s+(?:-\w+\s+)?(\S+)/gi)) {
-    here = resolve(here, (m[1] ?? "").replace(/[;&|)]+$/, ""));
-    found.push(here);
+    const target = (m[1] ?? "").replace(/[;&|)]+$/, "");
+    const matches = hasWildcard(target) ? (globMatches(target, here) ?? [resolve(here, fixedPart(target))]) : [];
+    here = matches[0] ?? resolve(here, target);
+    found.push(here, ...matches.slice(1));
   }
   return found;
 }
 
+const VARIABLE_REASON =
+  "a run names its folders as written, not through a variable that holds a private checkout or the folder above one";
+
+/**
+ * The command with each variable the shell would expand put in from the run's environment (Qodo on PR 310), so a
+ * path spelled `$FAULTFORGE_RUN_ROOT/lab/private` is judged as the folder it is. A variable can't be expanded
+ * here when it is edited on the way (`${NAME%%:*}`) or named through another (`${!name}`): when that variable
+ * holds a private checkout or a folder above one, the command is refused, and so is one that reads a variable
+ * naming a checkout any other way (`printenv NAME`, `process.env.NAME`). The run's own folder is set aside, as
+ * the path rules set it aside: its ticket file sits in the runs folder, a checkout (Qodo on PR 312), but its own
+ * private worktree still counts.
+ */
+function expandVariables(command: string, env: NodeJS.ProcessEnv) {
+  const { checkouts, own, nested } = runFolders(env);
+  const touches = (name: string, holders: boolean) =>
+    (env[name] ?? "").split(delimiter).some((part) => {
+      const path = part.trim();
+      if (!isAbsolute(path)) return false;
+      if (nested.some((c) => inside(path, c) || (holders && inside(c, path)))) return true;
+      if (own && inside(path, own)) return false;
+      return checkouts.some((c) => inside(path, c) || (holders && inside(c, path)));
+    });
+  // A value's backslashes would read as escapes to the word rules below: a path's folders are split by `/`.
+  const slashed = (value: string | undefined) => (value ?? "").replace(/\\/g, "/");
+  let problem = /\$\{!/.test(command) ? VARIABLE_REASON : undefined;
+  const expand = (part: string) =>
+    part
+      .replace(/\$\{([A-Za-z_]\w*)([^}]*)\}/g, (all, name: string, edit: string) => {
+        if (!edit) return slashed(env[name]);
+        if (touches(name, true)) problem = VARIABLE_REASON;
+        return all;
+      })
+      .replace(/\$env:([A-Za-z_]\w*)|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi, (_all, a, b, c) =>
+        slashed(env[a ?? b ?? c]),
+      );
+  // Single-quoted text is the shell's literal text: no variable in it is expanded (Qodo on PR 312).
+  let text = "";
+  let at = 0;
+  for (const span of quotedSpans(command).filter((s) => s.kind === "single")) {
+    text += expand(command.slice(at, span.start)) + command.slice(span.start, span.end);
+    at = span.end;
+  }
+  text += expand(command.slice(at));
+  const words = joinedWords(text);
+  for (const name of Object.keys(env)) {
+    if (problem) break;
+    if (words.includes(name) && new RegExp(`\\b${name}\\b`).test(words) && touches(name, false))
+      problem = VARIABLE_REASON;
+  }
+  return { text, problem };
+}
+
 /** Why a shell command may not run because it reaches the private repo's files or checkouts, or undefined. */
 export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv, cwd?: string): string | undefined {
-  const readings = [command, spokenWords(command)];
-  if (readings.some((r) => ANSWER_FILES.test(r))) return "no run reads the answer key, the audit log or the templates";
+  const answer = "no run reads the answer key, the audit log or the templates";
+  if ([command, spokenWords(command)].some((r) => ANSWER_FILES.test(r))) return answer;
   const { checkouts, own, nested } = runFolders(env);
   if (!checkouts.length) return undefined;
+  const expanded = expandVariables(command, env);
+  if (expanded.problem) return expanded.problem;
+  const spoken = spokenWords(expanded.text);
+  const readings = [command, spokenWords(command), expanded.text, spoken];
+  if (readings.some((r) => ANSWER_FILES.test(r))) return answer;
   // The run's own folder may sit inside one the runner names (its runs folder): it is set aside first.
   const ownSpellings = own ? spellings(own) : [];
   const named = (text: string) => {
@@ -230,25 +294,36 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv,
   };
   if (readings.some((r) => PRIVATE_NAMES.test(r) || named(r))) return REASON;
   const start = cwd ?? own ?? ".";
-  // A command run from inside the private worktree reads it, whatever it names.
-  const here = pathViolation(resolve(start), env, true);
-  if (here) return here;
   // Paths as the shell would resolve them (Qodo on PR 288), from every folder the command may be in: one that
   // climbs out of the run's folder with `..`, or whose fixed start (before a wildcard) is in a private checkout.
-  const dirs = folders(command, start);
-  for (const word of spokenWords(command).split(/[\s;&|<>()=]+/)) {
-    if (!/[/\\]/.test(word) && !/^\.\.?$/.test(word) && !/^private$/i.test(word)) continue;
+  const dirs = folders(expanded.text, start);
+  // A command run from inside the private worktree, or that moves into it, reads it, whatever it names.
+  for (const dir of dirs) {
+    const here = pathViolation(resolve(dir), env, true);
+    if (here) return here;
+  }
+  for (const word of spoken.split(/[\s;&|<>()=]+/)) {
+    const wild = hasWildcard(word);
+    if (!wild && !/[/\\]/.test(word) && !/^\.\.?$/.test(word) && !/^private$/i.test(word)) continue;
     for (const dir of dirs) {
       const base = resolve(dir, fixedPart(word));
       if (own && /(^|[/\\])\.\.([/\\]|$)/.test(word) && !inside(base, own))
         return "a run stays in its own folder: no `..` out of it";
-      // A wildcard is judged by the folder it starts from: `private/temp*` by `private/`.
+      // A wildcard is judged by the folder it starts from (`private/temp*` by `private/`), and by every path it
+      // matches: `priv*/cases` starts from the run's own folder but names its private worktree (Qodo on PR 310).
       const reason = pathViolation(base, env, true);
       if (reason) return reason;
+      if (!wild) continue;
+      const matches = globMatches(word, dir);
+      if (!matches && checkouts.some((c) => inside(c, base))) return REASON;
+      for (const match of matches ?? []) {
+        const found = pathViolation(match, env, true);
+        if (found) return found;
+      }
     }
   }
   // A recursive read from a folder that holds the run's own private worktree reads that too.
-  for (const step of steps(command)) {
+  for (const step of steps(expanded.text)) {
     for (const target of recursiveTargets(step)) {
       if (dirs.some((dir) => nested.some((c) => inside(c, resolve(dir, fixedPart(target)))))) return HOLDER_REASON;
     }

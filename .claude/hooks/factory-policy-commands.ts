@@ -3,7 +3,7 @@
  * factory-policy.ts, which may not pass 400 lines (CLAUDE.md, module size rule); it exports them again.
  */
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
-import { NETWORK_CODE, onlyLocalCalls } from "./shell-exec.ts";
+import { inlineNetworkProblem, NETWORK_CODE, onlyLocalCalls } from "./shell-exec.ts";
 import { joinedWords, MAX_COMMAND_CHARS, quotedMask } from "./shell-scan.ts";
 
 const COMMAND_RULES: [RegExp, string][] = [
@@ -94,6 +94,8 @@ const BUILT_NAMES: [RegExp, string][] = [
   ],
 ];
 
+const NETWORK_REASON = "HTTP tools and network calls may only reach the app on localhost; GitHub goes through gh";
+
 /** Shell tools that send requests. Network calls from code (`NETWORK_CODE`) are shared with the guard. */
 const HTTP_TOOLS =
   /\b(curl|wget|nc|ncat|netcat|socat|ssh|scp|sftp|telnet|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i;
@@ -104,7 +106,9 @@ const HTTP_TOOLS =
  * where someone could have added text after the check.
  */
 export function commandViolations(raw: string, ticket?: string): string[] {
-  const reasons: string[] = [];
+  // Inline code is read on its own, as the shell splits the command: it may call the network under another name
+  // (`const f = fetch`), which the whole command's rule doesn't count as a call (Qodo on PR 310).
+  const reasons = inlineNetworkProblem(raw) ? [NETWORK_REASON] : [];
   for (const command of readings(raw)) {
     for (const reason of violationsIn(command, ticket)) if (!reasons.includes(reason)) reasons.push(reason);
   }
@@ -216,9 +220,7 @@ function violationsIn(command: string, ticket?: string): string[] {
     // Each call from code needs a local URL of its own: one localhost URL beside a second call whose address
     // is built at run time doesn't vouch for that one (Qodo on PR 270).
     const calls = [...command.matchAll(new RegExp(NETWORK_CODE.source, "g"))].length;
-    if (!onlyLocalCalls(command, calls)) {
-      reasons.push("HTTP tools and network calls may only reach the app on localhost; GitHub goes through gh");
-    }
+    if (!onlyLocalCalls(command, calls)) reasons.push(NETWORK_REASON);
   }
   if (ticket && /^\d+$/.test(ticket)) {
     const live = [

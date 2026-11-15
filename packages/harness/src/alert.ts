@@ -1,12 +1,14 @@
 /**
- * Raises the lab's alert (#308): when CI on main fails, or a factory run ends with exit 2 or 3, one open issue
- * labelled `alert` per kind says so. A later alert of the same kind comments on that issue instead of opening
- * another, so a run of failures is one issue, not a flood. Run by `.github/workflows/alert.yml` with the lab's
- * own GITHUB_TOKEN (issues: write, that job only), by plain node, from a checkout with nothing installed:
+ * Raises the lab's alert (#308): when CI on main fails, or a factory run ends with exit 2 or 3 or stops without
+ * reporting, one open issue labelled `alert` per kind says so. A later alert of the same kind comments on that
+ * issue instead of opening another, so a run of failures is one issue, not a flood. Run by
+ * `.github/workflows/alert.yml` with the lab's own GITHUB_TOKEN (issues: write, that job only), by plain node, from
+ * a checkout of this file and github.ts alone, with nothing installed:
  *
  *   node packages/harness/src/alert.ts <kind> <outcome>
  *
- * `kind` is `ci-main` or `factory`; `outcome` is one of that kind's fixed outcomes (a factory run's exit code).
+ * `kind` is `ci-main` or `factory`; `outcome` is one of that kind's fixed outcomes (a factory run's exit code, or
+ * `stopped` for a tick cancelled or out of time).
  * The text is fixed words, the workflow's name and the run's URL, each checked against a strict shape. It never
  * holds a log line, a path or a ticket's text. It reads GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID,
  * GITHUB_RUN_ATTEMPT and GITHUB_WORKFLOW, which GitHub sets, and gh reads GH_TOKEN.
@@ -15,9 +17,9 @@
  * or a workflow name or run that doesn't have the expected shape; 2 could not run: gh failed, or an unexpected
  * error.
  */
-import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gh as runGh } from "./github.ts";
 
 /** The label every alert issue carries. */
 export const LABEL = "alert";
@@ -35,6 +37,7 @@ export const KINDS: Record<string, Kind> = {
     outcomes: {
       "2": "exit 2: the tick could not set up",
       "3": "exit 3: the tick stopped with an error",
+      stopped: "the tick stopped without reporting: cancelled or out of time",
     },
   },
 };
@@ -92,11 +95,11 @@ export function raise(alert: Alert, issues: Issues): { action: "commented" | "op
   return { action: "opened" };
 }
 
-/** `Issues` through the gh CLI, for one repo. */
-export function ghIssues(
-  repo: string,
-  gh: (args: string[]) => string = (args) => execFileSync("gh", args, { encoding: "utf8" }),
-): Issues {
+/**
+ * `Issues` through the gh CLI, for one repo, by the shared wrapper (Qodo on PR 310): every call has its time
+ * limit, and a read that fails transiently is tried again, so a flaky moment does not swallow the alert.
+ */
+export function ghIssues(repo: string, gh: (args: string[]) => string = (args) => runGh(...args)): Issues {
   return {
     openAlerts: () =>
       (

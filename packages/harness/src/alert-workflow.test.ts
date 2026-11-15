@@ -38,8 +38,14 @@ describe("the alert workflow (#308)", () => {
     expect(alert).not.toMatch(/secrets\./);
   });
 
-  it("checks out only the script, keeps no token, and installs nothing", () => {
-    expect(alert).toContain("sparse-checkout: packages/harness/src/alert.ts");
+  it("checks out only the script and the modules it imports, keeps no token, and installs nothing", () => {
+    // Every module alert.ts imports from this repo must be in the sparse checkout, or the job can't start it
+    // (the shared gh wrapper, Qodo on PR 310).
+    const source = readFileSync(join(import.meta.dirname, "alert.ts"), "utf8");
+    const local = [...source.matchAll(/from "\.\/([\w.-]+)"/g)].map((m) => `packages/harness/src/${m[1]}`);
+    const block = alert.match(/sparse-checkout: \|\n((?: {12}\S.*\n)+)/)?.[1] ?? "";
+    const list = block.split("\n").map((line) => line.trim());
+    expect(list.filter(Boolean).sort()).toEqual(["packages/harness/src/alert.ts", ...local].sort());
     expect(alert).toContain("persist-credentials: false");
     expect(alert).not.toMatch(/npm (ci|install)/);
   });
@@ -50,6 +56,11 @@ describe("the alert workflow (#308)", () => {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expressions, not a JS template
     expect(alert).toContain("KIND: ${{ inputs.kind }}");
     expect(run).not.toContain("${{");
+  });
+
+  it("leaves its gh calls time to retry: the job's limit is above every call's time limit and retries", () => {
+    // Three tries of a read at 60 s with pauses, and three writes at 60 s each, fit in ten minutes.
+    expect(Number(job(alert, "alert").match(/timeout-minutes: (\d+)/)?.[1])).toBeGreaterThanOrEqual(10);
   });
 
   it("raises one kind at a time, so two failures can't open two issues", () => {
@@ -72,22 +83,31 @@ describe("who raises it (#308)", () => {
     expect(check.match(/^ +issues: write$/gm)).toHaveLength(1);
   });
 
-  it("factory.yml: after the tick, on exit 2 or 3 only", () => {
+  it("factory.yml: after the tick, on exit 2 or 3, or a tick that stopped without reporting", () => {
     const caller = job(factory, "alert");
     expect(caller).toContain("needs: tick");
-    expect(caller).toContain("if: always() && (needs.tick.outputs.code == '2' || needs.tick.outputs.code == '3')");
+    expect(caller).toContain(
+      "if: always() && (needs.tick.outputs.code == '2' || needs.tick.outputs.code == '3' || needs.tick.outputs.code == 'stopped')",
+    );
     expect(caller).toContain("uses: ./.github/workflows/alert.yml");
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
     expect(caller).toContain("outcome: ${{ needs.tick.outputs.code }}");
     expect(factory.match(/^ +issues: write$/gm)).toHaveLength(1);
     // The tick job hands its exit code on, as the step records it.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
-    expect(job(factory, "tick")).toContain("code: ${{ steps.tick.outputs.code }}");
+    expect(job(factory, "tick")).toContain("code: ${{ steps.tick.outputs.code || steps.unreported.outputs.code }}");
     expect(factory).toContain('echo "code=$code" >> "$GITHUB_OUTPUT"');
+  });
+
+  it("factory.yml: a tick cancelled or out of time hands on an alertable code (Qodo on PR 310)", () => {
+    const tick = job(factory, "tick");
+    const step = tick.slice(tick.indexOf("- name: Report a tick that stopped without reporting"));
+    expect(step).toMatch(/^- name: Report a tick that stopped without reporting\n {8}id: unreported\n/);
+    expect(step.slice(0, step.indexOf("\n      - "))).toContain('echo "code=stopped" >> "$GITHUB_OUTPUT"');
   });
 
   it("asks only for outcomes alert.ts knows", () => {
     expect(Object.keys(KINDS["ci-main"]?.outcomes ?? {})).toContain("failure");
-    expect(Object.keys(KINDS.factory?.outcomes ?? {}).sort()).toEqual(["2", "3"]);
+    expect(Object.keys(KINDS.factory?.outcomes ?? {}).sort()).toEqual(["2", "3", "stopped"]);
   });
 });
