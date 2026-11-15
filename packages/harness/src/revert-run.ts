@@ -57,15 +57,17 @@ export function sandboxedSpawn(spawn: Spawn = spawnSync): Spawn {
  * Lets the sandbox user into the scratch folder, without writing there, and read and write one copy in it, and the
  * runner whatever that user makes in the copy, so the runner can read the report and remove it afterwards. The
  * folder itself, where the runner keeps its temporary indexes and builds the next copy, stays the runner's alone
- * (Qodo on PR 336). Throws when `setfacl` fails.
+ * (Qodo on PR 336). Default entries go on folders only, as the sandbox's setup gives them: `setfacl` refuses a
+ * default entry on a file (Qodo on PR 336). Throws when a step fails.
  */
 export function shareWithSandbox(scratch: string, copy: string, sh: Sh = realSh, runner = userInfo().username): void {
-  const acl = `u:${SANDBOX_USER}:rwX,d:u:${SANDBOX_USER}:rwX,d:u:${runner}:rwX`;
+  const u = SANDBOX_USER;
   for (const args of [
-    ["-m", `u:${SANDBOX_USER}:x`, scratch],
-    ["-R", "-m", acl, copy],
+    ["setfacl", "-m", `u:${u}:x`, scratch],
+    ["setfacl", "-R", "-m", `u:${u}:rwX`, copy],
+    ["find", copy, "-type", "d", "-exec", "setfacl", "-m", `d:u:${u}:rwX,d:u:${runner}:rwX`, "{}", "+"],
   ]) {
-    const result = sh("sudo", ["-n", "setfacl", ...args]);
+    const result = sh("sudo", ["-n", ...args]);
     if (result.status !== 0) throw new Error(`couldn't share the scratch copy with the sandbox user: ${result.stderr}`);
   }
 }

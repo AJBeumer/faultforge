@@ -42,16 +42,24 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
     shareWithSandbox("/tmp/revert-check-1", "/tmp/revert-check-1/with", sh, "runner");
     expect(calls).toEqual([
       ["sudo", "-n", "setfacl", "-m", `u:${SANDBOX_USER}:x`, "/tmp/revert-check-1"],
+      ["sudo", "-n", "setfacl", "-R", "-m", `u:${SANDBOX_USER}:rwX`, "/tmp/revert-check-1/with"],
       [
         "sudo",
         "-n",
-        "setfacl",
-        "-R",
-        "-m",
-        `u:${SANDBOX_USER}:rwX,d:u:${SANDBOX_USER}:rwX,d:u:runner:rwX`,
+        "find",
         "/tmp/revert-check-1/with",
+        "-type",
+        "d",
+        "-exec",
+        "setfacl",
+        "-m",
+        `d:u:${SANDBOX_USER}:rwX,d:u:runner:rwX`,
+        "{}",
+        "+",
       ],
     ]);
+    // setfacl refuses a default entry on a file, so a recursive call never carries one (Qodo on PR 336).
+    for (const call of calls.filter((c) => c.includes("-R"))) expect(call.join(" ")).not.toMatch(/\bd:u:/);
     expect(() => shareWithSandbox("/tmp/r", "/tmp/r/with", recorder(1).sh, "runner")).toThrow(/couldn't share/);
   });
 
