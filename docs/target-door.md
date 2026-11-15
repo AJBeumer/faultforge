@@ -16,6 +16,7 @@ npm run target:post -- <kind> [options]
 | `pr-comment` | `--number <n> --body-file <f>` | a comment on a PR |
 | `pr-close` | `--number <n> --body-file <f>` | closes the PR with that comment |
 | `push` | `--branch <name> [--checkout <path>]` | the branch's commit, never forced |
+| `label` | `--number <n>`, `--add <name>` and/or `--remove <name>`, each as often as needed | adds the labels in one edit, then removes each other one |
 
 `--repo owner/name` picks a reviewed repo when there is more than one. Run it on its own, from the lab's root.
 
@@ -25,7 +26,9 @@ It reads its text only from files, and checks the exact text it sends, each piec
 
 Exit codes: 0 sent; 1 usage; 2 refused, nothing sent; 3 `gh` or `git` failed after the checks (check GitHub before retrying).
 
-`case:ticket` and `case:pr` send through the same module (`packages/harness/src/target-post.ts`).
+A label name is checked like any text, and must also be one plain line of at most 50 characters with no comma (gh would split it into two labels). A label post can't add and remove the same label.
+
+`case:ticket` and `case:pr` send through the same module (`packages/harness/src/target-post.ts`), and so does the factory's runner for its comments and label moves on a reviewed repo's ticket (`ticket-write.ts`, #345). Its agent pushes and opens its PR with `npm run target:post`, like anyone else.
 
 ## What the guard does
 

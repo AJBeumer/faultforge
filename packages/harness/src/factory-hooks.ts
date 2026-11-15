@@ -6,7 +6,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FactoryConfig } from "./factory-config.ts";
-import { worktreeFor } from "./factory-workspace.ts";
 
 /**
  * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
@@ -113,11 +112,11 @@ export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "si
   }
 }
 
-/** What one hook answered to its three self-test payloads, and its slowest answer. */
+/** What one hook answered to its self-test payloads, and its slowest answer. */
 export interface HookReport {
   hook: string;
   /** Claude Code's reading of each answer: "deny", "allow" or "silent", "ask", "invalid". */
-  outcomes: { deny: string; allow: string; notJson: string };
+  outcomes: { deny: string; allow: string; notJson: string; door?: string };
   slowestMs: number;
 }
 
@@ -130,18 +129,19 @@ export interface HooksReport {
 /**
  * Proves both hooks work before an agent runs: each must deny what it exists to deny, allow a harmless
  * command, and deny when its input is not JSON (a crash would otherwise let the tool run). Each answer
- * must come well inside the time limit, since a hook that times out is also a bypass. `reviewedFolder`
- * is a reviewed repo's checkout, where the guard must block a telltale commit message. Returns the
- * problems found, or an empty list.
+ * must come well inside the time limit, since a hook that times out is also a bypass. `reviewedGithub`
+ * is a reviewed repo (owner/name): the guard must refuse a raw write to it, and let the door
+ * (`npm run target:post` from the lab's root) through unread (#345). Returns the problems found, or an
+ * empty list.
  */
-export function hookSelfTest(lab: string, reviewedFolder: string, limitSeconds: number, run: HookRunner): string[] {
-  return hookSelfTestReport(lab, reviewedFolder, limitSeconds, run).problems;
+export function hookSelfTest(lab: string, reviewedGithub: string, limitSeconds: number, run: HookRunner): string[] {
+  return hookSelfTestReport(lab, reviewedGithub, limitSeconds, run).problems;
 }
 
-/** The same self-test, with each hook's three outcomes and slowest answer, for the run log (#126). */
+/** The same self-test, with each hook's outcomes and slowest answer, for the run log (#126). */
 export function hookSelfTestReport(
   lab: string,
-  reviewedFolder: string,
+  reviewedGithub: string,
   limitSeconds: number,
   run: HookRunner,
 ): HooksReport {
@@ -151,18 +151,27 @@ export function hookSelfTestReport(
   const cases: {
     hook: string;
     name: string;
-    kind: "deny" | "allow" | "notJson";
+    kind: "deny" | "allow" | "notJson" | "door";
     stdin: string;
     env: Record<string, string>;
     expectDeny: boolean;
   }[] = [
     {
       hook: "guard-target.ts",
-      name: "a telltale commit in a reviewed repo",
+      name: "a raw write to a reviewed repo",
       kind: "deny",
-      stdin: payload("Bash", { command: 'git commit -m "Fix the planted bug"' }, reviewedFolder),
+      // Plain words: the guard must refuse the raw write itself, not the text in it (#340).
+      stdin: payload("Bash", { command: `gh pr create --repo ${reviewedGithub} --head tidy --fill` }, lab),
       env: {},
       expectDeny: true,
+    },
+    {
+      hook: "guard-target.ts",
+      name: "a write through the door",
+      kind: "door",
+      stdin: payload("Bash", { command: "npm run target:post -- pr-comment --number 1 --body-file b.md" }, lab),
+      env: {},
+      expectDeny: false,
     },
     {
       hook: "guard-target.ts",
@@ -297,10 +306,11 @@ export function requireHooks(factory: FactoryConfig, lab: string): HooksReport {
       problems: missing,
       hooks: [],
     });
-  const reviewed = Object.values(factory.repos).find((r) => r.guard === "reviewed");
-  const reviewedFolder = reviewed ? worktreeFor(lab, reviewed.path) : lab;
+  // With none marked, the target: the guard always protects it, whatever the config says (guard-repos.ts).
+  const reviewed =
+    Object.values(factory.repos).find((r) => r.guard === "reviewed")?.github ?? "AJBeumer/faultforge-target";
   const limit = hookTimeoutSeconds(text);
-  const report = hookSelfTestReport(lab, reviewedFolder, limit, realHookRunner(lab, limit));
+  const report = hookSelfTestReport(lab, reviewed, limit, realHookRunner(lab, limit));
   if (report.problems.length)
     throw new HooksCheckError(`the workspace's hooks failed their self-test: ${report.problems.join("; ")}`, report);
   return report;

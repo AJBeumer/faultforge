@@ -11,6 +11,11 @@
  *   npm run target:post -- pr-comment    --number <n> --body-file <f>
  *   npm run target:post -- pr-close      --number <n> --body-file <f>     (closes with that comment)
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
+ *   npm run target:post -- label         --number <n> [--add <name>]... [--remove <name>]...
+ *
+ * A label post adds its labels in one edit, then removes each of the others on its own (the factory's runner moves
+ * a ticket's labels this way, #345). Each label name is checked like any text, and must be one plain line of at most
+ * 50 characters with no comma, which gh would split into two labels.
  *
  * Every kind takes `--repo owner/name`, which must be a repo `factory.json` marks `"guard": "reviewed"`; without it,
  * the one reviewed repo, refused when there are several. Text comes only from files, read as UTF-8; a title is
@@ -53,6 +58,7 @@ export const KINDS = [
   "pr-comment",
   "pr-close",
   "push",
+  "label",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 
@@ -67,6 +73,9 @@ export interface Post {
   base?: string;
   branch?: string;
   checkout?: string;
+  /** A label post's labels to add, then to remove. */
+  add?: string[];
+  remove?: string[];
 }
 
 /** Runs `gh` with `args`, `input` on its stdin, and returns stdout; throws when gh fails. */
@@ -80,7 +89,7 @@ export interface Deps {
 
 /** Thrown when a check finds something, or what would be sent can't be read: nothing was sent (exit 2). */
 export class Refused extends Error {}
-/** Thrown when gh or git failed after the checks passed (exit 3). */
+/** Thrown when gh or git failed after the checks passed (exit 3). Its `cause` is gh's or git's own error. */
 export class SendFailed extends Error {}
 
 /** gh with no host or repo from the environment: the post names github.com and the repo itself. */
@@ -114,8 +123,58 @@ function postPieces(post: Post): [string, string][] {
     ["body", post.body],
     ["head branch", post.head],
     ["base branch", post.base],
+    ...labelsOf(post).map((name, i): [string, string] => [`label ${i + 1}`, name]),
   ];
   return pieces.filter((piece): piece is [string, string] => piece[1] !== undefined);
+}
+
+/** A label post's names, added ones first. */
+const labelsOf = (post: Post) => [...(post.add ?? []), ...(post.remove ?? [])];
+
+/** What is wrong with a label post's names as names, before their words are checked; the names aren't repeated. */
+function labelShapeProblems(post: Post): string[] {
+  if (post.kind !== "label") return [];
+  const names = labelsOf(post);
+  if (!names.length) return ["a label post must add or remove at least one label"];
+  const problems = names.flatMap((name, i) => {
+    if (!name.trim()) return [`label ${i + 1}: is blank`];
+    // gh splits --add-label on commas, so `a,b` would add two labels, one of them unchecked as a name of its own.
+    if (/[,\p{Cc}]/u.test(name)) return [`label ${i + 1}: has a comma or a control character`];
+    return [...name].length > 50 ? [`label ${i + 1}: is longer than GitHub's 50 characters`] : [];
+  });
+  const both = (post.add ?? []).filter((name) => post.remove?.includes(name));
+  return both.length ? [...problems, "a label can't be both added and removed"] : problems;
+}
+
+/** The gh calls for a label post: one edit that adds every label, then one REST delete for each removal. */
+export function labelCalls(post: Post): { args: string[] }[] {
+  const add = post.add ?? [];
+  return [
+    ...(add.length
+      ? [
+          {
+            args: [
+              "issue",
+              "edit",
+              String(post.number),
+              "--repo",
+              `github.com/${post.repo}`,
+              ...add.flatMap((name) => ["--add-label", name]),
+            ],
+          },
+        ]
+      : []),
+    ...(post.remove ?? []).map((name) => ({
+      args: [
+        "api",
+        "--hostname",
+        "github.com",
+        "-X",
+        "DELETE",
+        `repos/${post.repo}/issues/${post.number}/labels/${encodeURIComponent(name)}`,
+      ],
+    })),
+  ];
 }
 
 /** The gh call for a post that isn't a push, and the body it reads on stdin. */
@@ -147,17 +206,23 @@ export function sendPost(post: Post, deps: Deps = {}): string {
     try {
       return git(checkout, pushArgs({ url: plan.url, commit: plan.commit }, branch));
     } catch (error) {
-      throw new SendFailed(`git push failed: ${errorText(error)}`);
+      throw new SendFailed(`git push failed: ${errorText(error)}`, { cause: error });
     }
   }
   const problems = postProblems(post, env);
   if (problems.length) throw new Refused(refusal(problems));
-  const { args, input } = ghCall(post);
-  try {
-    return (deps.gh ?? realGh)(args, input);
-  } catch (error) {
-    throw new SendFailed(`gh ${args.slice(0, 2).join(" ")} failed: ${errorText(error)}`);
+  const calls: { args: string[]; input?: string }[] = post.kind === "label" ? labelCalls(post) : [ghCall(post)];
+  const out: string[] = [];
+  for (const { args, input } of calls) {
+    try {
+      out.push((deps.gh ?? realGh)(args, input));
+    } catch (error) {
+      // A label post that fails part-way says what already went: the labels added stay added.
+      const done = out.length ? ` (after ${out.length} of ${calls.length} calls went through)` : "";
+      throw new SendFailed(`gh ${args.slice(0, 2).join(" ")} failed${done}: ${errorText(error)}`, { cause: error });
+    }
   }
+  return out.join("");
 }
 
 /** The problems a post's own text has, without sending it: a caller can refuse before it records an attempt. */
@@ -168,7 +233,7 @@ export function postProblems(post: Post, env: NodeJS.ProcessEnv = process.env): 
     const problem = name === undefined ? undefined : branchNameProblem(name);
     return problem ? [problem] : [];
   });
-  return [...branches, ...textProblems(postPieces(post), env)];
+  return [...branches, ...labelShapeProblems(post), ...textProblems(postPieces(post), env)];
 }
 
 function refusal(problems: string[]): string {
@@ -203,17 +268,25 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   const [kind, ...rest] = argv;
   if (!KINDS.includes(kind as Kind)) throw new Usage(`the first word must be one of: ${KINDS.join(", ")}`);
   let values: Record<string, string | undefined>;
+  let lists: Record<"add" | "remove", string[]>;
   try {
-    values = parseArgs({
+    const parsed = parseArgs({
       args: rest,
       strict: true,
-      options: Object.fromEntries(
-        ["repo", "number", "title-file", "body-file", "head", "base", "branch", "checkout"].map((o) => [
-          o,
-          { type: "string" as const },
-        ]),
-      ),
-    }).values as Record<string, string | undefined>;
+      options: {
+        ...Object.fromEntries(
+          ["repo", "number", "title-file", "body-file", "head", "base", "branch", "checkout"].map((o) => [
+            o,
+            { type: "string" as const },
+          ]),
+        ),
+        add: { type: "string", multiple: true },
+        remove: { type: "string", multiple: true },
+      },
+    }).values as Record<string, string | string[] | undefined>;
+    const { add = [], remove = [], ...single } = parsed;
+    values = single as Record<string, string | undefined>;
+    lists = { add: add as string[], remove: remove as string[] };
   } catch (error) {
     throw new Usage(errorText(error));
   }
@@ -234,8 +307,10 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
     "pr-comment": ["number", "body-file"],
     "pr-close": ["number", "body-file"],
     push: ["branch", "checkout"],
+    label: ["number", "add", "remove"],
   };
-  const extra = Object.keys(values).filter((o) => o !== "repo" && !allowed[post.kind].includes(o));
+  const given = [...Object.keys(values), ...(["add", "remove"] as const).filter((o) => lists[o].length)];
+  const extra = given.filter((o) => o !== "repo" && !allowed[post.kind].includes(o));
   if (extra.length) throw new Usage(`${post.kind} takes no --${extra.join(", --")}`);
   const needs = (option: string) => {
     if (!values[option]) throw new Usage(`${post.kind} needs --${option}`);
@@ -246,7 +321,12 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
     if (!Number.isInteger(post.number) || post.number < 1) throw new Usage("--number must be a whole number above 0");
   }
   if (["issue-create", "pr-create"].includes(post.kind)) needs("title-file");
-  if (!/-edit$|^push$/.test(post.kind)) needs("body-file");
+  if (!/-edit$|^push$|^label$/.test(post.kind)) needs("body-file");
+  if (post.kind === "label") {
+    if (!lists.add.length && !lists.remove.length) throw new Usage("label needs --add or --remove");
+    post.add = lists.add;
+    post.remove = lists.remove;
+  }
   if (/-edit$/.test(post.kind) && !values["title-file"] && !values["body-file"]) {
     throw new Usage(`${post.kind} needs --title-file or --body-file`);
   }

@@ -46,6 +46,26 @@ vi.mock("./guard-install.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./guard-install.ts")>()),
   unguardedCheckouts: vi.fn(() => ["faultforge-target: no guard hooks"]),
 }));
+// The door runs for real, every check included, but sends with this fake gh: never the real one (#345).
+/** Every call the door made, and the error each next call throws (`null` or none: it works). */
+const door = vi.hoisted(() => ({ calls: [] as { args: string[]; input?: string }[], fail: [] as (Error | null)[] }));
+vi.mock("./target-post.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./target-post.ts")>();
+  return {
+    ...real,
+    sendPost: vi.fn((post: import("./target-post.ts").Post, deps: import("./target-post.ts").Deps = {}) =>
+      real.sendPost(post, {
+        ...deps,
+        gh: (args, input) => {
+          door.calls.push({ args, input });
+          const fail = door.fail.shift();
+          if (fail) throw fail;
+          return "";
+        },
+      }),
+    ),
+  };
+});
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
@@ -67,7 +87,7 @@ vi.mock("./paths.ts", async (importOriginal) => {
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
 import { RUNNER_MARKER } from "./factory-comments.ts";
-import type { FactoryConfig } from "./factory-config.ts";
+import type { FactoryConfig, RepoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
@@ -224,38 +244,108 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(readFileSync(file, "utf8")).toBe("# Filter\n");
   });
 
-  it("adds the new labels in one edit, then removes each old one on its own, ignoring a label already gone (AUD-M19)", () => {
+  it("adds a lab ticket's new labels in one edit, then removes each old one on its own, ignoring a label already gone (AUD-M19)", () => {
     vi.mocked(gh)
       .mockImplementationOnce(() => "")
       .mockImplementationOnce(() => {
         throw new ExternalCallError("gh api", { stderr: "gh: Label does not exist (HTTP 404)\n" });
       });
     const problems = realDeps(FACTORY, OPTIONS).relabel(
-      "owner/target",
+      "owner/lab",
       18,
       ["ready-for-agent", "agent-done"],
       ["agent-working"],
     );
     expect(problems).toEqual({ removeFailed: null, addFailed: null });
     expect(vi.mocked(gh).mock.calls).toEqual([
-      ["issue", "edit", "18", "--repo", "owner/target", "--add-label", "agent-working"],
-      ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/ready-for-agent"],
-      ["api", "-X", "DELETE", "repos/owner/target/issues/18/labels/agent-done"],
+      ["issue", "edit", "18", "--repo", "owner/lab", "--add-label", "agent-working"],
+      ["api", "-X", "DELETE", "repos/owner/lab/issues/18/labels/ready-for-agent"],
+      ["api", "-X", "DELETE", "repos/owner/lab/issues/18/labels/agent-done"],
     ]);
   });
 
-  it("comments on the ticket with gh issue comment, behind the runner's mark (AUD-M21)", () => {
-    realDeps(FACTORY, OPTIONS).comment("owner/target", 18, "Picked up.");
+  it("comments on a lab ticket with gh issue comment, behind the runner's mark (AUD-M21)", () => {
+    realDeps(FACTORY, OPTIONS).comment("owner/lab", 18, "Picked up.");
     expect(vi.mocked(gh)).toHaveBeenCalledWith(
       "issue",
       "comment",
       "18",
       "--repo",
-      "owner/target",
+      "owner/lab",
       "--body",
       `${RUNNER_MARKER}
 Picked up.`,
     );
+    expect(door.calls).toEqual([]);
+  });
+
+  describe("a reviewed repo's ticket is written through the door, never with raw gh (#345)", () => {
+    beforeEach(() => {
+      door.calls = [];
+      door.fail = [];
+    });
+
+    it("comments through the door's issue-comment, the body on stdin, behind the runner's mark", () => {
+      realDeps(FACTORY, OPTIONS).comment("owner/target", 18, "Picked up.");
+      expect(vi.mocked(gh)).not.toHaveBeenCalled();
+      expect(door.calls).toEqual([
+        {
+          args: ["issue", "comment", "18", "--repo", "github.com/owner/target", "--body-file", "-"],
+          input: `${RUNNER_MARKER}\nPicked up.`,
+        },
+      ]);
+    });
+
+    it("refuses a comment the door's checks refuse, and sends nothing", () => {
+      expect(() => realDeps(FACTORY, OPTIONS).comment("owner/target", 18, "@qodo please look again")).toThrow(
+        /refused/,
+      );
+      expect(door.calls).toEqual([]);
+      expect(vi.mocked(gh)).not.toHaveBeenCalled();
+    });
+
+    it("moves labels through the door's label kind: add first, then each removal, a label already gone ignored", () => {
+      // The first removal answers as GitHub does for a label that isn't on the issue: gh's own error, from the door.
+      door.fail = [
+        null,
+        Object.assign(new Error("Command failed: gh api"), { stderr: "gh: Label does not exist (HTTP 404)\n" }),
+      ];
+      const problems = realDeps(FACTORY, OPTIONS).relabel(
+        "owner/target",
+        18,
+        ["ready-for-agent", "agent-done"],
+        ["agent-working"],
+      );
+      expect(problems).toEqual({ removeFailed: null, addFailed: null });
+      expect(vi.mocked(gh)).not.toHaveBeenCalled();
+      expect(door.calls.map((c) => c.args)).toEqual([
+        ["issue", "edit", "18", "--repo", "github.com/owner/target", "--add-label", "agent-working"],
+        ["api", "--hostname", "github.com", "-X", "DELETE", "repos/owner/target/issues/18/labels/ready-for-agent"],
+        ["api", "--hostname", "github.com", "-X", "DELETE", "repos/owner/target/issues/18/labels/agent-done"],
+      ]);
+    });
+
+    it("reports a label the door refuses as a failed add, and sends nothing", () => {
+      const problems = realDeps(FACTORY, OPTIONS).relabel("owner/target", 18, [], ["planted-bug"]);
+      expect(String(problems.addFailed)).toMatch(/refused/);
+      expect(door.calls).toEqual([]);
+    });
+
+    it("sends the target through the door even when the config doesn't mark it reviewed: the guard's list counts", () => {
+      const unmarked: FactoryConfig = {
+        ...FACTORY,
+        repos: { ...FACTORY.repos, target: { ...(FACTORY.repos.target as RepoConfig), guard: "lab" } },
+      };
+      realDeps(unmarked, OPTIONS).comment("AJBeumer/faultforge-target", 18, "Picked up.");
+      expect(vi.mocked(gh)).not.toHaveBeenCalled();
+      expect(door.calls[0]?.args.slice(0, 5)).toEqual([
+        "issue",
+        "comment",
+        "18",
+        "--repo",
+        "github.com/AJBeumer/faultforge-target",
+      ]);
+    });
   });
 
   it("hands the agent launcher the run's options and runs folder", async () => {
