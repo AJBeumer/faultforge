@@ -129,6 +129,8 @@ describe("a run can't change the check script (re-grade 7)", () => {
     expect(checkScriptNames({ check: "npm run t && node --run tst" })).toContain("tst");
     expect(checkScriptNames({ check: "npm t" })).toContain("test");
     expect(checkScriptNames({ check: "npm run t" })).not.toContain("test");
+    // A node option before --run (Qodo on PR 339, fourth review).
+    expect(checkScriptNames({ check: "node --no-warnings --run lint" })).toContain("lint");
   });
 
   it("refuses adding a precheck script, which npm runs before the check (Qodo on PR 339)", () => {

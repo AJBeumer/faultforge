@@ -34,7 +34,7 @@ export function checkScriptNames(scripts: Scripts): Set<string> {
   // Each name with whether its pre and post scripts run with it: true when a package manager runs it.
   const todo: [string, boolean][] = [["check", true]];
   const runs =
-    /\b(npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+--run[=\s]+([\w:.-]+)/g;
+    /\b(npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(run(?:-script)?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*)?([\w:.-]+)|\bnode\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*--run[=\s]+([\w:.-]+)/g;
   while (todo.length) {
     const [name, called] = todo.pop() as [string, boolean];
     if (called) todo.push([`pre${name}`, false], [`post${name}`, false]);
