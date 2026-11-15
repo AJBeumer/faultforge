@@ -164,6 +164,13 @@ describe("a move whose destination can't be read touches every reviewed repo (re
     expect(unreadableMove('echo "$(cd "$DIR" && git push origin main)"', ELSEWHERE)).toBe(true);
   });
 
+  it("reads a substitution's own command, nested quotes and all (Qodo on PR 322, third review)", () => {
+    const command = 'echo "$(printf "%s" x; cd "$DIR"; git push --force origin main)"';
+    expect(unreadableMove(command, ELSEWHERE)).toBe(true);
+    expect(bash(command)).toBeDefined();
+    expect(unreadableMove('echo "$(printf \'%s\' x; echo `cd "$DIR"`)"', ELSEWHERE)).toBe(true);
+  });
+
   it("reads single-quoted text and a lone % as written (Qodo on PR 322)", () => {
     expect(unreadableMove("cd '$DIR'", ELSEWHERE)).toBe(false);
     expect(unreadableMove("git -C '$(x)' status", ELSEWHERE)).toBe(false);

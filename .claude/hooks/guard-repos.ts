@@ -7,7 +7,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { globMatches, hasWildcard } from "./shell-glob.ts";
-import { quotedSpans } from "./shell-scan.ts";
+import { quotedSpans, substitutions } from "./shell-scan.ts";
 
 export interface Reviewed {
   /** owner/name on GitHub */
@@ -338,13 +338,16 @@ export function navigationTargets(command: string, cwd: string): string[] {
  * where the shell acts on it: a move written in a message, a single-quoted string or a comment is text, so it
  * can't widen a write to every reviewed repo (Qodo on PR 322).
  */
-export function unreadableMove(command: string, cwd: string): boolean {
+export function unreadableMove(command: string, cwd: string, depth = 0): boolean {
   // A move counts unless its first word sits in quoted text, a heredoc body or a comment that runs nothing. The
   // spans are read from the command as written, never after posted values are cut out of it: a cut can shift a
   // quote and hide a real move (Qodo on PR 322, second review). Text that runs a substitution still counts.
   const text = new Array<boolean>(command.length).fill(false);
   for (const span of quotedSpans(command)) if (!span.runs) text.fill(true, span.start, span.end);
-  return navigation(command, cwd, (index) => !text[index]).unreadable;
+  if (navigation(command, cwd, (index) => !text[index]).unreadable) return true;
+  // Quotes inside a substitution belong to its own command, not the string around it: each command a
+  // substitution runs is read again on its own (Qodo on PR 322, third review).
+  return depth < 3 && substitutions(command, true).some((s) => unreadableMove(s.inner, cwd, depth + 1));
 }
 
 /** The folder a file edit lands in, or its nearest existing parent: where its checkout is looked up. */
