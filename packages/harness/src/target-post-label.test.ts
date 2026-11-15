@@ -1,13 +1,13 @@
 /**
- * The door's `label` kind (#345): the factory's runner moves a reviewed repo's ticket labels through it, and it checks
- * every label name it sends.
+ * The door's `label` kind (#345): the factory's runner moves a reviewed repo's ticket labels through `sendPost`, which
+ * checks every label name it sends. The command doesn't take it: an agent run could otherwise move labels itself.
  */
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Reviewed } from "../../../.claude/hooks/guard-repos.ts";
-import { type Gh, main, SendFailed, sendPost } from "./target-post.ts";
+import { type Gh, main, type Post, SendFailed, sendPost } from "./target-post.ts";
 
 const DIR = mkdtempSync(join(tmpdir(), "target-post-label-"));
 const PRIVATE = join(DIR, "private");
@@ -26,20 +26,24 @@ function fakeGh(fail?: (args: string[]) => Error | undefined) {
   return { gh, calls };
 }
 
-function run(argv: string[], gh: Gh) {
-  const err: string[] = [];
-  const code = main(argv, { gh, env: ENV, reviewed: [APP], log: () => {}, error: (l) => err.push(l) });
-  return { code, err: err.join("\n") };
+/** A label post on Owner/app#7, sent with `gh`. */
+const label = (gh: Gh, labels: Pick<Post, "add" | "remove">) =>
+  sendPost({ kind: "label", repo: "Owner/app", number: 7, ...labels }, { gh, env: ENV });
+
+/** The error a label post throws, or undefined when it was sent. */
+function thrown(gh: Gh, labels: Pick<Post, "add" | "remove">): Error | undefined {
+  try {
+    label(gh, labels);
+    return undefined;
+  } catch (error) {
+    return error as Error;
+  }
 }
 
-describe("target:post label (#345)", () => {
+describe("the door's label kind (#345)", () => {
   it("adds every label in one edit, then removes each other label on its own", () => {
     const fake = fakeGh();
-    const { code } = run(
-      ["label", "--number", "7", "--add", "agent-working", "--remove", "ready-for-agent", "--remove", "needs help"],
-      fake.gh,
-    );
-    expect(code).toBe(0);
+    label(fake.gh, { add: ["agent-working"], remove: ["ready-for-agent", "needs help"] });
     expect(fake.calls).toEqual([
       ["issue", "edit", "7", "--repo", "github.com/Owner/app", "--add-label", "agent-working"],
       ["api", "--hostname", "github.com", "-X", "DELETE", "repos/Owner/app/issues/7/labels/ready-for-agent"],
@@ -49,12 +53,11 @@ describe("target:post label (#345)", () => {
 
   it("refuses a label name that gives the case away, names a private template or addresses Qodo, and sends nothing", () => {
     for (const name of ["planted", "pl4nted-bug", "x-secret-v1", "@qodo", "FF-9001"]) {
-      for (const flag of ["--add", "--remove"]) {
+      for (const side of ["add", "remove"] as const) {
         const fake = fakeGh();
-        const { code, err } = run(["label", "--number", "7", "--add", "ok", flag, name], fake.gh);
-        expect(code, `${flag} ${name}`).toBe(2);
-        expect(err).toMatch(/refused/);
-        expect(err).not.toContain("x-secret-v1");
+        const error = thrown(fake.gh, { add: ["ok"], [side]: side === "add" ? ["ok", name] : [name] });
+        expect(error?.message, `${side} ${name}`).toMatch(/refused/);
+        expect(error?.message).not.toContain("x-secret-v1");
         expect(fake.calls).toEqual([]);
       }
     }
@@ -63,43 +66,39 @@ describe("target:post label (#345)", () => {
   it("refuses a name gh would split or GitHub can't hold: a comma, a line break, blank, over 50 characters", () => {
     for (const name of ["ok,planted", "a\nb", "  ", "x".repeat(51)]) {
       const fake = fakeGh();
-      expect(() =>
-        sendPost({ kind: "label", repo: "Owner/app", number: 7, add: [name] }, { gh: fake.gh, env: ENV }),
-      ).toThrow(/refused/);
+      expect(thrown(fake.gh, { add: [name] })?.message).toMatch(/refused/);
       expect(fake.calls).toEqual([]);
     }
   });
 
   it("refuses a post that adds and removes the same label, or moves none", () => {
     const fake = fakeGh();
-    expect(() =>
-      sendPost({ kind: "label", repo: "Owner/app", number: 7, add: ["a"], remove: ["a"] }, { gh: fake.gh, env: ENV }),
-    ).toThrow(/both added and removed/);
-    expect(() => sendPost({ kind: "label", repo: "Owner/app", number: 7 }, { gh: fake.gh, env: ENV })).toThrow(
-      /at least one label/,
-    );
-    expect(run(["label", "--number", "7"], fake.gh).code).toBe(1);
+    expect(thrown(fake.gh, { add: ["a"], remove: ["a"] })?.message).toMatch(/both added and removed/);
+    expect(thrown(fake.gh, {})?.message).toMatch(/at least one label/);
     expect(fake.calls).toEqual([]);
   });
 
-  it("takes --add and --remove only for a label post, and needs --number", () => {
-    const fake = fakeGh();
-    expect(run(["label", "--add", "a"], fake.gh).code).toBe(1);
-    expect(run(["push", "--branch", "x", "--add", "a"], fake.gh).code).toBe(1);
-    expect(fake.calls).toEqual([]);
-  });
-
-  it("keeps gh's own error as the failure's cause, and says how far a part-way send got (exit 3)", () => {
+  it("keeps gh's own error as the failure's cause, and says how far a part-way send got", () => {
     const gone = Object.assign(new Error("Command failed"), { stderr: "Label does not exist (HTTP 404)" });
     const fake = fakeGh((args) => (args[0] === "api" ? gone : undefined));
-    try {
-      sendPost({ kind: "label", repo: "Owner/app", number: 7, add: ["a"], remove: ["b"] }, { gh: fake.gh, env: ENV });
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(SendFailed);
-      expect((error as SendFailed).cause).toBe(gone);
-      expect((error as SendFailed).message).toMatch(/after 1 of 2 calls/);
-    }
-    expect(run(["label", "--number", "7", "--remove", "b"], fake.gh).code).toBe(3);
+    const error = thrown(fake.gh, { add: ["a"], remove: ["b"] });
+    expect(error).toBeInstanceOf(SendFailed);
+    expect(error?.cause).toBe(gone);
+    expect(error?.message).toMatch(/after 1 of 2 calls/);
+  });
+
+  it("isn't a command: npm run target:post refuses label with exit 1, so only the runner moves labels (Qodo on PR 346)", () => {
+    const fake = fakeGh();
+    const err: string[] = [];
+    const code = main(["label", "--number", "7"], {
+      gh: fake.gh,
+      env: ENV,
+      reviewed: [APP],
+      log: () => {},
+      error: (l) => err.push(l),
+    });
+    expect(code).toBe(1);
+    expect(err.join("\n")).not.toMatch(/\blabel\b.*,|, label\b/);
+    expect(fake.calls).toEqual([]);
   });
 });

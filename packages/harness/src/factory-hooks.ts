@@ -5,6 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
 import type { FactoryConfig } from "./factory-config.ts";
 
 /**
@@ -294,6 +295,15 @@ export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
 }
 
 /**
+ * The reviewed repo the self-test writes to: the config's first, or with none marked, the first the guard itself
+ * protects (`guard-repos.ts` always has the target), never a copy of its name (Qodo on PR 346).
+ */
+export function selfTestRepo(factory: FactoryConfig, guarded = reviewedRepos(process.env.FAULTFORGE_CONFIG)): string {
+  const marked = Object.values(factory.repos).find((r) => r.guard === "reviewed")?.github;
+  return marked ?? guarded[0]?.github ?? "";
+}
+
+/**
  * Refuses to start the agent unless both hooks run before every shell command and file edit, and
  * unless each hook, run once with payloads it must deny and allow, answers as it should and in time.
  */
@@ -306,11 +316,8 @@ export function requireHooks(factory: FactoryConfig, lab: string): HooksReport {
       problems: missing,
       hooks: [],
     });
-  // With none marked, the target: the guard always protects it, whatever the config says (guard-repos.ts).
-  const reviewed =
-    Object.values(factory.repos).find((r) => r.guard === "reviewed")?.github ?? "AJBeumer/faultforge-target";
   const limit = hookTimeoutSeconds(text);
-  const report = hookSelfTestReport(lab, reviewed, limit, realHookRunner(lab, limit));
+  const report = hookSelfTestReport(lab, selfTestRepo(factory), limit, realHookRunner(lab, limit));
   if (report.problems.length)
     throw new HooksCheckError(`the workspace's hooks failed their self-test: ${report.problems.join("; ")}`, report);
   return report;

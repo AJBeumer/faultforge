@@ -11,8 +11,26 @@ import {
   hookTimeoutSeconds,
   readHookProblems,
   realHookRunner,
+  selfTestRepo,
   withCleanupFailure,
 } from "./factory-hooks.ts";
+
+describe("selfTestRepo: the reviewed repo the self-test writes to (#345)", () => {
+  const repo = (github: string, guard: "lab" | "reviewed") =>
+    ({ github, path: ".", guard, check: "", tests: "", start: null, tickets: {}, board: false }) as never;
+  const guarded = [{ github: "Guard/first", name: "first", folder: "first", checkout: "first" }];
+
+  it("takes the config's reviewed repo first", () => {
+    const factory = { evidence: "", repos: { lab: repo("Owner/lab", "lab"), app: repo("Owner/app", "reviewed") } };
+    expect(selfTestRepo(factory as never, guarded)).toBe("Owner/app");
+  });
+
+  it("with none marked, takes the guard's own first repo, not a name copied here (Qodo on PR 346)", () => {
+    const factory = { evidence: "", repos: { lab: repo("Owner/lab", "lab") } };
+    expect(selfTestRepo(factory as never, guarded)).toBe("Guard/first");
+    expect(selfTestRepo(factory as never)).toMatch(/^[\w.-]+\/[\w.-]+$/);
+  });
+});
 
 describe("hookProblems", () => {
   const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +10,7 @@ import {
   killTree,
   prUrlFromToolResult,
 } from "./factory-agent.ts";
+import { parsePost } from "./target-post.ts";
 
 describe("agentInstructions (#73)", () => {
   it("tells the agent to pass PR bodies, comments and commit messages as files", () => {
@@ -148,11 +150,20 @@ describe("agentInstructions: a lab ticket's agent doesn't commit or read in the 
 
 describe("agentInstructions: a target ticket's agent writes to the reviewed repo only through the door (#345)", () => {
   it("tells it to push and open the PR with npm run target:post, never with raw gh pr create or git push", () => {
-    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false);
-    expect(text).toContain("npm run target:post -- push --branch <name>");
-    expect(text).toContain("npm run target:post -- pr-create --head <name>");
-    expect(text).toContain("npm run target:post -- pr-edit");
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false, "Owner/app");
+    expect(text).toContain("npm run target:post -- push --repo Owner/app --branch <name>");
+    expect(text).toContain("npm run target:post -- pr-create --repo Owner/app --head <name>");
+    expect(text).toContain("npm run target:post -- pr-edit --repo Owner/app --number <n>");
     expect(text).not.toMatch(/gh pr (create|edit)/);
+  });
+
+  it("gives commands the door takes with two reviewed repos, so it never has to guess (Qodo on PR 346)", () => {
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false, "Owner/app");
+    const app = { github: "Owner/app", name: "app", folder: "app", checkout: join(tmpdir(), "app") };
+    const other = { ...app, github: "Owner/other", name: "other", folder: "other" };
+    const push = text.match(/npm run target:post -- (push [^,]*)/)?.[1] ?? "";
+    const argv = push.replace("<name>", "tidy").split(" ");
+    expect(parsePost(argv, [app, other])).toMatchObject({ kind: "push", repo: "Owner/app", branch: "tidy" });
   });
 
   it("keeps gh pr create for a lab ticket, whose repo has no door", () => {
@@ -171,8 +182,9 @@ describe("agentInstructions: a target ticket's agent writes to the reviewed repo
 describe("the factory skill sends a reviewed repo's writes through the door (#345)", () => {
   it("names target:post for the push and the PR, and has no raw gh pr create or edit", () => {
     const skill = readFileSync(join(import.meta.dirname, "../../../.claude/skills/factory/SKILL.md"), "utf8");
-    expect(skill).toContain("npm run target:post -- push --branch <name>");
-    expect(skill).toContain("npm run target:post -- pr-create --head <name>");
+    expect(skill).toContain("npm run target:post -- push --repo <github> --branch <name>");
+    expect(skill).toContain("npm run target:post -- pr-create --repo <github> --head <name>");
+    expect(skill).toContain("npm run target:post -- pr-edit --repo <github> --number <n>");
     expect(skill).not.toMatch(/gh pr (create|edit)/);
   });
 });

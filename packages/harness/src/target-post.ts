@@ -11,11 +11,10 @@
  *   npm run target:post -- pr-comment    --number <n> --body-file <f>
  *   npm run target:post -- pr-close      --number <n> --body-file <f>     (closes with that comment)
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
- *   npm run target:post -- label         --number <n> [--add <name>]... [--remove <name>]...
  *
- * A label post adds its labels in one edit, then removes each of the others on its own (the factory's runner moves
- * a ticket's labels this way, #345). Each label name is checked like any text, and must be one plain line of at most
- * 50 characters with no comma, which gh would split into two labels.
+ * One more kind, `label`, has no command: only the factory's runner moves a ticket's labels, with `sendPost` (#345).
+ * A label post adds its labels in one edit, then removes each of the others on its own. Each label name is checked
+ * like any text, and must be one plain line of at most 50 characters with no comma, which gh would split in two.
  *
  * Every kind takes `--repo owner/name`, which must be a repo `factory.json` marks `"guard": "reviewed"`; without it,
  * the one reviewed repo, refused when there are several. Text comes only from files, read as UTF-8; a title is
@@ -61,6 +60,13 @@ export const KINDS = [
   "label",
 ] as const;
 export type Kind = (typeof KINDS)[number];
+
+/**
+ * The kinds the command takes. `label` isn't one: only the factory's runner moves a ticket's labels, through
+ * `sendPost` (`ticket-write.ts`), and a command an agent could run would let it move them itself (Qodo on PR 346).
+ */
+export const COMMAND_KINDS = KINDS.filter((k): k is Exclude<Kind, "label"> => k !== "label");
+type CommandKind = (typeof COMMAND_KINDS)[number];
 
 /** One write to the reviewed repository, with its text already read. */
 export interface Post {
@@ -266,27 +272,20 @@ function readTitle(path: string): string {
  */
 export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   const [kind, ...rest] = argv;
-  if (!KINDS.includes(kind as Kind)) throw new Usage(`the first word must be one of: ${KINDS.join(", ")}`);
+  if (!COMMAND_KINDS.includes(kind as CommandKind))
+    throw new Usage(`the first word must be one of: ${COMMAND_KINDS.join(", ")}`);
   let values: Record<string, string | undefined>;
-  let lists: Record<"add" | "remove", string[]>;
   try {
-    const parsed = parseArgs({
+    values = parseArgs({
       args: rest,
       strict: true,
-      options: {
-        ...Object.fromEntries(
-          ["repo", "number", "title-file", "body-file", "head", "base", "branch", "checkout"].map((o) => [
-            o,
-            { type: "string" as const },
-          ]),
-        ),
-        add: { type: "string", multiple: true },
-        remove: { type: "string", multiple: true },
-      },
-    }).values as Record<string, string | string[] | undefined>;
-    const { add = [], remove = [], ...single } = parsed;
-    values = single as Record<string, string | undefined>;
-    lists = { add: add as string[], remove: remove as string[] };
+      options: Object.fromEntries(
+        ["repo", "number", "title-file", "body-file", "head", "base", "branch", "checkout"].map((o) => [
+          o,
+          { type: "string" as const },
+        ]),
+      ),
+    }).values as Record<string, string | undefined>;
   } catch (error) {
     throw new Usage(errorText(error));
   }
@@ -297,8 +296,8 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
       ? reviewed[0]
       : undefined;
   if (!target) throw new Usage(`--repo must name a reviewed repo: ${reviewed.map((r) => r.github).join(", ")}`);
-  const post: Post = { kind: kind as Kind, repo: target.github };
-  const allowed: Record<Kind, string[]> = {
+  const post: Post & { kind: CommandKind } = { kind: kind as CommandKind, repo: target.github };
+  const allowed: Record<CommandKind, string[]> = {
     "issue-create": ["title-file", "body-file"],
     "issue-edit": ["number", "title-file", "body-file"],
     "issue-comment": ["number", "body-file"],
@@ -307,10 +306,8 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
     "pr-comment": ["number", "body-file"],
     "pr-close": ["number", "body-file"],
     push: ["branch", "checkout"],
-    label: ["number", "add", "remove"],
   };
-  const given = [...Object.keys(values), ...(["add", "remove"] as const).filter((o) => lists[o].length)];
-  const extra = given.filter((o) => o !== "repo" && !allowed[post.kind].includes(o));
+  const extra = Object.keys(values).filter((o) => o !== "repo" && !allowed[post.kind].includes(o));
   if (extra.length) throw new Usage(`${post.kind} takes no --${extra.join(", --")}`);
   const needs = (option: string) => {
     if (!values[option]) throw new Usage(`${post.kind} needs --${option}`);
@@ -321,12 +318,7 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
     if (!Number.isInteger(post.number) || post.number < 1) throw new Usage("--number must be a whole number above 0");
   }
   if (["issue-create", "pr-create"].includes(post.kind)) needs("title-file");
-  if (!/-edit$|^push$|^label$/.test(post.kind)) needs("body-file");
-  if (post.kind === "label") {
-    if (!lists.add.length && !lists.remove.length) throw new Usage("label needs --add or --remove");
-    post.add = lists.add;
-    post.remove = lists.remove;
-  }
+  if (!/-edit$|^push$/.test(post.kind)) needs("body-file");
   if (/-edit$/.test(post.kind) && !values["title-file"] && !values["body-file"]) {
     throw new Usage(`${post.kind} needs --title-file or --body-file`);
   }
