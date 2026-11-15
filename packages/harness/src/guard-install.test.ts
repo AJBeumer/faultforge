@@ -139,8 +139,9 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
       },
     } as unknown as FactoryConfig;
     const problems = unguardedCheckouts(factory, tmpdir());
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain(bare.dir);
+    // The bare lab lacks its link check, and the second reviewed checkout its guard.
+    expect(problems).toHaveLength(2);
+    expect(problems.every((p) => p.includes(bare.dir))).toBe(true);
   });
 });
 

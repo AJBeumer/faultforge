@@ -72,3 +72,26 @@ describe("the lab's pre-push hook refuses target links in the commits it sends (
     expect(check("lab-pre-push", dir, "origin", update(head, base))).toBeUndefined();
   });
 });
+
+describe("the lab's pre-push asks the remote what it has (Qodo on PR 329)", () => {
+  it("isn't fooled by a local remote-tracking ref moved onto the linked commit", () => {
+    const { dir, git, head } = lab(`Tidy ${T}#3`);
+    git("update-ref", "refs/remotes/origin/cover", head);
+    expect(check("lab-pre-push", dir, "origin", update(head, ZERO, "refs/heads/new"))?.reasons).toEqual([LINK_REASON]);
+  });
+
+  it("reads only the new commits when the push names the remote by URL", () => {
+    const clean = lab("Tidy for target 3");
+    const url = clean.git("remote", "get-url", "origin").trim();
+    expect(check("lab-pre-push", clean.dir, url, update(clean.head, ZERO, "refs/heads/new"))).toBeUndefined();
+    // An old commit the remote already holds, with a link in it, doesn't block a later clean push.
+    const old = lab(`Tidy ${T}#3`);
+    old.git("push", "-q", "origin", "main");
+    writeFileSync(join(old.dir, "b.md"), "Two\n");
+    old.git("add", "b.md");
+    old.git("commit", "-q", "-m", "Tidy more");
+    const next = old.git("rev-parse", "HEAD").trim();
+    const oldUrl = old.git("remote", "get-url", "origin").trim();
+    expect(check("lab-pre-push", old.dir, oldUrl, update(next, ZERO, "refs/heads/new"))).toBeUndefined();
+  });
+});

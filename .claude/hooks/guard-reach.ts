@@ -135,21 +135,27 @@ export function rewritesHistory(command: string, variablesForce = false): boolea
  * True when the command rewrites or deletes a ref through GitHub's API, where no git hook runs (re-grade 5): a
  * `gh api` write to `git/refs/<ref>` (an existing ref: PATCH moves it, DELETE removes it), any `git/refs` write
  * with a `force` field, a GraphQL `updateRef`, `updateRefs` or `deleteRef`, or `gh repo sync --force`. Creating
- * a new ref (`POST git/refs`) and reading refs stay allowed.
+ * a new ref (`POST git/refs`) and reading refs stay allowed. `files` are the texts the command posts from files
+ * (a GraphQL query read with `-F query=@q.graphql` or `--input`; Qodo on PR 329).
  */
-export function rewritesRefs(command: string): boolean {
+export function rewritesRefs(command: string, files: string[] = []): boolean {
   const c = joinedWords(command).replace(/\\(?=\w)/g, "");
-  if (/\bgh\s+api\s+graphql\b/.test(c) && /\b(?:updateRefs?|deleteRef)\b/.test(c)) return true;
+  const refMutation = /\b(?:updateRefs?|deleteRef)\b/;
+  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...files].some((text) => refMutation.test(text))) return true;
   return segments(c).some(({ text }) => {
     if (/\bgh\s+repo\s+sync\b/.test(text)) return /\s--force\b/.test(text);
     const gh = /\bgh\s+api\b/.exec(text);
     if (!gh) return false;
     const args = text.slice(gh.index);
-    const route = /(?:^|\s|=)\/?repos\/[\w.-]+\/[\w.-]+\/git\/refs(\/\S*)?/.exec(args);
+    // Any owner and name, gh's `{owner}/{repo}` and `:owner/:repo` placeholders included (Qodo on PR 329).
+    const route = /(?:^|\s|=)\/?repos\/[^/\s]+\/[^/\s]+\/git\/refs(\/\S*)?/.exec(args);
     if (!route) return false;
-    const method = (/(?:\s-X\s*|--method[=\s]+)(\w+)/.exec(args)?.[1] ?? "").toUpperCase();
+    // Every method flag, in any spelling (`-X=DELETE`, `-X GET -X DELETE`): any write among them counts.
+    const methods = [...args.matchAll(/(?:\s-X\s*=?\s*|\s--method[=\s]+)(\w+)/g)].map((m) =>
+      (m[1] ?? "").toUpperCase(),
+    );
     const sends = /\s-[fF]|--field|--raw-field|--input/.test(args);
-    const writes = method ? !/^(GET|HEAD)$/.test(method) : sends;
+    const writes = methods.length ? methods.some((m) => !/^(GET|HEAD)$/.test(m)) : sends;
     if (!writes) return false;
     // `git/refs/heads/x` names an existing ref; `git/refs` alone, with or without a trailing slash, is the list.
     const existing = Boolean(route[1] && route[1] !== "/");

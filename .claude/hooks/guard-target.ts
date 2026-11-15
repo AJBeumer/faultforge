@@ -334,7 +334,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   }
   // A flag from a variable the command doesn't set (`git push $FLAG`) could be --force (#285).
   // GitHub's API moves and deletes refs too, where no git hook runs (re-grade 5).
-  if (rewritesHistory(command, readable) || rewritesRefs(command)) {
+  if (rewritesHistory(command, readable) || rewritesRefs(command, referencedFiles(ctx.cwd, command))) {
     deny(
       `Force pushes to ${repo.name} are not allowed, nor pushes or API calls that delete, mirror or move a ref: its history is evidence for recorded cases.`,
     );

@@ -127,11 +127,12 @@ export function guardInstalled(checkout: string): boolean {
   return guardProblem(checkout) === undefined;
 }
 
-/** Why each reviewed checkout in `factory` lacks the git-level guard, resolved from `root`; empty when all have it. */
+/**
+ * Why each reviewed checkout in `factory` lacks the git-level guard, or the lab its link check (Qodo on PR 329),
+ * resolved from `root`; empty when all have them.
+ */
 export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT): string[] {
-  return Object.values(factory.repos)
-    .filter((repo) => repo.guard === "reviewed")
-    .flatMap((repo) => guardProblem(resolve(root, repo.path)) ?? []);
+  return Object.values(factory.repos).flatMap((repo) => guardProblem(resolve(root, repo.path), repo.guard) ?? []);
 }
 
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */

@@ -141,39 +141,80 @@ export function argumentsFromInput(command: string, backticks = true): boolean {
 const SCRIPT_RUNNERS =
   /^(node|nodejs|tsx|ts-node|deno|bun|python[\d.]*|py|pypy[\d.]*|ruby|perl|php|lua|Rscript|bash|sh|zsh|dash|ksh|pwsh|powershell)$/i;
 
+/** A script file a command runs, and whether it may be missing (a Python module that may be installed, not local). */
+export interface ScriptFile {
+  file: string;
+  optional: boolean;
+}
+
+/** True when `word` hands the runner inline code instead of a file (`-e`, `bash -lc`, `php -r`, `pwsh -Command`). */
+function inlineFlag(name: string, word: string): boolean {
+  if (/^(bash|sh|zsh|dash|ksh)$/.test(name)) return /^-[a-zA-Z]*c[a-zA-Z]*$/.test(word);
+  if (/^(pwsh|powershell)$/.test(name)) return /^-(c|Command|EncodedCommand|ec|e)$/i.test(word);
+  if (name === "php") return word === "-r";
+  if (/^(python|py|pypy)/.test(name)) return word === "-c";
+  return /^(-e|-p|-pe|-ne|-E|--eval|--print)$/.test(word);
+}
+
+/** A word that names a local file, not a package: `./x`, `../x`, an absolute path, or a name with an extension. */
+const localPath = (word: string) => /^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])/.test(word);
+
+/** The script files one step runs; see `scriptFiles`. */
+function stepScripts(text: string): ScriptFile[] {
+  const all = words(text);
+  const { at } = programAt(all);
+  const program = unquote(all[at] ?? "");
+  // A script run as the program itself (`./post.mjs`), through its shebang (Qodo on PR 329).
+  if (/^\.{1,2}[\\/]/.test(program)) return [{ file: program, optional: false }];
+  const name = programName(program);
+  if (!SCRIPT_RUNNERS.test(name)) return [];
+  const found: ScriptFile[] = [];
+  for (let i = at + 1; i < all.length; i++) {
+    const word = unquote(all[i] ?? "");
+    if (inlineFlag(name, word)) return found;
+    // Subcommands: `deno run x.ts`, `bun x y`, `tsx watch x.ts`. Any other bare word to deno or bun is a
+    // subcommand of its own (`bun install`, `deno test`), which runs no file named here (Qodo on PR 329).
+    if (/^(deno|bun|tsx)$/.test(name) && i === at + 1 && /^(run|x|watch)$/.test(word)) continue;
+    if (/^(deno|bun)$/.test(name) && i === at + 1 && /^[a-z]+$/.test(word)) return found;
+    // `python -m mod` runs a local module when there is one (Qodo on PR 329); an installed one is not read.
+    if (/^(python|py|pypy)/.test(name) && word === "-m") {
+      const module = (all[i + 1] ?? "").replace(/\./g, "/");
+      return module
+        ? [...found, { file: `${module}.py`, optional: true }, { file: `${module}/__main__.py`, optional: true }]
+        : found;
+    }
+    if (/^-File$/i.test(word)) continue;
+    // A preload runs too: node's `--require ./x`, `--import ./x`, `--loader ./x` (Qodo on PR 329). A package
+    // name there (`--import tsx`) is installed code, not read. Python's `-W x` and `-X x` take a value.
+    if (/^(-r|--require|--import|--loader|--experimental-loader|-W|-X)$/.test(word)) {
+      const value = unquote(all[i + 1] ?? "");
+      if (!/^-[WX]$/.test(word) && localPath(value)) found.push({ file: value, optional: false });
+      i++;
+      continue;
+    }
+    // Code from stdin (`-`, a heredoc, a here-string) is inline code, judged as such elsewhere.
+    if (word === "-" || word.startsWith("<<")) return found;
+    // An output redirect's file is no script; an input redirect's is, as the code it reads.
+    if (/^\d*>{1,2}$/.test(word)) {
+      i++;
+      continue;
+    }
+    if (word === "<") continue;
+    if (word.startsWith("-") || /^\d*[<>]/.test(word)) continue;
+    return [...found, { file: word, optional: false }];
+  }
+  return found;
+}
+
 /**
  * The script files the command runs (re-grade 5): the first word after a script runner (`node post.mjs`,
- * `npx tsx x.ts`, `python3 -u post.py`, `deno run x.ts`, `pwsh -File x.ps1`) that isn't one of its options. A
- * runner given inline code (`-e`, `-c`, `-Command`) or nothing runs no file; that code is judged elsewhere.
+ * `npx tsx x.ts`, `python3 -u post.py`, `deno run x.ts`, `pwsh -File x.ps1`) that isn't one of its options, a
+ * local preload, a local `python -m` module, and a script run as the program (`./post.mjs`), in every step and
+ * every substitution (`$(node post.mjs)`; Qodo on PR 329). A runner given inline code (`-e`, `bash -lc`) runs no
+ * file; that code is judged elsewhere. What a script imports is not followed: only the file named is read.
  */
-export function scriptFiles(command: string, backticks = true): string[] {
-  return steps(command, backticks).flatMap((step) => {
-    const all = words(step.text);
-    const { at } = programAt(all);
-    const name = programName(all[at] ?? "");
-    if (!SCRIPT_RUNNERS.test(name)) return [];
-    let i = at + 1;
-    if (/^(deno|bun)$/.test(name) && /^(run|x)$/.test(all[i] ?? "")) i++;
-    for (; i < all.length; i++) {
-      const word = all[i] ?? "";
-      if (/^-(e|c|p|m|-eval|-print|Command|EncodedCommand|ec)$/i.test(word)) return [];
-      if (/^-File$/i.test(word)) continue;
-      // An option's value: node's `--require x`, `--import x`, `--loader x`; python's `-W x`, `-X x`.
-      if (/^(-r|--require|--import|--loader|--experimental-loader|-W|-X)$/.test(word)) {
-        i++;
-        continue;
-      }
-      // Code from stdin (`-`, a heredoc, a here-string) is inline code, judged as such elsewhere.
-      if (word === "-" || word.startsWith("<<")) return [];
-      // An output redirect's file is no script; an input redirect's is, as the code it reads.
-      if (/^\d*>{1,2}$/.test(word)) {
-        i++;
-        continue;
-      }
-      if (word === "<") continue;
-      if (word.startsWith("-") || /^\d*[<>]/.test(word)) continue;
-      return [unquote(word)];
-    }
-    return [];
-  });
+export function scriptFiles(command: string, backticks = true, depth = 0): ScriptFile[] {
+  const own = steps(command, backticks).flatMap((step) => stepScripts(step.text));
+  if (depth >= 3) return own;
+  return [...own, ...substitutions(command, backticks).flatMap((s) => scriptFiles(s.inner, backticks, depth + 1))];
 }

@@ -58,24 +58,35 @@ function linksReviewed(text: string): boolean {
 }
 
 /**
- * The messages of every commit a lab push sends (re-grade 5): for each ref update, what the remote doesn't
- * have. When the remote's old commit isn't here, every commit no ref of the remote holds is read instead.
+ * The messages of every commit a lab push sends (re-grade 5): for each ref update, what the remote doesn't have.
+ * What the remote has is asked of the remote itself (`git ls-remote`), never read from local remote-tracking
+ * refs, which anyone can move (Qodo on PR 329), and which a push to a URL has none of. Git's own old commit for
+ * the ref counts too. A remote commit that isn't here is skipped (`--ignore-missing`): more is read, never less.
  */
 function pushedMessages(checkout: string, remote: string, updates: PushUpdate[]): string {
-  const log = (range: string[]) =>
-    spawnSync("git", ["-C", checkout, "log", "--format=%B", ...range], {
+  const git = (args: string[], input?: string) => {
+    const r = spawnSync("git", ["-C", checkout, ...args], {
+      input,
       encoding: "utf8",
       timeout: DEFAULT_BUDGET_MS,
       maxBuffer: 64 * 1024 * 1024,
     });
+    if (r.status !== 0)
+      throw new Error(`git ${args[0]} failed: ${(r.stderr || r.error?.message || "").split("\n")[0]}`);
+    return r.stdout;
+  };
+  const sending = updates.filter((u) => !ZERO.test(u.localSha));
+  if (!sending.length) return "";
+  const held = git(["ls-remote", "--heads", "--tags", remote])
+    .split("\n")
+    .map((line) => line.split(/\s+/)[0] ?? "")
+    .filter((sha) => /^[0-9a-f]{40,64}$/.test(sha));
   const texts: string[] = [];
-  for (const u of updates) {
-    if (ZERO.test(u.localSha)) continue;
-    const all = [u.localSha, "--not", `--remotes=${remote}`];
-    let r = log(ZERO.test(u.remoteSha) ? all : [u.localSha, `^${u.remoteSha}`]);
-    if (r.status !== 0 && !ZERO.test(u.remoteSha)) r = log(all);
-    if (r.status !== 0) throw new Error(`git log failed: ${(r.stderr || r.error?.message || "").split("\n")[0]}`);
-    texts.push(r.stdout);
+  for (const u of sending) {
+    const known = ZERO.test(u.remoteSha) ? held : [...held, u.remoteSha];
+    texts.push(
+      git(["log", "--format=%B", "--ignore-missing", "--stdin"], [u.localSha, "--not", ...known, ""].join("\n")),
+    );
   }
   return texts.join("\n");
 }

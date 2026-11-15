@@ -307,13 +307,16 @@ export function scriptProblem(
     unreadableMove(command, cwd);
   if (!near) return undefined;
   const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
-  for (const file of files) {
+  for (const { file, optional } of files) {
     let texts: string[] = [];
+    let failed = false;
     try {
       texts = /[$`%*?]/.test(file) ? [] : readPosted(cwd, command, file);
     } catch {
-      texts = [];
+      failed = true;
     }
+    // A `python -m` module that isn't a local file is installed code, not a script written here.
+    if (optional && !failed && !texts.length) continue;
     const why = !texts.length
       ? "the guard can't read it"
       : texts.some((t) => names.test(t) || WRITE_API.test(t))

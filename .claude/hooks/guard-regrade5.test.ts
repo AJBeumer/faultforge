@@ -176,13 +176,67 @@ describe("a script file run where it could post to a reviewed repo is read first
   });
 
   it("finds the script a runner is given, past options and redirects, and none for code from stdin", () => {
-    expect(scriptFiles("node --require ./hook.js post.mjs > out.txt")).toEqual(["post.mjs"]);
-    expect(scriptFiles("node > out.txt post.mjs")).toEqual(["post.mjs"]);
-    expect(scriptFiles("node < post.mjs")).toEqual(["post.mjs"]);
-    expect(scriptFiles("deno run -A post.ts")).toEqual(["post.ts"]);
-    expect(scriptFiles("pwsh -File post.ps1")).toEqual(["post.ps1"]);
+    expect(scriptFiles("node --require ./hook.js post.mjs > out.txt").map((s) => s.file)).toEqual([
+      "./hook.js",
+      "post.mjs",
+    ]);
+    expect(scriptFiles("node > out.txt post.mjs").map((s) => s.file)).toEqual(["post.mjs"]);
+    expect(scriptFiles("node < post.mjs").map((s) => s.file)).toEqual(["post.mjs"]);
+    expect(scriptFiles("deno run -A post.ts").map((s) => s.file)).toEqual(["post.ts"]);
+    expect(scriptFiles("pwsh -File post.ps1").map((s) => s.file)).toEqual(["post.ps1"]);
     expect(scriptFiles("python3 - <<'EOF'\nimport os\nEOF")).toEqual([]);
     expect(scriptFiles("node -e 'console.log(1)'")).toEqual([]);
     expect(scriptFiles("npx vitest run")).toEqual([]);
+  });
+});
+
+describe("Qodo on PR 329", () => {
+  const RUN = { FAULTFORGE_FACTORY_RUN: "run-1" };
+  writeFileSync(join(ELSEWHERE, "del.graphql"), 'mutation { deleteRef(input: {refId: "R_x"}) { clientMutationId } }');
+  writeFileSync(join(ELSEWHERE, "hook.cjs"), `require("child_process").execSync("gh pr comment 3 -R ${T} -b x");\n`);
+  mkdirSync(join(ELSEWHERE, "poster"), { recursive: true });
+  writeFileSync(join(ELSEWHERE, "poster", "__main__.py"), 'import os\nos.system("gh issue create -t x -b y")\n');
+
+  it("refuses a ref mutation read from a query file", () => {
+    expect(bash("gh api graphql -F query=@del.graphql")).toMatch(/move a ref/);
+  });
+
+  it.each([
+    `gh api repos/${T}/git/refs/heads/main -X=DELETE`,
+    `gh api repos/${T}/git/refs/heads/main -X GET -X DELETE`,
+  ])("reads every method flag: %s", (command) => {
+    expect(bash(command)).toMatch(/move a ref/);
+  });
+
+  it("reads gh's repo placeholders as the checkout's repo", () => {
+    expect(bash("gh api repos/{owner}/{repo}/git/refs/heads/main -X DELETE", TARGET_REPO.dir)).toMatch(/move a ref/);
+    expect(bash("gh api repos/:owner/:repo/git/refs/heads/main -X PATCH -F force=true", TARGET_REPO.dir)).toMatch(
+      /move a ref/,
+    );
+  });
+
+  it("reads a script run inside a substitution", () => {
+    expect(bash("echo $(node post.mjs)", TARGET_REPO.dir)).toMatch(/script/);
+    expect(bash("echo `node post.mjs`", TARGET_REPO.dir)).toMatch(/script/);
+  });
+
+  it.each(["bun install", "deno test", "deno fmt", "bash -lc 'npm test'", "php -r 'echo 1;'", "sh -ec 'npm test'"])(
+    "lets %s run in a factory run: no script file is named",
+    (command) => {
+      expect(scriptFiles(command)).toEqual([]);
+      expect(bash(command, ELSEWHERE, RUN)).toBeUndefined();
+    },
+  );
+
+  it("reads tsx watch's file, a local preload, a local python module and a script run as the program", () => {
+    expect(scriptFiles("tsx watch post.mjs").map((s) => s.file)).toEqual(["post.mjs"]);
+    expect(bash("node -r ./hook.cjs sum.mjs", ELSEWHERE, RUN)).toMatch(/script/);
+    expect(bash("python -m poster", ELSEWHERE, RUN)).toMatch(/script/);
+    expect(bash("./post.mjs", ELSEWHERE, RUN)).toMatch(/script/);
+  });
+
+  it("lets an installed python module and a package preload run", () => {
+    expect(bash("python -m pytest", ELSEWHERE, RUN)).toBeUndefined();
+    expect(bash("node --import tsx sum.mjs", ELSEWHERE, RUN)).toBeUndefined();
   });
 });
