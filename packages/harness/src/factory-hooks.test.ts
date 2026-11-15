@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,8 +11,26 @@ import {
   hookTimeoutSeconds,
   readHookProblems,
   realHookRunner,
+  selfTestRepo,
   withCleanupFailure,
 } from "./factory-hooks.ts";
+
+describe("selfTestRepo: the reviewed repo the self-test writes to (#345)", () => {
+  const repo = (github: string, guard: "lab" | "reviewed") =>
+    ({ github, path: ".", guard, check: "", tests: "", start: null, tickets: {}, board: false }) as never;
+  const guarded = [{ github: "Guard/first", name: "first", folder: "first", checkout: "first" }];
+
+  it("takes the config's reviewed repo first", () => {
+    const factory = { evidence: "", repos: { lab: repo("Owner/lab", "lab"), app: repo("Owner/app", "reviewed") } };
+    expect(selfTestRepo(factory as never, guarded)).toBe("Owner/app");
+  });
+
+  it("with none marked, takes the guard's own first repo, not a name copied here (Qodo on PR 346)", () => {
+    const factory = { evidence: "", repos: { lab: repo("Owner/lab", "lab") } };
+    expect(selfTestRepo(factory as never, guarded)).toBe("Guard/first");
+    expect(selfTestRepo(factory as never)).toMatch(/^[\w.-]+\/[\w.-]+$/);
+  });
+});
 
 describe("hookProblems", () => {
   const settings = (hooks: object[]) => JSON.stringify({ hooks: { PreToolUse: hooks } });
@@ -100,21 +117,42 @@ describe("hook self-test (#104)", () => {
       return { stdout: deny, status: 0, ms: 5 };
     }
     const command = json?.tool_input?.command ?? "";
-    const bad = hook === "guard-target.ts" ? /planted/.test(command) : /gh pr merge/.test(command);
+    const bad =
+      hook === "guard-target.ts" ? /^gh pr create --repo Owner\/app\b/.test(command) : /gh pr merge/.test(command);
     return { stdout: bad ? deny : allow, status: 0, ms: 5 };
   };
 
   it("passes hooks that deny what they must, allow the harmless command, and deny bad input quickly", () => {
-    expect(hookSelfTest(LAB, join(LAB, "../faultforge-target"), 15, fake(correct))).toEqual([]);
+    expect(hookSelfTest(LAB, "Owner/app", 15, fake(correct))).toEqual([]);
+  });
+
+  it("asks the guard to refuse a raw write to the reviewed repo and to let the door through (#345)", () => {
+    const seen: string[] = [];
+    hookSelfTest(LAB, "Owner/app", 15, (hook, stdin) => {
+      if (hook === "guard-target.ts" && stdin.startsWith("{")) seen.push(JSON.parse(stdin).tool_input.command);
+      return correct(hook, stdin);
+    });
+    expect(seen).toContain("gh pr create --repo Owner/app --head tidy --fill");
+    expect(seen.some((c) => /^npm run target:post -- /.test(c))).toBe(true);
+    expect(seen.some((c) => /planted/.test(c))).toBe(false);
+  });
+
+  it("fails a guard that refuses the door: no run on a reviewed repo could push or open its PR", () => {
+    const closed = fake((hook, stdin) =>
+      stdin.includes("target:post") ? { stdout: deny, status: 0, ms: 5 } : correct(hook, stdin),
+    );
+    expect(hookSelfTest(LAB, "Owner/app", 15, closed)).toEqual([
+      expect.stringMatching(/guard-target\.ts refused a write through the door/),
+    ]);
   });
 
   it("fails a hook that lets the forbidden command through", () => {
     const lax = fake((hook, stdin) =>
       hook === "guard-target.ts" ? { stdout: allow, status: 0, ms: 5 } : correct(hook, stdin),
     );
-    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, lax);
+    const problems = hookSelfTest(LAB, "Owner/app", 15, lax);
     expect(problems).toEqual([
-      expect.stringMatching(/guard-target\.ts let through a telltale commit/),
+      expect.stringMatching(/guard-target\.ts let through a raw write to a reviewed repo/),
       expect.stringMatching(/guard-target\.ts let through input that is not JSON/),
     ]);
   });
@@ -123,7 +161,7 @@ describe("hook self-test (#104)", () => {
     const crashing = fake((hook, stdin) =>
       stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 1, ms: 5 },
     );
-    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, crashing)).toEqual([
+    expect(hookSelfTest(LAB, "Owner/app", 15, crashing)).toEqual([
       expect.stringMatching(/guard-target\.ts let through input that is not JSON \(decision invalid, exit 1/),
       expect.stringMatching(/factory-policy\.ts let through input that is not JSON \(decision invalid, exit 1/),
     ]);
@@ -133,7 +171,7 @@ describe("hook self-test (#104)", () => {
     const blocking = fake((hook, stdin) =>
       stdin.startsWith("{") ? correct(hook, stdin) : { stdout: "", status: 2, ms: 5 },
     );
-    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, blocking)).toEqual([]);
+    expect(hookSelfTest(LAB, "Owner/app", 15, blocking)).toEqual([]);
   });
 
   it("fails a hook whose deny is not a decision Claude Code accepts (no hookEventName) (Qodo on PR 115)", () => {
@@ -141,9 +179,9 @@ describe("hook self-test (#104)", () => {
       const answer = correct(hook, stdin);
       return answer.stdout ? { ...answer, stdout: decision("deny", null) } : answer;
     });
-    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, malformed);
+    const problems = hookSelfTest(LAB, "Owner/app", 15, malformed);
     expect(problems).toHaveLength(4);
-    expect(problems[0]).toMatch(/guard-target\.ts let through a telltale commit .*invalid/);
+    expect(problems[0]).toMatch(/guard-target\.ts let through a raw write to a reviewed repo .*invalid/);
   });
 
   it("fails a hook that asks for approval on the harmless command: nobody is there to answer (Qodo on PR 115)", () => {
@@ -151,7 +189,7 @@ describe("hook self-test (#104)", () => {
       const answer = correct(hook, stdin);
       return stdin.includes("npm run check") ? { ...answer, stdout: decision("ask") } : answer;
     });
-    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, asking);
+    const problems = hookSelfTest(LAB, "Owner/app", 15, asking);
     expect(problems).toEqual([
       expect.stringMatching(/guard-target\.ts refused a harmless command .*ask/),
       expect.stringMatching(/factory-policy\.ts refused a harmless command inside a run .*ask/),
@@ -162,17 +200,17 @@ describe("hook self-test (#104)", () => {
     const strict = fake((hook, stdin) =>
       hook === "factory-policy.ts" ? { stdout: deny, status: 0, ms: 5 } : correct(hook, stdin),
     );
-    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, strict)).toEqual([
+    expect(hookSelfTest(LAB, "Owner/app", 15, strict)).toEqual([
       expect.stringMatching(/factory-policy\.ts refused a harmless command inside a run/),
     ]);
     const flaky = fake((hook, stdin) => ({ ...correct(hook, stdin), status: stdin.includes("npm run check") ? 1 : 0 }));
-    expect(hookSelfTest(LAB, "/x/faultforge-target", 15, flaky)).toHaveLength(2);
+    expect(hookSelfTest(LAB, "Owner/app", 15, flaky)).toHaveLength(2);
   });
 
   it("fails a hook that answers slower than half its time limit", () => {
     const slow = fake((hook, stdin) => ({ ...correct(hook, stdin), ms: hook === "guard-target.ts" ? 9000 : 5 }));
-    const problems = hookSelfTest(LAB, "/x/faultforge-target", 15, slow);
-    expect(problems).toHaveLength(3);
+    const problems = hookSelfTest(LAB, "Owner/app", 15, slow);
+    expect(problems).toHaveLength(4);
     expect(problems[0]).toMatch(/guard-target\.ts took 9000 ms .* within half its 15 s limit/);
   });
 
@@ -193,22 +231,17 @@ describe("hook self-test (#104)", () => {
     ).toBe(60);
   });
 
-  // Six real `node` processes, spawned one after another: fast alone, but a concurrent Vitest
+  // Seven real `node` processes, spawned one after another: fast alone, but a concurrent Vitest
   // run on the same machine (#110) can starve the CPU long enough to pass vitest's 5 s default.
+  // The real guard refuses the raw write to the target and lets the door through from this checkout (#345).
   it("passes this repo's real hooks, run with node as settings.json runs them", () => {
     const limit = hookTimeoutSeconds(readFileSync(join(LAB, ".claude/settings.json"), "utf8"));
-    // A scratch checkout, not the real one next door: this test only needs a cwd that looks
-    // like the reviewed repo's folder, and a real neighbour checkout may be mid-build under a
-    // concurrent run, which this test has no business depending on either way.
-    const scratchParent = mkdtempSync(join(tmpdir(), "ff-reviewed-"));
-    const reviewedFolder = join(scratchParent, "faultforge-target");
-    mkdirSync(reviewedFolder);
-    expect(hookSelfTest(LAB, reviewedFolder, limit, realHookRunner(LAB, limit))).toEqual([]);
+    expect(hookSelfTest(LAB, "AJBeumer/faultforge-target", limit, realHookRunner(LAB, limit))).toEqual([]);
   }, 60_000);
 });
 
 describe("withCleanupFailure: a failed start's cleanup problems keep the hook report (#126)", () => {
-  const report: HooksReport = { problems: ["guard-target.ts let through a telltale commit"], hooks: [] };
+  const report: HooksReport = { problems: ["guard-target.ts let through a raw write to a reviewed repo"], hooks: [] };
 
   it("keeps a HooksCheckError's report when cleanup also failed, so the run log can still show it", () => {
     const original = new HooksCheckError("the workspace's hooks failed their self-test: x", report);

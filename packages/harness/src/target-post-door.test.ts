@@ -22,9 +22,8 @@ const ELSEWHERE: Record<string, string> = {
   "factory-evidence.ts": "git push of the private evidence repo",
   "factory-keep.ts": "git push of the private evidence repo",
   "factory-sandbox-setup.ts": "iptables' -X, which drops a firewall chain: no GitHub call at all",
-  // Known open item: the runner's own status comments and labels on a ticket, in whichever repo the ticket is.
-  // Owned by the factory work; to move onto the door there (#340 follow-up).
-  "factory-deps.ts": "the runner's status comments and labels on the ticket being worked",
+  // The runner's comments and labels on the ticket it works: a reviewed repo's go through the door (#345).
+  "ticket-write.ts": "the runner's comments and labels on a lab ticket; a reviewed repo's go through sendPost",
 };
 
 function writers(): string[] {
@@ -42,6 +41,16 @@ describe("one door to the reviewed repository (#340)", () => {
 
   it("has no module but the door writing with gh or git, outside the listed ones", () => {
     expect(writers()).toEqual(Object.keys(ELSEWHERE).sort());
+  });
+
+  it("lists no factory module that writes to GitHub: the runner's comments and labels go through the door (#345)", () => {
+    // The factory modules left only push the private evidence repo, or make no GitHub call at all.
+    const factory = Object.keys(ELSEWHERE).filter((f) => f.startsWith("factory-"));
+    expect(factory.sort()).toEqual(["factory-evidence.ts", "factory-keep.ts", "factory-sandbox-setup.ts"]);
+    for (const file of factory) expect(ELSEWHERE[file], file).toMatch(/private evidence repo|no GitHub call/);
+    expect(ELSEWHERE["factory-deps.ts"]).toBeUndefined();
+    expect(readFileSync(join(SRC, "factory-deps.ts"), "utf8")).toMatch(/\bticketWriter\(/);
+    expect(readFileSync(join(SRC, "ticket-write.ts"), "utf8")).toMatch(/\bsendPost\(/);
   });
 
   it("sends case:ticket's issue and case:pr's PR through the door", () => {

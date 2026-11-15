@@ -12,6 +12,10 @@
  *   npm run target:post -- pr-close      --number <n> --body-file <f>     (closes with that comment)
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
  *
+ * One more kind, `label`, has no command: only the factory's runner moves a ticket's labels, with `sendPost` (#345).
+ * A label post adds its labels in one edit, then removes each of the others on its own. Each label name is checked
+ * like any text, and must be one plain line of at most 50 characters with no comma, which gh would split in two.
+ *
  * Every kind takes `--repo owner/name`, which must be a repo `factory.json` marks `"guard": "reviewed"`; without it,
  * the one reviewed repo, refused when there are several. Text comes only from files, read as UTF-8; a title is
  * one line. A push sends the branch's commit from `--checkout` (by default the repo's checkout in `factory.json`) to
@@ -53,8 +57,16 @@ export const KINDS = [
   "pr-comment",
   "pr-close",
   "push",
+  "label",
 ] as const;
 export type Kind = (typeof KINDS)[number];
+
+/**
+ * The kinds the command takes. `label` isn't one: only the factory's runner moves a ticket's labels, through
+ * `sendPost` (`ticket-write.ts`), and a command an agent could run would let it move them itself (Qodo on PR 346).
+ */
+export const COMMAND_KINDS = KINDS.filter((k): k is Exclude<Kind, "label"> => k !== "label");
+type CommandKind = (typeof COMMAND_KINDS)[number];
 
 /** One write to the reviewed repository, with its text already read. */
 export interface Post {
@@ -67,6 +79,9 @@ export interface Post {
   base?: string;
   branch?: string;
   checkout?: string;
+  /** A label post's labels to add, then to remove. */
+  add?: string[];
+  remove?: string[];
 }
 
 /** Runs `gh` with `args`, `input` on its stdin, and returns stdout; throws when gh fails. */
@@ -80,7 +95,7 @@ export interface Deps {
 
 /** Thrown when a check finds something, or what would be sent can't be read: nothing was sent (exit 2). */
 export class Refused extends Error {}
-/** Thrown when gh or git failed after the checks passed (exit 3). */
+/** Thrown when gh or git failed after the checks passed (exit 3). Its `cause` is gh's or git's own error. */
 export class SendFailed extends Error {}
 
 /** gh with no host or repo from the environment: the post names github.com and the repo itself. */
@@ -114,8 +129,58 @@ function postPieces(post: Post): [string, string][] {
     ["body", post.body],
     ["head branch", post.head],
     ["base branch", post.base],
+    ...labelsOf(post).map((name, i): [string, string] => [`label ${i + 1}`, name]),
   ];
   return pieces.filter((piece): piece is [string, string] => piece[1] !== undefined);
+}
+
+/** A label post's names, added ones first. */
+const labelsOf = (post: Post) => [...(post.add ?? []), ...(post.remove ?? [])];
+
+/** What is wrong with a label post's names as names, before their words are checked; the names aren't repeated. */
+function labelShapeProblems(post: Post): string[] {
+  if (post.kind !== "label") return [];
+  const names = labelsOf(post);
+  if (!names.length) return ["a label post must add or remove at least one label"];
+  const problems = names.flatMap((name, i) => {
+    if (!name.trim()) return [`label ${i + 1}: is blank`];
+    // gh splits --add-label on commas, so `a,b` would add two labels, one of them unchecked as a name of its own.
+    if (/[,\p{Cc}]/u.test(name)) return [`label ${i + 1}: has a comma or a control character`];
+    return [...name].length > 50 ? [`label ${i + 1}: is longer than GitHub's 50 characters`] : [];
+  });
+  const both = (post.add ?? []).filter((name) => post.remove?.includes(name));
+  return both.length ? [...problems, "a label can't be both added and removed"] : problems;
+}
+
+/** The gh calls for a label post: one edit that adds every label, then one REST delete for each removal. */
+export function labelCalls(post: Post): { args: string[] }[] {
+  const add = post.add ?? [];
+  return [
+    ...(add.length
+      ? [
+          {
+            args: [
+              "issue",
+              "edit",
+              String(post.number),
+              "--repo",
+              `github.com/${post.repo}`,
+              ...add.flatMap((name) => ["--add-label", name]),
+            ],
+          },
+        ]
+      : []),
+    ...(post.remove ?? []).map((name) => ({
+      args: [
+        "api",
+        "--hostname",
+        "github.com",
+        "-X",
+        "DELETE",
+        `repos/${post.repo}/issues/${post.number}/labels/${encodeURIComponent(name)}`,
+      ],
+    })),
+  ];
 }
 
 /** The gh call for a post that isn't a push, and the body it reads on stdin. */
@@ -147,17 +212,23 @@ export function sendPost(post: Post, deps: Deps = {}): string {
     try {
       return git(checkout, pushArgs({ url: plan.url, commit: plan.commit }, branch));
     } catch (error) {
-      throw new SendFailed(`git push failed: ${errorText(error)}`);
+      throw new SendFailed(`git push failed: ${errorText(error)}`, { cause: error });
     }
   }
   const problems = postProblems(post, env);
   if (problems.length) throw new Refused(refusal(problems));
-  const { args, input } = ghCall(post);
-  try {
-    return (deps.gh ?? realGh)(args, input);
-  } catch (error) {
-    throw new SendFailed(`gh ${args.slice(0, 2).join(" ")} failed: ${errorText(error)}`);
+  const calls: { args: string[]; input?: string }[] = post.kind === "label" ? labelCalls(post) : [ghCall(post)];
+  const out: string[] = [];
+  for (const { args, input } of calls) {
+    try {
+      out.push((deps.gh ?? realGh)(args, input));
+    } catch (error) {
+      // A label post that fails part-way says what already went: the labels added stay added.
+      const done = out.length ? ` (after ${out.length} of ${calls.length} calls went through)` : "";
+      throw new SendFailed(`gh ${args.slice(0, 2).join(" ")} failed${done}: ${errorText(error)}`, { cause: error });
+    }
   }
+  return out.join("");
 }
 
 /** The problems a post's own text has, without sending it: a caller can refuse before it records an attempt. */
@@ -168,7 +239,7 @@ export function postProblems(post: Post, env: NodeJS.ProcessEnv = process.env): 
     const problem = name === undefined ? undefined : branchNameProblem(name);
     return problem ? [problem] : [];
   });
-  return [...branches, ...textProblems(postPieces(post), env)];
+  return [...branches, ...labelShapeProblems(post), ...textProblems(postPieces(post), env)];
 }
 
 function refusal(problems: string[]): string {
@@ -201,7 +272,8 @@ function readTitle(path: string): string {
  */
 export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   const [kind, ...rest] = argv;
-  if (!KINDS.includes(kind as Kind)) throw new Usage(`the first word must be one of: ${KINDS.join(", ")}`);
+  if (!COMMAND_KINDS.includes(kind as CommandKind))
+    throw new Usage(`the first word must be one of: ${COMMAND_KINDS.join(", ")}`);
   let values: Record<string, string | undefined>;
   try {
     values = parseArgs({
@@ -224,8 +296,8 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
       ? reviewed[0]
       : undefined;
   if (!target) throw new Usage(`--repo must name a reviewed repo: ${reviewed.map((r) => r.github).join(", ")}`);
-  const post: Post = { kind: kind as Kind, repo: target.github };
-  const allowed: Record<Kind, string[]> = {
+  const post: Post & { kind: CommandKind } = { kind: kind as CommandKind, repo: target.github };
+  const allowed: Record<CommandKind, string[]> = {
     "issue-create": ["title-file", "body-file"],
     "issue-edit": ["number", "title-file", "body-file"],
     "issue-comment": ["number", "body-file"],

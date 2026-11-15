@@ -24,12 +24,13 @@ import type { IssueEvent, TickDeps, TickOptions } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { fingerprints, PRIVATE_KEY, type RunMode, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
 import { gitControlProblem } from "./git-control.ts";
-import { gh, ghAll, ghJson } from "./github.ts";
+import { ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
 import { checkTicket } from "./ticket-ready.ts";
 import { ghSnapshot } from "./ticket-snapshot.ts";
+import { ticketWriter } from "./ticket-write.ts";
 
 export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
@@ -42,6 +43,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths (N-12)
   // In CI there is no private checkout until the runner makes one, and none while a target ticket's agent runs.
   const access = privateAccess(mode, privateRepo, runs);
+  // The runner's comments and labels: a reviewed repo's ticket gets them through the door, which checks them (#345).
+  const tickets = ticketWriter(
+    Object.values(factory.repos)
+      .filter((repo) => repo.guard === "reviewed")
+      .map((repo) => repo.github),
+  );
 
   // The lock this tick holds, so the agent's pid can be written into it once the agent starts.
   let held: Lock | undefined;
@@ -103,14 +110,12 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       relabelWith(
         remove,
         add,
-        (label) => gh("api", "-X", "DELETE", `repos/${github}/issues/${number}/labels/${encodeURIComponent(label)}`),
-        (labels) => gh("issue", "edit", String(number), "--repo", github, ...labels.flatMap((l) => ["--add-label", l])),
+        (label) => tickets.removeLabel(github, number, label),
+        (labels) => tickets.addLabels(github, number, labels),
       ),
     // Every comment the runner posts starts with its mark: it posts as the owner, and the mark is how a later
     // run's snapshot tells it from the owner's own text (AUD-M21).
-    comment: (github, number, body) => {
-      gh("issue", "comment", String(number), "--repo", github, "--body", runnerComment(body));
-    },
+    comment: (github, number, body) => tickets.comment(github, number, runnerComment(body)),
     async qodoCheck(runId) {
       // Its own short-lived worktree, so the live answers reach the private repo's `main` even when
       // the check stops the run before the ticket's own workspace (and `ws.private`) ever exist, and

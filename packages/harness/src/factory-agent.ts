@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
+import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
 import { type FactoryConfig, repoConfig } from "./factory-config.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
@@ -23,7 +24,7 @@ export interface AgentRun {
   subtype: string | null;
   costUsd: number | null;
   turns: number | null;
-  /** The last pull request URL seen in a `gh pr create` step's own result, if the agent opened one. Used
+  /** The last pull request URL in the result of a step that opened one (`gh pr create`, or the door's `pr-create`). Used
    * when the time limit cuts the run off before it can report a `FACTORY_RESULT` of its own. */
   lastPr?: string | null;
 }
@@ -48,7 +49,7 @@ export function prUrlFromToolResult(content: unknown, github: string): string | 
   return null;
 }
 
-/** The instructions added to the agent's system prompt for an unattended run. */
+/** The instructions added to the agent's system prompt for an unattended run; `github` is the ticket's owner/name. */
 export function agentInstructions(
   runRoot: string,
   repoKey: string,
@@ -56,6 +57,7 @@ export function agentInstructions(
   ticketFile: string,
   /** False in a target ticket's run, which has no private worktree (AUD-H2). A lab ticket's agent only reads its evidence (#299). */
   privateWorktree = true,
+  github = repoKey,
 ): string {
   return [
     `You are running unattended: a scheduled task started you for ${repoKey} ticket ${number}. Nobody is watching or will answer, so never ask a question or wait for one.`,
@@ -64,7 +66,7 @@ export function agentInstructions(
     'Everything you need from the environment is written here. Don\'t list it (env, printenv and set are blocked); one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine.',
     "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
     "Run review:wait in the foreground, with the Bash tool's longest timeout (600000 ms) and --timeout 9, and run it again while it exits 1, up to the round's time. Never start it in the background and never schedule a wakeup: ending your turn ends the run, and nobody wakes you. Report FACTORY_RESULT before you stop, whatever happened.",
-    "Pass PR bodies, comments and commit messages as files, never inline: write the text with the Write tool to a file in your run folder or the temp folder, then use gh pr create/edit --body-file or git commit -F. The policy hook reads the whole command, so a blocked word quoted in an inline message blocks it.",
+    writeInstructions(runRoot, privateWorktree, github),
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
     privateWorktree
       ? "private/ here is a worktree of the private repo: review:wait and revert:check save their evidence there by themselves, and you may add to the factory log there with the Write tool. Don't read anything else in it, and don't commit or push in it: the runner commits and pushes the evidence after you stop. Never read the private repo anywhere else."
@@ -174,9 +176,9 @@ const DENY = [
 
 /** A short name for the agent's shell commands worth showing on the timeline, or null. */
 export function agentStep(command: string): string | null {
-  if (/\bgh\s+pr\s+create\b/.test(command)) return "pr-opened";
+  if (/\bgh\s+pr\s+create\b|\btarget:post\s+--\s+pr-create\b/.test(command)) return "pr-opened";
   if (/\breview:wait\b/.test(command)) return "review-wait";
-  if (/\bgit\b[^\n]*\bpush\b/.test(command)) return "push";
+  if (/\bgit\b[^\n]*\bpush\b|\btarget:post\s+--\s+push\b/.test(command)) return "push";
   if (/\bnpm\s+run\s+check\b/.test(command)) return "check";
   if (/\bticket:ready\b/.test(command)) return "ticket-ready";
   if (/\brevert:check\b/.test(command)) return "revert-check";
@@ -218,7 +220,7 @@ export async function runAgent(
     budget: options.budget,
     settingsFile,
     mcpConfigFile,
-    instructions: agentInstructions(ws.root, repoKey, number, ticketFile, Boolean(ws.private)),
+    instructions: agentInstructions(ws.root, repoKey, number, ticketFile, Boolean(ws.private), github),
     extraDirs,
   });
   // review:wait goes through the runner, which keeps Qodo's key (AUD-H2): served from a trusted checkout.

@@ -1254,16 +1254,20 @@ describe("hooks-checked: the run log records the hook self-test (#126)", () => {
       } catch {
         return { stdout: deny, status: 0, ms };
       }
-      const bad = hook === "guard-target.ts" ? /planted/.test(command) : /gh pr merge/.test(command);
+      const bad = hook === "guard-target.ts" ? /^gh pr create --repo /.test(command) : /gh pr merge/.test(command);
       return { stdout: bad ? deny : "", status: 0, ms };
     };
-  const run = (runner: HookRunner) => hookSelfTestReport("/lab", "/lab/../faultforge-target", 15, runner);
+  const run = (runner: HookRunner) => hookSelfTestReport("/lab", "Owner/app", 15, runner);
 
-  it("reports each hook's deny, allow and not-JSON outcomes and its slowest answer", () => {
+  it("reports each hook's deny, allow and not-JSON outcomes, the guard's door outcome, and its slowest answer", () => {
     const report = run(hooks({ "factory-policy.ts": 40 }));
     expect(report.problems).toEqual([]);
     expect(report.hooks).toEqual([
-      { hook: "guard-target.ts", outcomes: { deny: "deny", allow: "silent", notJson: "deny" }, slowestMs: 5 },
+      {
+        hook: "guard-target.ts",
+        outcomes: { deny: "deny", door: "silent", allow: "silent", notJson: "deny" },
+        slowestMs: 5,
+      },
       { hook: "factory-policy.ts", outcomes: { deny: "deny", allow: "silent", notJson: "deny" }, slowestMs: 40 },
     ]);
   });
