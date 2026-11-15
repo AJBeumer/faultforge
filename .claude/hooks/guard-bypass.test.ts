@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { answer, run } from "./fail-closed.ts";
-import { guardConfig, tempRepo } from "./fixtures.ts";
+import { growth, guardConfig, LINEAR_BOUND, tempRepo } from "./fixtures.ts";
 import { check } from "./git-guard.ts";
 import { decide } from "./guard-target.ts";
 import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
@@ -105,18 +105,18 @@ describe("private template ids in posts (AUD-H1)", () => {
 
 describe("a crafted command can't outrun the hook (AUD-M4)", () => {
   const post = 'gh pr create --repo AJBeumer/faultforge-target --title Tidy --body "planted bug" ';
+  // At `k` quarters of the old wall-clock test's 6 KB; `growth` compares k = 1 with k = 8 (re-grade 7).
   it.each([
-    ["heredoc openers in a comment", `${post}# ${"<<A ".repeat(450)}${"\n".repeat(4500)}`],
-    ["heredoc openers in the open", `${post}${"<<A ".repeat(800)}\n${"x\n".repeat(1500)}`],
-    ["unclosed quotes", `${post}${"\"'".repeat(1500)}${"\n".repeat(3000)}`],
-    ["repeated git words", `${post}; ${"git ".repeat(1500)}`],
-    ["repeated cd words", `${post}; ${"cd ".repeat(2000)}`],
-    ["repeated flags", `${post}${"-m -t -b -F ".repeat(500)}`],
-  ])("decides 6 KB of %s in under a second", (_name, command) => {
-    expect(command.length).toBeGreaterThan(6000);
-    const started = performance.now();
-    expect(bash(command)).toBeDefined();
-    expect(performance.now() - started).toBeLessThan(1000);
+    ["heredoc openers in a comment", (k: number) => `${post}# ${"<<A ".repeat(113 * k)}${"\n".repeat(1125 * k)}`],
+    ["heredoc openers in the open", (k: number) => `${post}${"<<A ".repeat(200 * k)}\n${"x\n".repeat(375 * k)}`],
+    ["unclosed quotes", (k: number) => `${post}${"\"'".repeat(375 * k)}${"\n".repeat(750 * k)}`],
+    ["repeated git words", (k: number) => `${post}; ${"git ".repeat(375 * k)}`],
+    ["repeated cd words", (k: number) => `${post}; ${"cd ".repeat(500 * k)}`],
+    ["repeated flags", (k: number) => `${post}${"-m -t -b -F ".repeat(125 * k)}`],
+  ])("decides %s in time linear in the command's length", (_name, make) => {
+    expect(make(4).length).toBeGreaterThan(6000);
+    expect(bash(make(4))).toBeDefined();
+    expect(growth((k) => bash(make(k)))).toBeLessThan(LINEAR_BOUND);
   });
 
   it("refuses a command longer than it reads", () => {

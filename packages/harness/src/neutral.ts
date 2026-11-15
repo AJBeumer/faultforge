@@ -102,6 +102,54 @@ const LOOKALIKES: Record<string, string> = {
   ɑ: "a",
 };
 
+/** Named HTML entities a separator or a mark can hide behind; any other named entity reads as nothing. */
+const ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  ensp: " ",
+  emsp: " ",
+  thinsp: " ",
+  hairsp: " ",
+  tab: " ",
+  newline: " ",
+  hyphen: "-",
+  dash: "-",
+  ndash: "-",
+  mdash: "-",
+  minus: "-",
+  lowbar: "_",
+  period: ".",
+  colon: ":",
+  sol: "/",
+};
+
+/** Inline HTML tags GitHub renders as nothing but style, so `plan<b></b>ted` reads `planted`. */
+const INLINE_TAG =
+  /<\/?(?:a|b|i|u|s|q|em|strong|ins|del|sub|sup|span|code|kbd|mark|small|big|tt|abbr|cite|dfn|var|samp|wbr|strike)\b[^<>]*>/gi;
+
+/**
+ * The text as markdown renders it (re-grade 7): HTML comments and inline tags removed, HTML entities decoded
+ * (`&#102;`, `&#x66;`, `&amp;`), and emphasis markers removed (`**`, `__`, `~~`, backticks), so `fault<!-- -->forge`,
+ * `pl&#97;nted` and `plan**ted**` read as the words they show. A dot between two letters or digits reads as a
+ * space, so `answer.key` reads as two words, as a separator would.
+ */
+export function renderedText(text: string): string {
+  return text
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(INLINE_TAG, "")
+    .replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z][a-z0-9]{1,31}));?/gi, (whole, dec, hex, name) => {
+      if (name) return /;$/.test(whole) ? (ENTITIES[name.toLowerCase()] ?? "") : whole;
+      const code = dec ? Number(dec) : Number.parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    })
+    .replace(/[*~`]+|_{2,}/g, "")
+    .replace(/(?<=[\p{L}\p{N}])\.(?=[\p{L}\p{N}])/gu, " ");
+}
+
 /**
  * The text as a reader sees it: compatibility forms folded (NFKC: full-width letters, ligatures), invisible
  * characters removed (zero-width spaces and joiners, the soft hyphen, the word joiner, the byte-order mark),
@@ -113,6 +161,19 @@ export function normalizeLookalikes(text: string): string {
     .replace(/[​-‍⁠﻿­᠎]/g, "")
     .replace(/[‐-―−﹘﹣－]/g, "-")
     .replace(/[Ͱ-ϿЀ-ԯɡıɑ]/g, (ch) => LOOKALIKES[ch] ?? ch);
+}
+
+/**
+ * The ways a reader may see the text, each normalised (`normalizeLookalikes`): as written, and as markdown
+ * renders it (`renderedText`). Both, because removing a mark can join a word to the one before it (a code span
+ * right after a letter), and the word's start is then seen only as written. One view when rendering changes
+ * nothing. The one step `telltales` and the guard's private-id test both read text through.
+ */
+export function readerViews(text: string): string[] {
+  const rendered = renderedText(text);
+  return rendered === text
+    ? [normalizeLookalikes(text)]
+    : [...new Set([normalizeLookalikes(text), normalizeLookalikes(rendered)])];
 }
 
 /** Digits and signs read as letters (leetspeak), except `1`, which reads as either `i` or `l`. */
@@ -141,12 +202,11 @@ export function joinsSplit(text: string): string {
 /**
  * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
  * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242), and
- * neither can digits written for letters (#285). The lab's name is also read with camel-case joins split
+ * neither can digits written for letters (#285) or markup that renders as nothing (re-grade 7). The lab's name is also read with camel-case joins split
  * (re-grade 5); the other words are not, so code such as `clientMutationId` stays ordinary.
  */
 export function telltales(text: string): string[] {
-  const seen = normalizeLookalikes(text);
-  const readings = [seen, ...leetReadings(seen)];
+  const readings = readerViews(text).flatMap((seen) => [seen, ...leetReadings(seen)]);
   const split = readings.map(joinsSplit);
   return TELLTALES.filter(([pattern, reason]) =>
     (reason === LAB_REASON ? [...readings, ...split] : readings).some((reading) => pattern.test(reading)),

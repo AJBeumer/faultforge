@@ -11,6 +11,7 @@ import {
   editViolation,
   privateViolation,
 } from "./factory-policy.ts";
+import { growth, LINEAR_BOUND } from "./fixtures.ts";
 
 const HOOK = join(import.meta.dirname, "factory-policy.ts");
 // Native absolute paths, so the tests mean the same on Windows and on CI's Linux.
@@ -553,25 +554,30 @@ describe("factory policy: the whole environment and network calls from code (#24
 });
 
 describe("factory policy: decides in linear time (AUD-M4, lead's follow-up to PR 265)", () => {
-  const crafted = {
-    "git then push, over and over": "git push x ".repeat(600),
-    "git words, then a push with a branch at the end": `${"git ".repeat(1500)}push origin ${"a".repeat(30)}`,
-    "push, then branch-like words with colons": `git push ${"a:b".repeat(2000)}`,
-    "gh issue edit, over and over": "gh issue edit 5 ".repeat(400),
-    "gh api, over and over": "gh api x ".repeat(700),
-    "gh, then graphql far away": `${"gh ".repeat(2000)}graphql`,
+  // Each command at `k` quarters of 6 KB: the old wall-clock test's size is k = 4.
+  const crafted: Record<string, (k: number) => string> = {
+    "git then push, over and over": (k) => "git push x ".repeat(150 * k),
+    "git words, then a push with a branch at the end": (k) => `${"git ".repeat(375 * k)}push origin ${"a".repeat(30)}`,
+    "push, then branch-like words with colons": (k) => `git push ${"a:b".repeat(500 * k)}`,
+    "gh issue edit, over and over": (k) => "gh issue edit 5 ".repeat(100 * k),
+    "gh api, over and over": (k) => "gh api x ".repeat(175 * k),
+    "gh, then graphql far away": (k) => `${"gh ".repeat(500 * k)}graphql`,
   };
 
-  it.each(Object.entries(crafted))("a crafted 6 KB command (%s) decides in under a second", (_name, command) => {
-    expect(command.length).toBeGreaterThan(5000);
-    const start = performance.now();
-    commandViolations(command, "18");
-    decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
-      FAULTFORGE_FACTORY_RUN: "r",
-      FAULTFORGE_RUN_ROOT: RUN,
-      FAULTFORGE_TICKET_NUMBER: "18",
+  // Linear, not under a wall-clock limit (re-grade 7): a busy machine failed that at random, and a fast one let
+  // quadratic code through. `growth` compares 1.5 KB with 12 KB of the same command, timed in the same run.
+  it.each(Object.entries(crafted))("a crafted command (%s) decides in time linear in its length", (_name, make) => {
+    expect(make(4).length).toBeGreaterThan(5000);
+    const ratio = growth((k) => {
+      const command = make(k);
+      commandViolations(command, "18");
+      decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), {
+        FAULTFORGE_FACTORY_RUN: "r",
+        FAULTFORGE_RUN_ROOT: RUN,
+        FAULTFORGE_TICKET_NUMBER: "18",
+      });
     });
-    expect(performance.now() - start).toBeLessThan(1000);
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
   });
 
   it("still finds what the step rules looked for", () => {

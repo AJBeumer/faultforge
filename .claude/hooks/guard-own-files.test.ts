@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { guardConfig, tempRepo } from "./fixtures.ts";
+import { growth, guardConfig, LINEAR_BOUND, tempRepo } from "./fixtures.ts";
 import { guardRoots, relation, UNLOCK_FILE, unlocked } from "./guard-self.ts";
 import { decide } from "./guard-target.ts";
 
@@ -205,25 +205,24 @@ describe("the guard's own files can't be changed in its checkout (re-grade 6)", 
 });
 
 describe("a long command of paths stays fast (AUD-M4)", () => {
+  // At `k` quarters of the old wall-clock test's 6 KB; `growth` compares k = 1 with k = 8 (re-grade 7).
   it.each([
-    ["rm words", `rm ${"docs/a ".repeat(900)}`],
-    ["copy words", `cp ${"docs/a ".repeat(900)} docs/b`],
-    ["printed words", `cat ${"private/a ".repeat(700)} > docs/b`],
-  ])("decides 6 KB of %s in under a second", (_name, command) => {
-    expect(command.length).toBeGreaterThan(6000);
-    const started = performance.now();
-    bash(command);
-    expect(performance.now() - started).toBeLessThan(1000);
+    ["rm words", (k: number) => `rm ${"docs/a ".repeat(225 * k)}`],
+    ["copy words", (k: number) => `cp ${"docs/a ".repeat(225 * k)} docs/b`],
+    ["printed words", (k: number) => `cat ${"private/a ".repeat(175 * k)} > docs/b`],
+  ])("decides %s in time linear in the command's length", (_name, make) => {
+    expect(make(4).length).toBeGreaterThan(6000);
+    expect(growth((k) => bash(make(k)))).toBeLessThan(LINEAR_BOUND);
   });
 });
 
 describe("many distinct paths (AUD-M4)", () => {
   const many = (n: number) => Array.from({ length: n }, (_v, i) => `docs/file-${i}.md`).join(" ");
 
-  it.each(["rm", "cp"])("reads a %s of up to 256 distinct paths in under a second", (program) => {
-    const started = performance.now();
+  it.each(["rm", "cp"])("reads a %s of up to 256 distinct paths in time linear in their number", (program) => {
     expect(bash(`${program} ${many(250)} docs/`)).toBeUndefined();
-    expect(performance.now() - started).toBeLessThan(1000);
+    // 30 paths, then 240: both under the 256 the guard reads (re-grade 7).
+    expect(growth((k) => bash(`${program} ${many(30 * k)} docs/`))).toBeLessThan(LINEAR_BOUND);
   });
 
   it("refuses a writing step that names more than it reads", () => {

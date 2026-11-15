@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLookalikes, telltales, templateTelltales } from "./neutral.ts";
+import { normalizeLookalikes, readerViews, renderedText, telltales, templateTelltales } from "./neutral.ts";
 
 describe("telltales", () => {
   it.each([
@@ -191,5 +191,51 @@ describe("camel-case joins are split only for the lab's name (re-grade 5)", () =
   it("leaves code such as clientMutationId and answerKeys alone", () => {
     expect(telltales("addComment { clientMutationId }")).toEqual([]);
     expect(telltales("const answerKeys = []")).toEqual([]);
+  });
+});
+
+describe("telltales read text as markdown renders it, and a dot as a separator (re-grade 7)", () => {
+  it.each([
+    ["an HTML comment", "fault<!-- -->forge"],
+    ["an empty HTML comment", "plan<!---->ted bug"],
+    ["a decimal entity", "pl&#97;nted bug"],
+    ["a hex entity", "&#x66;aultforge"],
+    ["a named entity for a separator", "answer&lowbar;key"],
+    ["a named entity that renders as nothing", "led&shy;ger"],
+    ["bold", "plan**ted** bug"],
+    ["underscore bold", "led__ger__"],
+    ["strikethrough", "led~~ger~~"],
+    ["a code span", "fault`forge`"],
+    ["an inline tag", "plan<b></b>ted bug"],
+    ["a dot", "the answer.key"],
+    ["an entity dot", "ground&period;truth"],
+  ])("finds a word split by %s", (_name, text) => {
+    expect(telltales(text)).not.toEqual([]);
+  });
+
+  it("still finds a word a code span starts right after a letter, as written", () => {
+    expect(telltales("n`faultforge replay`")).toContain("names the lab");
+  });
+
+  it("decodes each entity once, as a reader sees it, and keeps a named entity with no semicolon", () => {
+    expect(renderedText("a &amp;#97; b")).toBe("a &#97; b");
+    expect(renderedText("AT&T and x &lt y")).toBe("AT&T and x &lt y");
+    expect(renderedText("&#0; &#9999999;")).toBe(" ");
+  });
+
+  it.each([
+    "const total = a * b;",
+    "if (a && b) return;",
+    "app.inject(request)",
+    "bookings.filter((b) => b.status === 'open')",
+    "Use `npm test` before a push",
+    "x.ledgerless?", // not a word on its own
+  ])("leaves ordinary text alone: %s", (text) => {
+    expect(telltales(text)).toEqual([]);
+  });
+
+  it("is one step: rendering changes nothing in plain text", () => {
+    expect(readerViews("Filter bookings by status")).toEqual(["Filter bookings by status"]);
+    expect(readerViews("plan**ted**")).toEqual(["plan**ted**", "planted"]);
   });
 });

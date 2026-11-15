@@ -24,7 +24,7 @@ import {
   within,
 } from "./guard-repos.ts";
 import { selfFileEdit } from "./guard-self.ts";
-import { joinedWords } from "./shell-scan.ts";
+import { joinedWords, wordThen } from "./shell-scan.ts";
 
 /** What one decision is made against: the folder the tool runs in, the repos under guard, and the environment. */
 export interface Context {
@@ -142,7 +142,7 @@ export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
  */
 export function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
   // `--fill` in any form posts commit text the guard can't check (AUD-N9): read where the shell reads flags.
-  if (/\bgh\s+pr\s+create\b[^|;&\n]*\s--fill(-first|-verbose)?\b/.test(joinedWords(outsidePostedText(command)))) {
+  if (wordThen(joinedWords(outsidePostedText(command)), /\bgh\s+pr\s+create\b/, /\s--fill(-first|-verbose)?\b/)) {
     deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
   }
   const posted = postedArguments(command);

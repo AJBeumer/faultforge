@@ -5,7 +5,7 @@
  * `gi''t` and `'+main'` read as the shell runs them.
  */
 import { githubRepos } from "./guard-repos.ts";
-import { blankQuoted, gitSteps, joinedWords, segments } from "./shell-scan.ts";
+import { blankQuoted, gitSteps, joinedWords, segments, wordThen } from "./shell-scan.ts";
 
 const REPO = String.raw`([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s?#)]|$)`;
 
@@ -78,7 +78,7 @@ export function graphqlMutation(command: string): boolean {
 export function rawApiWrite(command: string): boolean {
   const words = joinedWords(command);
   return (
-    /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b[^|;&\n]*github\.com/i.test(words) &&
+    wordThen(words, /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b/i, /github\.com/i) &&
     /(?:\s-X\s*\w|--request|\s-d\b|--data|--json|--form|\s-F\b|-Method|-Body|-InFile|--post-data|--post-file|--body-file|--upload-file|\s-T\b|--method|\s(?:POST|PATCH|PUT|DELETE)\b)/i.test(
       words,
     )
@@ -181,7 +181,7 @@ export function skipsGitGuard(command: string): boolean {
   const configFrom =
     /\bGIT_CONFIG(?:_[A-Z_]+)?\s*=|\b(?:HOME|XDG_CONFIG_HOME)\s*=|\$env:(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\s*=/i;
   if (/\bcore\.hookspath\b/i.test(words) || configFrom.test(words)) return true;
-  if (/\bgit\b[^|;&\n]*\s-c\s*["']?[^\s"']*[$%`]/.test(command)) return true;
+  if (wordThen(command, /\bgit\b/, /\s-c\s*["']?[^\s"']*[$%`]/)) return true;
   // A quoted option is still an option: `"-n"` reaches git as -n (Qodo on PR 266).
   const flags = command.replace(/(["'])(-[A-Za-z-]+)\1/g, "$2");
   return gitSteps(blankQuoted(flags), /\bcommit\b/).some((step) =>

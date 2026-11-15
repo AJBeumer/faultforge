@@ -12,7 +12,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { leetReadings, normalizeLookalikes } from "../../packages/harness/src/neutral.ts";
+import { leetReadings, readerViews } from "../../packages/harness/src/neutral.ts";
 import { checkoutAt, githubRepos, within } from "./guard-repos.ts";
 import { blankQuoted, gitSteps, quotedMask } from "./shell-scan.ts";
 
@@ -97,7 +97,7 @@ export function privateTemplateIds(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): 
 /**
  * A test for text that names any of `ids`: case-insensitive, as a whole word (letters or digits on either
  * side make it another word), with any separator between the id's parts counting (privateIdPattern). Look-alike
- * letters and invisible characters are normalised first. Undefined when there are no ids.
+ * letters, invisible characters and markup that renders as nothing are normalised first (`readerViews`). Undefined when there are no ids.
  */
 export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | undefined {
   if (!ids.length) return undefined;
@@ -106,10 +106,12 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
   const folded = privateIdPattern(ids.flatMap(leetReadings));
   // Written backwards too (re-grade 6): `1v-terces-x` is `x-secret-v1` read from the end.
   return (text) =>
-    [...new Set([text, percentDecoded(text)].flatMap((each) => [each, [...each].reverse().join("")]))].some((each) => {
-      const seen = normalizeLookalikes(each);
-      return pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading));
-    });
+    [...new Set([text, percentDecoded(text)].flatMap((each) => [each, [...each].reverse().join("")]))].some((each) =>
+      // As written and as markdown renders it (re-grade 7): a comment, an entity or emphasis can't split an id.
+      readerViews(each).some(
+        (seen) => pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading)),
+      ),
+    );
 }
 
 /**

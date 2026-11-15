@@ -4,9 +4,23 @@
  */
 import { codeAsWords, spokenWords } from "./shell-decode.ts";
 import { inlineNetworkProblem, NETWORK_CODE, onlyLocalCalls } from "./shell-exec.ts";
-import { joinedWords, MAX_COMMAND_CHARS, quotedMask } from "./shell-scan.ts";
+import { joinedWords, MAX_COMMAND_CHARS, quotedMask, wordThen } from "./shell-scan.ts";
 
-const COMMAND_RULES: [RegExp, string][] = [
+const CREDENTIAL_REASON = "no reading stored credentials (git credential, a credential helper)";
+const PS_ENV_REASON = "no reading another process's environment (ps e, ps eww)";
+const CHECK_SCRIPT_REASON =
+  "the agent can't change package.json's scripts from the shell (npm pkg set, set-script): the check must stay as the ticket found it";
+
+/** Options of git itself that take the next word as their value, read before its subcommand. */
+const GIT_VALUE_OPTION = /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)$/;
+/** Options of ps that take the next word as their value, so `ps -o user` names no BSD option. */
+const PS_VALUE_OPTION =
+  /^(-[oOpqugGtCsUN]|--(sort|format|pid|ppid|user|group|tty|cols|columns|rows|lines|sid|quick-pid))$/;
+
+/** A rule's test: a pattern, or a function for a test one pattern can't make in linear time. */
+type Rule = [{ test: (text: string) => boolean }, string];
+
+const COMMAND_RULES: Rule[] = [
   [/\bgh\s+pr\s+(merge|close|review|comment|ready)\b/i, "only the owner merges, closes or comments on a PR"],
   [/\bgh\s+issue\s+(comment|close|reopen|delete|transfer|lock)\b/i, "the runner reports on the ticket, not the agent"],
   [
@@ -22,13 +36,17 @@ const COMMAND_RULES: [RegExp, string][] = [
   [/\bdismiss/i, "never dismiss a finding"],
   // An alias runs later under a name no rule knows: `gh alias set c 'pr merge'`, `git config alias.p …` (#284).
   [/\bgh\s+alias\s+(set|import)\b/i, "no gh aliases: an alias hides what a later command runs"],
-  [/\bgit\b[^\n]*\balias\.[\w-]/i, "no git aliases: an alias hides what a later command runs"],
+  // `git`, then `alias.` on the same line, read in linear time (wordThen; re-grade 7).
+  [
+    { test: (text) => wordThen(text, /\bgit\b/i, /\balias\.[\w-]/i, "\n") },
+    "no git aliases: an alias hides what a later command runs",
+  ],
   // The private repo is the runner's, by name or by numeric id, which hides the name (#284).
   [/\bfaultforge-private\b/i, "the private repo is the runner's: the agent never reaches it"],
   // An id or a route the shell builds hides the repo just as well: `repositories/${id}` (Qodo on PR 288).
   [/\brepositories\/(\d|\$|`)/i, "no GitHub API by repository id: name the repo, so the rules can read where it goes"],
   [
-    /\bgh\s+api\b[^\n|;&]*(\$\(|`)/i,
+    { test: (text) => wordThen(text, /\bgh\s+api\b/i, /\$\(|`/, "\n|;&") },
     "build a gh api route in the command, not with $(…): the rules must read where it goes",
   ],
 ];
@@ -53,6 +71,9 @@ const SECRET_RULES: [RegExp, string][] = [
   // Any path under /proc, however it is spelled or linked: `ln -s /proc p`, `/proc/./self` (Qodo on PR 288).
   [/(^|[^\w.-])\/proc(\/|\b)/i, "no reading process files under /proc"],
   [/\bgh\s+auth\s+(token|status\s+(-t|--show-token))/i, "no printing the GitHub token"],
+  // A credential helper prints the stored token: `git-credential-manager get`, `gh auth git-credential get` (re-grade 7).
+  // `git credential fill` itself is read as a step (stepViolations), so a message that merely says "credential" passes.
+  [/\bgit-credential/i, CREDENTIAL_REASON],
   // The whole environment from a program, not only from the shell (#243): `env -0`, `printenv` in any form,
   // Node's `process.env` (except one variable by name), Python's `os.environ`.
   [
@@ -180,6 +201,34 @@ function stepViolations(command: string): string[] {
       if (writes) reasons.add("gh api is read-only here");
     }
     const git = all.findIndex((w) => program(w) === "git");
+    // git's subcommand, past its own options: `git -c x=y credential fill` and `git credential-store get` (re-grade 7).
+    let sub = git + 1;
+    while (git >= 0 && /^-/.test(all[sub] ?? "")) sub += GIT_VALUE_OPTION.test(all[sub] ?? "") ? 2 : 1;
+    if (git >= 0 && /^credential(-|$)/i.test(all[sub] ?? "")) reasons.add(CREDENTIAL_REASON);
+    // BSD-style `e` in ps prints each process's environment: `ps e`, `ps eww`, `ps auxe` (re-grade 7).
+    // Only where ps runs: first in the step, or after a word that runs the next one (`sudo ps e`), not in a message.
+    const ps = all.findIndex(
+      (w, i) =>
+        program(w) === "ps" &&
+        (i === 0 || /^(sudo|env|exec|time|nice|command|xargs|timeout|watch)$/.test(all[i - 1] ?? "")),
+    );
+    // An option's value runs to the next option: `-o pid,user` may read `-o pid user` once punctuation is spaces.
+    let value = false;
+    for (const w of ps >= 0 ? all.slice(ps + 1) : []) {
+      if (/^-/.test(w)) value = PS_VALUE_OPTION.test(w);
+      else if (!value && /^[a-z]*e[a-z]*$/i.test(w)) reasons.add(PS_ENV_REASON);
+    }
+    // npm's own way to change a script: `npm pkg set scripts.check=true`, `npm pkg delete scripts.test`, `npm set-script`.
+    const npm = all.findIndex((w) => /^p?npm$/.test(program(w)));
+    if (npm >= 0) {
+      const rest = all.slice(npm + 1);
+      const pkg = rest.findIndex((w, i) => /^pkg$/i.test(w) && /^(set|delete)$/i.test(rest[i + 1] ?? ""));
+      if (
+        rest.some((w) => /^set-script$/i.test(w)) ||
+        (pkg >= 0 && rest.slice(pkg + 2).some((w) => /^scripts\b/i.test(w)))
+      )
+        reasons.add(CHECK_SCRIPT_REASON);
+    }
     const push = git < 0 ? -1 : all.findIndex((w, i) => i > git && /^push$/i.test(w));
     if (push >= 0) {
       const after = all.slice(push + 1);
