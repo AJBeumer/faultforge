@@ -17,6 +17,8 @@ const HOOKS = import.meta.dirname;
 const LAB = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";
 const CONFIG = guardConfig(tempRepo(true).dir);
+/** The door rule (#340): every write to a reviewed repo goes through npm run target:post. */
+const DOOR = /go only through the door/;
 
 /**
  * A private folder holding one unreleased template and one that is already in templates/seed/. Its name has a
@@ -43,14 +45,6 @@ function verdict(tool: string, input: object, cwd = LAB, extra: NodeJS.ProcessEn
   return decision.kind === "deny" ? decision.reason : undefined;
 }
 const bash = (command: string, cwd?: string, extra?: NodeJS.ProcessEnv) => verdict("Bash", { command }, cwd, extra);
-
-/** A temp folder named like the target's checkout, holding `body.md` with the given text. */
-function targetFolder(body: string): string {
-  const dir = join(mkdtempSync(join(tmpdir(), "guard~tf-")), "faultforge-target");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "body.md"), body);
-  return dir;
-}
 
 describe("private template ids in posts (AUD-H1)", () => {
   it.each([
@@ -166,7 +160,7 @@ describe("the hook fails closed outside decide() (AUD-M4)", () => {
   it("passes the real guard's answers on: a deny, an allow, and its own refusal", () => {
     const payload = (command: string, cwd: string) =>
       JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } });
-    const denied = viaWrapper("guard-target.ts", payload('git commit -m "Fix the planted bug"', TARGET));
+    const denied = viaWrapper("guard-target.ts", payload("git push origin main", TARGET));
     expect(denied.status).toBe(0);
     expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
     const allowed = viaWrapper("guard-target.ts", payload("npm run check", LAB));
@@ -206,30 +200,7 @@ describe("the bypass spellings the audit found (AUD-M3)", () => {
   it("denies a raw API write with curl, even with clean text", () => {
     const curl =
       "curl -X POST -H 'Authorization: Bearer t' https://api.github.com/repos/AJBeumer/faultforge-target/issues/3/comments -d '{\"body\":\"Thanks\"}'";
-    expect(bash(curl)).toMatch(/with gh/);
-  });
-
-  it("reads a body that comes through stdin: --body-file - and -F- with a redirect or a pipe", () => {
-    const dir = targetFolder("Fixes the planted bug\n");
-    expect(bash("gh pr create --title Tidy --body-file - < body.md", dir)).toMatch(/says planted/);
-    expect(bash("gh pr create --title Tidy -F- < body.md", dir)).toMatch(/says planted/);
-    expect(bash("cat body.md | gh pr create --title Tidy --body-file -", dir)).toMatch(/says planted/);
-    expect(bash("gh pr create --title Tidy --body-file - < missing.md", dir)).toMatch(/can't read that file/);
-    writeFileSync(join(dir, "body.md"), "Small cleanup.\n");
-    expect(bash("gh pr create --title Tidy --body-file - < body.md", dir)).toBeUndefined();
-  });
-
-  it("reads a body file from the folder the command moves into, not only the hook's folder", () => {
-    const clean = mkdtempSync(join(tmpdir(), "guard-clean-"));
-    writeFileSync(join(clean, "body.md"), "Small cleanup.\n");
-    const target = targetFolder("Fixes the planted bug\n").replace(/\\/g, "/");
-    expect(bash(`cd ${target} && gh pr create --title Tidy --body-file body.md`, clean)).toMatch(/says planted/);
-  });
-
-  it("reads a gh --template file and a commit's -t template", () => {
-    const dir = targetFolder("Fixes the planted bug\n");
-    expect(bash("gh pr create --title Tidy --template body.md", dir)).toMatch(/says planted/);
-    expect(bash("git commit -t body.md", dir)).toMatch(/says planted/);
+    expect(bash(curl)).toMatch(DOOR);
   });
 
   it.each([
@@ -244,24 +215,13 @@ describe("the bypass spellings the audit found (AUD-M3)", () => {
     "gi''t pu''sh --fo''rce origin main",
     "git send-pack --force origin main",
   ])("denies the history rewrite %s", (command) => {
-    expect(bash(command, TARGET)).toMatch(/Force pushes/);
+    expect(bash(command, TARGET)).toMatch(DOOR);
   });
 
   it("denies a force push through GIT_DIR", () => {
     expect(
       bash("GIT_DIR=../faultforge-target/.git GIT_WORK_TREE=../faultforge-target git push --force origin main"),
-    ).toMatch(/Force pushes/);
-  });
-
-  it("denies an MCP tool's input that names the target and gives the lab away", () => {
-    const input = { owner: "AJBeumer", repo: "faultforge-target", title: "Fix the planted bug" };
-    expect(verdict("mcp__github__create_issue", input)).toMatch(/says planted/);
-    expect(verdict("mcp__github__create_issue", { ...input, title: "Tidy" })).toBeUndefined();
-  });
-
-  it("still posts a clean body from a file", () => {
-    const dir = targetFolder("Filter bookings by status.\n");
-    expect(bash("gh pr create --title Tidy --body-file body.md", dir)).toBeUndefined();
+    ).toMatch(DOOR);
   });
 });
 
@@ -270,10 +230,10 @@ describe("a second clone of a reviewed repo is recognised by its remote (AUD-M3)
   clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
   const dir = clone.dir;
 
-  it("guards commits, pushes and edits there although its folder has another name", () => {
-    expect(bash('git commit --allow-empty -m "Fix the planted bug FF-0012"', dir)).toMatch(/says planted/);
-    expect(bash("git push --force origin main", dir)).toMatch(/Force pushes/);
-    expect(bash(`cd "${dir.replace(/\\/g, "/")}" && git push --force origin main`)).toMatch(/Force pushes/);
+  it("guards pushes and edits there although its folder has another name", () => {
+    expect(bash("git push origin main", dir)).toMatch(DOOR);
+    expect(bash("git push --force origin main", dir)).toMatch(DOOR);
+    expect(bash(`cd "${dir.replace(/\\/g, "/")}" && git push --force origin main`)).toMatch(DOOR);
     expect(verdict("Write", { file_path: join(dir, "src", "x.ts"), content: "// planted here" })).toMatch(
       /says planted/,
     );
@@ -289,7 +249,7 @@ describe("a second clone of a reviewed repo is recognised by its remote (AUD-M3)
   it("finds it through a worktree's .git file too", () => {
     const worktree = join(mkdtempSync(join(tmpdir(), "guard-wt-")), "elsewhere");
     clone.git("worktree", "add", "-q", worktree);
-    expect(bash('git commit --allow-empty -m "Fix the planted bug"', worktree)).toMatch(/says planted/);
+    expect(bash("git push origin main", worktree)).toMatch(DOOR);
   });
 });
 
@@ -303,7 +263,7 @@ describe("holes Qodo found in the first version (PR 265)", () => {
   });
 
   it("counts a raw write to GitHub's GraphQL endpoint as reaching every reviewed repo", () => {
-    expect(bash("curl -X POST https://api.github.com/graphql -d @payload.json")).toMatch(/with gh/);
+    expect(bash("curl -X POST https://api.github.com/graphql -d @payload.json")).toMatch(DOOR);
   });
 
   it("keeps a private id out of a reviewed checkout's files and pending content", () => {
@@ -351,7 +311,7 @@ describe("holes Qodo found in the first version (PR 265)", () => {
     const clone = repo.dir;
     const extra = { FAULTFORGE_CONFIG: guardConfig(join(tmpdir(), "no-such-checkout-here")) };
     expect(bash('git commit --allow-empty -m "Tidy"', clone, extra)).toBeUndefined();
-    expect(bash('git commit --allow-empty -m "Fix the planted bug"', clone, extra)).toMatch(/says planted/);
+    expect(bash("git push origin main", clone, extra)).toMatch(DOOR);
   });
 });
 
@@ -410,12 +370,12 @@ describe("holes Qodo found in the second version (PR 265)", () => {
     clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
     const parent = at(join(clone.dir, ".."));
     const name = at(clone.dir).split("/").pop() ?? "";
-    expect(bash(`git -C "${parent}" -C ${name} push --force origin main`)).toMatch(/Force pushes/);
+    expect(bash(`git -C "${parent}" -C ${name} push --force origin main`)).toMatch(DOOR);
     const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
     process.env.HOME = parent;
     process.env.USERPROFILE = parent;
     try {
-      expect(bash(`cd ~/${name} && git push --force origin main`)).toMatch(/Force pushes/);
+      expect(bash(`cd ~/${name} && git push --force origin main`)).toMatch(DOOR);
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
@@ -425,30 +385,24 @@ describe("holes Qodo found in the second version (PR 265)", () => {
     const alias = tempRepo();
     alias.git("config", "url.https://github.com/.insteadOf", "gh:");
     alias.git("remote", "add", "origin", "gh:AJBeumer/faultforge-target.git");
-    expect(bash("git push --force origin main", alias.dir)).toMatch(/Force pushes/);
+    expect(bash("git push --force origin main", alias.dir)).toMatch(DOOR);
     const bare = mkdtempSync(join(tmpdir(), "guard-bare-"));
     execFileSync("git", ["init", "-q", "--bare", bare]);
     execFileSync("git", ["-C", bare, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git"]);
-    expect(bash("git push --force origin main", bare)).toMatch(/Force pushes/);
+    expect(bash("git push --force origin main", bare)).toMatch(DOOR);
   });
 });
 
 describe("holes Qodo found in the third version (PR 265, fixed here)", () => {
   it("reads an MCP input's text, so a word after a line break is still a word", () => {
     const input = { owner: "AJBeumer", repo: "faultforge-target", body: "Notes\nplanted bug" };
-    expect(verdict("mcp__github__add_comment", input)).toMatch(/says planted/);
+    expect(verdict("mcp__github__add_comment", input)).toMatch(DOOR);
     expect(verdict("mcp__github__add_comment", { body: "Notes\nx-secret-v1" })).toMatch(/still private/);
   });
 
   it("doesn't take a cd inside a quoted message as a move into private storage", () => {
     const priv = PRIVATE.replace(/\\/g, "/");
     expect(bash(`echo "x; cd ${priv}" && git commit -m "x-secret-v1"`)).toMatch(/still private/);
-  });
-
-  it("reads every file a piped cat is given", () => {
-    const dir = targetFolder("Small cleanup.\n");
-    writeFileSync(join(dir, "more.md"), "The planted bug\n");
-    expect(bash("cat body.md more.md | gh pr create --title Tidy --body-file -", dir)).toMatch(/says planted/);
   });
 
   it("doesn't take a destination built by the shell as private storage", () => {
@@ -473,7 +427,7 @@ describe("holes Qodo found in the third version (PR 265, fixed here)", () => {
     const clone = tempRepo();
     clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
     const dir = clone.dir.replace(/\\/g, "/");
-    expect(bash(`git --no-pager -C "${dir}" commit --allow-empty -m "Fix the planted bug"`)).toMatch(/says planted/);
-    expect(bash(`git -c core.pager=cat -C "${dir}" push --force origin main`)).toMatch(/Force pushes/);
+    expect(bash(`git --no-pager -C "${dir}" push origin main`)).toMatch(DOOR);
+    expect(bash(`git -c core.pager=cat -C "${dir}" push --force origin main`)).toMatch(DOOR);
   });
 });

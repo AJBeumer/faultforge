@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { FactoryConfig } from "./factory-config.ts";
+import type { Reviewed } from "../../../.claude/hooks/guard-repos.ts";
 import { type Gh, main } from "./target-post.ts";
 import type { Git } from "./target-post-push.ts";
 
@@ -12,20 +12,10 @@ mkdirSync(join(PRIVATE, "templates", "x-secret-v1"), { recursive: true });
 const ENV = { ...process.env, FAULTFORGE_PRIVATE_DIR: PRIVATE, FAULTFORGE_GUARD_PRIVATE_DIR: PRIVATE };
 const CHECKOUT = join(DIR, "app");
 
-const repo = (github: string, guard: "lab" | "reviewed", path: string) => ({
-  github,
-  path,
-  guard,
-  check: "npm run check",
-  tests: "x",
-  start: null,
-  tickets: { sections: ["What"], checklist: "What" },
-  board: false,
-});
-const FACTORY: FactoryConfig = {
-  evidence: "private/raw-artifacts",
-  repos: { lab: repo("Owner/lab", "lab", "."), target: repo("Owner/app", "reviewed", CHECKOUT) },
-};
+/** The reviewed repos, as the guard reads them from factory.json. */
+const APP: Reviewed = { github: "Owner/app", name: "app", folder: "app", checkout: CHECKOUT };
+const OTHER: Reviewed = { github: "Owner/other", name: "other", folder: "other", checkout: join(DIR, "other") };
+let REVIEWED: Reviewed[] = [APP];
 
 let files = 0;
 /** A text file with `text`, its path. */
@@ -92,7 +82,13 @@ function fakeGit(
 function run(argv: string[], deps: { gh?: Gh; git?: Git } = {}) {
   const out: string[] = [];
   const err: string[] = [];
-  const code = main(argv, { ...deps, env: ENV, factory: FACTORY, log: (l) => out.push(l), error: (l) => err.push(l) });
+  const code = main(argv, {
+    ...deps,
+    env: ENV,
+    reviewed: REVIEWED,
+    log: (l) => out.push(l),
+    error: (l) => err.push(l),
+  });
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
@@ -328,6 +324,20 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
     );
     expect(code).toBe(2);
     expect(fake.calls).toEqual([]);
+  });
+
+  it("asks for --repo when there is more than one reviewed repo, and never picks one itself (Qodo on PR 344)", () => {
+    REVIEWED = [APP, OTHER];
+    try {
+      const fake = fakeGh();
+      expect(run(["issue-comment", "--number", "2", "--body-file", file("ok")], { gh: fake.gh }).code).toBe(1);
+      expect(
+        run(["issue-comment", "--repo", "Owner/other", "--number", "2", "--body-file", file("ok")], fake).code,
+      ).toBe(0);
+      expect(fake.calls[0]?.args).toContain("github.com/Owner/other");
+    } finally {
+      REVIEWED = [APP];
+    }
   });
 
   it("names github.com in --repo, so GH_HOST can't send the post to another host", () => {

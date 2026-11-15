@@ -90,29 +90,16 @@ export function linkPattern(repos: Reviewed[]): RegExp | undefined {
  * `--git-dir`. The path may be relative, absolute or quoted, and the folder may be followed by a path
  * separator, a quote, whitespace or a shell operator (`;`, `&&`, `|`).
  */
-function checkoutPattern(repo: Reviewed, atSegmentStart: boolean): RegExp {
+function checkoutPattern(repo: Reviewed): RegExp {
   const folders = [repo.folder, repo.name].map(esc).join("|");
-  // Blanks after an operator, but not new lines: each new line is a lead of its own, and `\s*` there read a run of
-  // new lines again from every one of them, in time quadratic in its length (re-grade 7).
-  const lead = atSegmentStart ? "(?:^|[;&|\\n][^\\S\\n]*)" : "\\b";
   // `GIT_DIR=` and `GIT_WORK_TREE=` (or PowerShell's `$env:GIT_DIR =`) point git at a checkout too (AUD-M3).
-  const envLead = atSegmentStart ? lead : "(?:\\$env:|\\b)";
-  const into = `(?:${lead}(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|${lead}git\\s+${GIT_OPTIONS}-C\\s*|${lead}git\\s+${GIT_OPTIONS}--(?:work-tree|git-dir)[=\\s]\\s*|${envLead}GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;
+  const into = `(?:\\b(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|\\bgit\\s+${GIT_OPTIONS}-C\\s*|\\bgit\\s+${GIT_OPTIONS}--(?:work-tree|git-dir)[=\\s]\\s*|(?:\\$env:|\\b)GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;
   return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
 }
 
 /** True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. */
 export function entersCheckout(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, false).test(command);
-}
-
-/**
- * True only when the move into the checkout is a command of its own (at the start of the command or after a
- * shell operator), not words inside a message. The own-ticket link exemption needs this stricter form, so a
- * quoted `Set-Location <target>` in a commit message can't earn it.
- */
-export function navigatesInto(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo, true).test(command);
+  return checkoutPattern(repo).test(command);
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */

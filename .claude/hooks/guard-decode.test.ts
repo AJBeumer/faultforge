@@ -9,9 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { leetReadings, telltales } from "../../packages/harness/src/neutral.ts";
 import { hookFileProblem, MIN_HOOK_BYTES, run } from "./fail-closed.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { expandVariables, type RepositoryResolver, setRepositoryResolver, shellReading } from "./guard-expand.ts";
+import { expandVariables, type RepositoryResolver, setRepositoryResolver } from "./guard-expand.ts";
 import { privateIdMatcher } from "./guard-private.ts";
-import { rewritesHistory } from "./guard-reach.ts";
 import { decide } from "./guard-target.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
@@ -56,29 +55,19 @@ describe("a lab post is read as strictly as a post to a reviewed repo while priv
 });
 
 describe("ANSI-C strings and variables before the word and link checks (AUD-M3)", () => {
-  it("decodes $'…' before the giveaway words, to a reviewed repo", () => {
-    expect(verdict(String.raw`gh pr comment 3 -R ${T} -b $'pla\x6eted bug'`)).toMatch(/says planted/);
-  });
-
   it("decodes $'…' before the link check, from the lab", () => {
     expect(verdict(String.raw`gh issue create --title x --body $'${T}\x233'`, LAB, NO_PRIVATE)).toMatch(
       /link to the target/,
     );
   });
 
-  it("refuses a body from a variable the command doesn't set, posted to a reviewed repo", () => {
-    expect(verdict(`gh pr comment 3 -R ${T} -b "$MSG"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell variable, not a JS template
-    expect(verdict(`gh pr comment 3 -R ${T} -b "\${MSG}"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
-    // A literal '$MSG' in single quotes is text, not a variable.
-    expect(verdict(`gh pr comment 3 -R ${T} -b 'costs $MSG'`, LAB, NO_PRIVATE)).toBeUndefined();
-  });
-
   it("expands a variable the command sets, and judges the text it makes", () => {
     expect(verdict(`R=${T}; gh issue comment 3 --repo "$R" --body "planted bug"`, LAB, NO_PRIVATE)).toBeDefined();
     // A prefix doesn't set what the command's own words expand to: the variable stays unreadable.
     expect(verdict(`R=${T} gh issue comment 3 --repo "$R" --body "ok"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
-    expect(verdict(`M=pla gh pr comment 3 -R ${T} -b "\${M}nted bug"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
+    expect(verdict(`M=pla gh pr comment 3 -R ${T} -b "\${M}nted bug"`, LAB, NO_PRIVATE)).toMatch(
+      /go only through the door/,
+    );
     expect(expandVariables('A=x; B="y"; echo "$A$B ${A}"')).toBe('A=x; B="y"; echo "xy x"');
   });
 
@@ -88,35 +77,12 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
     expect(expandVariables("gh pr comment 3 -b 'R=safe $R'")).toBe("gh pr comment 3 -b 'R=safe $R'");
   });
 
-  it("reads every quoted part of a posted word, and lets an escaped dollar sign be (Qodo on PR 291)", () => {
-    expect(verdict(`gh pr comment 3 -R ${T} -b 'safe '"$MSG"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
-    expect(verdict(`gh pr comment 3 -R ${T} -b "costs \\$MSG"`, LAB, NO_PRIVATE)).toBeUndefined();
-  });
-
   it("posts a literal heredoc from the lab while private templates exist, and still finds an id in it (Qodo on PR 291)", () => {
     const body = (text: string) => `gh pr create --title Tidy --body "$(cat <<'EOF'\n${text}\nEOF\n)"`;
     expect(verdict(body("Small cleanup."))).toBeUndefined();
     expect(verdict(body("Demo with x-secret-v1."))).toMatch(/still private/);
     // The heredoc ends at its first delimiter line: a program after it runs, and is refused (Qodo on PR 291).
     expect(verdict(body("hi\nEOF\nprintf 'x-sec\\x72et-v1'"))).toBeDefined();
-  });
-
-  it("closes the second round's spellings (Qodo on PR 291)", () => {
-    // An apostrophe inside double quotes is a letter, not the start of literal text.
-    expect(verdict(`gh pr comment 3 -R ${T} -b "it's $MSG, isn't it"`, LAB, NO_PRIVATE)).toMatch(/shell variable/);
-    // gh's subcommand from a variable or ANSI-C could be alias.
-    expect(verdict("A=alias; gh $A set c 'pr merge'", LAB, NO_PRIVATE)).toMatch(/aliases/);
-    expect(verdict("gh $'alias' set c 'pr merge'", LAB, NO_PRIVATE)).toMatch(/aliases/);
-    // A bare value with a backslash isn't taken as written: the variable stays unreadable.
-    expect(expandVariables('M=pla\\nted; echo "$M"')).toBe('M=pla\\nted; echo "$M"');
-    // echo -e among other flags, printf \U and a quoted pipe before a format.
-    expect(verdict(`echo -n -e 'pla\\x6eted' | gh pr comment 3 -R ${T} --body-file -`, LAB, NO_PRIVATE)).toBeDefined();
-    expect(verdict(`printf 'x-sec\\U00000072et-v1' | gh pr create --title T --body-file -`)).toBeDefined();
-    expect(verdict(`printf 'a|b %s' x | gh pr comment 3 -R ${T} --body-file -`, LAB, NO_PRIVATE)).toBeDefined();
-    // PowerShell's $env:NAME set in the command is read as its value.
-    expect(expandVariables('$env:MSG = "ok"; gh pr comment 3 -b "$env:MSG"')).toBe(
-      '$env:MSG = "ok"; gh pr comment 3 -b "ok"',
-    );
   });
 
   it("closes the third round's spellings (Qodo on PR 291)", () => {
@@ -141,14 +107,16 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
   });
 
   it("reads a .git suffix and a percent-encoded route as the repo they name", () => {
-    expect(verdict(`gh pr comment 3 -R ${T}.git -b "planted bug"`, LAB, NO_PRIVATE)).toMatch(/says planted/);
+    expect(verdict(`gh pr comment 3 -R ${T}.git -b "planted bug"`, LAB, NO_PRIVATE)).toMatch(
+      /go only through the door/,
+    );
     expect(
       verdict(
         'gh api repos/AJBeumer/faultforge%2Dtarget/issues/3/comments -f body="planted bug FF-0012"',
         LAB,
         NO_PRIVATE,
       ),
-    ).toMatch(/says planted/);
+    ).toMatch(/go only through the door/);
   });
 });
 
@@ -175,7 +143,7 @@ describe("aliases, default repos and repository ids (AUD-M3)", () => {
       return id === "111" ? T : id === "222" ? "someone/else" : undefined;
     });
     const post = (id: string) => `gh api repositories/${id}/issues/3/comments -f body="planted bug FF-0012"`;
-    expect(verdict(post("111"), LAB, NO_PRIVATE)).toMatch(/says planted/);
+    expect(verdict(post("111"), LAB, NO_PRIVATE)).toMatch(/go only through the door/);
     expect(verdict(post("222"), LAB, NO_PRIVATE)).toBeUndefined();
     expect(verdict(post("333"), LAB, NO_PRIVATE)).toMatch(/couldn't tell which repo/);
     expect(asked).toEqual(["111", "222", "333"]);
@@ -204,10 +172,6 @@ describe("leetspeak (AUD-M3)", () => {
     expect(telltales("Fix the 404 on page 3")).toEqual([]);
   });
 
-  it("refuses a leetspeak post to a reviewed repo", () => {
-    expect(verdict(`gh pr comment 3 -R ${T} -b "pl@nted bug, plant3d"`, LAB, NO_PRIVATE)).toMatch(/says planted/);
-  });
-
   it("reads private ids in leetspeak too, and still tells a longer id apart", () => {
     const names = privateIdMatcher(["x-secret-v1"]);
     expect(names?.("x-s3cr3t-v1")).toBe(true);
@@ -234,26 +198,6 @@ describe("markup that renders as nothing can't split a word or an id (re-grade 7
     expect(verdict('gh pr create -R AJBeumer/faultforge -t Tidy -b "demo x-se<!---->cret-v1"')).toMatch(
       /name a bug template that is still private/,
     );
-  });
-
-  it.each([
-    ["an HTML comment", "plan<!-- -->ted bug"],
-    ["an entity", "pl&#97;nted bug"],
-    ["bold", "plan**ted** bug"],
-    ["a dot", "the answer.key"],
-  ])("refuses a post to a reviewed repo with a word split by %s", (_name, text) => {
-    expect(verdict(`gh pr comment 3 -R ${T} -b "${text}"`, LAB, NO_PRIVATE)).toMatch(/This would put a hint/);
-  });
-});
-
-describe("a force push built from a variable (AUD-M3)", () => {
-  it("is a force push in a reviewed checkout unless the command sets the flag to something harmless", () => {
-    expect(verdict("git push $FLAG origin main", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
-    // A prefix doesn't set what the push's own words expand to (Qodo on PR 291).
-    expect(verdict("FLAG=-u git push $FLAG origin x", TARGET_REPO.dir, NO_PRIVATE)).toMatch(/Force pushes/);
-    expect(rewritesHistory(shellReading("FLAG=--force; FLAG=-u git push $FLAG origin x"), true)).toBe(true);
-    // Set on its own, to a harmless flag, it reads as that flag.
-    expect(rewritesHistory(shellReading("FLAG=-u; git push $FLAG origin x"), true)).toBe(false);
   });
 });
 

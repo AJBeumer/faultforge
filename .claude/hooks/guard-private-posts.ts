@@ -69,5 +69,5 @@ export function checkPrivateFiles(ctx: Context, command: string) {
 }
 
 /** The denial for a post whose text is a shell variable the command doesn't set. */
-export const UNREADABLE_VARIABLE =
+const UNREADABLE_VARIABLE =
   "This post's text comes from a shell variable the command doesn't set, so the guard can't read it. Write the text in the command, or in a file passed with --body-file.";

@@ -1,6 +1,6 @@
 /**
  * Where a command reaches and what kind of write it is: the GitHub repos it names as destinations, whether it
- * posts or pushes at all, and whether a push rewrites or deletes history. Split out of guard-target.ts
+ * writes at all, whether it sends to a remote, and whether it switches git's own guard off. Split out of guard-target.ts
  * (AUD-M3). Every test here reads the command with its quote marks removed (`joinedWords`), so `"--force"`,
  * `gi''t` and `'+main'` read as the shell runs them.
  */
@@ -74,15 +74,80 @@ export function graphqlMutation(command: string): boolean {
   return rawApiWrite(command) && /api\.github\.com\/graphql\b/i.test(joinedWords(command));
 }
 
-/** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */
-export function rawApiWrite(command: string): boolean {
-  const words = joinedWords(command);
+/** The HTTP clients the guard reads: curl, wget, PowerShell's web calls, httpie and xh. */
+export const HTTP_CLIENT =
+  /(?:^|[\s/\\])(curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|https?|xh)(?:\.exe)?(?=\s|$)/i;
+
+/**
+ * True when an HTTP client's arguments send something: a body, a form, an upload, or a method other than GET or
+ * HEAD (#340). curl's short options are read alone or combined (`-d`, `-sd`, `-sX POST`, `-XPOST`) and in their own
+ * case, so `-f`, `-D` and `-x` stay reads; a PowerShell parameter (`-Headers`) is a word, not a cluster. A long option
+ * or a PowerShell parameter counts by any start of its name, as wget and PowerShell take one (`--post-d`, `-Me`,
+ * `-Bo`), and a bare method word (`POST`) counts anywhere. httpie and xh send a body for a data item (`key=value`,
+ * `key:=json`, `field@file`, `@file`) or a method word.
+ */
+export function httpSends(client: string, args: string[]): boolean {
+  const method = (value: string) => !/^(GET|HEAD)$/i.test(value);
+  const shell = /^(irm|iwr|Invoke-RestMethod|Invoke-WebRequest)$/i.test(client);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (/^(POST|PUT|PATCH|DELETE)$/i.test(a)) return true;
+    // A long option, or a PowerShell parameter, by any unambiguous start of a name that sends.
+    const long = shell ? /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a) : /^--([a-z][\w-]{2,})(?:=(.*))?$/.exec(a);
+    if (long) {
+      const name = (long[1] ?? "").toLowerCase();
+      const sends = (shell ? PS_SENDS : LONG_SENDS).filter((full) => full.startsWith(name));
+      if (sends.some((full) => !/^(method|request|custommethod)$/.test(full))) return true;
+      if (sends.length && method(long[2] ?? args[i + 1] ?? "")) return true;
+      continue;
+    }
+    const short = /^-([a-zA-Z]+)(.*)$/.exec(a);
+    if (/^curl/i.test(client) && short && !/^[A-Z][a-z]{2,}/.test(short[1] ?? "")) {
+      const letters = short[1] ?? "";
+      const x = letters.indexOf("X");
+      const data = letters.search(/[dFT]/);
+      if (data >= 0 && (x < 0 || data < x)) return true;
+      if (x >= 0 && method(`${letters.slice(x + 1)}${short[2] ?? ""}` || (args[i + 1] ?? ""))) return true;
+    }
+  }
+  if (!/^(https?|xh)$/i.test(client)) return false;
+  const items = args.filter((a) => !a.startsWith("-"));
   return (
-    wordThen(words, /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b/i, /github\.com/i) &&
-    /(?:\s-X\s*\w|--request|\s-d\b|--data|--json|--form|\s-F\b|-Method|-Body|-InFile|--post-data|--post-file|--body-file|--upload-file|\s-T\b|--method|\s(?:POST|PATCH|PUT|DELETE)\b)/i.test(
-      words,
-    )
+    args.some((a) => /^(--form|-f|--raw|--multipart)$/.test(a)) ||
+    /^(POST|PUT|PATCH|DELETE)$/i.test(items[0] ?? "") ||
+    items.some((a) => !/:\/\//.test(a) && /^(?:@|[^=:@\s]+(?:==?|:=|:=@|=@|@))/.test(a))
   );
+}
+
+/** The long options of curl, wget and httpie that send a body or choose a method. */
+const LONG_SENDS = [
+  "data",
+  "data-ascii",
+  "data-binary",
+  "data-raw",
+  "data-urlencode",
+  "json",
+  "form",
+  "form-string",
+  "upload-file",
+  "post-data",
+  "post-file",
+  "body-data",
+  "body-file",
+  "method",
+  "request",
+];
+/** PowerShell's web-call parameters that send a body or choose a method, in lower case. */
+const PS_SENDS = ["method", "custommethod", "body", "infile", "form"];
+
+/** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */
+function rawApiWrite(command: string): boolean {
+  return segments(joinedWords(command)).some(({ text }) => {
+    const client = HTTP_CLIENT.exec(text);
+    if (!client) return false;
+    const after = text.slice(client.index + client[0].length);
+    return /github\.com/i.test(after) && httpSends(client[1] ?? "", after.trim().split(/\s+/));
+  });
 }
 
 /**
@@ -96,10 +161,24 @@ export function isWrite(command: string): boolean {
   return writes(joinedWords(command), command) || (unescaped !== command && writes(joinedWords(unescaped), command));
 }
 
+/**
+ * True when the command makes a gh or raw API write. With a push (guard-door.ts reads git's own subcommand for
+ * that), that is everything that sends to a remote; a commit, tag or note stays in the checkout until a push sends
+ * it.
+ */
+export function isSend(command: string): boolean {
+  const unescaped = command.replace(/\\(?=[\w-])/g, "");
+  return sends(joinedWords(command), command) || (unescaped !== command && sends(joinedWords(unescaped), command));
+}
+
 /** True when `c`, the command with its quotes removed, writes to a repo; `command` is as written. */
 function writes(c: string, command: string): boolean {
+  return gitSteps(c, /\b(commit|push|tag|notes|send-pack)\b/).length > 0 || sends(c, command);
+}
+
+/** True when `c`, the command with its quotes removed, makes a gh or raw API write; `command` is as written. */
+function sends(c: string, command: string): boolean {
   return (
-    gitSteps(c, /\b(commit|push|tag|notes|send-pack)\b/).length > 0 ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge|develop|lock|unlock|transfer|pin|delete)\b/.test(
       c,
     ) ||
@@ -107,62 +186,12 @@ function writes(c: string, command: string): boolean {
     /\bgh\s+(label|release)\s+(create|edit|upload|clone)\b/.test(c) ||
     /\bgh\s+repo\s+(edit|rename|create|delete|archive|unarchive|sync|fork)\b/.test(c) ||
     /\bgh\s+(workflow\s+run|run\s+rerun|gist\s+(create|edit)|secret\s+set|variable\s+set)\b/.test(c) ||
-    (/\bgh\s+api\b/.test(c) && /(\s-X\s*\w|--method|\s-[fF]|--field|--raw-field|--input|\bgraphql\b)/.test(c)) ||
+    // A method other than GET or HEAD, a field, an input or GraphQL: `-X GET` reads.
+    (/\bgh\s+api\b/.test(c) &&
+      (/(\s-[fF]|--field|--raw-field|--input|\bgraphql\b)/.test(c) ||
+        /(?:\s-X\s*=?\s*|--method[=\s]+)(?!(?:GET|HEAD)\b)\w/i.test(c))) ||
     rawApiWrite(command)
   );
-}
-
-/**
- * True when a push in the command could rewrite or delete history: `--force` in any spelling (`-f`, `-fu`,
- * `-uf`, `--force-with-lease`, `--force-if-includes`), a `+` refspec, `--mirror`, `--delete` or `-d`, a
- * `:branch` refspec (a delete), `--prune`, or `git send-pack` (AUD-M3). With `variablesForce`, the command as
- * the shell reads it with its own variables expanded, a word a variable still builds (`$FLAG`) counts too: it
- * could be `--force`, and only a value the command sets shows it isn't (#285).
- */
-export function rewritesHistory(command: string, variablesForce = false): boolean {
-  const c = joinedWords(command).replace(/\\(?=\w)/g, "");
-  if (gitSteps(c, /\bsend-pack\b/).length) return true;
-  return gitSteps(c, /\bpush\b/).some((step) => {
-    const args = step.text.slice(step.text.search(/\bpush\b/) + 4);
-    if (variablesForce && /\$\{?[A-Za-z_]|\$\(/.test(args)) return true;
-    return /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
-      args,
-    );
-  });
-}
-
-/**
- * True when the command rewrites or deletes a ref through GitHub's API, where no git hook runs (re-grade 5): a
- * `gh api` write to `git/refs/<ref>` (an existing ref: PATCH moves it, DELETE removes it), any `git/refs` write
- * with a `force` field, a GraphQL `updateRef`, `updateRefs` or `deleteRef`, or `gh repo sync --force`. Creating
- * a new ref (`POST git/refs`) and reading refs stay allowed. `files` are the texts the command posts from files
- * (a GraphQL query read with `-F query=@q.graphql` or `--input`; Qodo on PR 329).
- */
-export function rewritesRefs(command: string, files: string[] = []): boolean {
-  const c = joinedWords(command).replace(/\\(?=\w)/g, "");
-  const refMutation = /\b(?:updateRefs?|deleteRef)\b/;
-  // A query file's comments and string values are no fields: a read that mentions a mutation in them is a read.
-  const fields = files.map((text) => text.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/#[^\n]*/g, ""));
-  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...fields].some((text) => refMutation.test(text))) return true;
-  return segments(c).some(({ text }) => {
-    if (/\bgh\s+repo\s+sync\b/.test(text)) return /\s--force\b/.test(text);
-    const gh = /\bgh\s+api\b/.exec(text);
-    if (!gh) return false;
-    const args = text.slice(gh.index);
-    // Any owner and name, gh's `{owner}/{repo}` and `:owner/:repo` placeholders included (Qodo on PR 329).
-    const route = /(?:^|\s|=)\/?repos\/[^/\s]+\/[^/\s]+\/git\/refs(\/\S*)?/.exec(args);
-    if (!route) return false;
-    // Every method flag, in any spelling (`-X=DELETE`, `-X GET -X DELETE`): any write among them counts.
-    const methods = [...args.matchAll(/(?:\s-X\s*=?\s*|\s--method[=\s]+)(\w+)/g)].map((m) =>
-      (m[1] ?? "").toUpperCase(),
-    );
-    const sends = /\s-[fF]|--field|--raw-field|--input/.test(args);
-    const writes = methods.length ? methods.some((m) => !/^(GET|HEAD)$/.test(m)) : sends;
-    if (!writes) return false;
-    // `git/refs/heads/x` names an existing ref; `git/refs` alone, with or without a trailing slash, is the list.
-    const existing = Boolean(route[1] && route[1] !== "/");
-    return existing || /\bforce\s*=/.test(args);
-  });
 }
 
 /**

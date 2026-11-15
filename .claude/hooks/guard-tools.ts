@@ -4,9 +4,9 @@
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { addressesQodo, QODO_REASON, telltales } from "../../packages/harness/src/neutral.ts";
+import { telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutEdit } from "./guard-answer-key.ts";
-import { mcpCaseProblem } from "./guard-cases.ts";
+import { doorReason, mcpReads } from "./guard-door.ts";
 import { builtText, referencedFiles, stdinFiles } from "./guard-files.ts";
 import { gitFolderEdit } from "./guard-hooks.ts";
 import { outsidePostedText, postedArguments, STDIN_BODY, stringsIn } from "./guard-posted.ts";
@@ -20,7 +20,6 @@ import {
   linkPattern,
   locate,
   type Reviewed,
-  stripReviewedNames,
   within,
 } from "./guard-repos.ts";
 import { selfFileEdit } from "./guard-self.ts";
@@ -119,7 +118,8 @@ function outsideEveryCheckout(ctx: Context, path: string): boolean {
 
 /**
  * An MCP tool (one outside Bash and the file tools) is judged by its input as a whole (AUD-N9): no MCP
- * input may name a private template, and when one names a reviewed repo nothing in it may give the lab away.
+ * input may name a private template, and one that names a reviewed repo may only read it. Writes to a reviewed
+ * repo go through the door (#340); the guard doesn't read what an MCP write would say.
  */
 export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   // The input's own text, every string value on its own line: JSON escapes would hide a word after a line
@@ -127,13 +127,7 @@ export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   const text = stringsIn(args).join("\n");
   if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const repo = ctx.reviewed.find((r) => new RegExp(`${esc(r.github)}|\\b${esc(r.name)}\\b`, "i").test(text));
-  if (!repo) return;
-  const found = telltales(stripReviewedNames(ctx.reviewed, text));
-  if (found.length) deny(`${tool} would put a hint into ${repo.name} (${found.join(", ")}).`);
-  if (addressesQodo(text)) deny(QODO_REASON);
-  // Nor may it merge a case PR or move a case branch, as the shell may not (Qodo on PR 337).
-  const action = mcpCaseProblem(ctx.env, tool, args ?? {}, repo);
-  if (action) deny(action);
+  if (repo && !mcpReads(tool)) deny(doorReason(repo.name));
 }
 
 /**

@@ -1,14 +1,17 @@
 /**
  * Claude Code PreToolUse hook. Keeps the reviewed repositories free of hints for the reviewer.
  *
- * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. For each, it blocks:
- *  - force pushes, pushes that delete or mirror, and API calls that move or delete a ref
- *  - commits, pushes, PRs, comments and API writes whose text, or whose posted files, name the lab or the bug
- *  - file edits by the Edit and Write tools whose new content does the same
- *  - any `git commit` or `git push`, wherever it runs, while a reviewed checkout holds pending content
- *    (staged, unstaged or untracked for a commit; unpushed commits for a push) that names the lab or the bug.
- *    Shell text can't show what a redirect, a copy or a script wrote, so the content is read from git at
- *    the moment it would travel. That is the guarantee; the text checks are the early warning.
+ * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. Every write to one goes through
+ * one door, `npm run target:post` (`packages/harness/src/target-post.ts`), which checks the exact text it sends
+ * (#340). So for each reviewed repo this hook:
+ *  - lets a command that is exactly `npm run target:post -- …` through, without reading it (guard-door.ts);
+ *  - refuses every other command that sends to it: a push, a gh call that isn't a known read, a gh or raw API
+ *    write, or a write whose destination it can't read. It doesn't read what such a write would say;
+ *  - refuses script files that could write to it, which it can't read either;
+ *  - keeps git's own guard hooks on in its checkout and its recorded case branches in place, and refuses a commit or
+ *    push anywhere while its checkout holds pending content that names the lab or the bug (guard-pending.ts);
+ *  - refuses a local commit message there that names the lab or the bug, as git's commit-msg hook does, and Edit
+ *    and Write content in its checkout that does; and MCP tools that write to it.
  * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
  * (cd, pushd, Set-Location, git -C, git --work-tree, GIT_DIR=), or runs from inside it. A checkout is
  * recognised by its folder name or by a remote that points at the repo (guard-repos.ts).
@@ -16,10 +19,9 @@
  * to any repo but private storage, that names a template still held in private storage (guard-private.ts).
  * Everywhere, it blocks code it can't read before it runs (shell-exec.ts): text built at run time run as a
  * shell (`… | base64 -d | bash`, `bash -c "$(…)"`, `eval`), and inline interpreter code that makes a network
- * call (`node -e "fetch(…)"`), which could post without gh. Since re-grade 6 it also keeps the guard's own files as
- * they are in the checkout it runs from (guard-self.ts), keeps the answer key, the audit log and private templates
- * in private storage and out of every commit (guard-answer-key.ts), and keeps recorded case PRs unmerged, their
- * branches in place and Qodo unaddressed in a reviewed repo (guard-cases.ts).
+ * call (`node -e "fetch(…)"`). It keeps the guard's own files as they are in the checkout it runs from
+ * (guard-self.ts), and the answer key, the audit log and private templates in private storage and out of every
+ * commit (guard-answer-key.ts).
  *
  * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
  * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
@@ -30,47 +32,25 @@
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
 
-import { addressesQodo, QODO_REASON, telltales } from "../../packages/harness/src/neutral.ts";
+import { telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./guard-answer-key.ts";
 import { caseActionProblem } from "./guard-cases.ts";
-import {
-  chainProblem,
-  DEFAULT_BUDGET_MS,
-  withDeadline,
-  withPrivateCopies,
-  withPrivateNames,
-  writerStep,
-} from "./guard-content.ts";
-import {
-  aliasProblem,
-  shellReading,
-  UnknownRepository,
-  unreadableDestination,
-  unreadablePost,
-} from "./guard-expand.ts";
-import { BuiltText, referencedFiles, scriptProblem, Unreadable } from "./guard-files.ts";
-import { historyProblem } from "./guard-history.ts";
+import { DEFAULT_BUDGET_MS, withDeadline, withPrivateCopies, withPrivateNames } from "./guard-content.ts";
+import { doorCommand, doorReason, sendsRaw, UNKNOWN_DESTINATION, webToUnknown } from "./guard-door.ts";
+import { aliasProblem, shellReading, UnknownRepository, unreadableDestination } from "./guard-expand.ts";
+import { BuiltText, scriptProblem, Unreadable } from "./guard-files.ts";
+import { calls, historyProblem } from "./guard-history.ts";
 import { guardSwitchOff } from "./guard-hooks.ts";
 import { pendingProblem } from "./guard-pending.ts";
 import { outsidePostedText } from "./guard-posted.ts";
 import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
-import { checkPrivateFiles, checkPrivateIds, postedPieces, UNREADABLE_VARIABLE } from "./guard-private-posts.ts";
-import {
-  explicitDestinations,
-  graphqlMutation,
-  isWrite,
-  rawApiWrite,
-  rewritesHistory,
-  rewritesRefs,
-  skipsGitGuard,
-  urlDestinations,
-} from "./guard-reach.ts";
+import { checkPrivateFiles, checkPrivateIds, postedPieces } from "./guard-private-posts.ts";
+import { explicitDestinations, graphqlMutation, isWrite, skipsGitGuard, urlDestinations } from "./guard-reach.ts";
 import {
   entersCheckout,
   locate,
   MAX_MOVES,
   moveCount,
-  navigatesInto,
   navigationTargets,
   type Reviewed,
   reviewedRepos,
@@ -170,6 +150,8 @@ function isChained(command: string): boolean {
  * `readable`: a variable left in it is one the command doesn't set.
  */
 function checkShell(ctx: Context, command: string) {
+  // The door checks what it sends itself (#340): exactly `npm run target:post -- …`, from the lab, passes unread.
+  if (doorCommand(command, ctx.cwd)) return;
   const alias = aliasProblem(command);
   if (alias) deny(alias);
   // Code no rule can read before it runs, wherever the command runs (#299): built text run as a shell, and
@@ -187,7 +169,7 @@ function checkShell(ctx: Context, command: string) {
   const names = ctx.names;
   const inline = codes.flatMap((code) => interpreterPipelines(code, ctx.backticks));
   if (names && inline.some((code) => names(code) || names(joinedWords(code)))) deny(PRIVATE_ID_REASON);
-  // A script file can post without gh too: read where it could reach a reviewed repo (re-grade 5).
+  // A script file can write without gh too: refused where it could reach a reviewed repo (re-grade 5, #340).
   const script = scriptProblem(ctx.cwd, joined, ctx.reviewed, Boolean(ctx.env.FAULTFORGE_FACTORY_RUN), ctx.backticks);
   if (script) deny(script);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
@@ -236,7 +218,7 @@ function reach(ctx: Context, command: string, writes: boolean) {
         (!realDestinations.length && isHere(r)),
     )
     .map((r) => entered.find((e) => e.github === r.github) ?? (isHere(r) && here ? here : r));
-  return { destinations, touched, mutation, isHere, runsIn: (r: Reviewed) => anywhere || isHere(r) || enters(r) };
+  return { destinations, touched, runsIn: (r: Reviewed) => anywhere || isHere(r) || enters(r) };
 }
 
 function checkCommand(ctx: Context, command: string, readable: boolean) {
@@ -249,9 +231,12 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   if (moveCount(command) > MAX_MOVES) {
     deny(`This command moves between folders more than ${MAX_MOVES} times, more than the guard follows. Split it.`);
   }
-  const writes = isWrite(command);
-  if (writes && readable && unreadableDestination(command))
-    deny("This write names its repo with a shell variable the command doesn't set. Name the repo as owner/name.");
+  const sends = sendsRaw(command, ctx.cwd, ctx.backticks);
+  const writes = sends || isWrite(command);
+  // A write whose repo the guard can't read may be aimed at a reviewed repo: refused, as it can't tell (#340).
+  if (writes && readable && (unreadableDestination(command) || webToUnknown(command, ctx.cwd, ctx.backticks))) {
+    deny(UNKNOWN_DESTINATION);
+  }
   // Whether or not the command reads as a write: a gist or a release found as the shell reads its words is one,
   // however it is spelled (`g\h gist create`; Qodo on PR 310).
   checkPrivateFiles(ctx, command);
@@ -265,11 +250,10 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     labCommitProblem(ctx, command);
   if (own) deny(own);
   if (writes) checkPrivateIds(ctx, command, readable);
-  const { destinations, touched, mutation, isHere, runsIn } = reach(ctx, command, writes);
+  const { destinations, touched, runsIn } = reach(ctx, command, writes);
 
   // Reading a shell command with patterns can't be complete, so a command that writes and involves
-  // more than one repo must be split: each part then gets judged on its own. A chain that stays in
-  // one repo (cd target && git add && git commit && git push) is fine.
+  // more than one repo must be split: each part then gets judged on its own.
   if (writes && isChained(command)) {
     const involved = new Set(destinations);
     for (const r of ctx.reviewed) if (runsIn(r)) involved.add(r.github.toLowerCase());
@@ -289,69 +273,37 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     return;
   }
 
+  // The door rule (#340): nothing is sent to a reviewed repo but through `npm run target:post`.
+  if (sends) deny(doorReason(repo.name));
+  // What stays local to its checkout: git's own guard hooks run, and recorded case branches stay in place.
   if (skipsGitGuard(command)) {
     deny(`In ${repo.name}, git's own guard hooks must run: no --no-verify, no commit -n, and no other core.hooksPath.`);
   }
-  // A flag from a variable the command doesn't set (`git push $FLAG`) could be --force (#285).
-  // GitHub's API moves and deletes refs too, where no git hook runs (re-grade 5). Only a GraphQL call's files are
-  // read for it: `grep -F x` names no posted file (Qodo on PR 329).
-  const queries = /\bgraphql\b/.test(command) ? referencedFiles(ctx.cwd, command) : [];
-  if (rewritesHistory(command, readable) || rewritesRefs(command, queries)) {
-    deny(
-      `Force pushes to ${repo.name} are not allowed, nor pushes or API calls that delete, mirror or move a ref: its history is evidence for recorded cases.`,
-    );
-  }
-  if (rawApiWrite(command)) {
-    deny(`Post to ${repo.name} with gh, where the guard can read the text, not with a raw API call.`);
-  }
-  // A case PR is never merged, nor its recorded branch deleted or moved (re-grade 6: Q23, Q24, H15).
   for (const r of touched) {
     const action = caseActionProblem(ctx, command, r);
     if (action) deny(action);
   }
-
-  // Inside a reviewed checkout, a chain that mentions git may hold only steps that can't change the
-  // checkout's content behind the guard's back (it looks before the command runs): no copies, redirects,
-  // scripts or shell functions in the same command as a commit or push. Those run first, on their own.
-  // A post counts too: an earlier step could rewrite the file it reads after the guard looked (Qodo on PR 266).
-  const git = /\bgit\b/.test(joinedWords(command));
-  if (isChained(command) && (writes || git)) {
-    // In a chained post, npm and gh steps could write the file it reads too (`npm exec`, `gh run download`).
-    const step = chainProblem(command, !git) ?? (git ? undefined : writerStep(command));
-    if (step !== undefined) {
+  // Links still go one way: a commit's message may link only to the repo whose checkout its git calls all run in,
+  // wherever the command starts (`git -C <other checkout>`; Qodo on PR 344). One that only names a reviewed repo in
+  // its text (a fake `--repo`) is a lab commit, judged as one (Qodo, 77c1f44).
+  if (writes) {
+    const homes = new Set(
+      calls(command, ctx.cwd, ctx.backticks)
+        .filter((call) => call.program === "git")
+        .map((call) => (call.dir === undefined ? undefined : locate(call.dir, ctx.reviewed)?.github)),
+    );
+    const home = homes.size === 1 ? [...homes][0] : undefined;
+    checkLinks(ctx, command, home ? ctx.reviewed.filter((r) => r.github !== home) : ctx.reviewed);
+    // A local commit's, tag's or note's own message is read as git's commit-msg hook reads it: an early refusal,
+    // and the denial the factory's hook self-test probes for (factory-hooks.ts). Each piece on its own.
+    const found = [...new Set(postedPieces(ctx, command, true).flatMap((piece) => telltales(piece)))];
+    if (found.length) {
       deny(
-        `In ${repo.name}, a command that writes files or hides a command ("${step.slice(0, 60)}") must run on its own, and the commit or push in a separate command: the guard checks the checkout's content before a command runs, and can't see what an earlier part of the same command would write.`,
+        `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
       );
     }
   }
-  if (!writes) return;
-  // A body from a variable the command doesn't set (`-b "$MSG"`) can't be read before it is posted (#285).
-  if (readable && unreadablePost(command)) deny(UNREADABLE_VARIABLE);
-
-  // A reviewed repo may link to its own tickets only when the command really runs in its checkout (the
-  // hook's folder, or a `cd`/`git -C` that is a command of its own) and goes nowhere else. Words in a
-  // message (a quoted --repo or a quoted Set-Location, say) can't grant that.
-  const onlyItself =
-    touched.length === 1 &&
-    !mutation &&
-    (isHere(repo) || navigatesInto(command, repo)) &&
-    destinations.every((d) => d === repo.github.toLowerCase());
-  checkLinks(ctx, command, onlyItself ? ctx.reviewed.filter((r) => r.github !== repo.github) : ctx.reviewed);
-
-  // Each piece is judged on its own: a title ending in one word and a body starting with the next must
-  // not join into a phrase that neither field holds.
-  const pieces = postedPieces(ctx, command, true);
-  const found = [...new Set(pieces.flatMap((piece) => telltales(piece)))];
-  if (found.length) {
-    deny(
-      `This would put a hint into ${repo.name} (${found.join(", ")}). Rewrite it so it reads like an ordinary change.`,
-    );
-  }
-  // Nor a word to Qodo, on any PR or issue there (re-grade 6: Q25, Q26).
-  if (pieces.some(addressesQodo)) deny(QODO_REASON);
-
-  // The command's own text is clean; now what would travel: the content pending in every reviewed
-  // checkout, read from git, whatever the text says about where it runs.
+  // A commit there is checked against what it would carry, read from git (guard-pending.ts).
   const pending = pendingProblem(ctx.reviewed, command, touched);
   if (pending) deny(pending);
 }
