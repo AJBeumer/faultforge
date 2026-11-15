@@ -301,7 +301,7 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
         "/bin/sh",
         [
           "-c",
-          `"${claude}" -p "Reply with OK" --output-format json > "${file}" 2>&1; echo "exit $?"; cat "${file}"; id; ls -la "$HOME" "$HOME/.claude" 2>&1 | head -30; tail -n 60 "$HOME"/.claude/debug/*.txt 2>&1 | cut -c1-300`,
+          `tty; echo "stdin: $(readlink /proc/self/fd/0)"; "${claude}" -p "Reply with OK" --output-format json < /dev/null > "${file}" 2>&1; echo "nulled exit $?"; cat "${file}"; GITHUB_ACTIONS=true "${claude}" -p "Reply with OK" --output-format json < /dev/null > "${file}" 2>&1; echo "gha exit $?"; cat "${file}"; ps -o pid,pgid,sid,tty,stat,comm -u "$(id -un)" 2>&1 | head; ls -t "$HOME"/.claude/debug/ | head -3`,
         ],
         { env: agentLike },
       );
