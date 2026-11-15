@@ -89,14 +89,15 @@ export function checkRun(run: ClaimedRun, outcome: AgentOutcome, minutes: number
     outcome.agent,
     outcome.result,
     (pr) => {
-      // The files that decide the check, compared by the runner itself before the PR can count (#341).
-      const weakened = checkFilesProblems(deps, ws, pick, pr, owner, outcome.from, log);
       const verification = deps.verifyPr(ws, pick.repoKey, pr);
       log("verified", {
         pr,
         problems: verification.problems,
         revertCheckRecord: verification.revertCheckRecord ?? null,
       });
+      // Then the files that decide the check, compared by the runner itself at the commit it just verified,
+      // before the PR can count (#341). GitHub's PR ref can lag a push, so the verified commit comes first.
+      const weakened = checkFilesProblems(deps, ws, pick, pr, verification.head, owner, outcome.from, log);
       return { ...verification, problems: [...weakened, ...verification.problems] };
     },
     pick.github,

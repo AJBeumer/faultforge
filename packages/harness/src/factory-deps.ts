@@ -225,13 +225,14 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         mode === "ci",
       );
     },
-    checkFiles(ws, repoKey, pr) {
+    checkFiles(ws, repoKey, pr, head) {
       const repo = factory.repos[repoKey];
       return readCheckFiles(
         repo?.checkFiles,
         `https://github.com/${repo?.github}.git`,
         ws.mainAtStart[repoKey],
         pr,
+        head,
         join(runs, `check-files-${basename(ws.root)}-${repoKey}-pr${pr}`),
       );
     },

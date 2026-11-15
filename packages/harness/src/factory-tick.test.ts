@@ -445,13 +445,29 @@ describe("tick: stop paths", () => {
       "agent-started",
       "agent-finished",
       "audited",
-      "check-files",
       "verified",
+      "check-files",
       "finished",
       "saved",
       "cleanup",
     ]);
     expect(f.events.find((e) => e.event === "check-files")).toMatchObject({ pr: 19, outcome: "unchanged" });
+  });
+
+  it("compares the check's files at the commit the runner verified, not at whatever GitHub shows (#341)", async () => {
+    const seen: (string | undefined)[] = [];
+    const f = fake(
+      { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
+      {
+        verifyPr: () => ({ problems: [], head: "d".repeat(40) }),
+        checkFiles: (_ws, _repo, _pr, head) => {
+          seen.push(head);
+          return { base: "b".repeat(40), head: head ?? "", changed: [] };
+        },
+      },
+    );
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(seen).toEqual(["d".repeat(40)]);
   });
 
   describe("the files that decide the check (#341)", () => {

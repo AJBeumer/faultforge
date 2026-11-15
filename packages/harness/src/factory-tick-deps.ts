@@ -79,7 +79,7 @@ export interface TickDeps {
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
   /** The files that decide the check which differ between the run's base and the PR's head, read by the runner
    * from GitHub, never from the agent's worktree (#341, `factory-check-files.ts`). */
-  checkFiles(ws: Workspace, repoKey: string, pr: number): CheckFilesReading;
+  checkFiles(ws: Workspace, repoKey: string, pr: number, head?: string): CheckFilesReading;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];
   /** Saves the run log (and the agent's transcript) to the private repo, and publishes what's allowed. */

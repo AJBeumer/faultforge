@@ -139,13 +139,14 @@ export function checkFilesProblems(
   ws: Workspace,
   ticket: { repoKey: string; github: string; number: number },
   pr: number,
+  head: string | undefined,
   owner: string,
   agentStarted: string,
   log: Logger,
 ): string[] {
   let reading: CheckFilesReading;
   try {
-    reading = deps.checkFiles(ws, ticket.repoKey, pr);
+    reading = deps.checkFiles(ws, ticket.repoKey, pr, head);
   } catch (error) {
     reading = { error: error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error) };
   }
@@ -162,36 +163,63 @@ export function checkFilesProblems(
   return verdict.problems;
 }
 
+const COMMIT = /^[0-9a-f]{40}$/i;
+const NO_OBJECT = /^0+$/;
+
+/**
+ * Each differing path's object id on each side, from `git diff --raw --no-abbrev -z`: records of
+ * `:<mode> <mode> <id> <id> <status>` and the path, each ending in NUL. An all-zero id means the file isn't on
+ * that side (added or removed). Throws on output it can't read, so the caller fails closed.
+ */
+export function rawDiff(output: string): Map<string, { base: string | null; head: string | null }> {
+  const parts = output.split("\0");
+  const blobs = new Map<string, { base: string | null; head: string | null }>();
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const fields = (parts[i] ?? "").replace(/^\s*:/, "").split(" ");
+    const path = parts[i + 1] ?? "";
+    const [base, head] = [fields[2] ?? "", fields[3] ?? ""];
+    if (fields.length < 5 || !path || !/^[0-9a-f]+$/i.test(base) || !/^[0-9a-f]+$/i.test(head)) {
+      throw new Error(`couldn't read git's list of changed files near "${parts[i]}"`);
+    }
+    blobs.set(path, { base: NO_OBJECT.test(base) ? null : base, head: NO_OBJECT.test(head) ? null : head });
+  }
+  // Whole records leave one empty string after the last NUL; anything else is a record cut off.
+  if (parts.length % 2 !== 1 || parts.at(-1) !== "") throw new Error("git's list of changed files ended early");
+  return blobs;
+}
+
 /**
  * Reads the check-defining changes of pull request `pr` against `base`, in a new repository at `dir` fetched
- * from `remoteUrl`, and removes `dir` again. Never throws: a failure is the reading's `error`.
+ * from `remoteUrl`, and removes `dir` again. `verified` is the commit the runner verified (the agent's last
+ * push); without one, the PR's ref as GitHub shows it now. Never throws: a failure is the reading's `error`.
  */
 export function readCheckFiles(
   config: CheckFilesConfig | undefined,
   remoteUrl: string,
   base: string | undefined,
   pr: number,
+  verified: string | undefined,
   dir: string,
 ): CheckFilesReading {
   if (!config) return { error: "factory.json has no checkFiles setting for this repo" };
-  if (!base || !/^[0-9a-f]{40}$/i.test(base)) return { error: "no commit id for main when the run started" };
+  if (!base || !COMMIT.test(base)) return { error: "no commit id for main when the run started" };
+  if (verified !== undefined && !COMMIT.test(verified)) return { error: "the verified head isn't a commit id" };
   try {
     mkdirSync(dir, { recursive: true });
     const git = (args: string[], timeout = CALL_TIMEOUT_MS) => gitIsolated(dir, dir, args, timeout);
     git(["init", "-q"]);
-    git(["fetch", "-q", "--no-tags", "--depth=1", remoteUrl, `refs/pull/${pr}/head`], LONG_CALL_TIMEOUT_MS);
+    git(["fetch", "-q", "--no-tags", "--depth=1", remoteUrl, verified ?? `refs/pull/${pr}/head`], LONG_CALL_TIMEOUT_MS);
     const head = git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"]);
     git(["fetch", "-q", "--no-tags", "--depth=1", remoteUrl, base], LONG_CALL_TIMEOUT_MS);
     git(["cat-file", "-e", `${base}^{commit}`]);
-    const differing = git(["diff", "--name-only", "--no-renames", "-z", base, head]).split("\0").filter(Boolean);
+    const blobs = rawDiff(git(["diff", "--raw", "--no-abbrev", "--no-renames", "-z", base, head]));
+    // A side's object id is null only where git says the file isn't there. Any failure to read a blob that is
+    // there (one too big for the output buffer, say) throws, so the reading is `unread`, never "unchanged".
     const read = (side: "base" | "head", path: string): string | null => {
-      try {
-        return git(["cat-file", "blob", `${side === "base" ? base : head}:${path}`]);
-      } catch {
-        return null;
-      }
+      const id = blobs.get(path)?.[side];
+      return id ? git(["cat-file", "blob", id]) : null;
     };
-    return { base, head, changed: changedCheckFiles(config, differing, read) };
+    return { base, head, changed: changedCheckFiles(config, [...blobs.keys()], read) };
   } catch (error) {
     return { error: error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error) };
   } finally {
