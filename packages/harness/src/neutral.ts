@@ -3,8 +3,13 @@
  * branch names, commit messages, PR titles and bodies, comments, and file contents.
  * Shared by the inject command and the Claude Code guard hook.
  */
+const LAB_REASON = "names the lab";
+
 const TELLTALES: [RegExp, string][] = [
-  [/\bfault[\s_-]*forge\b(?!-target)/i, "names the lab"],
+  // The lab's name wherever a word could start: after a separator, a digit or a camel-case join, with anything
+  // after it (`faultforge_private`, `FaultForgeLab`, `faultforge2`; re-grade 5). Read on the text with its
+  // camel-case joins split too (`joinsSplit`). Only the target's own name, `faultforge-target`, passes.
+  [/(?:^|[^a-z])fault[\s_-]*forge(?!-target)/i, LAB_REASON],
   // Two-word phrases match with a space, a hyphen or an underscore between the words, as branch names
   // write them, and in either case (#190).
   [/\bsabot(ag\w*|eurs?)\b/i, "says sabotage"],
@@ -126,14 +131,26 @@ export function leetReadings(text: string): string[] {
 }
 
 /**
+ * The text with each camel-case join read as two words (`FaultForgeLab` reads `Fault Forge Lab`; re-grade 5),
+ * so a pattern that looks for a word's start finds one inside a joined name.
+ */
+export function joinsSplit(text: string): string {
+  return text.replace(/([a-z])(?=[A-Z])/g, "$1 ").replace(/([A-Z])(?=[A-Z][a-z])/g, "$1 ");
+}
+
+/**
  * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
  * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242), and
- * neither can digits written for letters (#285).
+ * neither can digits written for letters (#285). The lab's name is also read with camel-case joins split
+ * (re-grade 5); the other words are not, so code such as `clientMutationId` stays ordinary.
  */
 export function telltales(text: string): string[] {
   const seen = normalizeLookalikes(text);
   const readings = [seen, ...leetReadings(seen)];
-  return TELLTALES.filter(([pattern]) => readings.some((reading) => pattern.test(reading))).map(([, reason]) => reason);
+  const split = readings.map(joinsSplit);
+  return TELLTALES.filter(([pattern, reason]) =>
+    (reason === LAB_REASON ? [...readings, ...split] : readings).some((reading) => pattern.test(reading)),
+  ).map(([, reason]) => reason);
 }
 
 /**

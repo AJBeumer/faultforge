@@ -15,7 +15,7 @@
  */
 import { decodeAnsiC } from "./shell-decode.ts";
 import { subprocessCode } from "./shell-interp.ts";
-import { substitutions } from "./shell-scan.ts";
+import { blankQuoted, substitutions } from "./shell-scan.ts";
 import { programAt, programName, type Step, steps, words } from "./shell-words.ts";
 
 export {
@@ -117,4 +117,55 @@ function builtCode(command: string, backticks: boolean, depth = 0): boolean {
 /** Why the command may not run because it runs text built at run time as shell code, or undefined. */
 export function builtCodeProblem(command: string, backticks = true): string | undefined {
   return builtCode(command, backticks) ? BUILT_CODE_REASON : undefined;
+}
+
+/**
+ * True when a program in the command passes on text it reads from a file or a pipe as arguments, where the
+ * guard never sees it (re-grade 5): `xargs` (it always reads its input), `parallel` given anything but `:::`
+ * words, and a `--post-file` (wget), which posts a file's bytes.
+ */
+export function argumentsFromInput(command: string, backticks = true): boolean {
+  if (/(?:^|\s)--post-file\b/.test(blankQuoted(command))) return true;
+  return steps(command, backticks).some((step) => {
+    const all = words(step.text);
+    const { at, xargs } = programAt(all);
+    if (xargs) return true;
+    if (programName(all[at] ?? "") !== "parallel") return false;
+    const args = all.slice(at + 1);
+    const fromFile = args.some((w) => /^(::::\+?|-a|--arg-file|--a)$|^--arg-file=|^-a\S/.test(w));
+    return step.piped || fromFile || /<(?!<)/.test(blankQuoted(step.text)) || !args.includes(":::");
+  });
+}
+
+/** Programs that run a script file named as their first argument that isn't an option. */
+const SCRIPT_RUNNERS =
+  /^(node|nodejs|tsx|ts-node|deno|bun|python[\d.]*|py|pypy[\d.]*|ruby|perl|php|lua|Rscript|bash|sh|zsh|dash|ksh|pwsh|powershell)$/i;
+
+/**
+ * The script files the command runs (re-grade 5): the first word after a script runner (`node post.mjs`,
+ * `npx tsx x.ts`, `python3 -u post.py`, `deno run x.ts`, `pwsh -File x.ps1`) that isn't one of its options. A
+ * runner given inline code (`-e`, `-c`, `-Command`) or nothing runs no file; that code is judged elsewhere.
+ */
+export function scriptFiles(command: string, backticks = true): string[] {
+  return steps(command, backticks).flatMap((step) => {
+    const all = words(step.text);
+    const { at } = programAt(all);
+    const name = programName(all[at] ?? "");
+    if (!SCRIPT_RUNNERS.test(name)) return [];
+    let i = at + 1;
+    if (/^(deno|bun)$/.test(name) && /^(run|x)$/.test(all[i] ?? "")) i++;
+    for (; i < all.length; i++) {
+      const word = all[i] ?? "";
+      if (/^-(e|c|p|m|-eval|-print|Command|EncodedCommand|ec)$/i.test(word)) return [];
+      if (/^-File$/i.test(word)) continue;
+      // An option's value: node's `--require x`, `--import x`, `--loader x`; python's `-W x`, `-X x`.
+      if (/^(-r|--require|--import|--loader|--experimental-loader|-W|-X)$/.test(word)) {
+        i++;
+        continue;
+      }
+      if (word.startsWith("-") || /^[<>]/.test(word)) continue;
+      return [unquote(word)];
+    }
+    return [];
+  });
 }

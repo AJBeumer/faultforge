@@ -62,10 +62,12 @@ export function commitSteps(command: string): string[] {
 
 /**
  * Every message value in one `git commit` step, `-m`, `--message`, or `m` at the end of combined short
- * flags such as `-am`: git joins them into one message.
+ * flags such as `-am`, and every `--trailer` (re-grade 5): git joins them into one message. A message file
+ * (`-F`, `--file`) or a template (`-t`, `--template`) is read by `referencedFiles`.
  */
 export function commitMessages(step: string): string[] {
-  const pattern = /(?:^|\s)(?:-[A-Za-z]*m|--message)(?=[\s="']|$)[\s=]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g;
+  const pattern =
+    /(?:^|\s)(?:-[A-Za-z]*m|--message|--trailer)(?=[\s="']|$)[\s=]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g;
   return [...step.matchAll(pattern)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 }
 
@@ -79,12 +81,12 @@ export function postedArguments(command: string): string[] {
 
 /**
  * A flag that posts text, with its value. `--subject` is a merge commit's title, `--notes` a release's,
- * `--description` a label's (#190). Their short forms (`-n`, `-d`) mean other things to git, so only the long
+ * `--description` a label's (#190), `--trailer` a line git adds to a commit message (re-grade 5). Their short forms (`-n`, `-d`) mean other things to git, so only the long
  * ones are read here; text after a short one is still in the whole-command check.
  */
 function postedFlagValue(): RegExp {
   const flag =
-    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|(?:-f|-F|--field|--raw-field)[\s=]*[\w.[\]-]+=)[\s=]*/;
+    /(?:^|\s)(?:-m|--message|-t|--title|-b|--body|--subject|--notes|--description|--trailer|(?:-f|-F|--field|--raw-field)[\s=]*[\w.[\]-]+=)[\s=]*/;
   const value = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/;
   return new RegExp(`${flag.source}(?:${value.source})`, "g");
 }

@@ -6,7 +6,8 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { postedRanges, STDIN_BODY } from "./guard-posted.ts";
-import { navigationTargets } from "./guard-repos.ts";
+import { entersCheckout, esc, locate, navigationTargets, type Reviewed } from "./guard-repos.ts";
+import { argumentsFromInput, scriptFiles } from "./shell-exec.ts";
 import { blankQuoted, gitSteps, quotedMask, substitutions } from "./shell-scan.ts";
 
 /** The most a posted file may hold: read in well under the hook's time limit (Qodo on PR 233). */
@@ -226,6 +227,13 @@ export function builtText(
       "This post's text may come from a program the guard can't check before it runs. Write the text to a file and pass it with --body-file.",
     );
   }
+  // xargs and parallel turn what they read from a file or a pipe into arguments, and `--post-file` posts a file's
+  // bytes: text the guard never sees (re-grade 5).
+  if (strict && argumentsFromInput(command, backticks)) {
+    throw new BuiltText(
+      "This post takes its text from input that xargs, parallel or --post-file reads, which the guard can't check before it runs. Write the text to a file and pass it with --body-file.",
+    );
+  }
   if (strict && stdin) {
     const producer = pipedInto(command);
     // A reader must name its files: a bare `cat` passes on whatever is piped into it (Qodo on PR 266).
@@ -268,4 +276,48 @@ function pipedInto(command: string): string | undefined {
     before.lastIndexOf("|", stepStart - 1),
   );
   return before.slice(producerStart + 1, stepStart).trim();
+}
+
+/** Text in a script that could post to GitHub: its API hosts, GraphQL, an API client, or a run of gh or git. */
+const WRITE_API =
+  /\b(?:api|uploads)\.github\.com\b|\bgithub\.com\/[\w.-]+\/[\w.-]+|\bgraphql\b|\boctokit\b|\bgh\s+(?:api|pr|issue|release|repo|gist|label|workflow)\b|["'`](?:gh|git)(?:\.exe)?["'`]|\bgit\s+push\b|\b(?:GH|GITHUB)_TOKEN\b/i;
+
+/**
+ * Why a script file the command runs can't be let through, or undefined (re-grade 5). The guard can't judge
+ * what a script posts, so where a run could reach a reviewed repo (inside its checkout, after a move into one,
+ * or anywhere in an unattended factory run, `run`) a script is refused when it can't be read, or when its text
+ * names a reviewed repo or something that writes to GitHub. The file is never named: its path could hold a
+ * private id. Elsewhere the owner's own scripts run as they are.
+ */
+export function scriptProblem(
+  cwd: string,
+  command: string,
+  reviewed: Reviewed[],
+  run: boolean,
+  backticks: boolean,
+): string | undefined {
+  const near =
+    run ||
+    locate(cwd, reviewed) !== undefined ||
+    navigationTargets(command, cwd).some((path) => locate(path, reviewed)) ||
+    reviewed.some((r) => entersCheckout(command, r));
+  if (!near) return undefined;
+  const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
+  for (const file of scriptFiles(command, backticks)) {
+    let texts: string[] = [];
+    try {
+      texts = /[$`%*?]/.test(file) ? [] : readPosted(cwd, command, file);
+    } catch {
+      texts = [];
+    }
+    const why = !texts.length
+      ? "the guard can't read it"
+      : texts.some((t) => names.test(t) || WRITE_API.test(t))
+        ? "it names a reviewed repo or a GitHub write API, and the guard can't judge what it would post"
+        : undefined;
+    if (why) {
+      return `This runs a script where it could post to a reviewed repo, and ${why}. Post with gh in the command itself, where the guard reads the text.`;
+    }
+  }
+  return undefined;
 }

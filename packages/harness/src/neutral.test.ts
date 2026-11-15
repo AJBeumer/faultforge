@@ -159,3 +159,37 @@ describe("telltales read look-alike and invisible characters as a reader sees th
     expect(telltales("Filter bookings by status")).toEqual([]);
   });
 });
+
+describe("telltales read the lab's name inside a joined word (re-grade 5)", () => {
+  it.each([
+    "faultforge_private",
+    "faultforge_lab",
+    "FaultForgeLab",
+    "myFaultForge",
+    "faultforgelab",
+    "faultforge2",
+    "2faultforge",
+    "FAULTFORGE_PRIVATE",
+    "FaultFORGE",
+    "fault_forge",
+  ])("flags %s", (text) => {
+    expect(telltales(`see ${text}`)).toContain("names the lab");
+  });
+
+  it.each([
+    "faultforge-target",
+    "AJBeumer/faultforge-target",
+    "the default forge settings",
+    "defaultForge",
+    "a fault for get",
+  ])("lets %s through", (text) => {
+    expect(telltales(text)).toEqual([]);
+  });
+});
+
+describe("camel-case joins are split only for the lab's name (re-grade 5)", () => {
+  it("leaves code such as clientMutationId and answerKeys alone", () => {
+    expect(telltales("addComment { clientMutationId }")).toEqual([]);
+    expect(telltales("const answerKeys = []")).toEqual([]);
+  });
+});

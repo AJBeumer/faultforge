@@ -187,3 +187,19 @@ describe("the git-level guard keeps the reviewed repo's history, however the pus
     expect(status("push", "-q", "origin", "main")).toBe(0);
   }, 60_000);
 });
+
+describe("the lab's own hooks, run by git itself (re-grade 5)", () => {
+  it("refuse a commit or a push that links a target issue or PR, and allow plain text", () => {
+    const { dir, git, status } = guarded();
+    installHooks(dir, SCRIPT, "lab");
+    const link = `${["AJBeumer", "faultforge-target"].join("/")}#3`;
+    const head = git("rev-parse", "HEAD");
+    expect(status("commit", "-q", "--allow-empty", "-m", `Tidy\n\nRefs ${link}`)).not.toBe(0);
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(status("commit", "-q", "--allow-empty", "-m", "Tidy for target 3")).toBe(0);
+    expect(status("push", "-q", "origin", "main")).toBe(0);
+    // A commit made around the commit hooks is still read when it is pushed.
+    expect(status("commit", "-q", "--no-verify", "--allow-empty", "-m", `Tidy ${link}`)).toBe(0);
+    expect(status("push", "-q", "origin", "main")).not.toBe(0);
+  }, 60_000);
+});
