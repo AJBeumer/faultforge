@@ -216,6 +216,18 @@ export function applyTestChange(targetDir: string, change: TestChange): boolean 
   return false;
 }
 
+/**
+ * A case commit's body (#321): the first sentence of the template's ticket `what`, on one line, ending in a full
+ * stop unless it ends in other punctuation, so case commits carry a body as ordinary commits do. A full stop
+ * ends a sentence only before a space or the end, so `v1.2` stays whole. The ticket's text is already public on
+ * the target and checked for giveaways with the rest of the template.
+ */
+export function commitBody(what: string): string {
+  const line = what.replace(/\s+/g, " ").trim();
+  const sentence = /^.*?[.!?](?=\s|$)/.exec(line)?.[0] ?? line;
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
 /** Every proof the variant must break: the template's own invariant, plus whatever it breaks as collateral. */
 export function proofsOf(template: Template): Proof[] {
   return template.kind === "bug"

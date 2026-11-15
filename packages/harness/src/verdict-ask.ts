@@ -123,3 +123,20 @@ export function printControlFindings(log: (line: string) => void, findings: Matc
   }
   log(`control: ${findings.length} finding${findings.length === 1 ? "" : "s"}, each for the owner to judge`);
 }
+
+/** The question `verdict` and `verdict:amend` ask after a reason, word for word. */
+export const DRAFTED_QUESTION = "Did you write this reason yourself? (y/n) ";
+
+/** Who drafted a verdict's reason: the owner, or an agent the owner read it from. */
+export type ReasonDraftedBy = "owner" | "agent";
+
+/**
+ * Whether the owner wrote the reason just given (#321): `y` or `yes` is the owner, `n` or `no` an agent. Asked
+ * again on any other answer, blank included, and undefined after a few tries: there is no default, so the
+ * caller records nothing.
+ */
+export async function askDraftedBy(ask: AskFn): Promise<ReasonDraftedBy | undefined> {
+  const answer = await askOneOf(ask, DRAFTED_QUESTION, ["y", "yes", "n", "no"]);
+  if (answer === undefined) return undefined;
+  return answer.startsWith("y") ? "owner" : "agent";
+}

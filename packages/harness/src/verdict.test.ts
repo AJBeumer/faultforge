@@ -6,6 +6,7 @@ import { eventProblems } from "./ledger-append.ts";
 import { applyMatchRule } from "./match-rule.ts";
 import { findSavedReview, type SavedFinding, toMatchFinding } from "./saved-review.ts";
 import { type AskFn, parseCliArgs, printReport, type RunOptions, run } from "./verdict.ts";
+import { DRAFTED_QUESTION } from "./verdict-ask.ts";
 import { latestVerdict, normalReason, reasonsOfOtherCases } from "./verdict-event.ts";
 
 const TEMPLATE = {
@@ -96,11 +97,16 @@ function fixture(
   return root;
 }
 
-/** A fake prompt that returns each of `answers` in turn, recording every question asked. */
-function fakeAsk(answers: string[]): { ask: AskFn; questions: string[] } {
+/**
+ * A fake prompt that returns each of `answers` in turn, recording every question asked. Whether the owner wrote
+ * the reason is answered `drafted` ("y" unless a test says otherwise) without taking one of `answers`, and isn't
+ * recorded as a question: the tests that count questions predate it (#321).
+ */
+function fakeAsk(answers: string[], drafted = "y"): { ask: AskFn; questions: string[] } {
   const questions: string[] = [];
   let i = 0;
   const ask: AskFn = async (question: string) => {
+    if (question === DRAFTED_QUESTION) return drafted;
     questions.push(question);
     const answer = answers[i];
     i++;
@@ -264,6 +270,63 @@ describe("npm run verdict: the event it appends", () => {
     });
     expect(appended[0]).not.toHaveProperty("supersedes");
     expect(out).toContain("recorded: FF-0001 confirmed_detected");
+  });
+
+  it("asks who wrote the reason, right after it, and records the answer as reasonDraftedBy (#321)", async () => {
+    for (const [answer, drafted] of [
+      ["y", "owner"],
+      ["Y", "owner"],
+      ["yes", "owner"],
+      ["n", "agent"],
+      ["no", "agent"],
+    ] as const) {
+      const asked: string[] = [];
+      const answers = ["detected", "Qodo named the lines and the replay", answer, "real", "the planted bug"];
+      let i = 0;
+      const ask: AskFn = async (question) => {
+        asked.push(question);
+        return answers[i++] ?? "";
+      };
+      const { code, appended } = await runOn("FF-0001", fixture(), { ask });
+      expect(code).toBe(0);
+      expect(asked[2]).toBe("Did you write this reason yourself? (y/n) ");
+      expect(appended[0]).toMatchObject({ reason: "Qodo named the lines and the replay", reasonDraftedBy: drafted });
+      expect(eventProblems(appended[0])).toEqual([]);
+    }
+  });
+
+  it("has no silent default: a blank or other answer is asked again, then nothing is recorded (#321)", async () => {
+    const { ask } = fakeAsk(["detected", "Qodo named the lines", "real", "r"], "");
+    const { code, err, appended } = await runOn("FF-0001", fixture(), { ask });
+    expect(code).toBe(2);
+    expect(err).toContain("who wrote the reason");
+    expect(appended).toEqual([]);
+    const maybe = await runOn("FF-0001", fixture(), {
+      ask: fakeAsk(["detected", "a reason", "real", "r"], "maybe").ask,
+    });
+    expect(maybe.code).toBe(2);
+  });
+
+  it("keeps every earlier event valid: reasonDraftedBy is optional in the schema, and only owner or agent (#321)", () => {
+    const event = {
+      eventId: "e1",
+      type: "case.adjudicated",
+      at: "2026-11-10T12:00:00.000Z",
+      caseId: "FF-0001",
+      commit: GROUND_TRUTH_ENTRY.injectionCommit,
+      by: "AJBeumer",
+      tool: "faultforge-harness@1.0.0",
+      environment: "win32-x64-node24",
+      inputHash: "a".repeat(64),
+      reviewFile: "raw-artifacts/reviews/x.review.json",
+      disposition: "confirmed_detected",
+      reason: "r",
+      judgements: [],
+    };
+    expect(eventProblems(event)).toEqual([]);
+    expect(eventProblems({ ...event, reasonDraftedBy: "owner" })).toEqual([]);
+    expect(eventProblems({ ...event, reasonDraftedBy: "agent" })).toEqual([]);
+    expect(eventProblems({ ...event, reasonDraftedBy: "someone" })).not.toEqual([]);
   });
 
   it("records a real judgement and an open one (blank) for the two other findings; a blank answer asks for no reason", async () => {
@@ -712,7 +775,7 @@ describe("npm run verdict: what Qodo found on PR 267", () => {
           join(root, "audit-events.jsonl"),
           verdictLine({ eventId: "rival", at: "2026-11-10T11:58:00.000Z" }),
         );
-      return ["detected", "found it", "real", "r"][n++] ?? "";
+      return ["detected", "found it", "y", "real", "r"][n++] ?? "";
     };
     const { code, err, appended } = await runOn("FF-0001", root, { ask });
     expect(code).toBe(2);
@@ -759,13 +822,13 @@ describe("npm run verdict: round two on PR 267", () => {
     const root = fixture();
     let n = 0;
     const ask = async () => {
-      if (n === 3) {
+      if (n === 4) {
         appendFileSync(
           join(root, "audit-events.jsonl"),
           `${JSON.stringify({ eventId: "o", type: "case.adjudicated", caseId: "FF-0002", at: "2026-11-10T11:59:00.000Z", reason: "found it" })}\n`,
         );
       }
-      return ["detected", "found it", "real", "r"][n++] ?? "";
+      return ["detected", "found it", "y", "real", "r"][n++] ?? "";
     };
     const { code, err } = await runOn("FF-0001", root, { ask });
     expect(code).toBe(2);

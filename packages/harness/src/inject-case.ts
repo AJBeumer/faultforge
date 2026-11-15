@@ -19,6 +19,7 @@ import { git as gitIn, readJsonl, run as runCommand, runProof, runStep, type Ste
 import {
   applyMutation,
   applyTestChange,
+  commitBody,
   loadTemplate,
   loadTemplates,
   type Proof,
@@ -233,7 +234,8 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
       checksFailure(checks, validateOnly);
 
     if (!failure && !validateOnly) {
-      git("commit", "--quiet", "--all", "-m", template.publish.commitMessage);
+      // A body as ordinary commits have, from the ticket the PR closes (#321): only new cases change.
+      git("commit", "--quiet", "--all", "-m", template.publish.commitMessage, "-m", commitBody(template.ticket.what));
       injectionCommit = git("rev-parse", "HEAD");
     }
   } finally {
