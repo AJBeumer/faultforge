@@ -4,6 +4,7 @@
  * (AUD-M3). Every test here reads the command with its quote marks removed (`joinedWords`), so `"--force"`,
  * `gi''t` and `'+main'` read as the shell runs them.
  */
+import { githubRepos } from "./guard-repos.ts";
 import { blankQuoted, gitSteps, joinedWords, segments } from "./shell-scan.ts";
 
 const REPO = String.raw`([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s?#)]|$)`;
@@ -25,7 +26,6 @@ export function explicitDestinations(command: string): string[] {
     /\bgh\s+repo\s+[\w-]+\s+["']?([\w.-]+\/[\w.-]+)/gi,
     // An API route, with or without a path after the repo: `repos/o/n -X PATCH` edits the repo itself.
     new RegExp(String.raw`\brepos\/${REPO}`, "gi"),
-    /\bgh\s+(?:pr|issue)\s+\w+\s+["']?https:\/\/github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s]|$)/gi,
   ];
   const named = patterns.flatMap((pattern) => [...command.matchAll(pattern)].map((m) => (m[1] ?? "").toLowerCase()));
   // `gh repo <verb>` takes its repo as a plain argument anywhere among its flags, in any quoting (Qodo on PR 266).
@@ -38,10 +38,12 @@ export function explicitDestinations(command: string): string[] {
       : [],
   );
   named.push(...repoArgs);
-  // A URL given to git, one git step at a time so the cost stays linear (AUD-M4).
-  const remote = new RegExp(String.raw`github\.com[/:]${REPO}`, "gi");
+  // An issue or PR URL as gh's first argument, in any spelling of GitHub's host (re-grade 4).
+  for (const m of command.matchAll(/\bgh\s+(?:pr|issue)\s+\w+\s+["']?(\S+)/gi)) named.push(...githubRepos(m[1] ?? ""));
+  // A URL given to git, in any spelling (`ssh://git@ssh.github.com:443/o/n`; re-grade 4), one git step at a
+  // time so the cost stays linear (AUD-M4).
   const urls = gitSteps(command, /\b(?:push|pull|fetch|clone|remote|send-pack)\b/).flatMap((step) =>
-    [...step.text.matchAll(remote)].map((m) => (m[1] ?? "").toLowerCase()),
+    githubRepos(step.text),
   );
   // gh takes `owner/name.git` for `owner/name` (#285).
   return [...named, ...urls].map((repo) => repo.replace(/\.git$/, ""));
@@ -54,10 +56,9 @@ export function explicitDestinations(command: string): string[] {
  */
 export function urlDestinations(outside: string): string[] {
   // Only in a gh step: a URL another program is given (a script's argument, say) is not where gh posts.
-  const url = new RegExp(String.raw`github\.com[/:]+${REPO}`, "gi");
   return segments(joinedWords(outside)).flatMap((part) => {
     const gh = /\bgh\s/.exec(part.text);
-    return gh ? [...part.text.slice(gh.index).matchAll(url)].map((m) => (m[1] ?? "").toLowerCase()) : [];
+    return gh ? githubRepos(part.text.slice(gh.index)) : [];
   });
 }
 

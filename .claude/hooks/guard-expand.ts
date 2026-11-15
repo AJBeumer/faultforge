@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { outsidePostedText, postedRanges } from "./guard-posted.ts";
 import { isWrite } from "./guard-reach.ts";
 import { decodeAnsiC } from "./shell-decode.ts";
-import { joinedWords, quotedMask, quotedSpans } from "./shell-scan.ts";
+import { joinContinuations, joinedWords, quotedMask, quotedSpans } from "./shell-scan.ts";
 
 /** A variable's name in shell text: `$NAME`, `${NAME}`, PowerShell's `$env:NAME`. Not `$(`, `$1` or `$?`. */
 export const VARIABLE = /\$\{?[A-Za-z_]\w*/;
@@ -138,11 +138,12 @@ export function nameRepositories(command: string, timeoutMs = 4000): string {
 }
 
 /**
- * The command as the shell would read it: ANSI-C decoded, its own variables expanded, routes decoded, and
- * (for a write) repository ids named. Equal to the command when none of those apply.
+ * The command as the shell would read it: line continuations joined (re-grade 4), ANSI-C decoded, its own
+ * variables expanded, routes decoded, and (for a write) repository ids named. Equal to the command when none of
+ * those apply.
  */
 export function shellReading(command: string, timeoutMs?: number): string {
-  const read = decodeRoutes(expandVariables(decodeAnsiC(command)));
+  const read = decodeRoutes(expandVariables(decodeAnsiC(joinContinuations(command))));
   // A write in either reading: `-X $M` with `M=PUT` is one only once expanded (Qodo on PR 291).
   return isWrite(command) || isWrite(read) ? nameRepositories(read, timeoutMs) : read;
 }
