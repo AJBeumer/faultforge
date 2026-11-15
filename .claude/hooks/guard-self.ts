@@ -1,7 +1,8 @@
 /**
  * The guard's own code, in the checkout it runs from (re-grade 6, H12, H14, H18). The hooks Claude Code and git run
  * are the files in that checkout: `.claude/hooks/**`, the settings that register them (`.claude/settings.json`,
- * `.claude/settings.local.json`) and the word list they import (`packages/harness/src/neutral.ts`). An owner
+ * `.claude/settings.local.json`), the word list they import (`packages/harness/src/neutral.ts`) and the door every
+ * write to a reviewed repo goes through (`packages/harness/src/target-post*.ts`, #340). An owner
  * session that rewrote one of them, emptied it or deleted it would switch the guard off for every later command,
  * git's commits and pushes included. So no shell command and no Write or Edit changes them there. The repo's main
  * checkout is held too when the guard runs from a linked worktree: later sessions run from there.
@@ -56,6 +57,10 @@ export const OWN_FILES = [
   ".claude/settings.json",
   ".claude/settings.local.json",
   "packages/harness/src/neutral.ts",
+  // The door: the guard lets `npm run target:post` through unread because these check what it sends (#340).
+  "packages/harness/src/target-post.ts",
+  "packages/harness/src/target-post-push.ts",
+  "packages/harness/src/target-post-cli.ts",
 ];
 
 /** Programs that write, delete or change the mode of the files they name. */
@@ -111,7 +116,7 @@ export function relation(path: string, root: string, cache = new Map<string, str
 }
 
 /** The deny reason for a change to the guard's own files. */
-export const SELF_EDIT = `This would change the guard's own files (.claude/hooks, .claude/settings*.json or neutral.ts) in the checkout it runs from, which would switch it off. Change them through a PR from another worktree; for a change in this checkout the owner unlocks it by hand (${UNLOCK_FILE} in its git folder).`;
+export const SELF_EDIT = `This would change the guard's own files (.claude/hooks, .claude/settings*.json, neutral.ts or the target-post door) in the checkout it runs from, which would switch it off. Change them through a PR from another worktree; for a change in this checkout the owner unlocks it by hand (${UNLOCK_FILE} in its git folder).`;
 
 export const UNLOCK_NAMED =
   "This names the guard's unlock file. Only the owner makes or removes it, by hand, outside a session.";

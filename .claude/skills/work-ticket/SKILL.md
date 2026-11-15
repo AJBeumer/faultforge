@@ -11,7 +11,7 @@ Arguments: a repo key from `factory.json` and a ticket number, e.g. `target 4` o
 
 Read `CLAUDE.md` first. In the target, also follow its `AGENTS.md`. This skill is for ordinary work. Planted-bug cases use `/new-case`.
 
-In an interactive session, every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set) the keys are already in the environment: `gh` and `review:wait` pick them up by themselves. Don't look for a token file, and never name, read, print or export a key. Run commands for a `reviewed` repo on their own, never chained with commands for another repo, and from inside its checkout: `cd <path> && gh pr create --repo <github> ...`. The guard allows a reviewed repo's PR or issue to link to its own tickets (such as `Ticket: <link>`) only when the command runs in that checkout, and refuses any command that writes to more than one repo.
+In an interactive session, every `gh` call uses the owner's one GitHub token, exported as `GH_TOKEN` from the token file whose location is kept in the agent's memory, outside this repo. Never print it, and never write its location into a repo file. In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set) the keys are already in the environment: `gh` and `review:wait` pick them up by themselves. Don't look for a token file, and never name, read, print or export a key. Every write to a `reviewed` repo goes through one door, `npm run target:post` ([docs/target-door.md](../../../docs/target-door.md)), run on its own from this repository's root: issues, comments, PRs, closing a PR and pushing a branch. Write the title and body to files first, then pass the files: `npm run target:post -- pr-create --head <branch> --title-file <f> --body-file <f>`, `npm run target:post -- push --branch <branch>`. The door checks the exact text it sends, and exits 2 with the reason if anything would give the lab away. The guard refuses every other write to a reviewed repo (`gh issue`/`gh pr` writes, `gh api` writes, `curl` and the like, `git push`) without reading it. Reads (`gh pr view`, `gh api` GETs, `git fetch`, `git log`) and commits in its checkout work as usual. Commands for a reviewed repo still run on their own, never chained with commands for another repo.
 
 ## 1. Read the ticket
 
@@ -36,7 +36,7 @@ In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set), the runner has a
 
 ## 3. Open the PR
 
-The title is the commit message. The body must give the reviewer the request alongside the change:
+The title is the commit message. For a `reviewed` repo, push and open it through the door (above): `npm run target:post -- push --branch <branch>`, then `npm run target:post -- pr-create --head <branch> --title-file <f> --body-file <f>`. The body must give the reviewer the request alongside the change:
 
 ```markdown
 Closes #N

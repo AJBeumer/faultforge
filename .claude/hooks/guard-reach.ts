@@ -1,6 +1,6 @@
 /**
  * Where a command reaches and what kind of write it is: the GitHub repos it names as destinations, whether it
- * posts or pushes at all, and whether a push rewrites or deletes history. Split out of guard-target.ts
+ * writes at all, whether it sends to a remote, and whether it switches git's own guard off. Split out of guard-target.ts
  * (AUD-M3). Every test here reads the command with its quote marks removed (`joinedWords`), so `"--force"`,
  * `gi''t` and `'+main'` read as the shell runs them.
  */
@@ -75,7 +75,7 @@ export function graphqlMutation(command: string): boolean {
 }
 
 /** True when the command sends a write to GitHub with something other than `gh`: curl, wget, PowerShell's web calls. */
-export function rawApiWrite(command: string): boolean {
+function rawApiWrite(command: string): boolean {
   const words = joinedWords(command);
   return (
     wordThen(words, /\b(?:curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b/i, /github\.com/i) &&
@@ -96,10 +96,25 @@ export function isWrite(command: string): boolean {
   return writes(joinedWords(command), command) || (unescaped !== command && writes(joinedWords(unescaped), command));
 }
 
+/**
+ * True when the command sends something to a remote: a push, or any gh or raw API write. A commit, tag or note is a
+ * write too (`isWrite`), but one that stays in the checkout until a push sends it.
+ */
+export function isSend(command: string): boolean {
+  const unescaped = command.replace(/\\(?=[\w-])/g, "");
+  return sends(joinedWords(command), command) || (unescaped !== command && sends(joinedWords(unescaped), command));
+}
+
 /** True when `c`, the command with its quotes removed, writes to a repo; `command` is as written. */
 function writes(c: string, command: string): boolean {
+  return gitSteps(c, /\b(commit|tag|notes)\b/).length > 0 || sends(c, command);
+}
+
+/** True when `c`, the command with its quotes removed, sends to a remote; `command` is as written. */
+function sends(c: string, command: string): boolean {
   return (
-    gitSteps(c, /\b(commit|push|tag|notes|send-pack)\b/).length > 0 ||
+    // A push as its own word: `pre-push` in a hook's path is no push.
+    gitSteps(c, /(?<![\w./-])(push|send-pack)\b/).length > 0 ||
     /\bgh\s+(pr|issue)\s+(create|edit|comment|review|close|reopen|merge|develop|lock|unlock|transfer|pin|delete)\b/.test(
       c,
     ) ||
@@ -110,59 +125,6 @@ function writes(c: string, command: string): boolean {
     (/\bgh\s+api\b/.test(c) && /(\s-X\s*\w|--method|\s-[fF]|--field|--raw-field|--input|\bgraphql\b)/.test(c)) ||
     rawApiWrite(command)
   );
-}
-
-/**
- * True when a push in the command could rewrite or delete history: `--force` in any spelling (`-f`, `-fu`,
- * `-uf`, `--force-with-lease`, `--force-if-includes`), a `+` refspec, `--mirror`, `--delete` or `-d`, a
- * `:branch` refspec (a delete), `--prune`, or `git send-pack` (AUD-M3). With `variablesForce`, the command as
- * the shell reads it with its own variables expanded, a word a variable still builds (`$FLAG`) counts too: it
- * could be `--force`, and only a value the command sets shows it isn't (#285).
- */
-export function rewritesHistory(command: string, variablesForce = false): boolean {
-  const c = joinedWords(command).replace(/\\(?=\w)/g, "");
-  if (gitSteps(c, /\bsend-pack\b/).length) return true;
-  return gitSteps(c, /\bpush\b/).some((step) => {
-    const args = step.text.slice(step.text.search(/\bpush\b/) + 4);
-    if (variablesForce && /\$\{?[A-Za-z_]|\$\(/.test(args)) return true;
-    return /(\s--force\b|\s--force-with-lease\b|\s--force-if-includes\b|\s-[a-zA-Z]*[fd][a-zA-Z]*\b|\s\+\S|\s--mirror\b|\s--delete\b|\s--prune\b|\s:\S)/.test(
-      args,
-    );
-  });
-}
-
-/**
- * True when the command rewrites or deletes a ref through GitHub's API, where no git hook runs (re-grade 5): a
- * `gh api` write to `git/refs/<ref>` (an existing ref: PATCH moves it, DELETE removes it), any `git/refs` write
- * with a `force` field, a GraphQL `updateRef`, `updateRefs` or `deleteRef`, or `gh repo sync --force`. Creating
- * a new ref (`POST git/refs`) and reading refs stay allowed. `files` are the texts the command posts from files
- * (a GraphQL query read with `-F query=@q.graphql` or `--input`; Qodo on PR 329).
- */
-export function rewritesRefs(command: string, files: string[] = []): boolean {
-  const c = joinedWords(command).replace(/\\(?=\w)/g, "");
-  const refMutation = /\b(?:updateRefs?|deleteRef)\b/;
-  // A query file's comments and string values are no fields: a read that mentions a mutation in them is a read.
-  const fields = files.map((text) => text.replace(/"(?:[^"\\\n]|\\.)*"/g, '""').replace(/#[^\n]*/g, ""));
-  if (/\bgh\s+api\s+graphql\b/.test(c) && [c, ...fields].some((text) => refMutation.test(text))) return true;
-  return segments(c).some(({ text }) => {
-    if (/\bgh\s+repo\s+sync\b/.test(text)) return /\s--force\b/.test(text);
-    const gh = /\bgh\s+api\b/.exec(text);
-    if (!gh) return false;
-    const args = text.slice(gh.index);
-    // Any owner and name, gh's `{owner}/{repo}` and `:owner/:repo` placeholders included (Qodo on PR 329).
-    const route = /(?:^|\s|=)\/?repos\/[^/\s]+\/[^/\s]+\/git\/refs(\/\S*)?/.exec(args);
-    if (!route) return false;
-    // Every method flag, in any spelling (`-X=DELETE`, `-X GET -X DELETE`): any write among them counts.
-    const methods = [...args.matchAll(/(?:\s-X\s*=?\s*|\s--method[=\s]+)(\w+)/g)].map((m) =>
-      (m[1] ?? "").toUpperCase(),
-    );
-    const sends = /\s-[fF]|--field|--raw-field|--input/.test(args);
-    const writes = methods.length ? methods.some((m) => !/^(GET|HEAD)$/.test(m)) : sends;
-    if (!writes) return false;
-    // `git/refs/heads/x` names an existing ref; `git/refs` alone, with or without a trailing slash, is the list.
-    const existing = Boolean(route[1] && route[1] !== "/");
-    return existing || /\bforce\s*=/.test(args);
-  });
 }
 
 /**

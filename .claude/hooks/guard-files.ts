@@ -279,7 +279,7 @@ function pipedInto(command: string): string | undefined {
 }
 
 /** Text in a script that could post to GitHub: its API hosts, GraphQL, an API client, or a run of gh or git. */
-const WRITE_API =
+export const WRITE_API =
   /\b(?:api|uploads)\.github\.com\b|\bgithub\.com\/[\w.-]+\/[\w.-]+|\bgraphql\b|\boctokit\b|\bgh\s+(?:api|pr|issue|release|repo|gist|label|workflow)\b|["'`](?:gh|git)(?:\.exe)?["'`]|\bgit\s+push\b|\b(?:GH|GITHUB)_TOKEN\b/i;
 
 /**
@@ -327,7 +327,7 @@ export function scriptProblem(
         ? "it names a reviewed repo or a GitHub write API, and the guard can't judge what it would post"
         : undefined;
     if (why) {
-      return `This runs a script where it could post to a reviewed repo, and ${why}. Post with gh in the command itself, where the guard reads the text.`;
+      return `This runs a script where it could post to a reviewed repo, and ${why}. Writes to a reviewed repo go through npm run target:post.`;
     }
   }
   return undefined;

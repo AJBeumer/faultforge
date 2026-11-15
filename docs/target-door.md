@@ -1,0 +1,34 @@
+# One door to the reviewed repository
+
+Every write to the reviewed repository (`faultforge-target`, any repo marked `"guard": "reviewed"` in `factory.json`) goes through one command:
+
+```bash
+npm run target:post -- <kind> [options]
+```
+
+| Kind | Options | What it sends |
+|---|---|---|
+| `issue-create` | `--title-file <f> --body-file <f>` | a new issue |
+| `issue-edit` | `--number <n>`, `--title-file` and/or `--body-file` | a changed issue |
+| `issue-comment` | `--number <n> --body-file <f>` | a comment on an issue |
+| `pr-create` | `--head <branch> [--base main] --title-file <f> --body-file <f>` | a new PR |
+| `pr-edit` | `--number <n>`, `--title-file` and/or `--body-file` | a changed PR |
+| `pr-comment` | `--number <n> --body-file <f>` | a comment on a PR |
+| `pr-close` | `--number <n> --body-file <f>` | closes the PR with that comment |
+| `push` | `--branch <name> [--checkout <path>]` | the branch's commit, never forced |
+
+`--repo owner/name` picks a reviewed repo when there is more than one. Run it on its own, from the lab's root.
+
+## What it checks
+
+It reads its text only from files, and checks the exact text it sends, each piece on its own: the giveaway words (`neutral.ts`), the id of a template still in private storage, and words addressed to Qodo. A head or base branch must be a plain branch of the reviewed repo. A push checks the branch name and, for every commit the remote doesn't have yet (asked of the remote itself), its author, committer and message, and the path and content of every file it touches. It pushes only to a github.com URL of the reviewed repo, and refuses when git's config rewrites remote URLs.
+
+Exit codes: 0 sent; 1 usage; 2 refused, nothing sent; 3 `gh` or `git` failed after the checks (check GitHub before retrying).
+
+`case:ticket` and `case:pr` send through the same module (`packages/harness/src/target-post.ts`).
+
+## What the guard does
+
+The Claude Code guard (`.claude/hooks/guard-target.ts`) lets a command that is exactly `npm run target:post -- …` through without reading it. It refuses every other write aimed at a reviewed repo without reading what it would say: `gh issue` and `gh pr` writes, any `gh` call that isn't a known read, `gh api` with a method or a field, `curl`, `wget` or `Invoke-WebRequest` with a body, MCP tools that aren't reads, and `git push` from or to the checkout. A write whose destination it can't read (a shell variable, a script) is refused too. Reads (`gh pr view`, `gh api` GETs, `git fetch`, `git log`) and commits in the checkout work as usual.
+
+The target's own git hooks (`pre-commit`, `commit-msg`, `pre-push`, installed by `npm run guard:install`) stay as a second layer: they run on the door's push too.

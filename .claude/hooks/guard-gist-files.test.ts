@@ -39,8 +39,8 @@ describe("a gist or release spelled with quotes inside its words (Qodo on PR 310
     expect(bash(command)).toMatch(/private storage/);
   });
 
-  it("reads an escaped gh as a write, so its text is checked too (the same cause)", () => {
-    expect(bash(`g\\h pr comment 3 -R ${T} -b "a planted bug"`)).toMatch(/says planted/);
+  it("reads an escaped gh as a write, so the door rule refuses it too (the same cause)", () => {
+    expect(bash(`g\\h pr comment 3 -R ${T} -b "a planted bug"`)).toMatch(/go only through the door/);
     expect(bash(`g\\h gist create ${CLEAN}`)).toBeUndefined();
   });
 });

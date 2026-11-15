@@ -32,11 +32,13 @@ This writes the ledger entry, an audit event and artefacts under `private/raw-ar
 In this order, each command on its own:
 
 1. **Create the target ticket.** `npm run case:ticket -- --template <id> --case <FF-NNNN>`, run in this repository and never chained with a target-repo command. It, the push and the PR need the GitHub token with write access to issues and pull requests (the default `gh` login lacks it). It prints the issue number `<N>`, records a `case.ticket-created` audit event and saves the raw `gh` output. Do this before pushing anything: if it refuses (exit 1), nothing has left the machine. Exit 2 means it could not tell whether the issue was created: check GitHub before retrying, never retry blindly.
-2. **Push the branch,** on its own:
+2. **Push the branch** through the door, on its own, from this repository's root:
 
 ```bash
-git -C ../faultforge-target push -u origin <branch>
+npm run target:post -- push --branch <branch>
 ```
+
+Every write to the target goes through `npm run target:post` ([docs/target-door.md](../../../docs/target-door.md)); `case:ticket` and `case:pr` use it too. The push checks the branch name and, for every commit the target doesn't have yet, its message and every file it touches, then pushes exactly that commit, never forced. Exit 2: something would give the case away, and nothing was pushed. The guard refuses a raw `git push` to the target, and any other raw write there.
 
 3. **Open and record the PR** with `case:pr`, in this repository, never chained with the push. Start with `--dry-run`:
 
@@ -87,7 +89,7 @@ npm run case:build -- <FF-NNNN> --save
 ## 7. Close out
 
 - Never click **Dismiss** on a Qodo finding and never chat with Qodo on a case PR. Qodo's PR history indexing learns from both, which would bias later cases.
-- Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue). They close the PR.
+- Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue), in a file. They close the PR with it through the door: `npm run target:post -- pr-close --number <pr> --body-file <file>`, which checks the comment first. The door has no merge.
 - Commit and push `private/`: `Add <case>: <template id>, <verdict>`.
 - Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
 - If the template is now adjudicated and not held back for the benchmark, ask whether to copy it to `templates/seed/`.

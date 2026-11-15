@@ -2,62 +2,7 @@ import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { canSymlink, tempRepo } from "./fixtures.ts";
-import {
-  chainProblem,
-  pendingCommit,
-  pendingIndex,
-  pendingPush,
-  Uninspectable,
-  withDeadline,
-} from "./guard-content.ts";
-
-describe("chainProblem: the steps a git chain may contain inside a reviewed checkout", () => {
-  it.each([
-    "git add -A && git commit -F msg.txt && git push -u origin HEAD",
-    "cd ../app && git add . && git commit -m Tidy",
-    "git -C ../app add -A && git -C ../app commit -m Tidy",
-    'git -C "D:\\Projects\\app" add -A && git -C "D:\\Projects\\app" commit -m Tidy',
-    "git --work-tree=../app status && git --work-tree=../app commit -m Tidy",
-    "git status 2>&1 && git commit -m Tidy",
-    "npm run check > /dev/null && git commit -m Tidy",
-    "echo <<'EOF'\n$(not run: the delimiter is quoted)\nEOF\ngit add . && git commit -m Tidy",
-    "echo <<EOF\nliteral \\$(not run: escaped) and \\`neither\\`\nEOF\ngit add . && git commit -m Tidy",
-  ])("allows %s", (command) => {
-    expect(chainProblem(command)).toBeUndefined();
-  });
-
-  it.each([
-    ["a copy", "cp hint.md . && git add . && git commit -m Tidy", /^cp /],
-    ["a shell function", 'f(){ git "$@"; }; f commit -m Tidy', /^f\(\)/],
-    ["a redirect", "echo x > notes.md; git add . && git commit -m Tidy", />/],
-    ["a numbered redirect (Qodo, round 3)", 'echo "$PAYLOAD" 1>notes.md && git add . && git commit -m Tidy', /1>/],
-    ["an appending numbered redirect", "echo x 2>>err.log && git commit -m Tidy", /2>>/],
-    [
-      "a heredoc body that expands (Qodo, round 3)",
-      "echo <<EOF\n$(echo planted > n.md)\nEOF\ngit add . && git commit -m Tidy",
-      /heredoc/,
-    ],
-    ["a script", "node write.js && git add . && git commit -m Tidy", /^node/],
-    [
-      "git stash pop, which writes files from outside the committed history",
-      "git stash pop && git commit -m Tidy",
-      /stash/,
-    ],
-    [
-      "a command substitution inside an allowed step (Qodo, round 4)",
-      "git -C ../app status $(cp /tmp/payload ../app/notes.md) && git -C ../app add . && git -C ../app commit -m Tidy",
-      /\$\(/,
-    ],
-    ["a backtick substitution inside an allowed step", "git status `cp a b` && git commit -m Tidy", /`/],
-    [
-      "an escaped backslash before a real substitution in a heredoc body (Qodo, round 5)",
-      "echo <<EOF\nliteral \\\\$(cp /tmp/payload ../app/notes.md)\nEOF\ngit add . && git commit -m Tidy",
-      /heredoc/,
-    ],
-  ])("refuses %s", (_name, command, step) => {
-    expect(chainProblem(command)).toMatch(step);
-  });
-});
+import { pendingCommit, pendingIndex, pendingPush, Uninspectable, withDeadline } from "./guard-content.ts";
 
 describe("pendingCommit: what a commit would take", () => {
   it("reads a file that was staged and then deleted from the working tree (Qodo, round 3)", () => {

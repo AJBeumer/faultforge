@@ -180,9 +180,11 @@ describe("lab history never goes into a reviewed repo (re-grade 6, N-C)", () => 
     expect(bash(`gh issue transfer 5 ${L}-notes -R ${L}`)).toBeUndefined();
   });
 
-  it("still lets a reviewed checkout push to its own repo", () => {
-    expect(bash("git push origin HEAD:refs/heads/tidy", TARGET_REPO.dir)).toBeUndefined();
-    expect(bash(`git push https://github.com/${T}.git HEAD:refs/heads/tidy`, TARGET_REPO.dir)).toBeUndefined();
+  it("sends a reviewed checkout's push to its own repo through the door (#340)", () => {
+    expect(bash("git push origin HEAD:refs/heads/tidy", TARGET_REPO.dir)).toMatch(/go only through the door/);
+    expect(bash(`git push https://github.com/${T}.git HEAD:refs/heads/tidy`, TARGET_REPO.dir)).toMatch(
+      /go only through the door/,
+    );
   });
 });
 

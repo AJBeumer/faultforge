@@ -21,6 +21,8 @@ const PRIVATE = (() => {
 /** A folder that is no checkout, where commands run from unless a test says otherwise. */
 const ELSEWHERE = mkdtempSync(join(tmpdir(), "guard-elsewhere-"));
 const T = "AJBeumer/faultforge-target";
+/** The door rule (#340): every write to a reviewed repo goes through npm run target:post. */
+const DOOR = /go only through the door/;
 const LAB = "AJBeumer/faultforge";
 const LINK = `${T}#3`;
 
@@ -49,25 +51,6 @@ function bash(command: string, cwd = ELSEWHERE, extra: NodeJS.ProcessEnv = {}): 
   if (decision.kind === "error") throw new Error(decision.message);
   return decision.kind === "deny" ? decision.reason : undefined;
 }
-
-describe("the lab's name joined into a longer word is still the lab's name (re-grade 5)", () => {
-  it.each(["faultforge", "faultforge_private", "faultforge_lab", "FaultForgeLab", "faultforge2", "my_FaultForge"])(
-    "refuses %s in a post to the target",
-    (word) => {
-      expect(bash(`gh pr comment 3 -R ${T} -b "see ${word}"`)).toMatch(/names the lab/);
-    },
-  );
-
-  it("refuses it in a target commit message and a branch name", () => {
-    expect(bash('git commit -m "Move faultforge_lab notes"', TARGET_REPO.dir)).toMatch(/names the lab/);
-    expect(bash("git push origin HEAD:FaultForgeLab-tidy", TARGET_REPO.dir)).toMatch(/names the lab/);
-  });
-
-  it("still lets the target's own name and ordinary words through", () => {
-    expect(bash(`gh pr comment 3 -R ${T} -b "Tidy the default forge settings"`)).toBeUndefined();
-    expect(bash(`gh pr comment 3 -R ${T} -b "see the faultforge-target README"`)).toBeUndefined();
-  });
-});
 
 describe("a lab commit can't link to the target from any message source (re-grade 5)", () => {
   it.each([
@@ -100,13 +83,13 @@ describe("refs on a reviewed repo can't be rewritten through the API (re-grade 5
     `gh api -XPOST repos/${T}/git/refs -f ref=refs/heads/tidy -f sha=abc -F force=true`,
     `gh repo sync ${T} --source AJBeumer/other --force`,
   ])("refuses %s", (command) => {
-    expect(bash(command)).toMatch(/rewrite|delete|history/i);
+    expect(bash(command)).toMatch(DOOR);
   });
 
-  it("allows reading refs and creating a new branch", () => {
+  it("allows reading refs; creating one goes through the door", () => {
     expect(bash(`gh api repos/${T}/git/refs/heads/main`)).toBeUndefined();
     expect(bash(`gh api repos/${T}/git/matching-refs/heads/`)).toBeUndefined();
-    expect(bash(`gh api -X POST repos/${T}/git/refs -f ref=refs/heads/tidy-list -f sha=abc`)).toBeUndefined();
+    expect(bash(`gh api -X POST repos/${T}/git/refs -f ref=refs/heads/tidy-list -f sha=abc`)).toMatch(DOOR);
   });
 
   it("leaves the lab's own refs alone", () => {
@@ -201,21 +184,19 @@ describe("Qodo on PR 329", () => {
   writeFileSync(join(ELSEWHERE, "poster", "__main__.py"), 'import os\nos.system("gh issue create -t x -b y")\n');
 
   it("refuses a ref mutation read from a query file", () => {
-    expect(bash("gh api graphql -F query=@del.graphql")).toMatch(/move a ref/);
+    expect(bash("gh api graphql -F query=@del.graphql")).toMatch(DOOR);
   });
 
   it.each([
     `gh api repos/${T}/git/refs/heads/main -X=DELETE`,
     `gh api repos/${T}/git/refs/heads/main -X GET -X DELETE`,
   ])("reads every method flag: %s", (command) => {
-    expect(bash(command)).toMatch(/move a ref/);
+    expect(bash(command)).toMatch(DOOR);
   });
 
   it("reads gh's repo placeholders as the checkout's repo", () => {
-    expect(bash("gh api repos/{owner}/{repo}/git/refs/heads/main -X DELETE", TARGET_REPO.dir)).toMatch(/move a ref/);
-    expect(bash("gh api repos/:owner/:repo/git/refs/heads/main -X PATCH -F force=true", TARGET_REPO.dir)).toMatch(
-      /move a ref/,
-    );
+    expect(bash("gh api repos/{owner}/{repo}/git/refs/heads/main -X DELETE", TARGET_REPO.dir)).toMatch(DOOR);
+    expect(bash("gh api repos/:owner/:repo/git/refs/heads/main -X PATCH -F force=true", TARGET_REPO.dir)).toMatch(DOOR);
   });
 
   it("reads a script run inside a substitution", () => {
@@ -263,9 +244,5 @@ describe("Qodo on PR 329, second review", () => {
     expect(bash("deno test ./post_test.ts", ELSEWHERE, RUN)).toMatch(/script/);
     expect(bash("bun test post_test.ts", ELSEWHERE, RUN)).toMatch(/script/);
     expect(bash("bun add lodash", ELSEWHERE, RUN)).toBeUndefined();
-  });
-
-  it("lets a read whose query file mentions a ref mutation only in a comment or a string", () => {
-    expect(bash("gh api graphql -F query=@read.graphql")).toBeUndefined();
   });
 });

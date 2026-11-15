@@ -28,6 +28,8 @@ describe("content about to travel, read from git whatever the command text says"
     });
     return { dir, git, config };
   }
+  // A raw push inside a reviewed checkout is refused by the door rule before its content is read (#340), so the
+  // pushes below run from elsewhere: there every reviewed checkout's unpushed content is still read from git.
 
   it("refuses a commit anywhere while a reviewed checkout holds a staged telltale, however it got there", () => {
     const { dir, git, config } = reviewedRepo();
@@ -59,30 +61,30 @@ describe("content about to travel, read from git whatever the command text says"
   });
 
   it("refuses a push while a local branch or tag not on the remote is named with a telltale (#190)", () => {
-    const { dir, git, config } = reviewedRepo(true);
+    const { git, config } = reviewedRepo(true);
     git("switch", "-q", "-c", "planted-bug-7");
-    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toMatch(
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, HARNESS, config)).toMatch(
       /a new branch, or a tag \(planted-bug-7\)[\s\S]*says planted/,
     );
     git("switch", "-q", "main");
     git("branch", "-q", "-D", "planted-bug-7");
     git("tag", "ff-0002");
-    expect(decide("Bash", { command: "git push --tags" }, dir, config)).toMatch(/case id/);
+    expect(decide("Bash", { command: "git push --tags" }, HARNESS, config)).toMatch(/case id/);
     // A tag is read even when a branch of the same name is on the remote, and once it is published too:
     // without asking the remote the guard can't tell, and a giveaway tag shouldn't stay (Qodo on PR 208).
     git("push", "-q", "origin", "main:refs/heads/ff-0002");
     git("fetch", "-q", "origin");
-    expect(decide("Bash", { command: "git push origin main" }, dir, config)).toMatch(/case id/);
+    expect(decide("Bash", { command: "git push origin main" }, HARNESS, config)).toMatch(/case id/);
     git("tag", "-d", "ff-0002");
     // A branch is read even when one remote already has it: a push can send it to another (Qodo on PR 208).
     git("branch", "ff-0003");
     git("push", "-q", "origin", "ff-0003");
     git("fetch", "-q", "origin");
-    expect(decide("Bash", { command: "git push backup --all" }, dir, config)).toMatch(/case id/);
+    expect(decide("Bash", { command: "git push backup --all" }, HARNESS, config)).toMatch(/case id/);
     git("branch", "-q", "-D", "ff-0003");
     // An ordinary new branch, and one already on the remote, pass.
     git("switch", "-q", "-c", "tidy-lookup");
-    expect(decide("Bash", { command: "git push -u origin HEAD" }, dir, config)).toBeUndefined();
+    expect(decide("Bash", { command: "git push -u origin HEAD" }, HARNESS, config)).toBeUndefined();
   });
 
   it("refuses a push while an unpushed commit added a telltale, and allows it once the branch is clean", () => {
@@ -90,17 +92,17 @@ describe("content about to travel, read from git whatever the command text says"
     writeFileSync(join(dir, "notes.md"), "The planted bug is here\n");
     git("add", "notes.md");
     git("commit", "-q", "-m", "Tidy"); // made directly, as a bypass of the commit check would be
-    expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toMatch(
+    expect(decide("Bash", { command: "git push origin HEAD" }, HARNESS, config)).toMatch(
       /other-app holds content[\s\S]*not yet on any remote branch[\s\S]*says planted/,
     );
     git("reset", "-q", "--hard", "origin/main");
-    expect(decide("Bash", { command: "git push origin HEAD" }, dir, config)).toBeUndefined();
+    expect(decide("Bash", { command: "git push origin HEAD" }, HARNESS, config)).toBeUndefined();
   });
 
   it("denies when git can't answer for a reviewed checkout, rather than guessing", () => {
     const { dir, config } = reviewedRepo();
     writeFileSync(join(dir, ".git", "HEAD"), "not a ref\n"); // git can no longer read the repository
-    expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/can't inspect other-app/);
+    expect(decide("Bash", { command: "git push" }, HARNESS, config)).toMatch(/can't inspect other-app/);
   });
 
   describe("what Qodo found in round 2 (PR 120)", () => {
@@ -128,7 +130,7 @@ describe("content about to travel, read from git whatever the command text says"
       git("rm", "-q", "notes.md");
       git("commit", "-q", "-m", "Tidy more"); // the net diff is clean, the first commit is not
       git("checkout", "-q", "main"); // HEAD is clean; the push names the other branch
-      expect(decide("Bash", { command: "git push origin feature" }, dir, config)).toMatch(/says planted/);
+      expect(decide("Bash", { command: "git push origin feature" }, HARNESS, config)).toMatch(/says planted/);
     });
 
     it("scans the commit messages that would travel too", () => {
@@ -136,7 +138,7 @@ describe("content about to travel, read from git whatever the command text says"
       writeFileSync(join(dir, "README.md"), "# App\n\nMore.\n");
       git("add", "README.md");
       git("commit", "-q", "-m", "Fix the planted bug");
-      expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
+      expect(decide("Bash", { command: "git push" }, HARNESS, config)).toMatch(/says planted/);
     });
 
     it("includes ignored files only when the command forces them in", () => {
@@ -157,29 +159,10 @@ describe("content about to travel, read from git whatever the command text says"
       expect(decide("Bash", { command: 'git add . && git commit -m "Tidy"' }, dir, config)).toMatch(/says planted/);
     });
 
-    it("refuses a chain that writes files or hides git behind a function before committing in the checkout", () => {
-      const { dir, config } = reviewedRepo();
-      writeFileSync(join(tmpdir(), "guard-src.md"), "planted\n");
-      expect(
-        decide(
-          "Bash",
-          { command: `cp ${join(tmpdir(), "guard-src.md")} . && git add . && git commit -m Tidy` },
-          dir,
-          config,
-        ),
-      ).toMatch(/on its own/);
-      expect(decide("Bash", { command: 'f(){ git "$@"; }; f commit -m Tidy' }, dir, config)).toMatch(/on its own/);
-      expect(decide("Bash", { command: 'echo "x" > notes.md; git add . && git commit -m Tidy' }, dir, config)).toMatch(
-        /on its own/,
-      );
-    });
-
-    it("still allows the ordinary chain of git steps, and any chain outside a reviewed checkout", () => {
+    it("allows a chain of git steps that commits in a reviewed checkout, and any chain outside one", () => {
       const { dir, config } = reviewedRepo();
       writeFileSync(join(dir, "msg.txt"), "Add release notes\n");
-      expect(
-        decide("Bash", { command: "git add -A && git commit -F msg.txt && git push -u origin HEAD" }, dir, config),
-      ).toBeUndefined();
+      expect(decide("Bash", { command: "git add -A && git commit -F msg.txt" }, dir, config)).toBeUndefined();
       expect(
         decide("Bash", { command: "npm run check && git add -A && git commit -F msg.txt" }, dir, config),
       ).toBeUndefined();
@@ -200,24 +183,6 @@ describe("content about to travel, read from git whatever the command text says"
   });
 
   describe("what Qodo found in round 3 (PR 120), through the hook", () => {
-    it("refuses a chain with a numbered redirect or an expanding heredoc, and allows git -C steps", () => {
-      const { dir, config } = reviewedRepo();
-      expect(
-        decide("Bash", { command: 'echo "$X" 1>notes.md && git add . && git commit -m Tidy' }, dir, config),
-      ).toMatch(/on its own/);
-      expect(
-        decide(
-          "Bash",
-          { command: "echo <<EOF\n$(echo planted > n.md)\nEOF\ngit add . && git commit -m Tidy" },
-          dir,
-          config,
-        ),
-      ).toMatch(/on its own/);
-      expect(
-        decide("Bash", { command: `git -C ${dir} add -A && git -C ${dir} commit -m Tidy` }, HARNESS, config),
-      ).toBeUndefined();
-    });
-
     it("refuses a push whose merge commit introduced a telltale while resolving", () => {
       const { dir, git, config } = reviewedRepo(true);
       git("checkout", "-q", "-b", "feature");
@@ -229,7 +194,7 @@ describe("content about to travel, read from git whatever the command text says"
       writeFileSync(join(dir, "resolved.md"), "The planted bug\n");
       git("add", "resolved.md");
       git("commit", "-q", "-m", "Merge feature");
-      expect(decide("Bash", { command: "git push" }, dir, config)).toMatch(/says planted/);
+      expect(decide("Bash", { command: "git push" }, HARNESS, config)).toMatch(/says planted/);
     });
 
     it("refuses a commit of a file staged and then deleted from the working tree", () => {

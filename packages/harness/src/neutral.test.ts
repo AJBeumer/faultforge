@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLookalikes, readerViews, renderedText, telltales, templateTelltales } from "./neutral.ts";
+import {
+  addressesQodo,
+  normalizeLookalikes,
+  readerViews,
+  renderedText,
+  telltales,
+  templateTelltales,
+} from "./neutral.ts";
+
+describe("addressesQodo (re-grade 6: Q25, Q26)", () => {
+  it("tells a Qodo address from ordinary text", () => {
+    expect(addressesQodo("/ask why?")).toBe(true);
+    expect(addressesQodo("ok\n  /improve")).toBe(true);
+    expect(addressesQodo("hi @qodo-merge-pro")).toBe(true);
+    expect(addressesQodo("see src/review/ask.ts and /health")).toBe(false);
+    expect(addressesQodo("mail me at me@qodo.ai")).toBe(false);
+  });
+});
 
 describe("telltales", () => {
   it.each([

@@ -45,20 +45,15 @@ describe("the lab's name never hides a ref name (re-grade 3)", () => {
     "git push origin HEAD:refs/heads/x/faultforge/planted-bug",
     "git push origin faultforge/fix-list",
   ])("denies %s in the target", (command) => {
-    expect(bash(command, TARGET)).toMatch(/names the lab|says planted|case id/);
+    expect(bash(command, TARGET)).toMatch(/go only through the door/);
   });
 
-  it("denies a slash token with the lab's name in a post's text", () => {
-    expect(bash(`gh pr comment 3 -R ${T} -b see-faultforge/planted-bug-here`)).toMatch(/names the lab|says planted/);
-    expect(bash(`gh issue create -R ${T} --title faultforge/tidy --body ok`)).toMatch(/names the lab/);
-  });
-
-  it("still lets real paths and owner/name repo ids through", () => {
-    expect(bash(`gh pr create -R ${T} --title Tidy --body ok`)).toBeUndefined();
-    expect(bash(`gh pr create --repo=${T} --title Tidy --body ok`)).toBeUndefined();
+  it("reads owner/name repo ids and paths as written: reads pass, writes go through the door", () => {
+    expect(bash(`gh pr create -R ${T} --title Tidy --body ok`)).toMatch(/go only through the door/);
+    expect(bash(`gh pr create --repo=${T} --title Tidy --body ok`)).toMatch(/go only through the door/);
     expect(bash("git -C D:/Projects/FaultForge status && git status", TARGET)).toBeUndefined();
-    expect(bash(`gh api repos/${T}/issues/3/comments -f body=ok`)).toBeUndefined();
-    expect(bash("git push -u origin tidy-list", TARGET)).toBeUndefined();
+    expect(bash(`gh api repos/${T}/issues/3/comments -f body=ok`)).toMatch(/go only through the door/);
+    expect(bash("git push -u origin tidy-list", TARGET)).toMatch(/go only through the door/);
   });
 
   it("blanks only paths and repo ids, never a ref", () => {
@@ -106,7 +101,6 @@ describe("code an interpreter runs as a subprocess is built code (re-grade 3)", 
 });
 
 describe("gists and release assets are posts (re-grade 3)", () => {
-  const giveaway = file("notes.txt", "Fixes the planted bug\n");
   const named = file("idnote.txt", "see x-secret-v1\n");
   const clean = file("clean.txt", "Filter bookings by status.\n");
 
@@ -118,12 +112,6 @@ describe("gists and release assets are posts (re-grade 3)", () => {
     ["a release upload", (f: string) => `gh release upload v1 -R ${T} ${f}`],
   ])("reads the files of %s for a private id", (_name, command) => {
     expect(bash(command(named))).toMatch(/still private/);
-  });
-
-  it("reads a target release's asset for a giveaway word, and allows a clean one", () => {
-    expect(bash(`gh release create v1 -R ${T} ${giveaway}`)).toMatch(/says planted/);
-    expect(bash(`gh release upload v1 -R ${T} ${giveaway}`)).toMatch(/says planted/);
-    expect(bash(`gh release create v1 -R ${T} ${clean}`)).toBeUndefined();
   });
 
   it("refuses a gist of a file in private storage", () => {
