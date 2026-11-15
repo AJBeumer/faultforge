@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { postedRanges, STDIN_BODY } from "./guard-posted.ts";
-import { entersCheckout, esc, locate, navigationTargets, type Reviewed } from "./guard-repos.ts";
+import { entersCheckout, esc, locate, navigationTargets, type Reviewed, unreadableMove } from "./guard-repos.ts";
 import { argumentsFromInput, scriptFiles } from "./shell-exec.ts";
 import { blankQuoted, gitSteps, quotedMask, substitutions } from "./shell-scan.ts";
 
@@ -296,14 +296,18 @@ export function scriptProblem(
   run: boolean,
   backticks: boolean,
 ): string | undefined {
+  const files = scriptFiles(command, backticks);
+  if (!files.length) return undefined;
+  // A move the guard can't read (`cd "$DIR"`) may land in a reviewed checkout (re-grade 4).
   const near =
     run ||
     locate(cwd, reviewed) !== undefined ||
     navigationTargets(command, cwd).some((path) => locate(path, reviewed)) ||
-    reviewed.some((r) => entersCheckout(command, r));
+    reviewed.some((r) => entersCheckout(command, r)) ||
+    unreadableMove(command, cwd);
   if (!near) return undefined;
   const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
-  for (const file of scriptFiles(command, backticks)) {
+  for (const file of files) {
     let texts: string[] = [];
     try {
       texts = /[$`%*?]/.test(file) ? [] : readPosted(cwd, command, file);

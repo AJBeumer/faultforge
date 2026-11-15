@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { guardConfig, tempRepo } from "./fixtures.ts";
 import { decide } from "./guard-target.ts";
+import { scriptFiles } from "./shell-exec.ts";
 
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);
@@ -158,6 +159,7 @@ describe("a script file run where it could post to a reviewed repo is read first
     expect(bash("node post.mjs", TARGET_REPO.dir)).toMatch(/script/);
     const dir = TARGET_REPO.dir.replace(/\\/g, "/");
     expect(bash(`cd ${dir} && node post.mjs`)).toMatch(/script/);
+    expect(bash('cd "$WHERE" && node post.mjs')).toMatch(/script/);
   });
 
   it("refuses a script it can't read there", () => {
@@ -171,5 +173,16 @@ describe("a script file run where it could post to a reviewed repo is read first
 
   it("leaves the owner's own scripts alone outside a run and outside a reviewed checkout", () => {
     expect(bash("node post.mjs")).toBeUndefined();
+  });
+
+  it("finds the script a runner is given, past options and redirects, and none for code from stdin", () => {
+    expect(scriptFiles("node --require ./hook.js post.mjs > out.txt")).toEqual(["post.mjs"]);
+    expect(scriptFiles("node > out.txt post.mjs")).toEqual(["post.mjs"]);
+    expect(scriptFiles("node < post.mjs")).toEqual(["post.mjs"]);
+    expect(scriptFiles("deno run -A post.ts")).toEqual(["post.ts"]);
+    expect(scriptFiles("pwsh -File post.ps1")).toEqual(["post.ps1"]);
+    expect(scriptFiles("python3 - <<'EOF'\nimport os\nEOF")).toEqual([]);
+    expect(scriptFiles("node -e 'console.log(1)'")).toEqual([]);
+    expect(scriptFiles("npx vitest run")).toEqual([]);
   });
 });

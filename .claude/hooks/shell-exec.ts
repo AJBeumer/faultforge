@@ -163,7 +163,15 @@ export function scriptFiles(command: string, backticks = true): string[] {
         i++;
         continue;
       }
-      if (word.startsWith("-") || /^[<>]/.test(word)) continue;
+      // Code from stdin (`-`, a heredoc, a here-string) is inline code, judged as such elsewhere.
+      if (word === "-" || word.startsWith("<<")) return [];
+      // An output redirect's file is no script; an input redirect's is, as the code it reads.
+      if (/^\d*>{1,2}$/.test(word)) {
+        i++;
+        continue;
+      }
+      if (word === "<") continue;
+      if (word.startsWith("-") || /^\d*[<>]/.test(word)) continue;
       return [unquote(word)];
     }
     return [];
