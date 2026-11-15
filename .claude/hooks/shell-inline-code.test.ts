@@ -106,6 +106,10 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     // An interpreter named after a prefix's value runs its own inline code (Qodo on PR 312, fourth review).
     `npx --package tsx tsx -e "require('child_process').execSync('ls')"`,
     `npx -p tsx tsx -e "require('child_process')"`,
+    // A flag whose value is a separate word, then inline code (Qodo on PR 312, fifth review).
+    `node --disable-warning ExperimentalWarning -e "require('child_process')"`,
+    `node --inspect-port 9229 -e "require('child_process')"`,
+    `python3 --check-hash-based-pycs never -c "import subprocess"`,
     "node --import 'data:text/javascript,require(\"child_process\")' x.mjs",
     "NODE_OPTIONS='--require ./x.cjs --eval require(\"child_process\")' node x.mjs",
     "echo 'import subprocess' | python3 /dev/stdin",

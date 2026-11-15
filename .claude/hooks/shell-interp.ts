@@ -172,6 +172,13 @@ function stepCode(step: Step, before: Step[], name: string): string {
   // A "script" that is itself an interpreter's name follows a prefix's value (`npx --package tsx tsx -e …`): that
   // second one is the program, so the whole step is read (Qodo on PR 312, fourth review).
   const second = INTERPRETERS.test(programName(named));
+  // A flag can take its value as the next word without being listed (`--inspect-port 9229`), so that value may
+  // look like the script. An inline-code flag anywhere after it means the step is read whole: a script's own
+  // argument that looks like one only costs the narrower reading (Qodo on PR 312, fifth review).
+  const later = all
+    .slice((script ?? all.length) + 1)
+    .some((w) => family?.inline.test(spokenWords(w)) || /(^|=)data:/.test(spokenWords(w)));
+  if (later) return step.text;
   if (script !== undefined && !second && !STDIN_SCRIPT.test(named.replace(/["']/g, "")))
     return all.slice(at, script).join(" ");
   return [...before.map((s) => s.text), step.text].join(" | ");
