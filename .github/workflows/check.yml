@@ -51,7 +51,7 @@ jobs:
 
   # The slow tests (packages/*/test), on both systems. They need the reviewed target checked out next to this
   # repository, as on the owner's machine; it is public, so no token is needed. Both jobs are required checks
-  # in protect-main, as the check jobs are: a red integration job blocks a merge. It runs on every push (#229).
+  # in protect-main, as the check jobs are: a red integration job blocks a merge. It runs on every push.
   integration:
     name: npm run test:integration (${{ matrix.os }})
     strategy:
@@ -62,7 +62,7 @@ jobs:
     timeout-minutes: 30
     steps:
       # No checkout keeps its token: `npm ci` runs the target's install scripts, which could otherwise read it
-      # from ../FaultForge/.git/config (Qodo on PR 241). This job never pushes.
+      # from ../FaultForge/.git/config. This job never pushes.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: FaultForge
@@ -91,12 +91,12 @@ jobs:
         working-directory: FaultForge
       - run: npm run test:integration
         working-directory: FaultForge
-        # The job's own read-only token, for the network sandbox test's `gh api` call alone (#330). Only this step
+        # The job's own read-only token, for the network sandbox test's `gh api` call alone. Only this step
         # has it, never an install step, and under its own name, so no other test takes it for GH_TOKEN.
         env:
           SANDBOX_TEST_GH_TOKEN: ${{ github.token }}
 
-  # A red main opens the lab's alert issue, or comments on the open one (#308). Only for a push to main: a PR's
+  # A red main opens the lab's alert issue, or comments on the open one. Only for a push to main: a PR's
   # failures show on the PR. issues: write for this job alone, with the lab's own token.
   alert:
     name: Alert on a red main
