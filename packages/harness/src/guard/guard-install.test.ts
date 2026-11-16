@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { join, resolve } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { telltales } from "../shared/neutral.ts";
 import {
   CONFIG_KEY,
+  guardInstall,
   guardInstalled,
   guardProblem,
   HOOKS,
@@ -16,6 +17,7 @@ import {
   installHooks,
   LAB_HOOKS,
   MARKER,
+  mainCheckout,
   ORIGIN_KEY,
   PRIVATE_HOOKS,
   unguardedCheckouts,
@@ -241,5 +243,48 @@ describe("unguardedCheckouts reports the private checkout", () => {
     installHooks(priv, script, "private");
     expect(unguardedCheckouts(factory, tmpdir(), priv)).toEqual([]);
     expect(unguardedCheckouts(factory, tmpdir(), join(tmpdir(), "no-such-private"))).toEqual([]);
+  });
+});
+
+/** A linked worktree of `main`'s repo, at a fresh temp path. */
+function worktreeOf(main: { dir: string; git: (...args: string[]) => string }, branch: string): string {
+  main.git("commit", "--allow-empty", "-q", "-m", "init");
+  const linked = mkdtempSync(join(tmpdir(), "guard-worktree-"));
+  rmSync(linked, { recursive: true, force: true });
+  execFileSync("git", ["-C", main.dir, "worktree", "add", "-q", linked, "-b", branch]);
+  return linked;
+}
+
+describe("mainCheckout: the repo's main checkout, from a linked worktree", () => {
+  it("is undefined from the main checkout itself, and names it from a linked worktree", () => {
+    const main = repo();
+    expect(mainCheckout(main.dir)).toBeUndefined();
+    const linked = worktreeOf(main, "a-worktree");
+    expect(resolve(mainCheckout(linked) ?? "")).toBe(resolve(main.dir));
+  });
+});
+
+describe("guardInstall: refuses before writing anything", () => {
+  const quiet = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+  it("refuses an unknown argument with a usage line, and installs nothing", () => {
+    const main = repo();
+    const error = quiet();
+    expect(guardInstall(["--bogus"], main.dir, "script-path")).toBe(1);
+    expect(error.mock.calls.join("\n")).toMatch(/usage: npm run guard:install/);
+    expect(existsSync(join(main.dir, ".git", "hooks", "pre-commit"))).toBe(false);
+    expect(readFileSync(join(main.dir, ".git", "config"), "utf8")).not.toContain(CONFIG_KEY);
+    error.mockRestore();
+  });
+
+  it("refuses a run from a linked worktree, naming the main checkout, and installs nothing", () => {
+    const main = repo();
+    const linked = worktreeOf(main, "another-worktree");
+    const error = quiet();
+    expect(guardInstall([], linked, "script-path")).toBe(1);
+    expect(error.mock.calls.join("\n")).toContain(resolve(main.dir));
+    expect(guardProblem(linked)).toBeDefined();
+    expect(readFileSync(join(main.dir, ".git", "config"), "utf8")).not.toContain(CONFIG_KEY);
+    error.mockRestore();
   });
 });
