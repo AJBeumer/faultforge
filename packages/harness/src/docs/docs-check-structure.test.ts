@@ -17,7 +17,7 @@ import {
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
 const file = (path: string, text: string): MarkdownFile => ({ path, text });
 
-describe("tooLong: no page over 150 lines (#354)", () => {
+describe("tooLong: no page over 150 lines", () => {
   it("refuses a long page under docs/, at the root, or in .claude/skills/", () => {
     const files = [
       file("docs/charter/a.md", lines(151)),
@@ -74,7 +74,7 @@ describe("slugs: GitHub's heading anchors", () => {
   });
 });
 
-describe("brokenLinks: every relative link resolves (#354)", () => {
+describe("brokenLinks: every relative link resolves", () => {
   const root = mkdtempSync(join(tmpdir(), "docs-links-"));
   mkdirSync(join(root, "docs", "charter"), { recursive: true });
   mkdirSync(join(root, "examples"));
@@ -106,7 +106,7 @@ describe("brokenLinks: every relative link resolves (#354)", () => {
   });
 });
 
-describe("unlistedDocs: docs/README.md links every doc (#354)", () => {
+describe("unlistedDocs: docs/README.md links every doc", () => {
   it("names a doc under docs/ the start page doesn't link", () => {
     const files = [
       file("docs/README.md", "- [Charter](CHARTER.md)\n- [Part one](charter/01-idea.md#x)\n"),
@@ -145,7 +145,7 @@ describe("markdownFiles and structureProblems on a real folder", () => {
   });
 });
 
-describe("Qodo on PR 357", () => {
+describe("markdownProblems: staged pages, file name case and link forms", () => {
   const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
   const repo = () => {
     const root = mkdtempSync(join(tmpdir(), "docs-staged-"));

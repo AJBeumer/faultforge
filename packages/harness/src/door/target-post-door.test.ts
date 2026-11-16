@@ -1,5 +1,5 @@
 /**
- * The door is the only harness code that writes to the reviewed repository (#340): no other module under
+ * The door is the only harness code that writes to the reviewed repository: no other module under
  * `packages/harness/src` calls gh with a write verb, a gh API method, or git push, except those listed here with
  * the repo they write to, which is never the reviewed one. A new write anywhere else fails this test until it goes
  * through `target-post.ts` or is listed with its reason.
@@ -24,7 +24,7 @@ const ELSEWHERE: Record<string, string> = {
   "factory-evidence.ts": "git push of the private evidence repo",
   "factory-keep.ts": "git push of the private evidence repo",
   "factory-sandbox-setup.ts": "iptables' -X, which drops a firewall chain: no GitHub call at all",
-  // The runner's comments and labels on the ticket it works: a reviewed repo's go through the door (#345).
+  // The runner's comments and labels on the ticket it works: a reviewed repo's go through the door.
   "ticket-write.ts": "the runner's comments and labels on a lab ticket; a reviewed repo's go through sendPost",
 };
 
@@ -36,7 +36,7 @@ function writers(): string[] {
     .sort();
 }
 
-describe("one door to the reviewed repository (#340)", () => {
+describe("one door to the reviewed repository", () => {
   it("finds the door's own writes, so the pattern still matches real code", () => {
     const door = readFileSync(join(DOOR, "target-post-push.ts"), "utf8");
     expect(WRITE_CALL.test(door)).toBe(true);
@@ -46,7 +46,7 @@ describe("one door to the reviewed repository (#340)", () => {
     expect(writers()).toEqual(Object.keys(ELSEWHERE).sort());
   });
 
-  it("lists no factory module that writes to GitHub: the runner's comments and labels go through the door (#345)", () => {
+  it("lists no factory module that writes to GitHub: the runner's comments and labels go through the door", () => {
     // The factory modules left only push the private evidence repo, or make no GitHub call at all.
     const factory = Object.keys(ELSEWHERE).filter((f) => f.startsWith("factory-"));
     expect(factory.sort()).toEqual(["factory-evidence.ts", "factory-keep.ts", "factory-sandbox-setup.ts"]);
@@ -64,7 +64,7 @@ describe("one door to the reviewed repository (#340)", () => {
     }
   });
 
-  it("imports only files the guard holds, so no module it loads can change what it sends (Qodo on PR 344)", () => {
+  it("imports only files the guard holds, so no module it loads can change what it sends", () => {
     const root = join(SRC, "../../..");
     const held = (path: string) => {
       const rel = relative(root, path).replace(/\\/g, "/").toLowerCase();

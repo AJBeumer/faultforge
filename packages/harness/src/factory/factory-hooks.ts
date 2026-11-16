@@ -1,6 +1,6 @@
 /**
  * The guardrail hooks' settings check and self-test, run before an agent starts: both hooks must run before
- * every shell command and file edit, and answer as they should, in time. Split from factory-tick.ts (#227).
+ * every shell command and file edit, and answer as they should, in time.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -9,18 +9,18 @@ import { reviewedRepos } from "../../../../.claude/hooks/shared/repos.ts";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 
 /**
- * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
- * guard hook and the factory policy hook must run before every shell command and file edit.
- */
-/**
- * True when a hook command runs exactly this repo's hook file with node, through the fail-closed wrapper that
- * turns a crash, a broken import or a timeout into a refusal (AUD-M4), not merely mentions it.
+ * True when a hook command runs exactly this repo's hook file through the fail-closed wrapper, which turns a
+ * crash, a broken import or a timeout into a refusal. Merely mentioning the file is not enough.
  */
 export function runsHook(command: string, file: string): boolean {
   const expected = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" ${file}`;
   return command.trim().replace(/\\/g, "/") === expected;
 }
 
+/**
+ * Why a workspace's `.claude/settings.json` isn't safe for an unattended run, or an empty list. Both the
+ * guard hook and the factory policy hook must run before every shell command and file edit.
+ */
 export function hookProblems(settingsText: string): string[] {
   let hooks: { matcher?: string; hooks?: { command?: string }[] }[] = [];
   try {
@@ -30,7 +30,7 @@ export function hookProblems(settingsText: string): string[] {
   }
   const problems: string[] = [];
   for (const hook of ["guard-target.ts", "factory-policy.ts"]) {
-    // An MCP tool can post too, so the guard hooks must run before those as well (Qodo on PR 265).
+    // An MCP tool can post too, so the hooks must run before those as well.
     for (const tool of ["Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "mcp__any__tool"]) {
       const covered = hooks.some(
         (h) =>
@@ -44,8 +44,8 @@ export function hookProblems(settingsText: string): string[] {
 }
 
 /**
- * Why the policy hook doesn't judge the read tools, or an empty list: it keeps a run's Read, Grep and Glob off
- * the keys under /proc and off the private repo in a target ticket's run (#284).
+ * Why the policy hook doesn't judge the read tools, or an empty list. It must, to keep a run's Read, Grep and
+ * Glob away from the keys under /proc, and from the private repo in a target ticket's run.
  */
 export function readHookProblems(settingsText: string): string[] {
   let hooks: { matcher?: string; hooks?: { command?: string }[] }[] = [];
@@ -98,7 +98,7 @@ export type HookRunner = (hook: string, stdin: string, env: Record<string, strin
  * What Claude Code would make of a hook's answer. Exit 2 is a blocking error (the tool call is refused);
  * exit 0 with no output allows; exit 0 with a well-formed PreToolUse decision is that decision. Anything
  * else is invalid: Claude Code ignores it and lets the tool run, so a deny printed without
- * `hookEventName` is not a deny (Qodo on PR 115).
+ * `hookEventName` is not a deny.
  */
 export function hookDecision(answer: HookAnswer): "deny" | "allow" | "ask" | "silent" | "invalid" {
   if (answer.status === 2) return "deny";
@@ -132,14 +132,13 @@ export interface HooksReport {
  * command, and deny when its input is not JSON (a crash would otherwise let the tool run). Each answer
  * must come well inside the time limit, since a hook that times out is also a bypass. `reviewedGithub`
  * is a reviewed repo (owner/name): the guard must refuse a raw write to it, and let the door
- * (`npm run target:post` from the lab's root) through unread (#345). Returns the problems found, or an
- * empty list.
+ * (`npm run target:post` from the lab's root) through unread. Returns the problems found, or an empty list.
  */
 export function hookSelfTest(lab: string, reviewedGithub: string, limitSeconds: number, run: HookRunner): string[] {
   return hookSelfTestReport(lab, reviewedGithub, limitSeconds, run).problems;
 }
 
-/** The same self-test, with each hook's outcomes and slowest answer, for the run log (#126). */
+/** The same self-test, with each hook's outcomes and slowest answer, for the run log. */
 export function hookSelfTestReport(
   lab: string,
   reviewedGithub: string,
@@ -161,7 +160,7 @@ export function hookSelfTestReport(
       hook: "guard-target.ts",
       name: "a raw write to a reviewed repo",
       kind: "deny",
-      // Plain words: the guard must refuse the raw write itself, not the text in it (#340).
+      // Plain words: the guard must refuse the raw write itself, not the text in it.
       stdin: payload("Bash", { command: `gh pr create --repo ${reviewedGithub} --head tidy --fill` }, lab),
       env: {},
       expectDeny: true,
@@ -255,7 +254,7 @@ export class HooksCheckError extends Error {
 /**
  * The error to throw when a failed start's cleanup also left something behind: the original message plus
  * what could not be removed. A HooksCheckError stays one, with its report, so the run log still records
- * the failed hook check (Qodo's local review of #126); any other error becomes a plain Error as before.
+ * the failed hook check.
  */
 export function withCleanupFailure(error: unknown, leftovers: string[]): Error {
   if (!leftovers.length) return error instanceof Error ? error : new Error(String(error));
@@ -296,7 +295,7 @@ export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
 
 /**
  * The reviewed repo the self-test writes to: the config's first, or with none marked, the first the guard itself
- * protects (the hooks' `shared/repos.ts` always has the target), never a copy of its name (Qodo on PR 346).
+ * protects (the hooks' `shared/repos.ts` always has the target). A copy of the name could drift from the guard's.
  */
 export function selfTestRepo(factory: FactoryConfig, guarded = reviewedRepos(process.env.FAULTFORGE_CONFIG)): string {
   const marked = Object.values(factory.repos).find((r) => r.guard === "reviewed")?.github;

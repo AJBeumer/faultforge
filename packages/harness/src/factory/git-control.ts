@@ -2,9 +2,9 @@
  * What decides which programs git runs in a checkout: its hooks and its config (a hook, `core.hooksPath`,
  * `core.fsmonitor`, a filter or a credential helper all run a program). In a factory run the agent can write the
  * `.git` folder of a checkout it works in, so after it ends the runner commits there only when these are as they
- * were before it started (#335). Read straight from the files, never through git, which would already obey them:
- * each hook's mode with its text (a hook made executable starts to run; Qodo on PR 336), and every file a config
- * includes (`include.path`, `includeIf.*.path`), as git would read it (Qodo on PR 336).
+ * were before it started. Read straight from the files, never through git, which would already obey them:
+ * each hook's mode with its text (a hook made executable starts to run), and every file a config includes
+ * (`include.path`, `includeIf.*.path`), as git would read it.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";

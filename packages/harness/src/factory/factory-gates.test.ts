@@ -5,7 +5,7 @@ const pages = (...names: (string | { filename: string; previous_filename?: strin
   names.map((n) => (typeof n === "string" ? { filename: n } : n)),
 ];
 
-describe("reviewerRuleGates (#215)", () => {
+describe("reviewerRuleGates", () => {
   it("is empty for a PR that touches no reviewer rule file", () => {
     expect(reviewerRuleGates(pages("src/bookings/list.ts", "README.md", "docs/AGENTS-notes.md"))).toEqual([]);
   });
@@ -25,13 +25,13 @@ describe("reviewerRuleGates (#215)", () => {
     ]);
   });
 
-  it("gates a list GitHub may have cut off at 3,000 files (Qodo on PR 220)", () => {
+  it("gates a list GitHub may have cut off at 3,000 files", () => {
     const many = Array.from({ length: MAX_LISTED_FILES }, (_, i) => `src/f${i}.ts`);
     expect(reviewerRuleGates(pages(...many))).toEqual([expect.stringContaining("can't rule out")]);
     expect(reviewerRuleGates(pages(...many.slice(1)))).toEqual([]);
   });
 
-  it("names rule files only as plain paths in code spans, never as a mention or a link (Qodo on PR 220)", () => {
+  it("names rule files only as plain paths in code spans, never as a mention or a link", () => {
     const [reason] = reviewerRuleGates(pages(".qodo/@victim", ".qodo/[read this](https://example.com)"));
     expect(reason).toContain("`.qodo/?victim`");
     expect(reason).not.toContain("@");

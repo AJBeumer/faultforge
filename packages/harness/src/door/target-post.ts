@@ -1,5 +1,5 @@
 /**
- * The one door for every write to the reviewed repository (#340). It builds the request itself, checks the exact
+ * The one door for every write to the reviewed repository. It builds the request itself, checks the exact
  * text it is about to send, and sends it with `gh` or `git`. The guard hook refuses every other write aimed at that
  * repository, so text this command doesn't send can't reach the reviewer, however it is spelled or built.
  *
@@ -12,7 +12,7 @@
  *   npm run target:post -- pr-close      --number <n> --body-file <f>     (closes with that comment)
  *   npm run target:post -- push          --branch <name> [--checkout <path>]
  *
- * One more kind, `label`, has no command: only the factory's runner moves a ticket's labels, with `sendPost` (#345).
+ * One more kind, `label`, has no command: only the factory's runner moves a ticket's labels, with `sendPost`.
  * A label post adds its labels in one edit, then removes each of the others on its own. Each label name is checked
  * like any text, and must be one plain line of at most 50 characters with no comma, which gh would split in two.
  *
@@ -27,7 +27,7 @@
  * (`target-post-push.ts`). The body goes to `gh` on stdin (`--body-file -`), so what is checked is what is sent.
  *
  * During a factory run the door sends only push, pr-create and pr-edit, unless the runner's own key comes with the
- * post (`target-post-run.ts`, #347): the check is in `sendPost`, so it holds however the door is called.
+ * post (`target-post-run.ts`): the check is in `sendPost`, so it holds however the door is called.
  *
  * Exit codes: 0 sent; 1 usage: an unknown kind or option, a missing or unreadable text file, a title that isn't one
  * line, or a repo that isn't a reviewed one; 2 refused: a check found something, what would be sent couldn't be
@@ -49,9 +49,9 @@ import { addressesQodo, telltales } from "../shared/neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
 import { gateMarker, runGateRefusal } from "./target-post-run.ts";
 
-// The door imports only the guard's own files (the hooks' self/own-files.ts holds them) and Node's: a module it imported that a
-// session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
-// guard does, from factory.json with the target always among them, and runs with node, not a package's runner.
+// The door imports only the guard's own files (listed in the hooks' self/own-files.ts) and Node's: a module a
+// session could rewrite would decide what the door sends. It reads the reviewed repos the way the guard does,
+// from factory.json with the target always among them, and runs with node, not a package's runner.
 
 /** An error's message, or the thrown value as text. */
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -71,7 +71,7 @@ export type Kind = (typeof KINDS)[number];
 
 /**
  * The kinds the command takes. `label` isn't one: only the factory's runner moves a ticket's labels, through
- * `sendPost` (`ticket-write.ts`), and a command an agent could run would let it move them itself (Qodo on PR 346).
+ * `sendPost` (`ticket-write.ts`), and a command an agent could run would let it move them itself.
  */
 export const COMMAND_KINDS = KINDS.filter((k): k is Exclude<Kind, "label"> => k !== "label");
 type CommandKind = (typeof COMMAND_KINDS)[number];
@@ -214,7 +214,7 @@ export function ghCall(post: Post): { args: string[]; input?: string } {
  */
 export function sendPost(post: Post, deps: Deps = {}): string {
   const env = deps.env ?? process.env;
-  // Sent with the door's own gh or git, the gate reads the fixed marker, whatever the caller names (Qodo on PR 349).
+  // Sent with the door's own gh or git, the gate reads the fixed marker, whatever the caller names.
   const ownSender = post.kind === "push" ? !deps.git : !deps.gh;
   const marker = gateMarker(ownSender, deps.runMarker);
   const gate = runGateRefusal(post.kind, { marker, runnerKey: deps.runnerKey });
@@ -306,7 +306,7 @@ export function parsePost(argv: string[], reviewed: Reviewed[]): Post {
   } catch (error) {
     throw new Usage(errorText(error));
   }
-  // With more than one reviewed repo, a post names its own: a default could send it to the wrong one (Qodo on PR 344).
+  // With more than one reviewed repo, a post names its own: a default could send it to the wrong one.
   const target = values.repo
     ? reviewed.find((r) => r.github.toLowerCase() === values.repo?.toLowerCase())
     : reviewed.length === 1

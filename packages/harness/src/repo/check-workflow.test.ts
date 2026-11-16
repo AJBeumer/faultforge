@@ -1,6 +1,6 @@
 /**
- * The Check workflow's safety properties, read from the file itself so a later edit can't drop one quietly
- * (AUD-M20, AUD-N9). Plain text checks, as for the factory workflow.
+ * The Check workflow's safety properties, read from the file itself so a later edit can't drop one quietly.
+ * Plain text checks, as for the factory workflow.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

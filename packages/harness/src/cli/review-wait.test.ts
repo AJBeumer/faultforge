@@ -24,7 +24,7 @@ const pr1: QodoReview = JSON.parse(
 const PR1_HEAD = "c7ffd1540d6ae37e15450c8342d83dc8f866884f";
 
 describe("findingsFor", () => {
-  it("reproduces FF-0001's finding from target PR 1", () => {
+  it("reproduces FF-0001's finding from its saved review", () => {
     expect(findingsFor(pr1, PR1_HEAD)).toEqual([
       expect.objectContaining({
         id: "db9e3625-ca25-490b-8bdf-a61f58b4f0bf",
@@ -118,7 +118,7 @@ describe("waitForReview", () => {
   });
 });
 
-describe("review findings on PR 59", () => {
+describe("open findings, review depth and the last save", () => {
   const lite: QodoReview = JSON.parse(
     readFileSync(join(import.meta.dirname, "../../fixtures/qodo-lite-rereview.json"), "utf8"),
   );
@@ -153,7 +153,7 @@ describe("review findings on PR 59", () => {
   });
 });
 
-describe("parseToolText and parseRpcBody (review findings on PR 59)", () => {
+describe("parseToolText and parseRpcBody", () => {
   it("throws on a tool error instead of treating it as data", () => {
     expect(() => parseToolText({ isError: true, content: [{ type: "text", text: '{"error":"x"}' }] })).toThrow(/x/);
   });
@@ -183,7 +183,7 @@ describe("isSessionLost", () => {
   });
 });
 
-describe("review findings on PR 59, second round", () => {
+describe("waitForReview: when the review was seen complete", () => {
   it("records when the review was first seen complete", async () => {
     let t = 1_000;
     const result = await waitForReview(PR1_HEAD, {
@@ -197,7 +197,7 @@ describe("review findings on PR 59, second round", () => {
   });
 });
 
-describe("review findings on PR 61", () => {
+describe("waitForReview: failed polls and failed saves", () => {
   const failOnce = (answer: QodoReview) => {
     let calls = 0;
     return async () => {
@@ -253,7 +253,7 @@ describe("review findings on PR 61", () => {
   });
 });
 
-describe("review findings on PR 61, third round", () => {
+describe("reconnecting, and saving the comments before reporting complete", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -317,8 +317,8 @@ describe("review findings on PR 61, third round", () => {
   });
 });
 
-describe("waitForHead (#67: review:wait on PR 65 read the old head right after a push)", () => {
-  // PR 65 on 9 Nov: GitHub still showed 506f56d a second after 56fb13c was pushed.
+describe("waitForHead: GitHub can show the old head right after a push", () => {
+  // Real commits: GitHub still showed 506f56d a second after 56fb13c was pushed.
   const OLD = `506f56d${"0".repeat(33)}`;
   const PUSHED = `56fb13c${"1".repeat(33)}`;
   const OTHER = `9abcdef${"2".repeat(33)}`;
@@ -377,7 +377,7 @@ describe("waitForHead (#67: review:wait on PR 65 read the old head right after a
   });
 
   it("returns failed with the error, not a timeout, when every read failed, so the attempt can be recorded", async () => {
-    // Qodo on PR 98: a throw here skipped the head-wait record, leaving no trace of the attempts.
+    // A throw here would skip the head-wait record and leave no trace of the attempts.
     const { deps } = heads(new Error("gh: 502"));
     const result = await waitForHead(PUSHED, { ...deps, onError: () => {} }, { timeoutMs: 10_000, intervalMs: 5_000 });
     expect(result).toEqual({ state: "failed", head: null, polls: 3, seen: [], error: "gh: 502" });
@@ -385,7 +385,7 @@ describe("waitForHead (#67: review:wait on PR 65 read the old head right after a
 });
 
 describe("parseArgs", () => {
-  it("behaves as before without --commit", () => {
+  it("reads a repo and a PR number with no --commit", () => {
     expect(parseArgs(["faultforge", "92"])).toEqual({
       repoKey: "faultforge",
       pr: 92,
@@ -416,7 +416,7 @@ describe("parseArgs", () => {
   });
 });
 
-describe("review findings on PR 98", () => {
+describe("a head that moves while waiting, and the saved comment feeds", () => {
   const HEAD = PR1_HEAD;
   const NEWER = `56fb13c${"1".repeat(33)}`;
 
@@ -574,7 +574,7 @@ describe("QodoApi: raw body kept before parsing", () => {
   });
 });
 
-describe("QodoApi: recovers from a session Qodo later forgot", () => {
+describe("QodoApi: recovers when Qodo has forgotten the session", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -709,7 +709,7 @@ describe("QodoApi: recovers from a session Qodo later forgot", () => {
   });
 });
 
-describe("reviewState: a skip belongs to one commit (#188)", () => {
+describe("reviewState: a skip belongs to one commit", () => {
   const HEAD = "a".repeat(40);
   const OLDER = "b".repeat(40);
   const session = { commit_sha: HEAD, status: "completed", review_complete: false };
@@ -737,7 +737,7 @@ describe("reviewState: a skip belongs to one commit (#188)", () => {
   });
 });
 
-describe("findingsShapeProblem: a complete review must hold a readable findings list (#196)", () => {
+describe("findingsShapeProblem: a complete review must hold a readable findings list", () => {
   it("accepts the saved fixture as it is", () => {
     expect(findingsShapeProblem(pr1)).toBeUndefined();
   });
@@ -753,11 +753,11 @@ describe("findingsShapeProblem: a complete review must hold a readable findings 
     expect(findingsShapeProblem({ ...pr1, finding_count: pr1.findings?.length ?? 0 })).toBeUndefined();
   });
 
-  it("refuses runs that aren't a list of runs, or a session that isn't an object, instead of throwing (Qodo on PR 286)", () => {
+  it("refuses runs that aren't a list of runs, or a session that isn't an object, instead of throwing", () => {
     for (const review_runs of [{}, "x", [null], [1], [[]]]) {
       expect(findingsShapeProblem({ ...pr1, review_runs: review_runs as never }, PR1_HEAD)).toMatch(/list of runs/);
     }
-    // A run still being filled in, with no commit yet, or no runs at all, is read as before (Qodo on PR 286).
+    // A run still being filled in, with no commit yet, or no runs at all, is still accepted.
     const runs = [...(pr1.review_runs ?? []), { review_effort: "standard" }];
     expect(findingsShapeProblem({ ...pr1, review_runs: runs as never }, PR1_HEAD)).toBeUndefined();
     expect(findingsShapeProblem({ ...pr1, review_runs: null as never }, PR1_HEAD)).toBeUndefined();
@@ -766,7 +766,7 @@ describe("findingsShapeProblem: a complete review must hold a readable findings 
   });
 });
 
-describe("findingsShapeProblem: every finding is read field by field (AUD-M9, #249)", () => {
+describe("findingsShapeProblem: every finding is read field by field", () => {
   const onlyFinding = pr1.findings?.find((f) => f.git_sha === PR1_HEAD) as NonNullable<QodoReview["findings"]>[0];
   const withFinding = (change: Record<string, unknown>): QodoReview => ({
     ...pr1,
@@ -814,7 +814,7 @@ describe("findingsShapeProblem: every finding is read field by field (AUD-M9, #2
   });
 });
 
-describe("reviewState: a skip wins, and only true is complete (AUD-N8)", () => {
+describe("reviewState: a skip wins, and only true is complete", () => {
   const session = { commit_sha: PR1_HEAD, status: "completed" };
   it("is skipped when the head's run was skipped, even if Qodo also marks it complete", () => {
     const review = {
@@ -829,15 +829,15 @@ describe("reviewState: a skip wins, and only true is complete (AUD-N8)", () => {
   });
 });
 
-describe("sameCommit (M68)", () => {
+describe("sameCommit", () => {
   it("needs at least seven characters of the commit", () => {
     expect(sameCommit(PR1_HEAD, PR1_HEAD.slice(0, 7))).toBe(true);
     expect(sameCommit(PR1_HEAD, PR1_HEAD.slice(0, 6))).toBe(false);
   });
 });
 
-describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #252)", () => {
-  /** Fake GitHub and Qodo: the head is `PR1_HEAD`, and Qodo answers each of `answers` in turn. */
+describe("run: what review:wait saves, and what it refuses", () => {
+  /** Fake GitHub and Qodo: the head is the fixture's commit, and Qodo answers each of `answers` in turn. */
   function harness(answers: unknown[]) {
     const dir = join(mkdtempSync(join(tmpdir(), "review-wait-")), "target-pr1");
     let t = Date.parse("2026-11-14T00:00:00.000Z");
@@ -900,7 +900,7 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     expect(savedReviewProblem(h.saved())).toBeUndefined();
   });
 
-  it("refuses, exit 2, a complete review it can't read, and saves no review (M21)", async () => {
+  it("refuses, exit 2, a complete review it can't read, and saves no review", async () => {
     const h = harness([{ ...pr1, findings: pr1.findings?.map((f) => ({ ...f, git_sha: f.git_sha.slice(0, 7) })) }]);
     expect(await h.wait()).toBe(2);
     expect(h.err.join("\n")).toContain("not a full lower-case commit id");
@@ -925,7 +925,7 @@ describe("run: what review:wait saves, and what it refuses (AUD-M6, AUD-M26, #25
     expect(h.fetches()).toBe(0);
   });
 
-  it("waits again after an unfinished save, and keeps that save under another name (Qodo on PR 264)", async () => {
+  it("waits again after an unfinished save and keeps that save under another name", async () => {
     const h = harness([pr1]);
     mkdirSync(h.dir, { recursive: true });
     writeFileSync(join(h.dir, `${PR1_HEAD.slice(0, 7)}.review.json`), '{"state":"review incomplete"}');
@@ -956,7 +956,7 @@ describe("writeSavedReview", () => {
   });
 });
 
-describe("run: waiting again after an unfinished save keeps all its evidence (Qodo on PR 264)", () => {
+describe("run: waiting again after an unfinished save keeps all its evidence", () => {
   it("moves the save and every raw file of the commit into a folder of their own", async () => {
     const dir = join(mkdtempSync(join(tmpdir(), "review-wait-")), "target-pr1");
     mkdirSync(dir, { recursive: true });
@@ -983,7 +983,7 @@ describe("run: waiting again after an unfinished save keeps all its evidence (Qo
   });
 });
 
-describe("main: the command line (#252)", () => {
+describe("main: the command line", () => {
   it("reads a usage problem as could not run, 2", async () => {
     expect(await main(["target"])).toBe(2);
     expect(await main(["target", "0"])).toBe(2);

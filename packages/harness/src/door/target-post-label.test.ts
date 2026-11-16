@@ -1,5 +1,5 @@
 /**
- * The door's `label` kind (#345): the factory's runner moves a reviewed repo's ticket labels through `sendPost`, which
+ * The door's `label` kind: the factory's runner moves a reviewed repo's ticket labels through `sendPost`, which
  * checks every label name it sends. The command doesn't take it: an agent run could otherwise move labels itself.
  */
 import { mkdirSync, mkdtempSync } from "node:fs";
@@ -40,7 +40,7 @@ function thrown(gh: Gh, labels: Pick<Post, "add" | "remove">): Error | undefined
   }
 }
 
-describe("the door's label kind (#345)", () => {
+describe("the door's label kind", () => {
   it("adds every label in one edit, then removes each other label on its own", () => {
     const fake = fakeGh();
     label(fake.gh, { add: ["agent-working"], remove: ["ready-for-agent", "needs help"] });
@@ -87,7 +87,7 @@ describe("the door's label kind (#345)", () => {
     expect(error?.message).toMatch(/after 1 of 2 calls/);
   });
 
-  it("isn't a command: npm run target:post refuses label with exit 1, so only the runner moves labels (Qodo on PR 346)", () => {
+  it("isn't a command: npm run target:post refuses label with exit 1, so only the runner moves labels", () => {
     const fake = fakeGh();
     const err: string[] = [];
     const code = main(["label", "--number", "7"], {

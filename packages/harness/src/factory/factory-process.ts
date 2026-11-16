@@ -1,12 +1,10 @@
 /**
- * Telling one process from another that later got the same pid: a pid alone names a process only while it
- * runs, and after a crash or a restart the system hands it on. A process is the one recorded when its pid is
- * alive and its start id is the one recorded (AUD-M19, Qodo on PR 262). Used for the lock's holder.
+ * Telling one process from another that later got the same pid: after a crash or a restart the system hands a
+ * pid on. A process is the one recorded when its pid is alive and its start id matches. Used for the lock's holder.
  *
- * The start id is what the system itself stores for the process's start, read the same way when it is
- * recorded and when it is checked, so a clock step in between changes neither reading (Qodo on PR 262):
- * Linux's start in clock ticks after boot (`/proc/<pid>/stat`), Windows' creation time (CIM, which a
- * standard user can read for other users' and services' processes too), and `ps`'s start elsewhere.
+ * The start id is what the system stores for the process's start, read the same way both times, so a clock step
+ * in between changes neither reading: Linux's clock ticks after boot, Windows' creation time (CIM, which a
+ * standard user can read for other users' processes too), and `ps`'s start elsewhere.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -37,7 +35,7 @@ function windowsStartId(pid: number): string | null {
 
 /** Elsewhere: `ps`, to the second, in UTC. */
 function psStartId(pid: number): string | null {
-  // In UTC whatever the zone or the season: `lstart` is printed in local time (Qodo on PR 262).
+  // `lstart` is printed in local time, so pin it to UTC whatever the zone or the season.
   const out = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
     encoding: "utf8",
     timeout: 15_000,
@@ -60,9 +58,8 @@ export function processStartId(pid: number): string | null {
 }
 
 /**
- * True when the live process `pid` is the one whose start id was recorded as `started`. Anything that can't
- * be read (no id recorded, as in a lock written before this rule, or an id the system won't give) counts as
- * the same process: a process is only taken for another on evidence, never on a failed look.
+ * True when the live process `pid` is the one whose start id was recorded as `started`. No id recorded, or one
+ * the system won't give, counts as the same process: a process is only taken for another on evidence.
  */
 export function sameProcess(
   pid: number,

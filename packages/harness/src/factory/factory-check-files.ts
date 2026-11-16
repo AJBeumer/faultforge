@@ -1,6 +1,6 @@
 /**
  * After the agent stops, the runner compares the files that decide whether the check passes between the commit
- * the run started from and the head of the pull request it delivered (#341). The policy hook reads command text,
+ * the run started from and the head of the pull request it delivered. The policy hook reads command text,
  * and the agent can build a command at run time that no text rule can read; a weakened check (a changed Vitest,
  * Biome or TypeScript config, a `package.json` script, the check workflow, or the check's own scripts) would then
  * still look green. Looking at the result, whatever made it, catches that.

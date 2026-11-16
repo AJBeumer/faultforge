@@ -32,7 +32,7 @@ const input = (over: Partial<SetupInput> = {}): SetupInput => ({
 });
 const lines = (over: Partial<SetupInput> = {}) => setupPlan(input(over)).map((s) => s.argv.join(" "));
 
-describe("setupPlan (#330)", () => {
+describe("setupPlan", () => {
   it("makes a system user with no extra groups, no password and no sudo rule", () => {
     const [first] = setupPlan(input());
     expect(first?.unless).toEqual(["id", "-u", SANDBOX_USER]);
@@ -113,7 +113,7 @@ describe("setupPlan (#330)", () => {
   });
 });
 
-describe("teardownPlan (Qodo on PR 334)", () => {
+describe("teardownPlan", () => {
   const down = (over: Partial<SetupInput> = {}, created = true) => teardownPlan(input(over), created);
 
   it("undoes every kind of change the setup makes, each step tried whatever an earlier one did", () => {

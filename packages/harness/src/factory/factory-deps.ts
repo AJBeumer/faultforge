@@ -1,6 +1,5 @@
 /**
- * The tick's real side effects: GitHub, git, npm, the agent and the file system, behind `TickDeps`. Split
- * from factory-tick.ts (#227).
+ * The tick's real side effects: GitHub, git, npm, the agent and the file system, behind `TickDeps`.
  */
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -37,16 +36,14 @@ import { ghSnapshot } from "./ticket-snapshot.ts";
 export function realDeps(factory: FactoryConfig, options: TickOptions, mode: RunMode = "local"): TickDeps {
   const runs = runsDir();
   mkdirSync(runs, { recursive: true });
-  // Literal, not `privateDir()`: this is the physical "private" worktree this very checkout always
-  // has (the same fixed name `workspace()` below gives it), the one the push and the main-moved check
-  // below act on. Honouring `FAULTFORGE_PRIVATE_DIR` here would push and audit a different folder than
-  // the one actually checked out, so the evidence would silently escape it (Qodo on PR 154).
+  // The fixed `private` folder, not `privateDir()`: FAULTFORGE_PRIVATE_DIR could point elsewhere, and then the
+  // runner would push and audit a folder other than the one checked out, and the evidence would escape it.
   const privateRepo = join(LAB_ROOT, "private");
-  const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths (N-12)
+  const evidenceInPrivate = relative(privateRepo, evidenceDir(factory)).replace(/\\/g, "/"); // as git spells paths
   // In CI there is no private checkout until the runner makes one, and none while a target ticket's agent runs.
   const access = privateAccess(mode, privateRepo, runs);
-  // The runner's comments and labels: a reviewed repo's ticket gets them through the door, which checks them (#345).
-  // While the agent runs, the door takes only its kinds; the runner's own writes carry the run's key (#347).
+  // A reviewed repo's ticket gets the runner's comments and labels through the door, which checks them. While the
+  // agent runs, the door takes only the agent's kinds; the runner's own writes carry the run's key.
   const doorRun = doorRunHolder();
   const tickets = ticketWriter(
     Object.values(factory.repos)
@@ -60,11 +57,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   const deps: TickDeps = {
     now: () => new Date(),
     mode,
-    // A local run works next to the owner's reviewed checkouts: git's own guard must be in each (#242), and in
-    // the private checkout too, whose pre-push hook sends its history only to its recorded origin (PR 333).
-    // The tick pushes through `privateRepo`, so that is the one checked. `guard:install` writes to `privateDir()`,
-    // which FAULTFORGE_PRIVATE_DIR can move elsewhere: then the refusal says so, or its advice could never clear it
-    // (Qodo on PR 334).
+    // A local run works next to the owner's reviewed checkouts, so git's own guard must be in each, and in the
+    // private checkout, whose pre-push hook sends its history only to its recorded origin. `guard:install` writes
+    // to `privateDir()`, which FAULTFORGE_PRIVATE_DIR can move: the refusal says so, or its advice can't clear it.
     unguarded: () => {
       const problems = unguardedCheckouts(factory, LAB_ROOT, privateRepo);
       const installs = privateDir();
@@ -75,10 +70,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
           : problem,
       );
     },
-    // GitHub reads get three tries in `github.ts` itself: one transient failure must not cost the tick (AUD-N10).
     // The same reads the recovery dry run makes (`factory-recover.ts`).
     claimMode: githubRecoveryReads.claimMode,
-    // Every open PR, however many: gh pages through them up to the limit (Qodo on PR 268).
+    // Every open PR, however many: gh pages through them up to the limit.
     openPrs: (github, number) =>
       earlierPrs(
         ghJson<OpenPr[]>(
@@ -97,7 +91,6 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         github.split("/")[0] ?? "",
       ),
     print: (line) => console.log(line),
-    // A live holder keeps it however long it runs; a restart frees it (AUD-M19).
     lock: () => {
       held = acquireLock(runs, pidAlive);
       return held;
@@ -118,14 +111,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         (label) => tickets.removeLabel(github, number, label),
         (labels) => tickets.addLabels(github, number, labels),
       ),
-    // Every comment the runner posts starts with its mark: it posts as the owner, and the mark is how a later
-    // run's snapshot tells it from the owner's own text (AUD-M21).
+    // The runner posts as the owner, so its mark is how a later run's snapshot tells it from the owner's own text.
     comment: (github, number, body) => tickets.comment(github, number, runnerComment(body)),
     async qodoCheck(runId) {
-      // Its own short-lived worktree, so the live answers reach the private repo's `main` even when
-      // the check stops the run before the ticket's own workspace (and `ws.private`) ever exist, and
-      // even on a clean run: `checkLiveQodoConfig` otherwise writes into this checkout's own `private/`,
-      // which nothing else ever commits or pushes (Qodo on PR 145).
+      // Its own short-lived worktree, so Qodo's live answers reach the private repo's `main` even when the check
+      // stops the run before the workspace exists. Otherwise they would land in a `private/` nothing ever pushes.
       const label = `qodo-check-${runId}`;
       const priv = join(runs, label, "private");
       let source = privateRepo;
@@ -149,13 +139,10 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       try {
         published = commitAndPublish(priv, evidenceInPrivate, label, git, gitLong);
       } catch {
-        // published stays null: the push itself failed (not merely a blocked path - our evidence is
-        // always under an allowed root). Nothing is torn down below, so the worktree is the evidence's
-        // only remaining copy, the same way `saveEvidence` keeps the run folder when its own push fails.
+        // The push failed, so the worktree below stays: it is the evidence's only copy.
       }
-      // Torn down only once the evidence actually reached the remote (`main`, or its own branch if a
-      // blocked path forced that); otherwise the worktree is left for the owner to recover by hand
-      // (Qodo on PR 145, round 2).
+      // Torn down only once the evidence reached the remote, on `main` or its own branch; otherwise the owner
+      // recovers it by hand.
       if (published?.pushed || published?.savedAt) {
         git(source, "worktree", "remove", "--force", priv);
         git(source, "branch", "-D", label);
@@ -167,7 +154,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     workspace(runId, repoKey) {
       const root = join(runs, runId);
       const lab = join(root, basename(LAB_ROOT));
-      // A target ticket's agent gets no private worktree: the runner saves its evidence after it ends (AUD-H2).
+      // A target ticket's agent gets no private worktree: the runner saves its evidence after it ends.
       const reviewed = isReviewedTicket(factory, repoKey);
       const priv = reviewed ? "" : join(lab, "private");
       const mainAtStart: Record<string, string> = {};
@@ -209,7 +196,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     audit: (ws, ticket, from, to) =>
       auditRun(factory, { checkout: privateRepo, main: access.main }, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) => {
-      // Marked when the lock was taken (`endsDoorRun`); again here in case it wasn't, before the agent exists (#347).
+      // Marked when the lock was taken (`endsDoorRun`); again here in case it wasn't, before the agent exists.
       doorRun.start(runId);
       log("door-run", { marker: doorRun.marker, allowed: AGENT_DOOR_KINDS });
       return runAgent(
@@ -223,7 +210,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         ticketFile,
         log,
         (pid) => held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
-        // In Actions the agent runs behind the network allow-list, or not at all; on a PC without one (#330).
+        // In Actions the agent runs behind the network allow-list, or not at all; on a PC without one.
         sandboxFor(mode, factory),
       );
     },
@@ -265,27 +252,25 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         mkdirSync(temporary, { recursive: true });
         source = access.source();
         // A copy saved earlier whose push failed left its worktree: the next copy goes through it, not a second
-        // branch of the same name (Qodo on PR 288).
+        // branch of the same name.
         if (!existsSync(join(priv, ".git"))) {
           gitLong(source, "fetch", "--quiet", "origin", "main");
           gitLong(source, "worktree", "add", "-b", `run-${runId}`, priv, "origin/main");
         }
       }
       // A private worktree that is gone (a half-done cleanup) must never be written to: `git -C` would then
-      // find the enclosing repository, the harness, and commit and push there (Qodo on PR 262).
+      // find the enclosing repository, the harness, and commit and push there.
       if (!existsSync(join(priv, ".git")))
         throw new Error("the run's private worktree is gone, so its evidence can't be saved through it");
-      // The agent could write the run's private checkout, its .git too: the runner's commit and push there would run
-      // its hooks and obey its config. Only as they were before the agent started; else the logs wait for the
-      // workflow's keep step, which pushes them from a clone of its own (#335). In CI no process of the agent's user
-      // may outlive the check either: one could change them after the runner looked (Qodo on PR 336).
+      // The agent could write the private checkout's .git, and the runner's commit there would run its hooks and
+      // obey its config. So only if they are as before the agent started; else the workflow's keep step pushes the
+      // logs from its own clone. In CI no agent process may outlive the check, or it could change them afterwards.
       const lingering = ws?.private && mode === "ci" ? stopAgentProcesses() : null;
       if (lingering) throw new Error(`${lingering}, so the runner won't commit through the run's private checkout`);
       const tampered = ws?.private ? gitControlProblem(ws.private, ws.fingerprints) : undefined;
       if (tampered) throw new Error(tampered);
-      // A target ticket's run kept the reviews review:wait saved in a plain folder of its lab worktree, which the
-      // runner now carries into the private repo: only `reviews/`, and first, so nothing the agent wrote there can
-      // stand in for the runner's own logs below; links are left behind (AUD-H2; Qodo on PR 288).
+      // A target ticket's run kept its saved reviews in a plain folder of its lab worktree. Only `reviews/` is
+      // carried over, and first, so nothing the agent wrote can stand in for the runner's own logs; links stay behind.
       if (ws && !ws.private)
         copyEvidence(
           evidenceKindDir(join(ws.lab, factory.evidence), "reviews"),
@@ -298,8 +283,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         if (existsSync(file)) copyFileSync(file, join(dir, `${runId}${suffix}`));
       }
       const result = commitAndPublish(priv, evidenceInPrivate, runId, git, gitLong);
-      // Torn down once the evidence reached origin, whether that's main or a blocked run's own branch;
-      // only when even that push failed is the worktree the owner's sole remaining copy (Qodo on PR 141).
+      // Torn down once the evidence reached origin, on main or a blocked run's own branch; when even that push
+      // failed, the worktree is the only copy.
       if ((result.pushed || result.savedAt) && temporary) {
         git(source, "worktree", "remove", "--force", priv);
         git(source, "branch", "-D", `run-${runId}`);
@@ -335,11 +320,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         mainAtStart[key] = main;
       }
       mainAtStart[PRIVATE_KEY] = access.main();
-      // The workflow checks no private repo out (AUD-H2). A lab ticket's agent saves evidence in <lab>/private,
-      // so the runner clones it there; a target ticket's agent starts only with no private content on disk.
+      // The workflow checks no private repo out. A lab ticket's agent saves evidence in <lab>/private, so the
+      // runner clones it there; a target ticket's agent starts only with no private content on disk.
       const reviewed = isReviewedTicket(factory, repoKey);
       // The clone goes, unless a Qodo-state worktree kept after a failed push still needs its objects: that
-      // evidence stays, and a target ticket then doesn't start (Qodo on PR 288).
+      // evidence stays, and a target ticket then doesn't start.
       if (!access.leftovers().some((p) => basename(dirname(p)).startsWith("qodo-check-"))) access.drop();
       if (reviewed) {
         const left = access.leftovers();

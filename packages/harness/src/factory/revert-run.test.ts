@@ -15,7 +15,7 @@ function recorder(status = 0) {
   return { sh, calls };
 }
 
-describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)", () => {
+describe("revert:check runs a PR's tests as the sandbox user in a CI run", () => {
   it("starts the program through sudo as the sandbox user, the environment kept by name, not by value", () => {
     const seen: { command: string; args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
     const spawn: Spawn = (command, args, options) => {
@@ -37,7 +37,7 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
     expect(call?.args.join(" ")).not.toContain("/home/runner");
   });
 
-  it("shares one copy with the sandbox user, and only lets it pass through the scratch folder (Qodo on PR 336)", () => {
+  it("shares one copy with the sandbox user, and only lets it pass through the scratch folder", () => {
     const { sh, calls } = recorder();
     shareWithSandbox("/tmp/revert-check-1", "/tmp/revert-check-1/with", sh, "runner");
     expect(calls).toEqual([
@@ -58,12 +58,12 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
         "+",
       ],
     ]);
-    // setfacl refuses a default entry on a file, so a recursive call never carries one (Qodo on PR 336).
+    // setfacl refuses a default entry on a file, so a recursive call never carries one.
     for (const call of calls.filter((c) => c.includes("-R"))) expect(call.join(" ")).not.toMatch(/\bd:u:/);
     expect(() => shareWithSandbox("/tmp/r", "/tmp/r/with", recorder(1).sh, "runner")).toThrow(/couldn't share/);
   });
 
-  it("reads no report a test replaced with a link (Qodo on PR 336)", (context) => {
+  it("reads no report a test replaced with a link", (context) => {
     const dir = mkdtempSync(join(tmpdir(), "revert-run-"));
     try {
       try {
@@ -94,7 +94,7 @@ describe("revert:check runs a PR's tests as the sandbox user in a CI run (#335)"
 
   it("never runs the tests unsandboxed when a sandbox was asked for and isn't in place", () => {
     expect(() => testSetup(true, recorder(1).sh)).toThrow(/no sandbox for the tests/);
-    // Without --sandbox (the owner's PC): the tests run as the caller, as before.
+    // Without --sandbox (the owner's PC) the tests run as the caller.
     expect(testSetup(false)).toEqual({ runTests: runVitest });
   });
 });

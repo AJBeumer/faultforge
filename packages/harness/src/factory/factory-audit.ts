@@ -1,7 +1,6 @@
 /**
  * The audit after the agent stops: what actually changed while it ran (each repo's `main`, the owner's
  * checkouts, the guardrail files, comments, reviews and ticket changes), whatever its commands looked like.
- * Split from factory-tick.ts (#227).
  */
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { gh, ghAll, ghApiJson } from "../shared/github.ts";

@@ -1,9 +1,8 @@
 /**
- * How the unattended agent writes its PR, by the ticket's repo (#345). A lab ticket's agent uses gh and git as
- * usual. A reviewed repo's agent writes only through the door (`npm run target:post`, #340), naming the repo with
- * `--repo`, which the door needs as soon as more than one repo is marked reviewed (Qodo on PR 346). The kinds it
- * may use come from `AGENT_DOOR_KINDS`, the list the door itself enforces during a run (`target-post-run.ts`, #347), so the prompt never
- * names a kind the hook refuses. Split from factory-agent.ts, which sits at the module size limit.
+ * How the unattended agent writes its PR. A lab ticket's agent uses gh and git as usual. A reviewed repo's agent
+ * writes only through the door (`npm run target:post`), always with `--repo`, which the door needs once more than
+ * one repo is reviewed. The kinds come from `AGENT_DOOR_KINDS`, the list the door enforces during a run, so the
+ * prompt never names a kind the hook refuses.
  */
 import { AGENT_DOOR_KINDS, type AgentDoorKind } from "../door/target-post-run.ts";
 

@@ -8,7 +8,7 @@ import {
   templateTelltales,
 } from "./neutral.ts";
 
-describe("addressesQodo (re-grade 6: Q25, Q26)", () => {
+describe("addressesQodo", () => {
   it("tells a Qodo address from ordinary text", () => {
     expect(addressesQodo("/ask why?")).toBe(true);
     expect(addressesQodo("ok\n  /improve")).toBe(true);
@@ -48,7 +48,7 @@ describe("telltales", () => {
   });
 });
 
-describe("templateTelltales (#105)", () => {
+describe("templateTelltales", () => {
   const template = {
     find: "    const original = deps.store.getBooking(previous.bookingId);\n",
     replace: "    const original = deps.store.getBooking(idempotencyKey);\n",
@@ -65,7 +65,7 @@ describe("templateTelltales (#105)", () => {
       "replace: says planted",
     ]);
     expect(templateTelltales({ ...template, find: "// FaultForge marker\n" })).toEqual(["find: names the lab"]);
-    // A case id in a branch name is caught in lower case too, as branch names are written (#190).
+    // A case id in a branch name is caught in lower case too, as branch names are written.
     expect(templateTelltales({ ...template, publish: { ...template.publish, branch: "ff-0002" } })).toEqual([
       "branch: contains a case id",
     ]);
@@ -96,7 +96,7 @@ describe("templateTelltales (#105)", () => {
   });
 });
 
-describe("telltales: hyphenated, underscored and lower-case forms, as branch names write them (#190)", () => {
+describe("telltales: hyphenated, underscored and lower-case forms, as branch names write them", () => {
   it.each([
     ["ff-0002", "contains a case id"],
     ["FF_0002", "contains a case id"],
@@ -143,7 +143,7 @@ describe("telltales: hyphenated, underscored and lower-case forms, as branch nam
   });
 });
 
-describe("telltales: one row per pattern, so none can be removed unnoticed (#188)", () => {
+describe("telltales: one row per pattern, so none can be removed unnoticed", () => {
   it.each([
     ["Undo the sabotage", "says sabotage"],
     ["a saboteur's change", "says sabotage"],
@@ -159,7 +159,7 @@ describe("telltales: one row per pattern, so none can be removed unnoticed (#188
   });
 });
 
-describe("telltales read look-alike and invisible characters as a reader sees them (#242)", () => {
+describe("telltales read look-alike and invisible characters as a reader sees them", () => {
   it.each([
     ["a Cyrillic a", "plаnted"],
     ["a Greek omicron", "grοund truth"],
@@ -177,7 +177,7 @@ describe("telltales read look-alike and invisible characters as a reader sees th
   });
 });
 
-describe("telltales read the lab's name inside a joined word (re-grade 5)", () => {
+describe("telltales read the lab's name inside a joined word", () => {
   it.each([
     "faultforge_private",
     "faultforge_lab",
@@ -204,14 +204,14 @@ describe("telltales read the lab's name inside a joined word (re-grade 5)", () =
   });
 });
 
-describe("camel-case joins are split only for the lab's name (re-grade 5)", () => {
+describe("camel-case joins are split only for the lab's name", () => {
   it("leaves code such as clientMutationId and answerKeys alone", () => {
     expect(telltales("addComment { clientMutationId }")).toEqual([]);
     expect(telltales("const answerKeys = []")).toEqual([]);
   });
 });
 
-describe("telltales read text as markdown renders it, and a dot as a separator (re-grade 7)", () => {
+describe("telltales read text as markdown renders it, and a dot as a separator", () => {
   it.each([
     ["an HTML comment", "fault<!-- -->forge"],
     ["an empty HTML comment", "plan<!---->ted bug"],
@@ -257,7 +257,7 @@ describe("telltales read text as markdown renders it, and a dot as a separator (
   });
 });
 
-describe("markup read as rendered, after Qodo on PR 339", () => {
+describe("markup read as GitHub renders it", () => {
   it("leaves a named entity GitHub doesn't know as written", () => {
     expect(renderedText("fault&bogus;forge")).toBe("fault&bogus;forge");
     expect(telltales("fault&bogus;forge")).toEqual([]);

@@ -50,7 +50,7 @@ function world(
   };
 }
 
-describe("recoverStranded (#197)", () => {
+describe("recoverStranded", () => {
   it("moves a stranded ticket to needs-help: comment first, then the help label, then agent-working off", () => {
     const w = world({ "o/t#7": [WORKING] });
     expect(w.run()).toEqual({ recovered: ["o/t#7"], failed: [] });
@@ -76,7 +76,7 @@ describe("recoverStranded (#197)", () => {
   });
 });
 
-describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 211)", () => {
+describe("recoverStranded: every failure leaves the ticket findable", () => {
   it("keeps agent-working when the help label can't be added, so the next tick tries again", () => {
     const w = world({ "o/t#7": [WORKING] }, { addFails: true });
     expect(w.run()).toMatchObject({ recovered: [], failed: [expect.stringContaining("couldn't add")] });
@@ -114,7 +114,7 @@ describe("recoverStranded: every failure leaves the ticket findable (Qodo on PR 
   });
 });
 
-describe("recoverStranded: a ticket the other way of running claimed is left alone (AUD-M19)", () => {
+describe("recoverStranded: a ticket the other way of running claimed is left alone", () => {
   it("skips a ticket whose claim came from the other mode, and still recovers its own and unmarked ones", () => {
     const w = world({ "o/t#1": [WORKING], "o/t#2": [WORKING], "o/t#3": [WORKING] });
     const claims: Record<number, "ci" | "local" | null> = { 1: "local", 2: "ci", 3: null };
@@ -152,7 +152,7 @@ describe("recoverStranded: a ticket the other way of running claimed is left alo
   });
 });
 
-describe("recoverStranded: a ticket that already shows agent-done (Qodo on PR 262)", () => {
+describe("recoverStranded: a ticket that already shows agent-done", () => {
   it("only loses agent-working: its run finished, so no stranded comment and no help label", () => {
     const w = world({ "o/t#7": [WORKING, "agent-done"] });
     expect(w.run().recovered).toEqual(["o/t#7"]);
@@ -161,7 +161,7 @@ describe("recoverStranded: a ticket that already shows agent-done (Qodo on PR 26
   });
 });
 
-describe("recoverStranded: a finished ticket of the other mode still loses agent-working (Qodo on PR 268)", () => {
+describe("recoverStranded: a finished ticket of the other mode still loses agent-working", () => {
   it("removes agent-working from a ticket that already shows agent-done, whichever mode claimed it", () => {
     const w = world({ "o/t#7": [WORKING, "agent-done"] });
     const deps: RecoveryDeps = { ...w.deps, mode: "ci", claimMode: () => "local" };

@@ -15,7 +15,7 @@ import {
   withCleanupFailure,
 } from "./factory-hooks.ts";
 
-describe("selfTestRepo: the reviewed repo the self-test writes to (#345)", () => {
+describe("selfTestRepo: the reviewed repo the self-test writes to", () => {
   const repo = (github: string, guard: "lab" | "reviewed") =>
     ({ github, path: ".", guard, check: "", tests: "", start: null, tickets: {}, board: false }) as never;
   const guarded = [{ github: "Guard/first", name: "first", folder: "first", checkout: "first" }];
@@ -25,7 +25,7 @@ describe("selfTestRepo: the reviewed repo the self-test writes to (#345)", () =>
     expect(selfTestRepo(factory as never, guarded)).toBe("Owner/app");
   });
 
-  it("with none marked, takes the guard's own first repo, not a name copied here (Qodo on PR 346)", () => {
+  it("with none marked, takes the guard's own first repo, not a name copied here", () => {
     const factory = { evidence: "", repos: { lab: repo("Owner/lab", "lab") } };
     expect(selfTestRepo(factory as never, guarded)).toBe("Guard/first");
     expect(selfTestRepo(factory as never)).toMatch(/^[\w.-]+\/[\w.-]+$/);
@@ -45,7 +45,7 @@ describe("hookProblems", () => {
     expect(readHookProblems(text)).toEqual([]);
   });
 
-  it("refuses settings where the policy hook doesn't judge the read tools (#284)", () => {
+  it("refuses settings where the policy hook doesn't judge the read tools", () => {
     const noReads = settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: both }]);
     expect(readHookProblems(noReads)).toEqual([
       "factory-policy.ts doesn't run before Read",
@@ -56,7 +56,7 @@ describe("hookProblems", () => {
     expect(readHookProblems(settings([{ matcher: "*", hooks: both }]))).toEqual([]);
   });
 
-  it("refuses settings without the policy hook, as on a main from before it existed", () => {
+  it("refuses settings that run only the guard hook, without the policy hook", () => {
     expect(
       hookProblems(
         settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: [both[0]] }]),
@@ -72,7 +72,7 @@ describe("hookProblems", () => {
     ]);
   });
 
-  it("refuses a matcher that leaves out MCP tools (Qodo on PR 265)", () => {
+  it("refuses a matcher that leaves out MCP tools", () => {
     const noMcp = settings([{ matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: both }]);
     expect(hookProblems(noMcp)).toEqual([
       "guard-target.ts doesn't run before mcp__any__tool",
@@ -91,7 +91,7 @@ describe("hookProblems", () => {
   });
 });
 
-describe("hook self-test (#104)", () => {
+describe("hook self-test", () => {
   const LAB = join(import.meta.dirname, "../../../..");
   /** A decision as a hook prints it; `null` leaves out the hookEventName Claude Code requires. */
   const decision = (permissionDecision: string, hookEventName: string | null = "PreToolUse") =>
@@ -104,7 +104,6 @@ describe("hook self-test (#104)", () => {
     });
   const deny = decision("deny");
   const allow = "";
-  /** A fake hook: answers from a table keyed by hook and whether the stdin was JSON and what it asked. */
   const fake =
     (answer: (hook: string, stdin: string) => HookAnswer): HookRunner =>
     (hook, stdin) =>
@@ -126,7 +125,7 @@ describe("hook self-test (#104)", () => {
     expect(hookSelfTest(LAB, "Owner/app", 15, fake(correct))).toEqual([]);
   });
 
-  it("asks the guard to refuse a raw write to the reviewed repo and to let the door through (#345)", () => {
+  it("asks the guard to refuse a raw write to the reviewed repo and to let the door through", () => {
     const seen: string[] = [];
     hookSelfTest(LAB, "Owner/app", 15, (hook, stdin) => {
       if (hook === "guard-target.ts" && stdin.startsWith("{")) seen.push(JSON.parse(stdin).tool_input.command);
@@ -174,7 +173,7 @@ describe("hook self-test (#104)", () => {
     expect(hookSelfTest(LAB, "Owner/app", 15, blocking)).toEqual([]);
   });
 
-  it("fails a hook whose deny is not a decision Claude Code accepts (no hookEventName) (Qodo on PR 115)", () => {
+  it("fails a hook whose deny is not a decision Claude Code accepts (no hookEventName)", () => {
     const malformed = fake((hook, stdin) => {
       const answer = correct(hook, stdin);
       return answer.stdout ? { ...answer, stdout: decision("deny", null) } : answer;
@@ -184,7 +183,7 @@ describe("hook self-test (#104)", () => {
     expect(problems[0]).toMatch(/guard-target\.ts let through a raw write to a reviewed repo .*invalid/);
   });
 
-  it("fails a hook that asks for approval on the harmless command: nobody is there to answer (Qodo on PR 115)", () => {
+  it("fails a hook that asks for approval on the harmless command: nobody is there to answer", () => {
     const asking = fake((hook, stdin) => {
       const answer = correct(hook, stdin);
       return stdin.includes("npm run check") ? { ...answer, stdout: decision("ask") } : answer;
@@ -231,16 +230,15 @@ describe("hook self-test (#104)", () => {
     ).toBe(60);
   });
 
-  // Seven real `node` processes, spawned one after another: fast alone, but a concurrent Vitest
-  // run on the same machine (#110) can starve the CPU long enough to pass vitest's 5 s default.
-  // The real guard refuses the raw write to the target and lets the door through from this checkout (#345).
+  // Seven real `node` processes, one after another: a concurrent Vitest run on the same machine can starve
+  // the CPU past Vitest's 5 s default, hence the longer limit.
   it("passes this repo's real hooks, run with node as settings.json runs them", () => {
     const limit = hookTimeoutSeconds(readFileSync(join(LAB, ".claude/settings.json"), "utf8"));
     expect(hookSelfTest(LAB, "AJBeumer/faultforge-target", limit, realHookRunner(LAB, limit))).toEqual([]);
   }, 60_000);
 });
 
-describe("withCleanupFailure: a failed start's cleanup problems keep the hook report (#126)", () => {
+describe("withCleanupFailure: a failed start's cleanup problems keep the hook report", () => {
   const report: HooksReport = { problems: ["guard-target.ts let through a raw write to a reviewed repo"], hooks: [] };
 
   it("keeps a HooksCheckError's report when cleanup also failed, so the run log can still show it", () => {

@@ -12,8 +12,8 @@ export interface RepoConfig {
   start: { command: string; port: number; health: string } | null;
   tickets: { sections: string[]; checklist: string };
   board: boolean;
-  /** The files that decide whether the check passes, compared after every factory run (#341,
-   * `factory-check-files.ts`): `files` compared whole, `scripts` (`package.json` files) by their `scripts` field
+  /** The files that decide whether the check passes, compared after every factory run
+   * (`factory-check-files.ts`): `files` compared whole, `scripts` (`package.json` files) by their `scripts` field
    * only. Regular expressions on repo-relative paths. Required by the schema; optional here so a test's made-up
    * config needs none (a run without it fails closed). */
   checkFiles?: { files: string; scripts: string };
@@ -21,7 +21,7 @@ export interface RepoConfig {
 
 export interface FactoryConfig {
   evidence: string;
-  /** The hosts a CI run's agent may reach, through the runner's proxy (#330, `factory-sandbox.ts`). Required by
+  /** The hosts a CI run's agent may reach, through the runner's proxy (`factory-sandbox.ts`). Required by
    * the schema; optional here so a test's made-up config needs none. */
   network?: { allow: string[] };
   repos: Record<string, RepoConfig>;
@@ -66,7 +66,6 @@ export function loadFactory(path = process.env.FAULTFORGE_CONFIG ?? join(root, "
   return config;
 }
 
-/** One repo's settings by its key in `factory.json`. */
 export function repoConfig(config: FactoryConfig, key: string): RepoConfig {
   const repo = config.repos[key];
   if (!repo) throw new Error(`No repo "${key}" in factory.json. Known: ${Object.keys(config.repos).join(", ")}`);

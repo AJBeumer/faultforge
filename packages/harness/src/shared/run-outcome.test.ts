@@ -35,7 +35,7 @@ describe("stepLogText", () => {
     expect(text).not.toContain("(");
   });
 
-  it("names not_run and the signal when a process is killed without a spawn error (#114)", () => {
+  it("names not_run and the signal when a process is killed without a spawn error", () => {
     const text = stepLogText(["vitest", "run"], { ...base, status: null, signal: "SIGTERM" }, "not_run");
     expect(text).toContain("exit null\noutcome not_run (signal SIGTERM)\n");
   });
@@ -65,7 +65,7 @@ describe("stepLogText", () => {
 });
 
 describe("reading vitest's JSON report", () => {
-  it("lists failed tests, and keeps a file that failed before any test ran apart (#217)", () => {
+  it("lists failed tests, and keeps a file that failed before any test ran apart", () => {
     const result = parseVitestReport({
       testResults: [
         {
@@ -87,7 +87,7 @@ describe("reading vitest's JSON report", () => {
   });
 });
 
-describe("a proof's outcome (#217)", () => {
+describe("a proof's outcome", () => {
   const ran = (status: "passed" | "failed") => ({
     testResults: [{ name: "/p.test.ts", status, assertionResults: [{ fullName: "invariant holds", status }] }],
   });
@@ -113,7 +113,7 @@ describe("a proof's outcome (#217)", () => {
   });
 });
 
-describe("readVitestReport (Qodo on PR 219)", () => {
+describe("readVitestReport", () => {
   it("reads a report, and gives undefined for a missing or truncated one, so the proof is not_run", () => {
     const dir = mkdtempSync(join(tmpdir(), "report-"));
     try {

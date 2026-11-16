@@ -1,6 +1,6 @@
 /**
- * The house rule that a helper two scripts need lives in one named module (AUD-N1), checked for the three that
- * had been copied: the SHA-256 helper and the tool name (`provenance.ts`) and JSON Lines reading (`jsonl.ts`).
+ * The house rule that a helper two scripts need lives in one named module, checked for three that are easy to
+ * copy: the SHA-256 helper and the tool name (`provenance.ts`) and JSON Lines reading (`jsonl.ts`).
  */
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -16,14 +16,14 @@ const filesMatching = (pattern: RegExp) =>
     .map(({ file }) => file)
     .sort();
 
-describe("helpers that live in one module (AUD-N1)", () => {
+describe("helpers that live in one module", () => {
   it("defines sha256 once", () => {
     expect(filesMatching(/function sha256\(/)).toEqual(["provenance.ts"]);
   });
 
   it("hashes only through it: no other module builds a hash of its own", () => {
     const inline = filesMatching(/createHash\(/);
-    // The door's run gate (#347) hashes its runner key itself: the door imports only files the guard holds, and
+    // The door's run gate hashes its runner key itself: the door imports only files the guard holds, and
     // provenance.ts isn't one (target-post-door.test.ts).
     expect(inline).toEqual(["provenance.ts", "target-post-run.ts"]);
   });
