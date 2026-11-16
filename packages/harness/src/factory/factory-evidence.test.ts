@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { blockedEvidencePaths, commitAndPublish } from "./factory-evidence.ts";
 
-describe("blockedEvidencePaths (#102)", () => {
+describe("blockedEvidencePaths", () => {
   it("allows paths under the evidence root or factory-log, nothing else", () => {
     expect(
       blockedEvidencePaths(
@@ -33,13 +33,13 @@ describe("blockedEvidencePaths (#102)", () => {
 
   it("drops only the genuinely empty line split() leaves after the trailing newline, never trims a real path", () => {
     expect(blockedEvidencePaths([""], "raw-artifacts")).toEqual([]);
-    // A leading space is part of a real (if unusual) filename, not formatting noise to strip (Qodo on PR 141):
-    // trimming it would make a root-level path look like it's under the evidence root when it is not.
+    // A leading space is part of a real file name: trimming it would make a root-level path look like it's
+    // under the evidence root.
     expect(blockedEvidencePaths([" raw-artifacts/x"], "raw-artifacts")).toEqual([" raw-artifacts/x"]);
   });
 });
 
-describe("commitAndPublish: what a run may push to the private repo (#102)", () => {
+describe("commitAndPublish: what a run may push to the private repo", () => {
   function sh(dir: string, ...args: string[]): string {
     return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
   }
@@ -68,7 +68,7 @@ describe("commitAndPublish: what a run may push to the private repo (#102)", () 
     return dir;
   }
 
-  it("a push to private main by someone else during the run is not the run's change (AUD-M2, two clones)", () => {
+  it("a push to private main by someone else during the run is not the run's change", () => {
     const origin = bareOrigin();
     const run = clone(origin);
     const other = clone(origin);
@@ -141,7 +141,7 @@ describe("commitAndPublish: what a run may push to the private repo (#102)", () 
     expect(sh(origin, "show", "blocked-run2:ground-truth.jsonl")).toContain("FF-0099");
   });
 
-  it("does not mistake a similarly-prefixed root path for one under the evidence root, through the same trimming `git` helper production uses (Qodo on PR 141, round 2)", () => {
+  it("does not mistake a similarly-prefixed root path for one under the evidence root, through the same trimming `git` helper production uses", () => {
     const origin = bareOrigin();
     const priv = clone(origin);
     mkdirSync(join(priv, "raw-artifacts-decoy"), { recursive: true });
@@ -151,7 +151,7 @@ describe("commitAndPublish: what a run may push to the private repo (#102)", () 
     expect(result.blocked).toEqual(["raw-artifacts-decoy/file.txt"]);
   });
 
-  it("still blocks a protected file moved under the evidence root: the rename's old path still counts as changed (Qodo on PR 141)", () => {
+  it("still blocks a protected file moved under the evidence root: the rename's old path still counts as changed", () => {
     const origin = bareOrigin();
     // Seed `ground-truth.jsonl` on main itself, so moving it is a same-commit rename, not a new file.
     const seedMain = clone(origin);

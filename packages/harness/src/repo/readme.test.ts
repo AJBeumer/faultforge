@@ -1,5 +1,5 @@
 /**
- * Statements in the README that the code decides, checked so they can't go stale again (AUD-N4).
+ * Statements in the README that the code decides, checked so they can't go stale.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

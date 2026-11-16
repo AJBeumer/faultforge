@@ -1,9 +1,8 @@
 /**
  * The end of a run that reached the agent: save its evidence, then label the ticket from what was saved,
- * report it, log the outcome, and copy the log once more so the saved copy ends with that outcome. Split from
- * factory-tick.ts, which may not grow (CLAUDE.md, module size rule).
+ * report it, log the outcome, and copy the log once more so the saved copy ends with that outcome.
  *
- * The order is the point (AUD-M18, #245):
+ * The order is the point:
  *  1. The run log and transcript go to private storage first. `agent-done` is set only once they are there;
  *     a failed or blocked save ends `agent-needs-help`, so a ticket never says done for a run with no record.
  *  2. The label (added before the old one is removed, `relabelWith`), then the comment.
@@ -46,7 +45,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
     saved = deps.saveEvidence(runId, ws);
   } catch (error) {
     // The error stays in the run log: a git error about the private repo can name its paths and URL, and
-    // the comment below can be on a public ticket (Qodo on PR 262).
+    // the comment below can be on a public ticket.
     log("error", { message: `couldn't save the run's evidence: ${message(error)}` });
   }
   let label: typeof LABELS.done | typeof LABELS.help = finish.label;
@@ -54,7 +53,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   let note = "";
   if (saved?.blocked.length) {
     // A count, never the paths: a private path can name an unreleased template or an unreviewed case, and
-    // this log and comment can be public. The paths are on the branch the commits went to (AUD-M2).
+    // this log and comment can be public. The paths are on the branch the commits went to.
     const count = saved.blocked.length;
     log("evidence-blocked", { files: count, savedAt: saved.savedAt ?? null });
     label = LABELS.help;
@@ -82,7 +81,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   log("finished", { label, reason, pr: finish.pr });
   c.finished();
   // The final copy: the one that ends with `finished`. When it doesn't reach the private repo, the saved
-  // copy lacks the outcome, so the run's folder is kept as the only full record (Qodo on PR 262).
+  // copy lacks the outcome, so the run's folder is kept as the only full record.
   let finalSaved = false;
   try {
     const copy = deps.saveEvidence(runId, ws);
@@ -92,7 +91,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   }
   if (finalSaved) log("saved", { evidence: evidenceFile(c.factory, runId) });
   else log("error", { message: "the final copy of the run log didn't reach the private repo; the run folder is kept" });
-  // A run that needs help keeps its worktrees (#197), unless it was done and only its evidence was
+  // A run that needs help keeps its worktrees, unless it was done and only its evidence was
   // blocked, and that evidence reached its own branch: then the folder holds nothing the branch doesn't.
   const blockedButSaved = finish.label === LABELS.done && saved?.blocked.length && saved.savedAt;
   const keep = !finalSaved || (label === LABELS.help && !blockedButSaved);
@@ -104,10 +103,9 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
     deps.cleanup(ws);
     log("cleanup", { root: ws.root });
   } catch (error) {
-    // Not the run's failure, so the outcome stands; but the saved log must say it, so it gets one more copy
-    // (Qodo on PR 262), through the run's own private worktree when it is still there (the cleanup removes it
-    // first; a copy that can't be made is logged). Never through a fresh one: that would clash with the run's
-    // branch and remove the run folder the cleanup couldn't.
+    // Not the run's failure, so the outcome stands, but the saved log must say it: one more copy, through the
+    // run's own private worktree if the cleanup left it. Never through a fresh one: that would clash with the
+    // run's branch and remove the run folder the cleanup couldn't.
     log("error", { message: `couldn't clean up the run's worktrees: ${message(error)}` });
     try {
       const copy = deps.saveEvidence(runId, ws);

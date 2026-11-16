@@ -4,7 +4,7 @@ import { unsavedFiles, wasSaved } from "./factory-keep.ts";
 const line = (event: string) => JSON.stringify({ t: "2026-11-14T00:00:00Z", event });
 const log = (...events: string[]) => events.map(line).join("\n");
 
-describe("factory:keep: which runs a cancelled or crashed CI tick left unsaved (AUD-M19)", () => {
+describe("factory:keep: which runs a cancelled or crashed CI tick left unsaved", () => {
   it("a log whose saved event came after its outcome is saved", () => {
     expect(wasSaved(log("picked", "claimed", "finished", "saved", "cleanup"))).toBe(true);
     expect(wasSaved(log("picked", "refused", "saved"))).toBe(true);

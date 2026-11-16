@@ -1,6 +1,6 @@
 # door
 
-The one way to write to a reviewed repository (#340): `npm run target:post -- <kind> ...` checks the exact
+The one way to write to a reviewed repository: `npm run target:post -- <kind> ...` checks the exact
 text it sends, and the guard lets nothing else write there.
 
 - `target-post.ts`: the kinds, the checks on the text, and the send. `target-post-push.ts`: a push.

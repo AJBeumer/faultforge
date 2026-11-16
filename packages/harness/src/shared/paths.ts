@@ -26,7 +26,7 @@ export function evidenceDir(factory: FactoryConfig = loadFactory(), root: string
  * Deliberately takes no `root`: a caller working against some other, explicit root (a worktree, a test
  * fixture) must derive its private directory from that root directly (`dirname(evidenceDir(factory,
  * root))`), never from this process's own `FAULTFORGE_PRIVATE_DIR` — otherwise the override redirects
- * reads and writes away from the root the caller actually meant (Qodo on PR 154).
+ * reads and writes away from the root the caller actually meant.
  */
 export function privateDir(env: NodeJS.ProcessEnv = process.env, factory?: FactoryConfig): string {
   return resolve(env.FAULTFORGE_PRIVATE_DIR ?? dirname(evidenceDir(factory)));
@@ -54,7 +54,7 @@ export function prEvidenceDir(evidence: string, kind: PrEvidenceKind, repoKey: s
 /** A case's id: `FF-` and four digits. Checked before it names a file (`<id>.json`), so `../x` can name none. */
 export const CASE_ID = /^FF-\d{4}$/;
 
-/** True when `id` is a case id; otherwise says why on `error`, as `tool`, and is false (#299). */
+/** True when `id` is a case id; otherwise says why on `error`, as `tool`, and is false. */
 export function caseIdOk(id: string, tool: string, error: (line: string) => void): boolean {
   if (CASE_ID.test(id)) return true;
   error(`${tool}: a case id is FF- and four digits, not ${JSON.stringify(id.slice(0, 40))}`);

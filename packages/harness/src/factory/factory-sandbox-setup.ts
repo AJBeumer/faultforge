@@ -1,6 +1,6 @@
 /**
  * `npm run factory:sandbox -- setup --dir <path> [--dir <path>]... | check`: the operating system's half of
- * the agent's network sandbox in a CI factory run (#330, AUD-H2). The runner's own steps keep the network; the
+ * the agent's network sandbox in a CI factory run. The runner's own steps keep the network; the
  * agent runs as its own unprivileged user, `ffagent`, whose every outbound packet goes through one iptables chain
  * (IPv4 and IPv6) that allows loopback only, without DNS. Its one way out is the runner's allow-listing proxy on
  * loopback (`factory-sandbox.ts`), which tunnels only to the hosts in `factory.json`. A program that ignores
@@ -191,7 +191,7 @@ export function setupPlan(input: SetupInput): Step[] {
  * Undoes `setupPlan(input)` on a machine that is kept (the integration test on a developer's Linux box; a CI VM is
  * thrown away): the user's processes and the user, both chains, the D-Bus policy and every ACL entry it added.
  * Every step is tried, whatever an earlier one did. The user is removed only when `createdUser` says the setup made
- * it: an account that was there before is never deleted (Qodo on PR 334).
+ * it: an account that was there before is never deleted.
  */
 export function teardownPlan(input: SetupInput, createdUser: boolean): Step[] {
   const u = SANDBOX_USER;

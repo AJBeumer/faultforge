@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { exitWhenWritten, runEntry } from "./cli-entry.ts";
 
-describe("runEntry's failure paths (AUD-N3, Qodo on PR 277)", () => {
+describe("runEntry's failure paths", () => {
   const run = async (main: (argv: string[]) => number | Promise<number>) => {
     const said: string[] = [];
     const code = await runEntry(
@@ -49,7 +49,7 @@ describe("runEntry's failure paths (AUD-N3, Qodo on PR 277)", () => {
   });
 });
 
-describe("exitWhenWritten (Qodo on PR 277)", () => {
+describe("exitWhenWritten", () => {
   it("exits once every stream has taken what was written", async () => {
     const exits: number[] = [];
     const streams = [{ write: (_: string, done: () => void) => setTimeout(done, 5) }];

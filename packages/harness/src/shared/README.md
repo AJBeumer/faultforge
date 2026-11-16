@@ -1,6 +1,6 @@
 # shared
 
-What every other area needs, in one place each (AUD-N1).
+What every other area needs, in one place each.
 
 - `paths.ts`: the repo root, private storage, the evidence folders. `factory-config.ts`: reads `factory.json`.
 - `templates.ts`: where templates live and what each must declare.

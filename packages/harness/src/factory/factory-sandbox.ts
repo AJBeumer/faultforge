@@ -1,5 +1,5 @@
 /**
- * The agent's network sandbox, the runner's half (#330, AUD-H2). In a CI run the agent runs as its own user
+ * The agent's network sandbox, the runner's half. In a CI run the agent runs as its own user
  * (`factory-sandbox-setup.ts`), whose packets the operating system lets reach loopback only. On loopback the
  * runner serves a small proxy that tunnels (`CONNECT`) to the hosts in `factory.json`'s `network.allow` on port
  * 443, and to nothing else: no other host, no other port, no plain HTTP, and no lookup of a refused name. The
@@ -73,7 +73,7 @@ export function startEgressProxy(
     sockets.add(client);
     client.on("close", () => sockets.delete(client));
     client.on("error", () => client.destroy());
-    // A client that never finishes its request is dropped, so idle ones can't pile up (Qodo on PR 334).
+    // A client that never finishes its request is dropped, so idle ones can't pile up.
     client.setTimeout(limits.headMs, () => client.destroy());
     let head = Buffer.alloc(0);
     const refuse = (line: string) => {

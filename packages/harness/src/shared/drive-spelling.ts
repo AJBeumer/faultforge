@@ -1,5 +1,5 @@
 /**
- * Whether Vitest was started from a spelling of the working folder that isn't its real one (AUD-M25).
+ * Whether Vitest was started from a spelling of the working folder that isn't its real one.
  *
  * On Windows, Vitest started from `d:\…` loads its runner by that spelling, while each test file's
  * `import "vitest"` resolves through the real path, `D:\…`. Node then holds two copies of Vitest and every test
@@ -13,7 +13,7 @@ import { resolve } from "node:path";
 /**
  * A message when `cwd` is its real path spelled in another case (`d:\…` for `D:\…`), or undefined. A path that
  * differs in more than case, such as a junction or a symlink to the checkout, is left alone: that is not the
- * failure measured here (Qodo on PR 260).
+ * failure measured here.
  */
 export function spellingProblem(cwd: string, real: string): string | undefined {
   if (cwd === real || cwd.toLowerCase() !== real.toLowerCase()) return undefined;
@@ -34,7 +34,7 @@ export function otherDriveSpelling(path: string): string | undefined {
 
 /**
  * The path as the file system spells it, drive letter and folder case included (`d:\x` becomes `D:\x` on
- * Windows), through any link (#316). Every path the harness hands to the target's Vitest is built from this, so
+ * Windows), through any link. Every path the harness hands to the target's Vitest is built from this, so
  * Vitest never loads twice. A path that doesn't exist is returned resolved, as written: the caller's own check
  * (git, say) then says what is wrong with it.
  */

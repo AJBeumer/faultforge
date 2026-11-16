@@ -1,7 +1,6 @@
 /**
  * The ticket as the agent will read it, taken from every page GitHub gives, and who wrote, edited, renamed
- * and commented on it: only the owner's text may become the agent's instructions. Split from
- * factory-tick.ts (#227).
+ * and commented on it: only the owner's text may become the agent's instructions.
  */
 
 import { gh } from "../shared/github.ts";
@@ -30,7 +29,7 @@ export function provenanceProblems(p: Provenance, owner: string): string[] {
   const problems: string[] = [];
   if (others([p.author]).length) problems.push(`written by ${p.author}`);
   if (others(p.editors).length) problems.push(`edited by ${others(p.editors).join(", ")}`);
-  // The title reaches the agent's instructions too, and a rename isn't a body edit (#215).
+  // The title reaches the agent's instructions too, and a rename isn't a body edit.
   if (others(p.renamers ?? []).length) problems.push(`renamed by ${others(p.renamers ?? []).join(", ")}`);
   if (others(p.commenters).length) problems.push(`commented on by ${others(p.commenters).join(", ")}`);
   const commentEditors = others(p.commentEditors ?? []);
@@ -108,7 +107,7 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   const { issue } = edits;
   // The runner's own comments are left out of the text: it posts as the owner, and a stop comment can quote
   // an earlier agent's reason or a review finding's title, which must never come back as the owner's
-  // instructions on a retry (AUD-M21). They still count for who commented, and for the history.
+  // instructions on a retry. They still count for who commented, and for the history.
   const text = [
     `# ${issue.title}`,
     "",

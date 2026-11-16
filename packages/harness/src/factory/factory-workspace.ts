@@ -1,6 +1,6 @@
 /**
  * A run's workspace on disk: where each repo's worktree goes, how it is removed again, and the fingerprints
- * of what the agent must not change. Split from factory-tick.ts (#227).
+ * of what the agent must not change.
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -21,7 +21,6 @@ export const PRIVATE_KEY = "(private)";
  */
 export type RunMode = "local" | "ci";
 
-/** Worktree folder for a repo: its configured path, resolved from the lab's worktree. */
 export const worktreeFor = (labWt: string, path: string) => resolve(labWt, path);
 
 /**
@@ -67,7 +66,7 @@ export function teardown(
       .split("\n")
       .some((line) => line.startsWith("worktree ") && samePath(line.slice(9), path));
   // A target ticket's run has no private worktree (`priv` is empty): its evidence branch belongs to the
-  // runner's own worktree, made after the agent ended, and is the runner's to remove (AUD-H2).
+  // runner's own worktree, made after the agent ended, and is the runner's to remove.
   if (priv && registered(privateRepo, priv))
     attempt("private worktree", () => git(privateRepo, "worktree", "remove", "--force", priv));
   if (priv && git(privateRepo, "branch", "--list", `run-${runId}`))
@@ -86,7 +85,7 @@ export function teardown(
 /**
  * Fingerprints of what the agent must not change: the owner's own checkouts (commit, branch and
  * uncommitted changes), the guardrail files in the run's lab worktree, and the git hooks and config of the run's
- * private checkout (`priv`), which the runner commits through after the agent ends (#335).
+ * private checkout (`priv`), which the runner commits through after the agent ends.
  */
 export function fingerprints(
   factory: FactoryConfig,
@@ -113,8 +112,8 @@ export function fingerprints(
   prints[`the run's guardrail files (${guardrails})`] = sha256(
     files.map((f) => `${f}\n${readFileSync(join(guardrails, f), "utf8")}`).join("\n"),
   );
-  // Outside .claude, every file the hooks import: emptied, the word list would let every hint through
-  // (AUD-M4, re-grade). A file that is gone, or appears, changes the print too.
+  // Outside .claude, every file the hooks import: emptied, the word list would let every hint through.
+  // A file that is gone, or appears, changes the print too.
   for (const file of HOOK_IMPORTS) {
     const path = join(lab, file);
     prints[`the run's guardrail file ${file}`] = sha256(existsSync(path) ? readFileSync(path, "utf8") : "(missing)");

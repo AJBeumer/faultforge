@@ -5,17 +5,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildTrustedCheckout, removeTrustedCheckout } from "./trusted-checkout.ts";
 
-describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main, never the agent's worktree (#161)", () => {
+describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main, never the agent's worktree", () => {
   let root: string;
   const sh = (repo: string, ...args: string[]) =>
     execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-  /** `origin` is a bare repo whose `main` holds the real script and a trivial, dependency-free
-   * `package.json`/lockfile (so the trusted checkout's own `npm ci` needs no network). `sourceRepo`,
-   * cloned from it, then has its own working tree switched to a branch with a doctored copy of the
-   * script, and its own `origin` remote pointed somewhere that was never pushed to - standing in for
-   * the agent's worktree with an edit to `revert-check.ts` itself, committed but never merged, and a
-   * tampered remote config, neither of which would ever show up in a tracked file's diff. */
+  /** `origin`'s `main` holds the real script and a package with no dependencies, so `npm ci` needs no network.
+   * `sourceRepo` stands in for the agent's worktree: an unmerged branch with a doctored script, and its
+   * `origin` pointed at another repo. */
   function sourceWithDoctoredWorktree() {
     root = mkdtempSync(join(tmpdir(), "trusted-checkout-test-"));
     const origin = join(root, "origin.git");
@@ -48,14 +45,12 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
   it("checks out main by its real address, untouched by a doctored branch or remote in the agent's own worktree", () => {
     const { sourceRepo, origin } = sourceWithDoctoredWorktree();
     const verifyRoot = join(root, "verify");
-    // `origin` here is the trusted address `buildTrustedCheckout` is given (what `factory.json` would
-    // resolve to), not `sourceRepo`'s own (tampered) `origin` remote.
+    // The address `factory.json` gives, not `sourceRepo`'s tampered remote.
     const lab = buildTrustedCheckout(verifyRoot, "lab", origin);
     expect(readFileSync(join(lab, "script.ts"), "utf8")).toContain("'real'");
-    // The agent's own worktree is left exactly as it was: still on its branch, still doctored.
     expect(sh(sourceRepo, "branch", "--show-current")).toBe("doctor-it");
     expect(readFileSync(join(sourceRepo, "script.ts"), "utf8")).toContain("forged pass");
-    // A real "origin" of its own, so revert-check.ts's own fetch-by-name logic still works.
+    // revert-check.ts fetches from "origin" by name.
     expect(sh(lab, "remote", "get-url", "origin")).toBe(origin);
     expect(removeTrustedCheckout(verifyRoot)).toBeNull();
     expect(existsSync(verifyRoot)).toBe(false);
@@ -63,8 +58,7 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
 
   it("ignores a url.insteadOf rule in the source checkout's own local git config", () => {
     const { sourceRepo, origin } = sourceWithDoctoredWorktree();
-    // A rule that would silently rewrite the trusted address itself, if this checkout inherited
-    // sourceRepo's config the way a worktree of it would.
+    // A worktree of sourceRepo would inherit this rule and fetch from the wrong repo.
     sh(sourceRepo, "config", `url.${join(root, "unrelated.git")}.insteadOf`, origin);
     const verifyRoot = join(root, "verify");
     const lab = buildTrustedCheckout(verifyRoot, "lab", origin);
@@ -72,9 +66,9 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
     removeTrustedCheckout(verifyRoot);
   });
 
-  it("clones a sibling repo fresh at the path the checked-out script resolves it at, never linking the agent's checkout (#335)", () => {
+  it("clones a sibling repo fresh at the path the checked-out script resolves it at, never linking the agent's checkout", () => {
     const { origin } = sourceWithDoctoredWorktree();
-    // The sibling's real address, and the agent's checkout of it, whose .git it could write (a hook, a filter).
+    // The agent can write its own checkout's .git (a hook, a filter).
     const siblingOrigin = join(root, "sibling.git");
     const agentCheckout = join(root, "a-sibling-repo");
     sh(root, "init", "-q", "--bare", siblingOrigin);
@@ -114,7 +108,7 @@ describe("buildTrustedCheckout: revert:check runs from a fresh checkout of main,
   });
 });
 
-describe("removeTrustedCheckout: reports what it couldn't remove, rather than throwing (#161)", () => {
+describe("removeTrustedCheckout: reports what it couldn't remove, rather than throwing", () => {
   it("names the folder it couldn't clear, for a path no filesystem call can resolve", () => {
     expect(removeTrustedCheckout("\0not-a-real-path")).toMatch(/couldn't remove the trusted checkout/);
   });

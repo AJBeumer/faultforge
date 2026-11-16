@@ -39,10 +39,8 @@ describe("privateDir", () => {
   });
 });
 
-// A non-default evidence path handled the same way by a real script, not just by this module's own
-// functions, is proven end to end in rules-propose.test.ts ("reads cases and ground truth from a
-// non-default evidence path..."), which drives rules-propose.ts's propose() against a factory.json
-// whose evidence isn't under "private/" at all.
+// rules-propose.test.ts proves a real script follows a non-default evidence path end to end, with a
+// factory.json whose evidence isn't under "private/" at all.
 
 describe("runsDir", () => {
   it("honours FAULTFORGE_RUNS_DIR", () => {
@@ -79,7 +77,7 @@ describe("prEvidenceDir and evidenceKindDir: one spelling of the per-PR evidence
 /**
  * Every place outside `paths.ts` that spells a per-PR evidence folder itself: a `join` with "reviews" or
  * "revert-checks" as a literal part, or a template that builds `<key>-pr<N>` from two values. Such a copy
- * once drifted from the folder review:wait writes (AUD-M24); the helpers above are the one place.
+ * can drift from the folder review:wait writes; the helpers above are the one place.
  */
 function handBuiltEvidencePaths(file: string, text: string): string[] {
   const patterns = [/\bjoin\((?:[^()]|\([^()]*\))*?["'](?:reviews|revert-checks)["']/g, /`\$\{[^}]+\}-pr\$\{[^}]+\}`/g];
@@ -113,7 +111,7 @@ describe("the harness sources", () => {
   });
 });
 
-describe("caseIdOk (#299)", () => {
+describe("caseIdOk", () => {
   it("takes FF- and four digits, and says why anything else is refused", () => {
     const errors: string[] = [];
     expect(caseIdOk("FF-0001", "t", (l) => errors.push(l))).toBe(true);

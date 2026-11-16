@@ -1,7 +1,6 @@
 /**
- * The house rule that every script documents its exit codes, checked instead of remembered (audit N-2,
- * AUD-N3): a file that calls `process.exit`, and every script `package.json` runs, must say "Exit codes:" in its
- * header; every code it can exit with literally must be named there; and a script that npm runs must turn an
+ * The house rule that every script documents its exit codes, checked instead of remembered: a file that calls
+ * `process.exit`, and every script `package.json` runs, must say "Exit codes:" in its header; every code it can exit with literally must be named there; and a script that npm runs must turn an
  * unexpected error into a code it documents, instead of Node's default 1, which most headers give another
  * meaning.
  */
@@ -20,7 +19,7 @@ const header = (text: string) => text.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
 
 function scripts(): { file: string; text: string }[] {
   return SOURCES.flatMap((dir) =>
-    // Every folder below, too: the hooks sit in folders by job (#355).
+    // Every folder below, too: the hooks sit in folders by job.
     (readdirSync(dir, { recursive: true }) as string[])
       .map((f) => f.replace(/\\/g, "/"))
       .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !LIBRARIES.has(f))
@@ -53,7 +52,7 @@ function handlesUnexpectedErrors(text: string): boolean {
   return /\bcatch\b/.test(entry);
 }
 
-describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
+describe("every script documents its exit codes", () => {
   it("has an Exit codes section in its header comment", () => {
     const missing = [...scripts(), ...npmScripts()]
       .filter(({ text }) => !/Exit codes:/.test(header(text)))
@@ -88,7 +87,7 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
     expect(handlesUnexpectedErrors(`process.on("uncaughtException", () => process.exit(2));\nrun();`)).toBe(true);
   });
 
-  it("catches load-time errors too: an entry on cli-entry.ts imports nothing else statically (AUD-N3)", () => {
+  it("catches load-time errors too: an entry on cli-entry.ts imports nothing else statically", () => {
     const problems: string[] = [];
     const entries = npmScripts().filter(({ text }) => /from "\.\.\/shared\/cli-entry\.ts"/.test(text));
     for (const { file, text } of entries) {
@@ -97,8 +96,8 @@ describe("every script documents its exit codes (audit N-2, AUD-N3)", () => {
       if (!/await runEntry\(\s*"[\w:]+",\s*async \(\) =>[^;]*\(await import\("\.\.\/[\w-]+\/[\w-]+\.ts"\)\)/.test(text))
         problems.push(`${file} doesn't load its body inside runEntry`);
     }
-    // The scripts moved behind cli-entry.ts for AUD-N3 stay there, and each body's header says where its
-    // could-not-run code comes from, so a reader of either file finds it.
+    // These scripts start through cli-entry.ts, and each body's header says where its could-not-run code
+    // comes from, so a reader of either file finds it.
     const moved = {
       "case-build": 2,
       "case-pr": 2,

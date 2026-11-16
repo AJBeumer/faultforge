@@ -7,18 +7,18 @@ const LAB_REASON = "names the lab";
 
 const TELLTALES: [RegExp, string][] = [
   // The lab's name wherever a word could start: after a separator, a digit or a camel-case join, with anything
-  // after it (`faultforge_private`, `FaultForgeLab`, `faultforge2`; re-grade 5). Read on the text with its
-  // camel-case joins split too (`joinsSplit`). Only the target's own name, `faultforge-target`, passes.
+  // after it (`faultforge_private`, `FaultForgeLab`, `faultforge2`). Read on the text with its camel-case
+  // joins split too (`joinsSplit`). Only the target's own name, `faultforge-target`, passes.
   [/(?:^|[^a-z])fault[\s_-]*forge(?!-target)/i, LAB_REASON],
   // Two-word phrases match with a space, a hyphen or an underscore between the words, as branch names
-  // write them, and in either case (#190).
+  // write them, and in either case.
   [/\bsabot(ag\w*|eurs?)\b/i, "says sabotage"],
   [/\bplanted\b|\bplant(ing)?[\s_-]+(an?[\s_-]+|the[\s_-]+)?(bug|defect|fault)s?\b/i, "says planted"],
   [
     /\b(injected|inserted)[\s_-]+(bug|defect|fault)s?\b|\b(bug|defect|fault)[\s_-]+injection\b/i,
     "says a bug was injected",
   ],
-  // Synonyms the third re-grade used (#306). Each needs a bug word or "on purpose" next to it, so dependency
+  // Synonyms for a bug put there on purpose. Each needs a bug word or "on purpose" next to it, so dependency
   // injection, a seeded database or a deliberate 404 stay ordinary text.
   [
     /\bseeded[\s_-]+(bug|defect|fault|flaw|vulnerabilit(y|ies))s?\b|\b(bug|defect|fault)[\s_-]+seeding\b|\b(deliberate|intentional|purposeful|artificial|synthetic)[\s_-]+(bug|defect|fault|flaw|regression)s?\b/i,
@@ -104,7 +104,7 @@ const LOOKALIKES: Record<string, string> = {
 
 /**
  * Named HTML entities a separator, a mark or an invisible character can hide behind. Any other named entity is
- * left as written: GitHub shows one it doesn't know as its own text (Qodo on PR 339).
+ * left as written: GitHub shows one it doesn't know as its own text.
  */
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -139,7 +139,7 @@ const ENTITIES: Record<string, string> = {
   applyfunction: "",
 };
 
-/** A tag that breaks a line or starts a block, read as a new line: `x-secret<br>v1` shows two lines (Qodo on PR 339). */
+/** A tag that breaks a line or starts a block, read as a new line: `x-secret<br>v1` shows two lines. */
 const BLOCK_TAG = /<\/?(?:br|p|div|hr|li|ul|ol|h[1-6]|blockquote|pre|table|tr|td|th|details|summary)\b[^<>]*>/gi;
 
 /** Inline HTML tags GitHub renders as nothing but style, so `plan<b></b>ted` reads `planted`. */
@@ -147,10 +147,10 @@ const INLINE_TAG =
   /<\/?(?:a|b|i|u|s|q|em|strong|ins|del|sub|sup|span|code|kbd|mark|small|big|tt|abbr|cite|dfn|var|samp|wbr|strike)\b[^<>]*>/gi;
 
 /**
- * The text as markdown renders it (re-grade 7): HTML comments and inline tags removed, block tags read as new lines, HTML entities decoded
- * (`&#102;`, `&#x66;`, `&amp;`), and emphasis markers removed (`**`, `__`, `~~`, backticks), so `fault<!-- -->forge`,
- * `pl&#97;nted` and `plan**ted**` read as the words they show. A dot between two letters or digits reads as a
- * space, so `answer.key` reads as two words, as a separator would.
+ * The text as markdown renders it: HTML comments and inline tags removed, block tags read as new lines, HTML
+ * entities decoded (`&#102;`, `&#x66;`, `&amp;`), and emphasis markers removed (`**`, `__`, `~~`, backticks),
+ * so `fault<!-- -->forge`, `pl&#97;nted` and `plan**ted**` read as the words they show. A dot between two
+ * letters or digits reads as a space, so `answer.key` reads as two words, as a separator would.
  */
 export function renderedText(text: string): string {
   return text
@@ -196,7 +196,7 @@ export function readerViews(text: string): string[] {
 const LEET: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", $: "s" };
 
 /**
- * The text's leetspeak readings (#285): `pl4nt3d` and `p1@nted` read `planted`. Two readings, because `1`
+ * The text's leetspeak readings: `pl4nt3d` and `p1@nted` read `planted`. Two readings, because `1`
  * stands for `i` as often as for `l`. Used beside the text as written, never instead of it: a case id such
  * as `FF-0012` is digits, and only the text as written still shows it.
  */
@@ -208,7 +208,7 @@ export function leetReadings(text: string): string[] {
 }
 
 /**
- * The text with each camel-case join read as two words (`FaultForgeLab` reads `Fault Forge Lab`; re-grade 5),
+ * The text with each camel-case join read as two words (`FaultForgeLab` reads `Fault Forge Lab`),
  * so a pattern that looks for a word's start finds one inside a joined name.
  */
 export function joinsSplit(text: string): string {
@@ -217,9 +217,9 @@ export function joinsSplit(text: string): string {
 
 /**
  * Returns the reasons a text would give the lab away, or an empty list if it reads as ordinary. The text is
- * read as a reader sees it: look-alike letters and invisible characters can't hide a word (#242), and
- * neither can digits written for letters (#285) or markup that renders as nothing (re-grade 7). The lab's name is also read with camel-case joins split
- * (re-grade 5); the other words are not, so code such as `clientMutationId` stays ordinary.
+ * read as a reader sees it: look-alike letters, invisible characters, digits written for letters and markup
+ * that renders as nothing can't hide a word. The lab's name is also read with camel-case joins split; the
+ * other words are not, so code such as `clientMutationId` stays ordinary.
  */
 export function telltales(text: string): string[] {
   const readings = readerViews(text).flatMap((seen) => [seen, ...leetReadings(seen)]);
@@ -259,7 +259,7 @@ export function templateTelltales(template: {
       : []),
   ];
   // The template's own id and invariant id are names only the lab uses: either one in a visible field
-  // gives the case away whatever the word list says (#190).
+  // gives the case away whatever the word list says.
   const ownNames = [template.id, template.invariantId].filter((name): name is string => Boolean(name));
   const named = (text: string) =>
     ownNames.filter((name) => text.toLowerCase().includes(name.toLowerCase())).map((name) => `names ${name}`);
@@ -272,7 +272,7 @@ const QODO_COMMANDS =
 
 /**
  * True when a text addresses Qodo: a mention, or a line that is one of its commands. Qodo learns from every chat in
- * a reviewed repo, which would bias later cases, so nothing posted there may address it (re-grade 6: Q25, Q26).
+ * a reviewed repo, which would bias later cases, so nothing posted there may address it.
  */
 export function addressesQodo(text: string): boolean {
   return /(^|[^\w.-])@qodo/i.test(text) || QODO_COMMANDS.test(text);

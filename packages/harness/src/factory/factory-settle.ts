@@ -1,7 +1,6 @@
 /**
  * The tick's pure decisions: which ticket goes first, what the agent reported, what the run delivered, and
- * what may be shown where. Split from factory-tick.ts, which may not grow (CLAUDE.md, module size rule);
- * factory-tick.ts exports them again for its callers.
+ * what may be shown where. factory-tick.ts exports them again for its callers.
  */
 
 import { telltales } from "../shared/neutral.ts";
@@ -126,7 +125,7 @@ export function settle(
       pr: result.pr,
     };
   }
-  // The runner's own gates hold a PR the agent called ready (#215).
+  // The runner's own gates hold a PR the agent called ready.
   const waits = [...(result.outcome === "ready" ? [] : [result.reason]), ...ownerGates];
   return {
     label: LABELS.done,
@@ -170,7 +169,7 @@ export function runIdFor(now: Date, repoKey: string, number: number): string {
 
 /**
  * How one tick ended. `failed` is the runner itself failing (an exception, before or after a pick), kept
- * apart from a run that stopped for the owner, so a red Actions run for a runner fault stands out (AUD-M18).
+ * apart from a run that stopped for the owner, so a red Actions run for a runner fault stands out.
  */
 export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-help" | "failed";
 
@@ -197,7 +196,7 @@ export function exitCodeFor(outcome: TickOutcome): number {
 /**
  * The ticket comment when Qodo's configuration couldn't be confirmed before a run. A fixed sentence: the
  * check's own message and differences can carry text read from private storage or from Qodo's API, so they
- * go to the run log as summaries and never to a ticket (the residue of the 13 November H-3).
+ * go to the run log as summaries and never to a ticket.
  */
 export const QODO_CHECK_COMMENT =
   "Stopped before any work started: the reviewer's configuration could not be confirmed to match the recorded snapshot. The run log has the details.";
@@ -215,8 +214,7 @@ export interface OpenPr {
 /**
  * The open pull requests that an earlier run left on ticket `number`: opened by the owner from a branch of the
  * repo itself, never a fork, with a body that closes the ticket (`Closes #N`, `Fixes: #N`, ...). Anyone else's
- * pull request could ask for the same ticket and must never be handed to the agent as its work to continue
- * (Qodo on PR 268).
+ * pull request could ask for the same ticket and must never be handed to the agent as its work to continue.
  */
 export function earlierPrs(prs: OpenPr[], number: number, owner: string): string[] {
   const closes = new RegExp(`\\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\\s+#${number}\\b`, "i");
@@ -228,7 +226,7 @@ export function earlierPrs(prs: OpenPr[], number: number, owner: string): string
 
 /**
  * Added to the ticket file when an earlier run on this ticket left an open pull request, so a retried ticket
- * continues that one instead of opening a second (AUD-N10). The runner's own words, under a line of its own,
+ * continues that one instead of opening a second. The runner's own words, under a line of its own,
  * apart from the owner's text; only pull request links of the ticket's repo go in.
  */
 export function earlierPrsNote(urls: string[]): string {

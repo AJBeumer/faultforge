@@ -1,16 +1,15 @@
 /**
- * The factory tick's side of the door's run gate (#347): the lock marks the run the door sees, and its release
- * ends it. Split from factory-deps.ts, which sits at the module size limit.
+ * The factory tick's side of the door's run gate: the lock marks the run the door sees, and its release ends it.
  */
 
 import type { doorRunHolder } from "../door/target-post-run.ts";
 import type { TickDeps } from "./factory-tick-deps.ts";
 
 /**
- * `deps` with `extra` over it, and a lock that marks the run the door sees (#347) as soon as it is taken, before the
+ * `deps` with `extra` over it, and a lock that marks the run for the door as soon as it is taken, before the
  * tick's first write: recovery's and the claim's writes then carry the key, and a marker a killed run left is
- * replaced rather than blocking them (Qodo on PR 349). Its release, at the tick's end whatever happened, ends the
- * run first. The CI lock is a no-op, so the lock is the one place both modes pass.
+ * replaced rather than blocking them. Its release ends the run first. The CI lock is a no-op, so the lock is the
+ * one place both modes pass.
  */
 export function endsDoorRun(
   deps: TickDeps,

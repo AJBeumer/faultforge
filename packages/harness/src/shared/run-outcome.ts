@@ -56,7 +56,7 @@ export interface VitestReport {
 /**
  * The tests that failed and passed, from vitest's JSON report, with the files that failed before any
  * test ran kept apart: a file that can't load proves only that it imports something, not that any
- * assertion about behaviour failed (#217).
+ * assertion about behaviour failed.
  */
 export function parseVitestReport(report: VitestReport): { failed: string[]; loadFailed: string[]; passed: number } {
   const failed: string[] = [];
@@ -79,7 +79,7 @@ export function parseVitestReport(report: VitestReport): { failed: string[]; loa
 /**
  * A proof's outcome from its run and its JSON report. "fail" only when a test ran and failed; a file
  * that failed to load, a run with no test, a non-zero exit with no failed test, or a missing report
- * is "not_run", since none of them shows the invariant broken (#217).
+ * is "not_run", since none of them shows the invariant broken.
  */
 export function proofOutcomeOf(result: { status: number | null; error?: unknown }, report?: VitestReport): Outcome {
   if (outcomeOf(result) === "not_run" || !report) return "not_run";
@@ -91,8 +91,7 @@ export function proofOutcomeOf(result: { status: number | null; error?: unknown 
 
 /**
  * The JSON report at `path`, or undefined when there is none or it doesn't parse: a run interrupted while
- * writing its report leaves a truncated file, which must read as no result, never crash the caller
- * (Qodo on PR 219).
+ * writing its report leaves a truncated file, which must read as no result, never crash the caller.
  */
 export function readVitestReport(path: string): VitestReport | undefined {
   try {

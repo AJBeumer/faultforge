@@ -1,11 +1,10 @@
 /**
- * JSON Lines, read in one place (AUD-N1): one JSON value per line, blank lines skipped. The answer key, the
+ * JSON Lines, read in one place: one JSON value per line, blank lines skipped. The answer key, the
  * audit log and the factory's run logs are all this format. A line that isn't JSON throws, naming its number,
  * so a damaged file is never read as a shorter one.
  */
 import { readFileSync } from "node:fs";
 
-/** Every value in `text`, in order. */
 export function parseJsonLines<T = Record<string, unknown>>(text: string): T[] {
   const values: T[] = [];
   const lines = text.split("\n");

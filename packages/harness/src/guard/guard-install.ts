@@ -1,7 +1,6 @@
 /**
- * Installs the git-level guard in every reviewed checkout named in `factory.json` (#191), the lab's own
- * link check in the checkout marked `"guard": "lab"` (re-grade 5), and the private checkout's remote check
- * (re-grade 6).
+ * Installs the git-level guard in every reviewed checkout named in `factory.json`, the lab's own link check in
+ * the checkout marked `"guard": "lab"`, and the private checkout's remote check.
  *
  *   npm run guard:install
  *
@@ -10,10 +9,10 @@
  * config (`review-guard.script`). The hooks name nothing but that setting, so their text gives nothing
  * away, and neither leaves the machine: hooks and local config are never pushed. In the lab it writes
  * `pre-commit`, `commit-msg` and `pre-push`, which refuse a link to a reviewed repo's issue or PR in a commit
- * message made or pushed there, and a copy of private storage in a commit (re-grade 6). In the private checkout (`private/`, when it is a git checkout) it writes `pre-push` only,
- * and records the `origin` URL in `review-guard.origin`: a push to any other remote or URL is refused, so the
- * private history goes nowhere else. Running it again writes the same files. A hook file this command didn't write
- * is never overwritten.
+ * message made or pushed there, and a copy of private storage in a commit. In the private checkout (`private/`,
+ * when it is a git checkout) it writes `pre-push` only, and records the `origin` URL in `review-guard.origin`:
+ * a push to any other remote or URL is refused, so the private history goes nowhere else. Running it again
+ * writes the same files. A hook file this command didn't write is never overwritten.
  *
  * Exit codes: 0 installed in every reviewed checkout, the lab and the private checkout; 1 refused somewhere: a hook file that isn't ours is
  * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
@@ -28,9 +27,9 @@ import { privateDir, ROOT } from "../shared/paths.ts";
 /** The first line after the shebang of every hook this command writes: how a rerun knows its own files. */
 export const MARKER = "# Installed by guard:install.";
 export const HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
-/** The lab's hooks: its commits may say anything except link a reviewed repo's issue or PR (re-grade 5). */
+/** The lab's hooks: its commits may say anything except link a reviewed repo's issue or PR. */
 export const LAB_HOOKS = ["pre-commit", "commit-msg", "pre-push"] as const;
-/** The private checkout's hook: its history goes only to the origin recorded at install (re-grade 6). */
+/** The private checkout's hook: its history goes only to the origin recorded at install. */
 export const PRIVATE_HOOKS = ["pre-push"] as const;
 /** Which hooks a checkout gets: a reviewed repo's full guard, the lab's link check, or the private remote check. */
 export type Role = "reviewed" | "lab" | "private";
@@ -65,10 +64,10 @@ export function installHooks(checkout: string, script: string, role: Role = "rev
   try {
     hooksPath = git("config", "--get", "core.hooksPath");
   } catch {
-    // not set: git uses the hooks folder in the git directory
+    // Not set: git uses the hooks folder in the git directory.
   }
   if (hooksPath) throw new InstallRefused(`${checkout} sets core.hooksPath (${hooksPath}); install there by hand`);
-  // The private checkout's one destination, read before anything is written (re-grade 6).
+  // Read before anything is written, so a checkout with no origin gets no hooks.
   let origin = "";
   if (role === "private") {
     try {
@@ -81,7 +80,7 @@ export function installHooks(checkout: string, script: string, role: Role = "rev
   const dir = isAbsolute(relative) ? relative : resolve(checkout, relative);
   mkdirSync(dir, { recursive: true });
   // Ours only when it starts with our exact header and is a plain file: a hook that merely mentions the
-  // marker, or a symlink whose write would land elsewhere, is someone else's (Qodo on PR 213).
+  // marker, or a symlink whose write would land elsewhere, is someone else's.
   for (const stage of hooksFor(role)) {
     const file = join(dir, stage);
     if (!existsSync(file)) continue;
@@ -99,7 +98,7 @@ export function installHooks(checkout: string, script: string, role: Role = "rev
 }
 
 /**
- * Why the checkout lacks the git-level guard, or undefined when it has it (#242): `core.hooksPath` unset,
+ * Why the checkout lacks the git-level guard, or undefined when it has it: `core.hooksPath` unset,
  * each of the three hooks present as this command wrote it, and the script setting naming a file that
  * exists. Anything git can't answer counts as missing.
  */
@@ -123,14 +122,14 @@ export function guardProblem(checkout: string, role: Role = "reviewed"): string 
       const ours =
         existsSync(file) && !lstatSync(file).isSymbolicLink() && readFileSync(file, "utf8") === hookText(stage, role);
       if (!ours) return `${checkout} has no guard ${stage} hook`;
-      // Git skips a hook it can't run, without a word (Qodo on PR 266).
+      // Git silently skips a hook it can't run.
       if (process.platform !== "win32" && !(statSync(file).mode & 0o111)) return `${file} is not executable`;
     }
-    // Git runs the hook from the checkout, so a relative script path is read from there (Qodo on PR 266).
+    // Git runs the hook from the checkout, so a relative script path is read from there.
     const configured = setting(CONFIG_KEY);
     const script = configured && resolve(checkout, configured);
     if (!script || !existsSync(script)) return `${checkout}'s guard hooks name no script that exists (${CONFIG_KEY})`;
-    // The script must be the guard itself, not any file that happens to exist (Qodo on PR 266).
+    // The script must be the guard itself, not any file that happens to exist.
     const guard =
       basename(script) === "git-guard.ts" && /export function check\(stage/.test(readFileSync(script, "utf8"));
     if (!guard) return `${checkout}'s guard hooks run ${script}, which is not the git-level guard`;
@@ -147,9 +146,8 @@ export function guardInstalled(checkout: string): boolean {
 }
 
 /**
- * Why each reviewed checkout in `factory` lacks the git-level guard, or the lab its link check (Qodo on PR 329),
- * resolved from `root`, and the private checkout `priv` its remote check when it is a checkout (Qodo on PR 333);
- * empty when all have them. A caller that has the private checkout passes it.
+ * Why each reviewed checkout in `factory` lacks the git-level guard, or the lab its link check, resolved from
+ * `root`, and the private checkout `priv` its remote check when it is a checkout; empty when all have them. A caller that has the private checkout passes it.
  */
 export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT, priv?: string): string[] {
   const problems = Object.values(factory.repos).flatMap(

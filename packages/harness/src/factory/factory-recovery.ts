@@ -1,17 +1,15 @@
 /**
  * What a tick puts right before it picks a ticket, so an interrupted run never leaves state only the owner
- * would notice (#197). Split from factory-tick.ts, which may not grow (CLAUDE.md, module size rule).
+ * would notice.
  *
  * A ticket labelled `agent-working` when a tick starts has no live run: the tick holds the run lock (or, in
- * CI, the workflow's one-at-a-time group), so whatever run claimed it stopped without reporting: its job was
- * cancelled, it hit the job's time limit, or the machine restarted. It is moved to `agent-needs-help` with a
- * comment, so it shows up on the owner's list instead of looking busy for ever.
+ * CI, the workflow's one-at-a-time group), so whatever run claimed it stopped without reporting. It is moved
+ * to `agent-needs-help` with a comment, so it shows up on the owner's list instead of looking busy for ever.
  *
  * The two ways to run the factory (Actions, or the scheduled task on the owner's machine) don't share a
  * lock, so a tick in one can't tell whether the other's run is still alive. The claim comment says which way
- * claimed the ticket (`claimMarker`), and recovery leaves alone a ticket the other way claimed (AUD-M19):
- * that one is the other's to recover. A ticket with no claim mark (claimed before the mark existed) is
- * recovered as before.
+ * claimed the ticket (`claimMarker`), and recovery leaves a ticket the other way claimed to that way. A ticket
+ * with no claim mark is recovered by either.
  */
 
 import { ghAll } from "../shared/github.ts";
@@ -33,7 +31,7 @@ export interface RecoveryDeps {
     add: string[],
   ): { removeFailed: unknown; addFailed: unknown };
   comment(github: string, number: number, body: string): void;
-  /** Which way of running claimed the ticket, from the runner's own comments; absent in older fakes. */
+  /** Which way of running claimed the ticket, from the runner's own comments; optional for simple fakes. */
   claimMode?(github: string, number: number): RunMode | null;
   /** This tick's own way of running; with `claimMode`, a ticket the other way claimed is left alone. */
   mode?: RunMode;
@@ -56,12 +54,10 @@ export type RecoveryReport = {
  * Moves every `agent-working` ticket in `repos` to `agent-needs-help` with a comment. Returns what it did, for
  * the run log. A ticket whose step fails is reported and left for the next tick; it never stops this one.
  *
- * The steps run in the order that leaves a ticket findable after any one of them fails (Qodo on PR 211):
- * the comment first, then `agent-needs-help` is added, and only then is `agent-working` removed. A failure
- * before the removal leaves `agent-working` on, so the next tick tries again. A ticket that already carries
- * `agent-needs-help` was commented on before and only lost its removal, so only the removal is retried and
- * no second comment is posted. Neither is one that already carries `agent-done`: its run finished and was
- * labelled (the new label goes on before the old comes off), and only lost its removal (Qodo on PR 262).
+ * The steps run in the order that leaves a ticket findable after any one of them fails: the comment first,
+ * then `agent-needs-help` is added, and only then is `agent-working` removed. A failure before the removal
+ * leaves `agent-working` on, so the next tick tries again. A ticket that already carries `agent-needs-help` or
+ * `agent-done` only lost its removal, so only the removal is retried and no second comment is posted.
  *
  * With `dryRun`, it reads exactly what a real recovery reads and reports each change it would make under
  * `planned`, and never calls `comment` or `relabel`: safe to run against the real repos at any time.
@@ -91,8 +87,8 @@ export function recoverStranded(
     for (const { number } of stranded) {
       const ref = `${github}#${number}`;
       try {
-        // A ticket that already shows a result only lost its last removal, whichever way ran it: finishing that
-        // removal can't disturb a live run (Qodo on PR 268). Only a bare claim is the other way's to recover.
+        // Finishing a lost removal can't disturb a live run, whichever way ran it. Only a bare claim is the
+        // other way's to recover.
         const claimedBy = !helped.has(number) && deps.mode && deps.claimMode ? deps.claimMode(github, number) : null;
         if (claimedBy && claimedBy !== deps.mode) {
           otherMode.push(`${ref} (claimed by a ${claimedBy} run)`);
@@ -154,8 +150,8 @@ export const githubRecoveryReads: Pick<RecoveryDeps, "labelled" | "claimMode"> =
 /**
  * True when a lock file's holder is gone: no pid, its process is gone, or the live pid is now another
  * process (`isSame` says it didn't start when the lock recorded: after a crash or restart the system hands
- * pids on). The holder itself keeps its lock however old it is and however long one of its steps takes
- * (AUD-M19): neither the lock's age nor its heartbeat's ever frees it, so two ticks never run at once.
+ * pids on). A live holder keeps its lock however old it is and however long one of its steps takes, so two
+ * ticks never run at once.
  */
 export function lockIsStale(
   held: { pid?: number; started?: string },

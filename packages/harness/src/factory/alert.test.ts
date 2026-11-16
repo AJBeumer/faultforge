@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type Alert, alertText, ghIssues, type Issues, KINDS, main, Refused, raise } from "./alert.ts";
 
-describe("the alert script runs on plain node, as the workflow runs it (#308)", () => {
+describe("the alert script runs on plain node, as the workflow runs it", () => {
   it("needs nothing installed and refuses an unknown kind with exit 1", () => {
     const run = spawnSync(process.execPath, [join(import.meta.dirname, "alert.ts"), "nope", "x"], { encoding: "utf8" });
     expect(run.stderr).toContain("alert: refused");
@@ -35,7 +35,7 @@ function fakeIssues(open: { number: number; title: string }[] = []) {
   return { issues, calls };
 }
 
-describe("the alert's text (#308)", () => {
+describe("the alert's text", () => {
   it("is fixed words, the workflow's name and the run's URL", () => {
     expect(alertText("ci-main", "failure", ENV)).toEqual({
       title: "Alert: CI on main failed",
@@ -70,7 +70,7 @@ describe("the alert's text (#308)", () => {
   });
 });
 
-describe("one alert issue per kind (#308)", () => {
+describe("one alert issue per kind", () => {
   const alert: Alert = { title: "Alert: CI on main failed", body: "Outcome: a job failed" };
 
   it("opens one when none is open, then comments on it", () => {

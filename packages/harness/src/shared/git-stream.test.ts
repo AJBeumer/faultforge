@@ -24,7 +24,7 @@ function listing(root: string): string[] {
  * A repository at `dir` with one commit of a long file. Git's automatic maintenance is off in it: after a commit,
  * git starts `git maintenance run --auto`, and from git 2.47 that runs detached, so it holds
  * `.git/objects/maintenance.lock` for a moment after the commit has returned. A test that lists the repository
- * then saw the lock come or go on its own (Linux CI on PR 346, #348). `env` lets a test trace the setup's git.
+ * would see the lock come or go on its own. `env` lets a test trace the setup's git.
  */
 function makeRepo(dir: string, env: NodeJS.ProcessEnv = process.env): void {
   const git = (...args: string[]) => execFileSync("git", args, { env, stdio: "ignore" });
@@ -35,7 +35,7 @@ function makeRepo(dir: string, env: NodeJS.ProcessEnv = process.env): void {
   git("-C", dir, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "one");
 }
 
-describe("the test repository (#348)", () => {
+describe("the test repository", () => {
   it("starts no git maintenance, which could write in its git folder while a test lists it", () => {
     const dir = mkdtempSync(join(tmpdir(), "git-stream-test-"));
     const trace = join(mkdtempSync(join(tmpdir(), "git-stream-trace-")), "trace.txt");
@@ -51,7 +51,7 @@ describe("the test repository (#348)", () => {
   });
 });
 
-describe("eachGitLine (AUD-N6, Qodo on PR 280)", () => {
+describe("eachGitLine", () => {
   let dir: string;
   let temp: string;
   beforeEach(() => {
@@ -124,7 +124,7 @@ describe("eachGitLine (AUD-N6, Qodo on PR 280)", () => {
     expect(existsSync(fresh)).toBe(true);
   });
 
-  it("never removes an old folder whose run is still going, or one that names no run (Qodo on PR 286)", () => {
+  it("never removes an old folder whose run is still going, or one that names no run", () => {
     const busy = join(temp, `${TEMP_PREFIX}1003-busy`);
     const unnamed = join(temp, `${TEMP_PREFIX}old`);
     const hourAndMore = new Date(Date.now() - 2 * 60 * 60 * 1000);

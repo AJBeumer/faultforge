@@ -8,7 +8,7 @@ import { npm as realNpm } from "./factory-exec.ts";
 import type { Workspace } from "./factory-tick.ts";
 import { commitToVerify, prViewProblems, readJsonRecord, type VerifyPrIo, verifyPrWith } from "./factory-verify.ts";
 
-describe("readJsonRecord: never throws on a missing or damaged file (#161)", () => {
+describe("readJsonRecord: never throws on a missing or damaged file", () => {
   let dir: string;
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -32,7 +32,7 @@ describe("readJsonRecord: never throws on a missing or damaged file (#161)", () 
   });
 });
 
-describe("verifyPrWith: review:wait runs from the trusted checkout, never the agent's worktree (#170)", () => {
+describe("verifyPrWith: review:wait runs from the trusted checkout, never the agent's worktree", () => {
   let root: string;
   const sh = (repo: string, ...args: string[]) =>
     execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -40,10 +40,8 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
 
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  /** A tiny stand-in for `review-wait.ts`, run by real `npm run -s review:wait -- <repoKey> <pr>
-   * --commit <sha> --timeout <n>` (the same command `verifyPrWith` runs), so the test proves real
-   * `npm` script resolution picks whichever checkout it runs from, not a hand-written fake of it.
-   * Writes `openFindings` as given, under the same path `verifyPrWith` itself reads back. */
+  /** A stand-in for `review-wait.ts`, run through real `npm run`, so the test proves npm picks the script
+   * of whichever checkout it runs from. It saves `openFindings` where `verifyPrWith` reads them back. */
   function reviewWaitStub(openFindings: unknown[]): string {
     return `import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,9 +53,8 @@ writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify(
 `;
   }
 
-  // The real revert-check.ts finds the PR's own head itself; this stub isn't under test here (#161
-  // already proved its own checkout), so the test's npm wrapper hands it the commit over the
-  // environment instead, just to name the record file `verifyPrWith` goes looking for.
+  // The real revert-check.ts finds the PR's head itself. This stub isn't under test, so the npm wrapper
+  // hands it the commit through the environment, only to name the record file `verifyPrWith` reads.
   const REVERT_CHECK_STUB = `import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const [repoKey, pr] = process.argv.slice(2);
@@ -67,11 +64,9 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
 `;
 
   /**
-   * `origin`'s main holds the genuine `review-wait-stub.mjs`, which reports one real, unresolved
-   * finding. `sourceRepo` (standing in for the agent's worktree, `ws.lab`) is cloned from it, then has
-   * a branch where that very script is edited to always report a clean review instead - a committed,
-   * never-pushed edit to `review-wait.ts` itself, exactly what an agent's own pull request branch can
-   * hold without that edit ever reaching `main`.
+   * `origin`'s main holds the genuine stub, which reports one open finding. `sourceRepo` stands in for the
+   * agent's worktree: its branch edits that script to always report a clean review, as an agent's own pull
+   * request could.
    */
   function sourceWithForgedStub() {
     root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
@@ -135,8 +130,7 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
       fingerprints: {},
     };
     const calls: { cwd: string; args: string[] }[] = [];
-    // The real npm, exactly as `realDeps()`'s own `npm` wrapper calls it: whatever script runs is
-    // whatever `package.json` at `cwd` resolves, not a behavior this test hand-picks.
+    // The real npm: the script that runs is whatever `package.json` at `cwd` names.
     const npm: VerifyPrIo["npm"] = (cwd, args, timeoutMs) => {
       calls.push({ cwd, args: [...args] });
       const env = args.includes("revert:check") ? { ...process.env, FAKE_SHORT: short } : undefined;
@@ -155,31 +149,24 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     const verifyRoot = join(root, "runs");
     const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42, true);
 
-    // In a CI run the PR's tests run as the sandbox user: revert:check is told so (#335).
+    // In a CI run the PR's tests run as the sandbox user: revert:check is told so.
     const revertCall = calls.find((c) => c.args.includes("revert:check"));
     expect(revertCall?.args.slice(-3)).toEqual(["lab", "42", "--sandbox"]);
-    // The real finding from main's genuine script survived, even though ws.lab's own copy of the
-    // script was edited to always report a clean review.
     expect(result.problems).toEqual(["1 action-required finding(s) still open: a real finding Qodo raised"]);
     const reviewCall = calls.find((c) => c.args.includes("review:wait"));
     expect(reviewCall?.cwd).not.toBe(sourceRepo);
-    // The evidence review:wait wrote in the (now-removed) trusted checkout reached the permanent,
-    // agent-worktree evidence path `saveEvidence` carries to the private repo - the genuine finding,
-    // not the forged "clean" one the doctored worktree's own script would have written.
+    // The genuine finding reached the permanent evidence path before the trusted checkout was removed.
     const permanent = JSON.parse(
       readFileSync(join(sourceRepo, EVIDENCE, "reviews", "lab-pr42", `${short}.review.json`), "utf8"),
     );
     expect(permanent.openFindings).toEqual([{ severity: "action_required", title: "a real finding Qodo raised" }]);
-    // The trusted checkout is gone once verification finishes, so nothing of it lingers to inspect
-    // or tamper with afterwards.
+    // Nothing of the trusted checkout lingers to tamper with afterwards.
     expect(existsSync(verifyRoot)).toBe(true);
     expect(readdirSync(verifyRoot)).toHaveLength(0);
   });
 
   it("keeps review:wait's evidence even when the review doesn't complete", () => {
-    // A timed-out or skipped review still writes what it saw (here, a lone head-wait record) before
-    // its non-zero exit; that's worth keeping even though the PR doesn't count as verified, and the
-    // trusted checkout holding it is removed as soon as this call returns (Qodo on PR 171).
+    // A timed-out review still saves what it saw (here, a head-wait record) before its non-zero exit.
     root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
     const origin = join(root, "origin.git");
     const sourceRepo = join(root, "source");
@@ -254,7 +241,7 @@ process.exit(1);
   });
 });
 
-describe("verifying the commit the agent pushed (Qodo on PR 98)", () => {
+describe("verifying the commit the agent pushed", () => {
   const OLD = `506f56d${"0".repeat(33)}`;
   const PUSHED = `56fb13c${"1".repeat(33)}`;
   const ok = [{ name: "npm run check", conclusion: "SUCCESS" }];

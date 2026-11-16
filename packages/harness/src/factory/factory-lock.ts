@@ -1,5 +1,5 @@
 /**
- * The tick's lock file, so only one run happens at a time. Split from factory-tick.ts (#227).
+ * The tick's lock file, so only one run happens at a time.
  */
 import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ export interface Lock {
   /** Writes a new heartbeat for a lock that is still this tick's. The tick also does it on a timer. Never throws. */
   refresh(): void;
   /** Records the agent's pid and start with the heartbeat, so a tick that takes over after this runner was
-   * killed can end the agent it left behind (AUD-M19). */
+   * killed can end the agent it left behind. */
   recordAgent(pid: number | null, started?: string): void;
   note?: string;
 }
@@ -54,34 +54,24 @@ export function readBeat(
 }
 
 /**
- * The tick's lock file in `dir`. It holds the tick's pid, a random token and when it was taken (`since`),
- * and is never rewritten while held. The tick's heartbeat lives in a file of its own
- * (`factory.lock.<token>.beat`), refreshed every `heartbeatMs` and at every step the tick logs; no other tick
- * ever writes that path. The heartbeat shows a waiting tick, and the owner, when the holder last did
- * something; it never frees the lock.
+ * The tick's lock file in `dir`: the tick's pid, its start, a random token and when it was taken. It is never
+ * rewritten while held. The heartbeat lives in a file of its own (`factory.lock.<token>.beat`) that only the
+ * holder writes; it shows when the holder last did something, and never frees the lock.
  *
- * Taking it fresh writes the whole content to a file of its own and hard-links it into place: the link is
- * created only if nothing is there yet, and it appears with its content, so a tick reading it at that
- * instant never sees an empty file (AUD-N10) and two ticks racing for an unheld lock can never both get it.
+ * A fresh lock is written to a file of its own and hard-linked into place. The link appears whole and only if
+ * nothing is there, so a reader never sees an empty file and two ticks can't both take an unheld lock.
  *
- * A lock is taken over only when its holder is gone: its pid is dead, or the live pid is another process
- * that started later, so the system handed it on after a crash or restart (`lockIsStale`; the lock records
- * when its holder started, `factory-process.ts`). The holder itself keeps its lock
- * however old it is and however long one of its steps takes (AUD-M19): neither the lock's age nor the
- * heartbeat's frees it (Qodo on PR 262: a heartbeat limit let a slow but live tick lose its lock). The
- * machine's uptime is no guide either: a clock correction moves a boot time computed from it, and Windows
- * Fast Startup doesn't reset it.
+ * A lock is taken over only when its holder is gone: its pid is dead, or now belongs to a process that started
+ * later (`lockIsStale`). A live holder keeps its lock however slow it is, so neither the lock's age nor the
+ * heartbeat's frees it. Uptime is no guide either: a clock correction moves it, and Windows Fast Startup
+ * doesn't reset it.
  *
- * Since a live holder is never taken over, a holder's release can't race a takeover: it removes the lock only
- * when the token in it is its own. Taking over a stale one goes through `renameSync`, which is exclusive on
- * its *source* path, so two ticks can't both move the same stale lock away; the moved file is checked against
- * the exact bytes read, and anything else is put back with `linkSync`, which never replaces a lock another
- * tick took in between.
+ * A takeover renames the stale lock away, which only one tick can do, and checks the moved file against the
+ * bytes it read; anything else goes back with `linkSync`, which never replaces a lock taken in between.
  *
- * The heartbeat also records the agent's pid and start while one runs (`recordAgent`). A runner killed
- * outright leaves its agent running with no time limit; the tick that takes the stale lock over kills that
- * agent's tree first (`killAgent`), before it recovers the ticket (AUD-M19). Only when that pid is alive and
- * still the process that started then (`isSame`): once the agent ended, its pid may belong to another.
+ * A runner killed outright leaves its agent running with no time limit, so the tick that takes over kills that
+ * agent's tree first (`killAgent`), but only if the pid still belongs to the same process: once the agent ended,
+ * its pid may belong to another.
  */
 export function acquireLock(
   dir: string,
@@ -127,8 +117,7 @@ export function acquireLock(
     }
   };
   let timer: NodeJS.Timeout | undefined;
-  // Releases only a lock that is still this tick's: one taken over (its holder was gone) belongs to the
-  // tick that took it.
+  // Releases only a lock that is still this tick's: one taken over belongs to the tick that took it.
   const release = () => {
     if (timer) clearInterval(timer);
     try {
@@ -170,10 +159,8 @@ export function acquireLock(
   const at = beatNow.at ?? held.at;
   if (!lockIsStale(held, isAlive, isSame))
     return { ...NOT_ACQUIRED, note: `pid ${held.pid} since ${held.since ?? held.at}, last heartbeat ${at}` };
-  // The gone runner's agent is ended before the lock changes hands; one that can't be ended keeps the lock
-  // where it is, so no second run starts beside it (Qodo on PR 268).
-  // Killed only on proof that the pid is still the agent (its start id read now equals the recorded one);
-  // when that can't be told either way, nothing is killed and the lock stays, for the owner (Qodo on PR 268).
+  // The gone runner's agent is ended before the lock changes hands, so no second run starts beside it. Killed
+  // only on proof the pid is still the agent; when that can't be told, nothing is killed and the lock stays.
   let ended = "";
   const { agentPid, agentStarted } = beatNow;
   if (agentPid && isAlive(agentPid)) {

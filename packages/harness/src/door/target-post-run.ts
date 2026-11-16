@@ -1,5 +1,5 @@
 /**
- * The door's run gate (#347). While a factory run is active, the door (`target-post.ts`) sends only the kinds a
+ * The door's run gate. While a factory run is active, the door (`target-post.ts`) sends only the kinds a
  * run's agent needs, `AGENT_DOOR_KINDS`: push its branch, open its PR and change it. Every other kind (commenting,
  * closing a PR, writing an issue, moving a label) is refused with exit 2, whoever calls the door and however: the
  * check sits in `sendPost`, which every send goes through, not in the text of a command. The one exception is the
@@ -50,9 +50,8 @@ export function runMarkerPath(platform: NodeJS.Platform = process.platform): str
 
 /**
  * The marker a send must read. When the door sends with its own `gh` or `git`, always the fixed one: no caller can
- * point the gate elsewhere (Qodo on PR 349). Only a caller that brings its own sender (a test's fake) reads the
- * marker it names, or none: such a caller sends nothing through the door's `gh` or `git`, and code that runs `gh`
- * itself needs no door to do it.
+ * point the gate elsewhere. Only a caller that brings its own sender (a test's fake) reads the marker it names, or
+ * none: such a caller sends nothing through the door's `gh` or `git`, and code that runs `gh` itself needs no door.
  */
 export const gateMarker = (ownSender: boolean, named?: string): string | undefined =>
   ownSender ? runMarkerPath() : named;

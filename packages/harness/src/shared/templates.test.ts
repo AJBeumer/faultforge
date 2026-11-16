@@ -16,7 +16,7 @@ describe("templateDir: where inject and match both look", () => {
   });
 
   it.each(["../../examples/FF-0001", "a/b", "a\\b", ".hidden", "", "x/../../y"])(
-    "finds nothing for %j, which isn't a plain folder name (Qodo on PR 128, round 2)",
+    "finds nothing for %j, which isn't a plain folder name",
     (id) => {
       expect(templateDir(id, {})).toBeUndefined();
     },
@@ -98,8 +98,8 @@ describe("templateProblems: the version-2 schema", () => {
     expect(templateProblems(VALID_CONTROL_TEMPLATE)).toEqual([]);
   });
 
-  it("refuses an invariant id that isn't safe as a file name, in both places (#193)", () => {
-    // A trailing newline is refused too: ajv's patterns use JavaScript's `$` (Qodo on PR 207).
+  it("refuses an invariant id that isn't safe as a file name, in both places", () => {
+    // A trailing newline is refused too: ajv's patterns use JavaScript's `$`, which doesn't match before one.
     for (const bad of ["a/../../x", "INV IDEMP", "../x", "-flag", "", "INV-1\n"]) {
       expect(templateProblems({ ...VALID_BUG_TEMPLATE, invariantId: bad }), bad).not.toEqual([]);
       const alsoBreaks = [{ invariantId: bad, proofTest: "proof.test.ts" }];
@@ -144,7 +144,7 @@ describe("every seed template matches the version-2 schema", () => {
   });
 });
 
-describe("isTemplateId (M45d)", () => {
+describe("isTemplateId", () => {
   it("accepts one plain folder name and refuses anything that moves up or across", () => {
     expect(isTemplateId("x-secret-v1")).toBe(true);
     for (const id of ["a/b", "a\b", "../a", "a..b", ".hidden", "", 7]) expect(isTemplateId(id)).toBe(false);

@@ -1,6 +1,6 @@
 /**
  * Starts Vitest from the working folder's real spelling, so `npm test` gives the same result whatever case
- * the drive letter was typed in (#195).
+ * the drive letter was typed in.
  *
  *   tsx packages/harness/src/repo/vitest-run.ts run --project unit
  *

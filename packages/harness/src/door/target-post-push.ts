@@ -1,5 +1,5 @@
 /**
- * What a push through the door (`target-post.ts`) would send to the reviewed repository, read from git (#340): the
+ * What a push through the door (`target-post.ts`) would send to the reviewed repository, read from git: the
  * branch's name, and for every commit the remote doesn't have yet its author, committer and message, the path of
  * every file it adds or changes, and that file's content at that commit. These are the texts the door checks; the
  * push then sends exactly the commit it read, to exactly the URL it checked, so nothing can change in between.

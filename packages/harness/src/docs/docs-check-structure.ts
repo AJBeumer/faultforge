@@ -1,5 +1,5 @@
 /**
- * The Markdown rules `npm run docs:check` holds the docs to (#354), so a person can find their way in them:
+ * The Markdown rules `npm run docs:check` holds the docs to, so a person can find their way in them:
  * no page over 150 lines (the decision log's weekly files excepted), every relative link and heading anchor
  * resolves, and `docs/README.md`, the start page, links every doc under `docs/`.
  *
@@ -30,7 +30,7 @@ function gitList(root: string, args: string[]): string[] {
 
 /**
  * Every Markdown file git tracks or would track (new and not ignored) under `root`, as the working tree has it.
- * Any case of the extension counts: `Guide.MD` is a page too (Qodo on PR 357).
+ * Any case of the extension counts: `Guide.MD` is a page too.
  */
 export function markdownFiles(root: string): MarkdownFile[] {
   return gitList(root, ["-co", "--exclude-standard"])
@@ -38,7 +38,7 @@ export function markdownFiles(root: string): MarkdownFile[] {
     .map((path) => ({ path, text: readFileSync(join(root, path), "utf8") }));
 }
 
-/** The index's Markdown files and every path it holds: what a commit would record (Qodo on PR 357). */
+/** The index's Markdown files and every path it holds: what a commit would record. */
 export function stagedMarkdown(root: string): { files: MarkdownFile[]; paths: Set<string> } {
   const paths = new Set(gitList(root, ["--cached"]));
   const files = [...paths]
@@ -56,7 +56,7 @@ export function stagedMarkdown(root: string): { files: MarkdownFile[]; paths: Se
 
 /**
  * The rules on the working tree, then on the index, since a commit records the index: a staged page can break a
- * rule its working copy keeps (Qodo on PR 357). A staged problem the working tree also has is reported once.
+ * rule its working copy keeps. A staged problem the working tree also has is reported once.
  */
 export function markdownProblems(root: string): string[] {
   const working = structureProblems(markdownFiles(root), root);
@@ -93,8 +93,8 @@ function lineCount(text: string): number {
 /** Pages over the limit: Markdown under `docs/`, at the root and under `.claude/skills/`. */
 export function tooLong(files: MarkdownFile[]): string[] {
   const inScope = (p: string) => p.startsWith("docs/") || !p.includes("/") || p.startsWith(".claude/skills/");
-  // The decision log's weekly files hold its entries verbatim, so a busy week may run long.
-  // Only the weekly files: any other page there is held to the limit (Qodo on PR 357).
+  // The decision log's weekly files hold its entries verbatim, so a busy week may run long. Any other page
+  // there is held to the limit.
   const weekly = (p: string) => /^docs\/decisions\/week-\d+\.md$/.test(p);
   return files
     .filter((f) => inScope(f.path) && !weekly(f.path) && lineCount(f.text) > MAX_LINES)
@@ -127,7 +127,7 @@ function linkTargets(text: string): string[] {
   const targets: string[] = [];
   for (const raw of proseLines(text)) {
     const line = raw.replace(/`[^`]*`/g, "");
-    // `(<a b.md>)` may hold spaces; a title may be in double or single quotes or brackets (Qodo on PR 357).
+    // `(<a b.md>)` may hold spaces; a title may be in double or single quotes or brackets.
     for (const m of line.matchAll(/\]\(\s*(?:<([^>]*)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g)) {
       targets.push((m[1] ?? m[2]) as string);
     }

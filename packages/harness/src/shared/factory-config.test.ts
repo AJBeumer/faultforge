@@ -34,7 +34,7 @@ describe("factory.json", () => {
     expect(raw).not.toMatch(/token|secret|password|PAT_|key\.txt|\.github[/\\]PAT|\\Users\\/i);
   });
 
-  it("recognises tests in both places the layout rules allow, and fixtures, but not code (#112)", () => {
+  it("recognises tests in both places the layout rules allow, and fixtures, but not code", () => {
     const tests = new RegExp(repoConfig(factory, "faultforge").tests);
     for (const path of [
       "packages/harness/src/inject.test.ts",

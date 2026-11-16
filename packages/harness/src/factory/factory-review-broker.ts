@@ -1,14 +1,11 @@
 /**
- * `review:wait` for the agent, run by the runner, so Qodo's key stays with the runner (AUD-H2, #243).
+ * `review:wait` for the agent, run by the runner, so Qodo's key stays with the runner.
  *
- * The agent's environment has no Qodo key. In a run, `FAULTFORGE_REVIEW_BROKER` names a folder in the run's
- * own folder; `npm run review:wait` there doesn't call Qodo itself (`askRunner`). It writes its command line
- * as a request file and waits for the answer. The runner, which holds the key, watches that folder while the
- * agent runs (`serveReviewRequests`): it checks the command line with `review:wait`'s own parser, runs the
- * real `review:wait` from a trusted checkout of `main` (never from the agent's worktree, whose scripts the
- * agent can change: #161), copies the evidence it saved to where the agent's own run keeps it, and writes back
- * its output and exit code. A request is only ever the four things `review:wait` takes: a repo key, a PR
- * number, a commit and a time limit. Nothing the agent writes is run as a command.
+ * In a run, `FAULTFORGE_REVIEW_BROKER` names a folder, and the agent's `review:wait` writes its command line
+ * there as a request (`askRunner`). The runner checks it with `review:wait`'s own parser, runs the real
+ * `review:wait` from a trusted checkout of `main`, since the agent can change its worktree's scripts, copies the
+ * saved evidence back, and writes the answer (`serveReviewRequests`). A request is only a repo key, a PR number,
+ * a commit and a time limit: nothing the agent writes is run as a command.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import {
@@ -79,7 +76,7 @@ export async function askRunner(
 /** The biggest request file the runner reads. */
 export const MAX_REQUEST_BYTES = 4096;
 
-/** The longest wait a request may ask for, in minutes: a round's own wait, never an endless poll (Qodo on PR 270). */
+/** The longest wait a request may ask for, in minutes: one review's wait, never an endless poll. */
 export const MAX_REQUEST_MINUTES = 30;
 
 /**
@@ -116,7 +113,7 @@ export function stopReviewWaits(): void {
   running.clear();
 }
 
-/** Ends a `review:wait` and everything it started: on Windows the child is the shell npm runs in (Qodo on PR 270). */
+/** Ends a `review:wait` and everything it started: on Windows the child is the shell npm runs in. */
 function endTree(child: ChildProcess) {
   try {
     if (child.pid) killTree(child.pid);
@@ -132,7 +129,7 @@ function endTree(child: ChildProcess) {
  */
 export const runReviewWait: RunReviewWait = (argv, cwd) =>
   new Promise((done) => {
-    // Only arguments `cleanArgs` rebuilt reach here: a repo key, a number, a hex commit, a number.
+    // Safe to join for the Windows shell: only arguments `cleanArgs` rebuilt reach here.
     const args = ["run", "-s", "review:wait", "--", ...argv];
     const env = { ...process.env };
     delete env[BROKER_ENV];
@@ -162,7 +159,7 @@ export const runReviewWait: RunReviewWait = (argv, cwd) =>
  * The runner's side: takes every new request in `dir`, answers it with `run`, and writes the answer next to
  * it. A request is claimed by renaming it first, so it is never run twice. A command line `review:wait`
  * wouldn't accept is answered with exit 2 and never run. Nothing the agent puts in the folder can throw out
- * of here or reject: a run never stops because of its own request folder (Qodo on PR 270).
+ * of here or reject: a run never stops because of its own request folder.
  */
 export function serveReviewRequests(dir: string, run: AnswerRequest, most = Number.POSITIVE_INFINITY): Promise<void>[] {
   const started: Promise<void>[] = [];
@@ -198,9 +195,8 @@ export function serveReviewRequests(dir: string, run: AnswerRequest, most = Numb
     const answer = join(dir, `${id}.answer.json`);
     let argv: unknown;
     try {
-      // A request is a few words: anything bigger is refused unread, never parsed (Qodo on PR 270).
-      // A regular file only, never followed through a link: a pipe or a link to a device would block the
-      // runner on the read (Qodo on PR 270).
+      // A small regular file only, never followed through a link: a pipe or a device would block the runner on
+      // the read, and a request is only a few words.
       const stat = lstatSync(taken);
       if (!stat.isFile() || stat.size > MAX_REQUEST_BYTES) throw new Error("not a small regular file");
       argv = JSON.parse(readFileSync(taken, "utf8")).argv;
@@ -231,7 +227,7 @@ export function serveReviewRequests(dir: string, run: AnswerRequest, most = Numb
 
 /**
  * True for anything but a symbolic link: a link the agent put among its saves would let `review:wait`, run by
- * the runner, write through it to a file outside the evidence folder (Qodo on PR 270).
+ * the runner, write through it to a file outside the evidence folder.
  */
 function notLink(path: string): boolean {
   try {
@@ -244,7 +240,7 @@ function notLink(path: string): boolean {
 /**
  * The runner's broker for one run: requests in `dir` are answered by `review:wait` run from a trusted
  * checkout of the harness's `main`, built by `prepare` before the agent starts (building it later would stop
- * the runner's event loop for minutes mid-run: Qodo on PR 270). The run's saved reviews of that PR are copied
+ * the runner's event loop for minutes mid-run). The run's saved reviews of that PR are copied
  * into the checkout first, so `review:wait`'s own write-once and archive rules see them, and its saves are
  * copied back after. A zero exit with no saved review to copy back is not a success: the run would lack its
  * evidence. `close` ends any wait still running and removes the checkout.
@@ -258,7 +254,7 @@ export function reviewBroker(options: {
   evidence: string;
   /** Where the agent's run keeps its evidence (its own checkout's evidence folder). */
   evidenceRoot: string;
-  /** The run's own repo key: a request for another repo's reviews is refused (Qodo on PR 270). */
+  /** The run's own repo key: a request for another repo's reviews is refused. */
   repoKey?: string;
   build?: typeof buildTrustedCheckout;
   run?: RunReviewWait;
@@ -309,7 +305,7 @@ export function reviewBroker(options: {
     dir,
     prepare,
     // One request at a time: they share one checkout and one evidence folder per PR, and an agent that fills
-    // its folder with requests mustn't start a process for each (Qodo on PR 270).
+    // its folder with requests mustn't start a process for each.
     serve: () => {
       if (busy) return [];
       const started = serveReviewRequests(dir, answer, 1);

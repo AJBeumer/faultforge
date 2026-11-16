@@ -1,5 +1,5 @@
 /**
- * Public text holds no local paths, user names or Qodo trace ids (#230, audit N-15): the docs and their
+ * Public text holds no local paths, user names or Qodo trace ids: the docs and their
  * evidence are permanent public history, and a raw tool output pasted into them carries the machine it ran on.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { ROOT } from "../shared/paths.ts";
 
 const TEXT = /\.(md|txt|json|jsonl|csv|yml|yaml)$/i;
-// `[\\/]+` also matches a JSON-escaped backslash, written twice (Qodo on PR 236).
+// `[\\/]+` also matches a JSON-escaped backslash, written twice.
 const LOCAL = [
   { what: "a Windows user folder", pattern: /[A-Za-z]:[\\/]+Users[\\/]+/ },
   { what: "a local project path", pattern: /[A-Za-z]:[\\/]+Projects[\\/]+/ },
@@ -32,7 +32,7 @@ function publicText(): { path: string; text: string }[] {
   }));
 }
 
-describe("public text holds nothing of the machine it was made on (audit N-15)", () => {
+describe("public text holds nothing of the machine it was made on", () => {
   it("has no local path, user folder, or Qodo trace or operation id", () => {
     const found = publicText().flatMap(({ path, text }) =>
       LOCAL.filter(({ pattern }) => pattern.test(text)).map(({ what }) => `${path}: ${what}`),
@@ -40,7 +40,7 @@ describe("public text holds nothing of the machine it was made on (audit N-15)",
     expect(found).toEqual([]);
   });
 
-  it("matches a JSON-escaped path as well as a plain one (Qodo on PR 236)", () => {
+  it("matches a JSON-escaped path as well as a plain one", () => {
     const [user, project] = LOCAL;
     expect(user?.pattern.test(String.raw`"C:\\Users\\someone\\AppData"`)).toBe(true);
     expect(project?.pattern.test(String.raw`"D:\\Projects\\x"`)).toBe(true);
