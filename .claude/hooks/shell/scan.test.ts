@@ -18,7 +18,7 @@ import { joinContinuations, MAX_COMMAND_CHARS } from "./scan.ts";
 
 describe("a backslash-newline is joined as the shell joins it", () => {
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade4-");
+  const privateDir = privateStore("guard~private-");
   const elsewhere = scratchFolder("guard-elsewhere-");
   const bash = (command: string) => askGuard("Bash", { command }, elsewhere, { config, privateDir });
 

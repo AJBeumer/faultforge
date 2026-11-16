@@ -196,7 +196,7 @@ describe("private storage is told by its checkout and its origin, never by a nam
 
 describe("percent-escaped private ids", () => {
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
 
   it.each(["uses x%2Dsecret%2Dv1", "uses x%2dsecret%2dv1", "uses %78-secret-v1", "uses x%252Dsecret%252Dv1"])(
     "denies an API field %s",

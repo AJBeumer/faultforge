@@ -179,7 +179,7 @@ describe("a private template id under other spellings, and inside inline code", 
 
 describe("code an interpreter runs as a subprocess is built code", () => {
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
   const inTarget = (command: string) =>
     askGuard("Bash", { command }, "D:\\Projects\\faultforge-target", { config, privateDir });
 

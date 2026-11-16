@@ -28,85 +28,23 @@ const HISTORY = new RegExp(
   "i",
 );
 
+/** Every file to scan. This one is left out: its samples are history on purpose. */
 const files = (readdirSync(HOOKS, { recursive: true }) as string[])
   .map((f) => f.replace(/\\/g, "/"))
-  .filter((f) => /\.(ts|md)$/.test(f) && !f.includes("node_modules/"));
-
-/** After one of these, a `/` starts a regular expression, not a division. */
-const BEFORE_REGEX = /[(,=:[!&|?{};+\-*%<>~^]/;
-const KEYWORD_BEFORE_REGEX = /\b(?:return|typeof|case|in|of|void|delete|throw|new|yield|await)\s*$/;
+  .filter((f) => /\.(ts|md)$/.test(f) && !f.includes("node_modules/") && f !== "history-free-comments.test.ts");
 
 /**
- * The comment text in a TypeScript file, one entry per line, wherever on a line a comment starts. Strings,
- * templates and regular expressions are skipped, so a `//` or `/*` inside one is not taken for a comment.
+ * The text that may be a comment, one entry per line: every line inside a block comment, and the rest of any
+ * line from its first `//` or `/*`. Telling a comment from a `//` in a string or a regular expression takes a
+ * parser, so this reads too much rather than too little: a missed comment would let history through.
  */
 function comments(text: string): string[] {
   const found: string[] = [];
-  const interpolations: number[] = []; // open braces inside each `${`, innermost last
-  let prev = "";
-  let i = 0;
-  const skipTemplate = () => {
-    while (i < text.length) {
-      const c = text[i];
-      if (c === "\\") i += 2;
-      else if (c === "`") return void i++;
-      else if (c === "$" && text[i + 1] === "{") {
-        i += 2;
-        interpolations.push(0);
-        return;
-      } else i++;
-    }
-  };
-  const skipRegex = () => {
-    let inClass = false;
-    for (i++; i < text.length && text[i] !== "\n"; i++) {
-      const c = text[i];
-      if (c === "\\") i++;
-      else if (c === "[") inClass = true;
-      else if (c === "]") inClass = false;
-      else if (c === "/" && !inClass) return void i++;
-    }
-  };
-  while (i < text.length) {
-    const c = text[i] ?? "";
-    const next = text[i + 1];
-    if (c === "/" && next === "/") {
-      const end = text.indexOf("\n", i);
-      const stop = end < 0 ? text.length : end;
-      found.push(text.slice(i + 2, stop).trim());
-      i = stop;
-    } else if (c === "/" && next === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end < 0 ? text.length : end + 2;
-      found.push(
-        ...text
-          .slice(i, stop)
-          .split(/\r?\n/)
-          .map((line) => line.trim()),
-      );
-      i = stop;
-    } else if (c === '"' || c === "'") {
-      for (i++; i < text.length && text[i] !== c && text[i] !== "\n"; i++) if (text[i] === "\\") i++;
-      i++;
-      prev = c;
-    } else if (c === "`" || (c === "}" && interpolations.at(-1) === 0)) {
-      if (c === "}") interpolations.pop();
-      i++;
-      skipTemplate();
-      prev = "`";
-    } else if (
-      c === "/" &&
-      (prev === "" || BEFORE_REGEX.test(prev) || KEYWORD_BEFORE_REGEX.test(text.slice(Math.max(0, i - 16), i)))
-    ) {
-      skipRegex();
-      prev = "a";
-    } else {
-      const open = interpolations.length - 1;
-      if (open >= 0 && c === "{") interpolations[open] = (interpolations[open] ?? 0) + 1;
-      if (open >= 0 && c === "}") interpolations[open] = (interpolations[open] ?? 1) - 1;
-      if (!/\s/.test(c)) prev = c;
-      i++;
-    }
+  let inBlock = false;
+  for (const line of text.split(/\r?\n/)) {
+    const start = inBlock ? 0 : line.search(/\/[/*]/);
+    if (start >= 0) found.push(line.slice(start).trim());
+    if (line.includes("/*") || line.includes("*/")) inBlock = line.lastIndexOf("/*") > line.lastIndexOf("*/");
   }
   return found;
 }
@@ -147,24 +85,24 @@ describe("history kept out of the hooks' comments and names", () => {
 
   it("finds comments, test names and file names to scan", () => {
     const sample = '// a\nconst x = 1; // b\n/**\n * c\n */\nit("d", () => {});\nit.each([1])("e %s", f);';
-    expect(comments(sample)).toEqual(["a", "b", "/**", "* c", "*/"]);
+    expect(comments(sample)).toEqual(["// a", "// b", "/**", "* c", "*/"]);
     expect(testNames(sample)).toEqual(["d", "e %s"]);
   });
 
-  it("finds a comment that starts after code on the same line", () => {
-    expect(comments("const result = decide(input); /* see #1 */")).toEqual(["/* see #1 */"]);
-    expect(comments("const x = 1;// see #2")).toEqual(["see #2"]);
+  it.each([
+    "const result = decide(input); /* see #1 */",
+    "const x = 1;// see #2",
+    "count++ / total; // see #3",
+    "if (value) /[/*] x/.test(value); // see #4",
+    "const re = /\\/\\//; // see #5",
+    'const url = "https://example.com"; // see #6',
+  ])("reads a comment wherever it starts on a line: %s", (line) => {
+    expect(comments(line).some((text) => HISTORY.test(text))).toBe(true);
   });
 
-  it("doesn't take a // or /* inside a string, template or regular expression for a comment", () => {
-    const sample = [
-      `const url = "https://example.com/#3";`,
-      `const glob = 'a/*b';`,
-      "const t = `x // ${y ? `/* ${z} */` : '//'} #4`;",
-      "const re = /\\/\\/#5|[/*]/g; // after",
-      "const half = total / 2; const r = (a) / 3; return /x\\/*y/.test(s);",
-    ].join("\n");
-    expect(comments(sample)).toEqual(["after"]);
+  it("reads every line of a block comment, however the line before it ends", () => {
+    const sample = 'const glob = "*/"; /* opens\n see #7\n*/ const after = 1;\nconst code = "#8";';
+    expect(comments(sample)).toEqual(["/* opens", "see #7", "*/ const after = 1;"]);
   });
 
   it("names no ticket, PR, review round, grading pass, audit id, reviewer finding or commit in any comment, test name or file name", () => {

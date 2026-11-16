@@ -8,7 +8,7 @@ import { askGuard, guardConfig, privateStore, REPOS, scratchFolder, tempRepo } f
 
 const T = REPOS.target;
 const CONFIG = guardConfig(tempRepo(true).dir);
-const PRIVATE = privateStore("guard~regrade5-");
+const PRIVATE = privateStore("guard~private-");
 const ELSEWHERE = scratchFolder("guard-elsewhere-", {
   "notes.txt": "Tidy the list\n",
   "body.json": '{"title":"Tidy"}',

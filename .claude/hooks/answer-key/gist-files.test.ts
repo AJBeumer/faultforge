@@ -110,12 +110,12 @@ describe("a gist fed on stdin", () => {
 
 describe("gists and release assets are posts", () => {
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
   const fromLab = (command: string) =>
     askGuard("Bash", { command }, "D:\\Projects\\FaultForge", { config, privateDir });
   /** A file in its own temp folder holding `text`, by a path with forward slashes. */
   const file = (name: string, text: string) => {
-    const path = join(mkdtempSync(join(tmpdir(), "guard-regrade-")), name);
+    const path = join(mkdtempSync(join(tmpdir(), "guard-gist-file-")), name);
     writeFileSync(path, text);
     return path.replace(/\\/g, "/");
   };

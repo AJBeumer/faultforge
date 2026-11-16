@@ -13,7 +13,7 @@ const T = REPOS.target;
 const POSTS = `await fetch("https://api.github.com/repos/${T}/issues", { method: "POST" });\n`;
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);
-const PRIVATE = privateStore("guard~regrade5-");
+const PRIVATE = privateStore("guard~private-");
 /** A folder that is no checkout, where commands run from unless a test says otherwise. */
 const ELSEWHERE = scratchFolder("guard-elsewhere-", {
   "post.mjs": POSTS,

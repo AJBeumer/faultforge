@@ -19,7 +19,7 @@ const at = (path: string) => path.replace(/\\/g, "/");
 /** A reviewed checkout with an origin, private storage, and a folder that is no checkout to run from. */
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);
-const PRIVATE = privateStore("guard~regrade4-");
+const PRIVATE = privateStore("guard~private-");
 const ELSEWHERE = scratchFolder("guard-elsewhere-");
 const bash = (command: string, cwd = ELSEWHERE) =>
   askGuard("Bash", { command }, cwd, { config: CONFIG, privateDir: PRIVATE });
@@ -28,7 +28,7 @@ describe("the lab's name never hides a ref name", () => {
   const LAB_DIR = "D:\\Projects\\FaultForge";
   const TARGET_DIR = "D:\\Projects\\faultforge-target";
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
   const ask = (command: string, cwd = LAB_DIR) => askGuard("Bash", { command }, cwd, { config, privateDir });
 
   it.each([

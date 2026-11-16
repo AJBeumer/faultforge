@@ -184,7 +184,7 @@ describe("lab history never goes into a reviewed repo", () => {
 describe("refs on a reviewed repo can't be rewritten through the API", () => {
   const target = tempRepo(true);
   const config = guardConfig(target.dir);
-  const privateDir = privateStore("guard~regrade5-");
+  const privateDir = privateStore("guard~private-");
   const elsewhere = scratchFolder("guard-elsewhere-", {
     "body.json": '{"title":"Tidy"}',
     "del.graphql": 'mutation { deleteRef(input: {refId: "R_x"}) { clientMutationId } }',
