@@ -5,8 +5,9 @@
  */
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { type FactoryConfig, repoConfig } from "../shared/factory-config.ts";
+import { type FactoryConfig, gateOf, repoConfig } from "../shared/factory-config.ts";
 import { ROOT as LAB_ROOT, prEvidenceDir } from "../shared/paths.ts";
+import { type GateRecord, gateAccount } from "../shared/quality-gate.ts";
 import { REVERT_CHECK_TIMEOUT_MS } from "./factory-exec.ts";
 import { reviewerRuleGates } from "./factory-gates.ts";
 import type { Workspace } from "./factory-tick.ts";
@@ -66,15 +67,6 @@ export function checkProblems(
     : [];
 }
 
-/** Titles of the action-required findings still open in a `review:wait` record. */
-export function openActionRequired(record: {
-  openFindings?: { severity?: string | null; title?: string | null }[];
-}): string[] {
-  return (record.openFindings ?? [])
-    .filter((f) => f.severity === "action_required")
-    .map((f) => f.title ?? "(untitled)");
-}
-
 /**
  * A problem for `revert:check`'s exit code; empty only when the process exited 0 *and* its saved record
  * agrees the change was caught. A forged or stubbed script could exit 0 without writing a record.
@@ -120,8 +112,8 @@ export interface VerifyPrIo {
 }
 
 /**
- * Checks one pull request the agent says is ready: that Qodo's review of its head is complete with no
- * action-required finding open (`review:wait`), and that its own new or changed tests actually catch
+ * Checks one pull request the agent says is ready: that Qodo's review of its head is complete and meets
+ * the quality gate (`review:wait`, then `gateAccount`), and that its own new or changed tests actually catch
  * the change (`revert:check`). Both run from a freshly fetched checkout of `main`, never from `ws.lab`,
  * the agent's own worktree: otherwise the pull request being checked could edit the checks that judge it.
  *
@@ -246,16 +238,19 @@ export function verifyPrWith(
     } catch {
       ownerGates = reviewerRuleGates(null);
     }
-    // A complete review can still have findings open: only none action-required counts as ready.
+    // A complete review can still have findings open: the quality gate says which of them block.
     if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
     else {
       // A damaged record is a problem to report, never a crash that loses the rest of this verdict.
-      const record = readJsonRecord(reviewRecordFile) as Parameters<typeof openActionRequired>[0] | null;
+      const record = readJsonRecord(reviewRecordFile) as GateRecord | null;
       if (!record) problems.push("review:wait's record for the head commit couldn't be read");
-      else {
-        const open = openActionRequired(record);
-        if (open.length) problems.push(`${open.length} action-required finding(s) still open: ${open.join("; ")}`);
-      }
+      // The file is named by the commit's first seven characters; the record's own `headSha` must agree in
+      // full, so a record of another commit under that name is never judged as this one's. The rounds are
+      // Qodo's own count, saved by review:wait in the trusted checkout, never the agent's.
+      else
+        problems.push(
+          ...gateAccount(record, gateOf(factory), { head: pushed, requireComplete: true, rounds: "require" }).problems,
+        );
     }
 
     // The PR's own new or changed tests must fail without its change. The runner checks this itself

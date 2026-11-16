@@ -9,6 +9,7 @@
     "review:wait": "tsx packages/harness/src/cli/review-wait.ts",
     "review:local": "tsx packages/harness/src/review/review-local.ts",
     "review:gate": "tsx packages/harness/src/review/review-gate.ts",
+    "gate:check": "tsx packages/harness/src/cli/gate-check-cli.ts",
     "factory:tick": "tsx packages/harness/src/cli/factory-tick-cli.ts",
     "factory:timeline": "tsx packages/harness/src/cli/factory-timeline-cli.ts",
     "factory:keep": "tsx packages/harness/src/factory/factory-keep.ts",

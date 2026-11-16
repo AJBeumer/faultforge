@@ -82,9 +82,12 @@ A clean review doesn't mean the ticket is done.
 
 ## 6. Act on the findings
 
-For each Qodo finding:
+The quality gate in `factory.json` says which findings must be fixed and which are only listed for the owner ([docs/quality-gate.md](../../../docs/quality-gate.md)). `npm run gate:check -- <key> <pr>` applies it to the saved review of the PR's head. The task is done only when it exits 0.
 
-- **Reproduce it first** with a failing test. If it reproduces, fix it, and the test must pass afterwards. If it doesn't reproduce, say so in the PR description with the evidence. Never click Dismiss and never reply to Qodo.
+For each Qodo finding the gate says to fix:
+
+- **Reproduce it first** with a failing test. If it reproduces, fix it, and the test must pass afterwards. If it doesn't reproduce, say so in the PR description with the evidence; the finding stays open and the owner decides. Never click Dismiss and never reply to Qodo.
+- Leave a finding the gate only flags unchanged, and list it in the PR description under "Flagged for the owner".
 - Push, save the new review (step 4), and repeat the checks the fix touches.
 - Note anything the review missed or raised that didn't matter.
 

@@ -10,6 +10,7 @@ import {
   openFindings,
   type QodoReview,
   reviewEffort,
+  reviewRounds,
   reviewState,
 } from "../qodo/qodo-review.ts";
 import { ciOrUnavailable, saveCommentFeeds, summarizeCi } from "../review/review-feeds.ts";
@@ -130,6 +131,20 @@ describe("open findings, review depth and the last save", () => {
     expect(findingsFor(lite, head)).toEqual([]);
     expect(openFindings(lite)).toHaveLength(9);
     expect(openFindings(lite)[0]).toMatchObject({ commit: "4d4d112", severity: "action_required" });
+  });
+
+  it("counts a review round per commit Qodo ran on, leaving out a run it skipped, and never guesses", () => {
+    const run = (commit_sha: string, review_effort = "standard") => ({
+      commit_sha,
+      review_effort,
+      status: "completed",
+    });
+    expect(reviewRounds({ review_runs: [run("a"), run("b"), run("b", "lite"), run("c", "skip")] })).toBe(2);
+    // A finished review has at least one run: nothing countable is unknown, never zero rounds.
+    expect(reviewRounds({ review_runs: [] })).toBeNull();
+    expect(reviewRounds({ review_runs: [run(""), run("c", "skip")] })).toBeNull();
+    expect(reviewRounds({})).toBeNull();
+    expect(reviewRounds({ review_runs: "many" } as never)).toBeNull();
   });
 
   it("reports how deeply Qodo reviewed the head commit", () => {

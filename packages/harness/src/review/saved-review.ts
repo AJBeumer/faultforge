@@ -19,6 +19,15 @@ export function savedReviewDir(repoKey: string, pr: number, env: NodeJS.ProcessE
   return prEvidenceDir(join(privateDir(env), basename(evidenceDir())), "reviews", repoKey, pr);
 }
 
+/**
+ * Where `review:wait` saves a PR's reviews, and so where a command that reads them back must look: this
+ * checkout's own evidence folder, whatever `FAULTFORGE_PRIVATE_DIR` says. The runner runs `review:wait` in a
+ * trusted checkout and copies the saves from there, so the folder must not follow the environment.
+ */
+export function waitSaveDir(repoKey: string, pr: number): string {
+  return savedReviewDir(repoKey, pr, {});
+}
+
 /** The save of one commit in a PR's folder: `<first 7 of the SHA>.review.json`. */
 export function savedReviewPath(dir: string, headSha: string): string {
   return join(dir, `${headSha.slice(0, 7)}.review.json`);

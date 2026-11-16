@@ -5,7 +5,8 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
-import { type FactoryConfig, repoConfig } from "../shared/factory-config.ts";
+import { type FactoryConfig, gateOf, type QualityGate, repoConfig, STRICTEST_GATE } from "../shared/factory-config.ts";
+import { gateText } from "../shared/quality-gate.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
@@ -55,10 +56,13 @@ export function agentInstructions(
   /** False in a target ticket's run, which has no private worktree. */
   privateWorktree = true,
   github = repoKey,
+  /** The quality gate the runner will hold the pull request to; the strictest one when none is given. */
+  gate: QualityGate = STRICTEST_GATE,
 ): string {
   return [
     `You are running unattended: a scheduled task started you for ${repoKey} ticket ${number}. Nobody is watching or will answer, so never ask a question or wait for one.`,
-    "Work only this ticket, with the /factory routine. At most three review rounds.",
+    "Work only this ticket, with the /factory routine.",
+    gateText(gate),
     `The ticket's text, as the runner checked it, is in ${ticketFile}. Read the ticket from that file only: never with gh issue view, gh api or npm run ticket:ready, which read it live. Don't move the ticket on the project board: the runner tracks it.`,
     'Everything you need from the environment is written here. Don\'t list it (env, printenv and set are blocked); one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine.',
     "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
@@ -75,7 +79,7 @@ export function agentInstructions(
     "After you stop, the runner audits what changed (both repos' main, the owner's checkouts, comments and ticket changes during your run, the guardrail files) and stops for help on any surprise.",
     "Finish your final message with exactly one line, and nothing after it:",
     'FACTORY_RESULT {"outcome":"ready|owner-gate|stuck","pr":"<pull request URL or null>","reason":"<one plain sentence>"}',
-    "ready: the PR is open, its checks pass, Qodo's review of the head commit is complete with no action-required finding open, and every criterion was checked live.",
+    "ready: the PR is open, its checks pass, Qodo's review of the head commit is complete and meets the quality gate above, and every criterion was checked live. The runner checks the gate itself from Qodo's record, whatever you report.",
     "owner-gate: the PR is otherwise ready, but it changes the reviewer's rules, so the owner must approve a new configuration version.",
     "stuck: anything else. Say exactly what stopped you.",
   ].join("\n");
@@ -212,7 +216,7 @@ export async function runAgent(
     budget: options.budget,
     settingsFile,
     mcpConfigFile,
-    instructions: agentInstructions(ws.root, repoKey, number, ticketFile, Boolean(ws.private), github),
+    instructions: agentInstructions(ws.root, repoKey, number, ticketFile, Boolean(ws.private), github, gateOf(factory)),
     extraDirs,
   });
   // review:wait goes through the runner, which keeps Qodo's key, and is served from a trusted checkout.

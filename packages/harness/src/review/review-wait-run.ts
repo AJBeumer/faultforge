@@ -7,7 +7,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { QodoApi } from "../qodo/qodo-api.ts";
-import { findingsFor, findingsShapeProblem, openFindings, type QodoReview, reviewEffort } from "../qodo/qodo-review.ts";
+import {
+  findingsFor,
+  findingsShapeProblem,
+  openFindings,
+  type QodoReview,
+  reviewEffort,
+  reviewRounds,
+} from "../qodo/qodo-review.ts";
 import { errorText as message } from "../shared/error-text.ts";
 import { loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { callDeadline, gh, ghAll } from "../shared/github.ts";
@@ -15,9 +22,9 @@ import { ciOrUnavailable, saveCommentFeeds } from "./review-feeds.ts";
 import { waitForHead, waitForReview } from "./review-poll.ts";
 import {
   archiveUnfinished,
-  savedReviewDir,
   savedReviewPath,
   savedReviewRefusal,
+  waitSaveDir,
   writeSavedReview,
 } from "./saved-review.ts";
 
@@ -223,6 +230,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
     headMovedTo: result.state === "moved" ? result.head : null,
     pushSeenAt,
     reviewEffort: effort,
+    reviewRounds: result.review ? reviewRounds(result.review) : null,
     reviewSeenCompleteAt: "seenCompleteAt" in result ? new Date(result.seenCompleteAt).toISOString() : null,
     reviewSeenCompleteNote: "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
     reviewStartedAt:
@@ -277,7 +285,7 @@ export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
     github,
     // This checkout's own evidence folder, whatever FAULTFORGE_PRIVATE_DIR says: factory-verify runs this in a
     // trusted checkout and copies the saves from there.
-    dir: savedReviewDir(repoKey, pr, {}),
+    dir: waitSaveDir(repoKey, pr),
     readHead: async () => gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim(),
     checkSuiteTimes: (sha) =>
       ghAll<{ created_at: string }>(

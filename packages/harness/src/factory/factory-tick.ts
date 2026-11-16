@@ -45,7 +45,7 @@
 import { parseArgs } from "node:util";
 import { summarizeDifference } from "../qodo/qodo-check.ts";
 import { proposeAfterRun } from "../rules/rules-propose.ts";
-import { type FactoryConfig, loadFactory, repoConfig } from "../shared/factory-config.ts";
+import { type FactoryConfig, gateOf, loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { ROOT as LAB_ROOT } from "../shared/paths.ts";
 import { claimMarker } from "./factory-comments.ts";
 import { realDeps } from "./factory-deps.ts";
@@ -200,10 +200,12 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
     // The claim says which way of running took it, so the other's recovery leaves it alone.
     const mark = deps.mode ? `\n\n${claimMarker(deps.mode)}` : "";
+    // The same limit the agent is told and the runner enforces: the quality gate's.
+    const reviewRounds = gateOf(factory).maxRounds;
     say(
-      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.${mark}`,
+      `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, ${reviewRounds} review round${reviewRounds === 1 ? "" : "s"}. It will report here when it stops; merging stays with the owner.${mark}`,
     );
-    log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds: 3 } });
+    log("claimed", { limits: { minutes: options.minutes, budgetUsd: options.budget, reviewRounds } });
 
     const qodo = await deps.qodoCheck(id);
     // Summaries only, in the log, and a fixed sentence on the ticket: CI prints this log and uploads it from

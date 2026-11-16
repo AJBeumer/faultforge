@@ -17,7 +17,7 @@ The loop runs on its own between these, and stops at them:
 
 1. **A ticket isn't ready.** `npm run ticket:ready` says why. The owner fixes the ticket; the loop doesn't fill the gap.
 2. **A PR is ready to merge.** Only the owner merges.
-3. **A review can't be settled by the loop:** Qodo skipped or didn't finish the review, a finding needs a decision about the product, three review rounds left an action-required finding open, or `revert:check` didn't show the PR's tests failing without its change (exit 1 or 2).
+3. **A review can't be settled by the loop:** Qodo skipped or didn't finish the review, a finding needs a decision about the product, the quality gate in `factory.json` is not met after its review rounds (a finding it says to fix is open, or the agent disputes one), or `revert:check` didn't show the PR's tests failing without its change (exit 1 or 2).
 4. **Anything that changes the reviewer:** a ticket that edits a reviewed repo's `AGENTS.md` or `INVARIANTS.md` (a new Qodo configuration version). The loop builds it, but the owner approves the version before the PR is called ready.
 
 It never merges, never dismisses or replies to a Qodo finding, and never changes Qodo's settings.
@@ -31,7 +31,7 @@ It never merges, never dismisses or replies to a Qodo finding, and never changes
    - Exit 3: Qodo skipped the review. That's a gate: log it, the PR waits for the owner.
    - Exit 1: no completed review in time, or the PR head never became `<sha>` (or moved past it). That's a gate.
    - Exit 2: the tool couldn't run (usage, missing key, or `gh` or the API failing on every poll; a single failed poll is retried). Not a review result: fix the setup and run it again.
-4. **Act on the findings**, as `/work-ticket` says: reproduce each with a failing test first, fix what's real, explain what isn't, push, and run `review:wait` again. At most three rounds; an action-required finding still open after that is a gate.
+4. **Act on the findings**, as `/work-ticket` says, under the quality gate in `factory.json` ([docs/quality-gate.md](../../../docs/quality-gate.md)): reproduce each with a failing test first, fix every valid finding the gate says to fix, leave the ones it only flags unchanged and list them in the PR, push, and run `review:wait` again. After each round, `npm run gate:check -- <repo> <pr>` says whether the gate is met. A finding you think is wrong stays open with your evidence in the PR: that is a gate for the owner, never yours to close. The gate gives the most rounds; a finding it says to fix that is still open after that is a gate.
 5. **Check the behaviour** on the running app (or with real commands for tooling), every criterion and a failure case. Save the transcript.
 6. **Prove the tests:** `npm run revert:check -- <repo> <pr>`. In a scratch copy it runs the PR's new or changed tests with the change (they must pass) and without it (at least one must fail). Paste its output into the PR body under "How I checked it". It saves its record under `<evidence>/revert-checks/`. Don't pipe its output.
    - Exit 0: caught. A test fails without the change, as it should.

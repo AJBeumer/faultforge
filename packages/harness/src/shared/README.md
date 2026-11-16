@@ -3,6 +3,7 @@
 What every other area needs, in one place each.
 
 - `paths.ts`: the repo root, private storage, the evidence folders. `factory-config.ts`: reads `factory.json`.
+- `quality-gate.ts`: the quality gate, decided for one saved review and worded for the agent.
 - `templates.ts`: where templates live and what each must declare.
 - `neutral.ts`: the giveaway word list. The hooks read it too, through their bridge, so the guard holds it.
 - `github.ts`: the one `gh` wrapper, with its time limit and retries. `git-stream.ts`: git output line by line.

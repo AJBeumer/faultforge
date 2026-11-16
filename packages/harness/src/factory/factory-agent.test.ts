@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { COMMAND_KINDS, parsePost } from "../door/target-post.ts";
 import { AGENT_DOOR_KINDS } from "../door/target-post-run.ts";
+import { gateOf, loadFactory, STRICTEST_GATE } from "../shared/factory-config.ts";
+import { gateText } from "../shared/quality-gate.ts";
 import {
   AGENT_TOOLS,
   agentArgs,
@@ -14,6 +16,18 @@ import {
 } from "./factory-agent.ts";
 
 describe("agentInstructions", () => {
+  it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
+    const gate = gateOf(loadFactory());
+    const text = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md", true, "o/r", gate);
+    expect(text).toContain(gateText(gate));
+    expect(text).toContain("meets the quality gate above");
+    expect(text).not.toMatch(/three review rounds|no action-required finding open/);
+    // Another gate gives other instructions: the text follows the data.
+    const strict = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md");
+    expect(strict).toContain(gateText(STRICTEST_GATE));
+    expect(strict).not.toContain(gateText(gate));
+  });
+
   it("tells the agent to pass PR bodies, comments and commit messages as files", () => {
     const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md");
     expect(text).toMatch(/--body-file/);

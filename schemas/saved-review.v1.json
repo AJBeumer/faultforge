@@ -14,6 +14,11 @@
     "pushSeenAt": { "$ref": "#/$defs/timeOrNull" },
     "pushedAt": { "$ref": "#/$defs/timeOrNull" },
     "reviewEffort": { "type": ["string", "null"] },
+    "reviewRounds": {
+      "description": "How many review rounds Qodo has run on the pull request when this was saved: the distinct commits it reports a run for, skipped runs left out. Null when its answer held no list of runs. Absent in a save made before rounds were recorded.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
     "reviewSeenCompleteAt": { "$ref": "#/$defs/timeOrNull" },
     "reviewSeenCompleteNote": { "type": "string" },
     "reviewStartedAt": { "type": ["string", "null"] },

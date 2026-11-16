@@ -37,11 +37,12 @@ import {
   tokenFrom,
   type Workspace,
 } from "./factory-tick.ts";
-import { checkProblems, openActionRequired, revertCheckProblems } from "./factory-verify.ts";
+import { checkProblems, revertCheckProblems } from "./factory-verify.ts";
 import { provenanceProblems, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
+  gate: { fix: ["action_required", "remediation_recommended"], flag: ["informational"], maxRounds: 2 },
   repos: {
     lab: {
       github: "owner/lab",
@@ -435,6 +436,9 @@ describe("tick: stop paths", () => {
       "cleanup",
     ]);
     expect(f.comments[0]?.body).toMatch(/Picked up by scheduled agent run `20261109-093001-target-18`/);
+    // The round limit on the ticket and in the log is the gate's, not a number of its own.
+    expect(f.comments[0]?.body).toContain("Limits: 120 minutes, 2 review rounds.");
+    expect(f.events.find((e) => e.event === "claimed")).toMatchObject({ limits: { reviewRounds: 2 } });
     expect(f.comments[1]?.body).toMatch(/ready for the owner to merge[\s\S]*pull\/19/);
     expect(f.events.map((e) => e.event)).toEqual([
       "picked",
@@ -1117,18 +1121,6 @@ describe("audit helpers", () => {
       },
     });
     expect(hookProblems(fake)).toHaveLength(14);
-  });
-
-  it("lists only action-required findings as blocking", () => {
-    expect(
-      openActionRequired({
-        openFindings: [
-          { severity: "action_required", title: "Bug" },
-          { severity: "remediation_recommended", title: "Nit" },
-        ],
-      }),
-    ).toEqual(["Bug"]);
-    expect(openActionRequired({})).toEqual([]);
   });
 
   it("requires both hooks on notebook and PowerShell tools too", () => {
