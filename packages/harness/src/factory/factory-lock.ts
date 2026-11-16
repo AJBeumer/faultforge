@@ -54,24 +54,8 @@ export function readBeat(
 }
 
 /**
- * The tick's lock file in `dir`: the tick's pid, its start, a random token and when it was taken. It is never
- * rewritten while held. The heartbeat lives in a file of its own (`factory.lock.<token>.beat`) that only the
- * holder writes; it shows when the holder last did something, and never frees the lock.
- *
- * A fresh lock is written to a file of its own and hard-linked into place. The link appears whole and only if
- * nothing is there, so a reader never sees an empty file and two ticks can't both take an unheld lock.
- *
- * A lock is taken over only when its holder is gone: its pid is dead, or now belongs to a process that started
- * later (`lockIsStale`). A live holder keeps its lock however slow it is, so neither the lock's age nor the
- * heartbeat's frees it. Uptime is no guide either: a clock correction moves it, and Windows Fast Startup
- * doesn't reset it.
- *
- * A takeover renames the stale lock away, which only one tick can do, and checks the moved file against the
- * bytes it read; anything else goes back with `linkSync`, which never replaces a lock taken in between.
- *
- * A runner killed outright leaves its agent running with no time limit, so the tick that takes over kills that
- * agent's tree first (`killAgent`), but only if the pid still belongs to the same process: once the agent ended,
- * its pid may belong to another.
+ * Takes the tick's lock in `dir`, hard-linked into place so it appears whole and two ticks can't both take it.
+ * A lock changes hands only when its holder is gone (`lockIsStale`): a slow but live holder keeps it.
  */
 export function acquireLock(
   dir: string,
@@ -180,6 +164,7 @@ export function acquireLock(
     }
   }
   const lost = { ...NOT_ACQUIRED, note: "lost the race to take over a stale lock" };
+  // Only one tick can rename the stale lock away; a moved file that isn't the one read goes back.
   const graveyard = join(dir, `factory.lock.stale.${process.pid}.${random()}`);
   try {
     renameSync(file, graveyard);

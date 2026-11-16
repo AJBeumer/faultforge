@@ -25,41 +25,92 @@ const HISTORY: { what: string; pattern: RegExp }[] = [
 
 const NAME_HISTORY = /re-?grade|round-?\d|bypass-?\d|\bpr-?\d|aud-|issue-?\d|ticket-?\d|finding-?\d/i;
 
-/** The comment text of a TypeScript source: whole-line, trailing and block comments. */
+/** The comment text of a TypeScript source: every line and block comment outside a string or regex literal. */
 function commentLines(source: string): string[] {
   const found: string[] = [];
   let inBlock = false;
   for (const line of source.split(/\r?\n/)) {
-    const t = line.trim();
+    let i = 0;
     if (inBlock) {
-      found.push(t);
-      if (t.includes("*/")) inBlock = false;
-    } else if (t.startsWith("//")) found.push(t);
-    else if (t.startsWith("/*")) {
-      found.push(t);
-      inBlock = !t.includes("*/");
-    } else {
-      const trailing = trailingComment(t);
-      if (trailing) found.push(trailing);
+      const end = line.indexOf("*/");
+      found.push(line.slice(0, end < 0 ? undefined : end + 2).trim());
+      if (end < 0) continue;
+      inBlock = false;
+      i = end + 2;
+    }
+    // A string or a regex literal ends on its own line here, which holds for this codebase's style.
+    let quote = "";
+    for (; i < line.length; i++) {
+      const c = line[i];
+      if (c === "\\") i++;
+      else if (quote) {
+        if (c === quote) quote = "";
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "/" && line[i + 1] === "/") {
+        found.push(line.slice(i).trim());
+        break;
+      } else if (c === "/" && line[i + 1] === "*") {
+        const end = line.indexOf("*/", i + 2);
+        found.push(line.slice(i, end < 0 ? undefined : end + 2).trim());
+        if (end < 0) {
+          inBlock = true;
+          break;
+        }
+        i = end + 1;
+      } else if (c === "/" && /(?:^|[(,=:[!&|?{};]|return)\s*$/.test(line.slice(0, i))) i = regexEnd(line, i);
     }
   }
   return found;
 }
 
-/** A `// note` after code, but not one inside a string: the quotes before it must all be closed. */
-function trailingComment(line: string): string | undefined {
-  for (const m of line.matchAll(/\s\/\/\s/g)) {
-    const before = line.slice(0, m.index).replace(/\\./g, "");
-    const open = ['"', "'", "`"].some((q) => before.split(q).length % 2 === 0);
-    if (!open) return line.slice((m.index ?? 0) + 1);
+/** The index of the `/` that closes the regex literal starting at `start`. */
+function regexEnd(line: string, start: number): number {
+  let inClass = false;
+  for (let i = start + 1; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\") i++;
+    else if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (c === "/" && !inClass) return i;
   }
-  return undefined;
+  return line.length;
 }
 
-/** The titles given to `describe`, `it` and `test`, with any modifier such as `.skipIf(...)` or `.each`. */
+/** The index just past the bracket that closes the one at `open`, skipping strings. */
+function closingParen(source: string, open: number): number {
+  let depth = 0;
+  let quote = "";
+  for (let i = open; i < source.length; i++) {
+    const c = source[i];
+    if (c === "\\") i++;
+    else if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return i + 1;
+  }
+  return source.length;
+}
+
+/** The titles given to `describe`, `it` and `test`, with any modifiers such as `.skipIf(...)` or `.each(...)`. */
 function testTitles(source: string): string[] {
-  const call = /\b(?:describe|it|test)(?:\.\w+(?:\((?:[^()]|\([^()]*\))*\))?)*\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/g;
-  return [...source.matchAll(call)].map((m) => m[2] ?? "");
+  const titles: string[] = [];
+  for (const m of source.matchAll(/\b(?:describe|it|test)\b(?=[.(])/g)) {
+    let i = (m.index ?? 0) + m[0].length;
+    for (;;) {
+      const modifier = /^\.\w+/.exec(source.slice(i));
+      if (modifier) i += modifier[0].length;
+      else if (source[i] === "(") {
+        const title = /^\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/.exec(source.slice(i));
+        if (title) {
+          titles.push(title[2] ?? "");
+          break;
+        }
+        i = closingParen(source, i);
+      } else break;
+    }
+  }
+  return titles;
 }
 
 /** Each place in the areas that names history, as `file: what (text)`. */
@@ -122,6 +173,16 @@ describe("comments, test names and file names that say why, not when", () => {
     expect(commentLines(source)).toEqual(["/**", "* A header.", "*/", "// a trailing note", "// a line note"]);
   });
 
+  it("reads a comment in the middle of code or with no space after its slashes", () => {
+    const source = [
+      "const a = 1 /* an inline note */ + 2;",
+      "const b = 3; //a tight note",
+      "const c = /\\/\\//.test(x); // after a regex",
+      'const d = "/* not a comment */";',
+    ].join("\n");
+    expect(commentLines(source)).toEqual(["/* an inline note */", "//a tight note", "// after a regex"]);
+  });
+
   it("reads test titles, also after a modifier and on the next line", () => {
     const source = [
       'describe("a group", () => {',
@@ -131,9 +192,13 @@ describe("comments, test names and file names that say why, not when", () => {
       "    () => {},",
       "  );",
       "  test.each([1])(`case %s`, () => {});",
+      "  it.each(KINDS.filter((k) => !(ALLOWED as readonly string[]).includes(k)))(",
+      '    "a nested case %s",',
+      "    () => {},",
+      "  );",
       "});",
     ].join("\n");
-    expect(testTitles(source)).toEqual(["a group", "a skipped case", "a long case", "case %s"]);
+    expect(testTitles(source)).toEqual(["a group", "a skipped case", "a long case", "case %s", "a nested case %s"]);
   });
 
   it("flags a file name that names history", () => {
