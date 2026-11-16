@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { decodeAnsiC, shellWords } from "../shell/decode.ts";
 import { globMatches, hasWildcard } from "../shell/glob.ts";
-import { outsidePostedText } from "../shell/posted.ts";
+import { withoutPostedValues } from "../shell/posted.ts";
 import { joinedWords, quotedSpans, substitutions } from "../shell/scan.ts";
 
 export interface Reviewed {
@@ -97,12 +97,12 @@ function checkoutPattern(repo: Reviewed): RegExp {
 
 /**
  * True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. Outside
- * posted text it is also read as the shell joins its words (`faultforge-tar''get`); inside a message, joining
- * would turn words like `c''d` into a move.
+ * posted flag values it is also read as the shell joins its words (`faultforge-tar''get`); inside a message,
+ * joining would turn words like `c''d` into a move.
  */
 export function entersCheckout(command: string, repo: Reviewed): boolean {
   const pattern = checkoutPattern(repo);
-  return pattern.test(command) || pattern.test(shellWords(outsidePostedText(command)));
+  return pattern.test(command) || pattern.test(shellWords(withoutPostedValues(command)));
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
@@ -316,11 +316,11 @@ export function navigation(command: string, cwd: string, acts: (index: number) =
 
 /**
  * The folders a command moves into or points git at (see `navigation`), read as written and as the shell joins
- * each word outside posted text: `cd faultforge-tar''get` goes into `faultforge-target`. The joined reading keeps
+ * each word outside posted flag values: `cd faultforge-tar''get` goes into `faultforge-target`. The joined reading keeps
  * backslashes, which Windows paths need, and also drops them, as bash does outside quotes.
  */
 export function navigationTargets(command: string, cwd: string): string[] {
-  const outside = outsidePostedText(command);
+  const outside = withoutPostedValues(command);
   const readings = new Set([command, joinedWords(decodeAnsiC(outside)), shellWords(outside)]);
   return [...new Set([...readings].flatMap((text) => navigation(text, cwd).targets))];
 }

@@ -2,8 +2,10 @@
  * A repo name split or escaped for the shell is the same name once the shell joins it, so a write to the
  * reviewed repo spelled that way still goes through the door, and a read spelled that way still passes.
  */
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { askGuard, DOOR, growth, guardConfig, LINEAR_BOUND, tempRepo } from "../fixtures.ts";
+import { navigationTargets } from "../shared/repos.ts";
 import { unreadableDestination } from "./expand.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
@@ -64,6 +66,11 @@ describe("a write to the reviewed repo whose name the shell joins", () => {
     expect(bash(`cd ${splitPath()} && git push origin tidy`)).toMatch(DOOR);
   });
 
+  it("finds a move by a split folder name in a heredoc a shell runs", () => {
+    const command = `bash <<'EOF'\ncd ${splitPath()} && git push origin tidy\nEOF`;
+    expect(navigationTargets(command, LAB)).toContain(resolve(FIXTURE.dir));
+  });
+
   it("does not read a move split by quotes inside a message to another repo", () => {
     const body = `c''d ${FIXTURE.dir.replace(/\\/g, "/")}`;
     expect(bash(`gh issue comment 5 -R AJBeumer/other-app --body "${body}"`)).toBeUndefined();
@@ -84,6 +91,12 @@ describe("a write whose repo name holds a variable the command doesn't set, or a
     "gh api repos/{AJBeumer/faultforge-target,o/n}/issues -f body=x",
   ])("is refused as unreadable: %s", (command) => {
     expect(bash(command)).toMatch(UNKNOWN);
+  });
+
+  it("reads a heredoc a shell runs, where an unreadable repo is still a destination", () => {
+    expect(bash("bash <<'EOF'\ngh issue comment 5 -R $X --body ok\nEOF")).toMatch(UNKNOWN);
+    expect(bash("bash <<'EOF'\nX=AJBeumer/faultforge-target\ngh issue comment 5 -R $X --body ok\nEOF")).toBeDefined();
+    expect(bash("bash <<'EOF'\ngh api repos/AJBeumer/faultforge-$X/issues -f body=x\nEOF")).toMatch(UNKNOWN);
   });
 
   it("reads only the repo, not the message, for a variable", () => {
