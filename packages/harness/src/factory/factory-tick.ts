@@ -14,7 +14,7 @@
  *     (`qodo-check.ts`) ends the run `agent-needs-help` here, before a workspace is ever built.
  *  6. Fresh worktrees of every repo from `origin/main`, laid out like the owner's folders, so the owner's
  *     working trees are never touched. Only a lab ticket's run also gets a private worktree on its own branch;
- *     a target ticket's run gets none (AUD-H2).
+ *     a target ticket's run gets none.
  *  7. Run `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
  *     the factory policy hook switched on.
  *  8. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's
@@ -28,8 +28,8 @@
  *
  * Needs GH_TOKEN (or GH_TOKEN_FILE) and QODO_KEY_FILE in the environment. Never merges.
  *
- * Split along its seams (#109): `factory-tick-deps.ts` (what a tick needs from the world), `factory-tick-pick.ts`
- * (steps 2 and 3), `factory-workspace.ts` (step 6), `factory-tick-run.ts` (step 7, and step 8's audit and
+ * The steps live in their own modules: `factory-tick-deps.ts` (what a tick needs from the world),
+ * `factory-tick-pick.ts` (steps 2 and 3), `factory-workspace.ts` (step 6), `factory-tick-run.ts` (step 7, and step 8's audit and
  * verification, which `factory-settle.ts` turns into an outcome), `factory-finish.ts` (step 9),
  * `factory-tick-failure.ts` (a tick that throws) and `factory-tick-setup.ts` (the command's own checks). This
  * module runs the steps in order.
@@ -116,7 +116,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     if (runId) deps.record(runId, entry);
     if (event === "saved") copied = true;
     // Every step is a heartbeat too: the lock's timer can't fire while a long synchronous step runs. A
-    // heartbeat that fails never stops the run (Qodo on PR 262).
+    // heartbeat that fails never stops the run.
     try {
       lock.refresh?.();
     } catch {
@@ -158,7 +158,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       return !removeFailed;
     };
     /** Takes `ready-for-agent` off a ticket that won't run, and comments only once that worked: while the
-     * label stays, the next tick meets the ticket again, and a comment on every tick would repeat (#245). */
+     * label stays, the next tick meets the ticket again, and a comment on every tick would repeat. */
     const turnAway = (
       outcome: "refused" | "not-ready",
       add: string[],
@@ -166,7 +166,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
       detail: Record<string, unknown>,
     ) => {
       const off = relabel([LABELS.ready], add);
-      // Set as soon as the label is on, so a failing comment can't leave the log saying no label (Qodo on PR 262).
+      // Set as soon as the label is on, so a failing comment can't leave the log saying no label.
       if (add.length) finalLabel = LABELS.help;
       if (!off) log("error", { message: "no comment until the label is off, so it is posted once" });
       else {
@@ -196,9 +196,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     const owner = pick.github.split("/")[0] ?? "";
 
     claimed = pick;
-    // An earlier run's result label goes too: a ticket carries one state at a time (#197).
+    // An earlier run's result label goes too: a ticket carries one state at a time.
     relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
-    // The claim says which way of running took it, so the other's recovery leaves it alone (AUD-M19).
+    // The claim says which way of running took it, so the other's recovery leaves it alone.
     const mark = deps.mode ? `\n\n${claimMarker(deps.mode)}` : "";
     say(
       `Picked up by scheduled agent run \`${id}\`. Limits: ${options.minutes} minutes, three review rounds. It will report here when it stops; merging stays with the owner.${mark}`,
@@ -291,9 +291,8 @@ export async function main(argv: string[]): Promise<number> {
   }
   const outcome = await tick(factory, deps, options);
   if (outcome === "done" || outcome === "needs-help") {
-    // After a finished run, ask whether the saved reviews now repeat a pattern worth a rule. The
-    // owner decides on the proposal ticket; a failure here is reported and never changes the
-    // run's outcome or labels.
+    // Ask whether the saved reviews repeat a pattern worth a rule. The owner decides on the proposal
+    // ticket; a failure here never changes the run's outcome or labels.
     try {
       proposeAfterRun(LAB_ROOT, console.log);
     } catch (error) {

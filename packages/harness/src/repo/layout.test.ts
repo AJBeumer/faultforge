@@ -1,5 +1,5 @@
 /**
- * The harness's layout, checked instead of remembered (#356): every module in an area folder, every `npm run`
+ * The harness's layout, checked instead of remembered: every module in an area folder, every `npm run`
  * script pointing at a file that exists, a short README in each area that names the areas it uses, and areas that
  * import one way, in the order `packages/harness/README.md` lists them.
  */
@@ -38,7 +38,7 @@ function areaImports(): Map<string, Set<string>> {
   return uses;
 }
 
-describe("the harness's layout (#356)", () => {
+describe("the harness's layout", () => {
   it("keeps no module directly in src/: each sits in an area folder", () => {
     expect(readdirSync(SRC).filter((f) => f.endsWith(".ts"))).toEqual([]);
   });

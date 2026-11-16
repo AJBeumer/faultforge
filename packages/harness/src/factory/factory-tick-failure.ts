@@ -63,7 +63,7 @@ export function failTick(error: unknown, tick: FailedTick): "failed" {
         claimed.github,
         claimed.number,
         // Only the runner's own words reach the ticket; any other error stays in the run log, since it can
-        // name private paths or URLs (Qodo on PR 262).
+        // name private paths or URLs.
         safeText(
           error instanceof RunnerStop
             ? `Agent run \`${runId}\` stopped and needs help: ${message}.`
@@ -75,8 +75,8 @@ export function failTick(error: unknown, tick: FailedTick): "failed" {
       log("error", { message: `couldn't report on the ticket: ${inner instanceof Error ? inner.message : inner}` });
     }
   }
-  // The saved log ends with how the run ended: the label the ticket now shows (AUD-M18). A copy that
-  // failed after the outcome was logged is tried once more here (Qodo on PR 262).
+  // The saved log ends with how the run ended: the label the ticket shows. A copy that failed after the
+  // outcome was logged is tried once more here.
   if (runId && !tick.copied) {
     if (!tick.finishedLogged)
       log("finished", { label: finalLabel, reason: `the runner failed (${message})`, pr: null, by: "runner" });

@@ -1,20 +1,16 @@
 /**
- * The agent's environment, built from an allow-list (AUD-H2, #243). The runner's own environment holds the
- * keys it needs for its own steps: Qodo's key, and in Actions the token that can write the private repo.
- * The agent gets only what its own tools need to run: the system's paths and settings, its own run's
- * `FAULTFORGE_*` values, a GitHub token for `gh` and `git`, and the one variable Claude Code itself signs in
- * with. Anything not named here never reaches it, so a new secret added to the runner can't leak by default.
+ * The agent's environment, built from an allow-list. The runner holds keys for its own steps (Qodo's key, and
+ * in Actions a token that can write the private repo); the agent gets only what its tools need. Anything not
+ * named here never reaches it, so a new secret added to the runner can't leak by default.
  *
  * What it needs, and why:
  *  - the system: `PATH` (and Windows' `Path`, `PATHEXT`, `SystemRoot`, `ComSpec`, ...), the home and temp
  *    folders (git reads its config from home, npm its cache), the locale and the terminal;
- *  - the run's own `FAULTFORGE_*` values, by exact name (`AGENT_RUN_VARIABLES`): the run's id, folder,
- *    ticket, the review broker, and in a target ticket's run the private checkouts its policy keeps it out of.
- *    No other `FAULTFORGE_*` passes, from the runner or the run: a prefix let a runner-side setting (a
- *    private folder, a config path) reach the agent by its name alone (AUD-H2, re-grade);
+ *  - the run's own `FAULTFORGE_*` values, by exact name (`AGENT_RUN_VARIABLES`). Not by prefix: that would let
+ *    a runner-side setting, such as a private folder or a config path, reach the agent by its name alone;
  *  - `GH_TOKEN`: `gh` and git's credential helper (`gh auth setup-git`) push and open the PR with it;
  *  - `CLAUDE_CODE_GLOB_NO_IGNORE=false`, set here, never taken from the runner: Glob then skips git-ignored
- *    files, as Grep does, so a Glob from the checkout doesn't list a lab ticket's private worktree (#299);
+ *    files, as Grep does, so a Glob from the checkout doesn't list a lab ticket's private worktree;
  *  - Claude Code's own sign-in: `CLAUDE_CODE_OAUTH_TOKEN` in Actions, else `ANTHROPIC_API_KEY`, only one.
  *    The CLI can't run without it. Its tools see it too: Claude Code's own setting that hides it from them
  *    (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`) also forces the default permission mode in 2.1.197, which an
@@ -83,7 +79,7 @@ export const AGENT_RUN_VARIABLES: readonly string[] = [
   "FAULTFORGE_REVIEW_BROKER",
   "FAULTFORGE_PRIVATE_CHECKOUTS",
   "FAULTFORGE_RUN_BASES",
-  // Only in a target ticket's run on the owner's PC, for its guard hook's template-id check (AUD-H1).
+  // Only in a target ticket's run on the owner's PC, for its guard hook's template-id check.
   "FAULTFORGE_GUARD_PRIVATE_DIR",
 ];
 
@@ -125,7 +121,7 @@ export function agentEnv(from: Record<string, string | undefined>, run: Record<s
   }
   for (const [name, value] of Object.entries(run)) if (AGENT_RUN_VARIABLES.includes(name)) env[name] = value;
   // Claude Code's Glob lists git-ignored files by default (2.1.197 runs ripgrep with --no-ignore unless this is
-  // false), and a lab ticket's private worktree is git-ignored: a Glob from the checkout would list its files (#299).
+  // false), and a lab ticket's private worktree is git-ignored: a Glob from the checkout would list its files.
   env.CLAUDE_CODE_GLOB_NO_IGNORE = "false";
   return { env, agentToken: Boolean(agentToken), ...(warning ? { warning } : {}) };
 }

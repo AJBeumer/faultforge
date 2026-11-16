@@ -92,7 +92,7 @@ function run(argv: string[], deps: { gh?: Gh; git?: Git } = {}) {
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-describe("target:post, the one door to the reviewed repository (#340)", () => {
+describe("target:post, the one door to the reviewed repository", () => {
   it("creates an issue from files, sending the body it checked on stdin", () => {
     const fake = fakeGh();
     const { code, out } = run(
@@ -326,7 +326,7 @@ describe("target:post, the one door to the reviewed repository (#340)", () => {
     expect(fake.calls).toEqual([]);
   });
 
-  it("asks for --repo when there is more than one reviewed repo, and never picks one itself (Qodo on PR 344)", () => {
+  it("asks for --repo when there is more than one reviewed repo, and never picks one itself", () => {
     REVIEWED = [APP, OTHER];
     try {
       const fake = fakeGh();

@@ -29,7 +29,7 @@ describe("buildSnapshot: GitHub's pages", () => {
     return { fetch, asked };
   };
 
-  it("leaves the runner's own comments out of a retried ticket's text, and still counts them (AUD-M21)", () => {
+  it("leaves the runner's own comments out of a retried ticket's text, and still counts them", () => {
     const stop = {
       ...comment("owner", "2026-11-09T09:00:00Z"),
       body: runnerComment(
@@ -82,7 +82,7 @@ describe("buildSnapshot: GitHub's pages", () => {
     expect(snapshot.text).toContain("Comment by eve, 2026-11-09T08:05:00Z:\n\ntext by eve");
   });
 
-  it("refuses a ticket someone else renamed, and accepts the owner's own renames (#215)", () => {
+  it("refuses a ticket someone else renamed, and accepts the owner's own renames", () => {
     const pages = (renamers: string[]) =>
       github({
         userContentEdits: { "": { nodes: [], next: null } },
@@ -133,7 +133,7 @@ describe("buildSnapshot: GitHub's pages", () => {
   });
 });
 
-describe("isRunnerComment: older unmarked runner comments, and an owner who quotes the mark (Qodo on PR 272)", () => {
+describe("isRunnerComment: older unmarked runner comments, and an owner who quotes the mark", () => {
   it("knows the runner's comments from before the mark by their fixed openings", () => {
     expect(isRunnerComment("Agent run `r1` stopped and needs help: the agent reported stuck: push to main.")).toBe(
       true,

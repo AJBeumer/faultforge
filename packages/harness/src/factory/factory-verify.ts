@@ -1,7 +1,7 @@
 /**
  * The runner's own check of a pull request the agent says is ready: its state, head and checks on GitHub,
  * Qodo's review of its head (`review:wait`) and its tests (`revert:check`), both run from a trusted checkout
- * of `main`. Split from factory-tick.ts (#227).
+ * of `main`.
  */
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -18,16 +18,15 @@ export interface Verification {
   /** Where `revert:check`'s saved record was read back from, for the run log; null when the check
    * never ran (an earlier problem, such as an incomplete review, stopped verification first). */
   revertCheckRecord?: string | null;
-  /** Why the PR waits for the owner whatever the agent reported, such as a change to the reviewer's rules (#215). */
+  /** Why the PR waits for the owner whatever the agent reported, such as a change to the reviewer's rules. */
   ownerGates?: string[];
-  /** The commit verified: the agent's last pushed commit. The check-defining files are compared at it (#341). */
+  /** The commit verified: the agent's last pushed commit. The check-defining files are compared at it. */
   head?: string;
 }
 
-/** Problems with a PR's checks: none may be pending or failed, and at least one must have run. */
 /**
  * The commit the runner must see reviewed: the agent's own branch tip in its worktree. GitHub's PR view
- * can still show the previous head right after a push (PR 65), so it is used only when the branch isn't
+ * can still show the previous head right after a push, so it is used only when the branch isn't
  * in the worktree. Null when neither is a commit id: the result goes on an npm command line.
  */
 export function commitToVerify(localTip: string | null, viewHead: string): string | null {
@@ -51,6 +50,7 @@ export function prViewProblems(
   return problems;
 }
 
+/** Problems with a PR's checks: none may be pending or failed, and at least one must have run. */
 export function checkProblems(
   rollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[],
 ): string[] {
@@ -76,15 +76,11 @@ export function openActionRequired(record: {
 }
 
 /**
- * A problem for `revert:check`'s exit code; empty only when the process exited 0 *and* its saved
- * record agrees the change was caught. A bare zero exit is never enough on its own: a forged or
- * stubbed script could exit 0 without ever writing one, so an exit with no matching record is treated
- * as unverified, the same way a missing review record already is (Qodo on PR 155). Only the exit code
- * and category reach a problem, never the record's own `message` or `failedWithoutChange`: those can
- * hold agent-written test names and file-load errors, which must never reach a ticket a reviewer can
- * read - the full detail stays in the saved `revert-check.json` record for the owner to read directly.
- * When no record exists at all, the last line of the process's own output is used instead, bounded in
- * size for the same reason.
+ * A problem for `revert:check`'s exit code; empty only when the process exited 0 *and* its saved record
+ * agrees the change was caught. A forged or stubbed script could exit 0 without writing a record.
+ * Only the exit code and category reach a problem: the record's own text can hold agent-written test
+ * names, which must never reach a ticket a reviewer can read. With no record, the last line of output
+ * is used, bounded in size for the same reason.
  */
 export function revertCheckProblems(status: number | null, record: { exit?: 0 | 1 | 2 } | null, output = ""): string[] {
   if (status === 0 && record?.exit === 0) return [];
@@ -104,9 +100,8 @@ export function revertCheckProblems(status: number | null, record: { exit?: 0 | 
   return [`revert:check gave no result (exit ${status}${tail ? `: ${tail}` : ""})`];
 }
 
-/** A saved JSON record, or null when the file is missing, or so damaged it can't be parsed. A reader
- * must never throw on it: a record a process died before finishing writing is no different from one
- * that was never written at all - both read as no result, not as a crash (#161). */
+/** A saved JSON record, or null when it is missing or can't be parsed. A record a process died while
+ * writing is no different from one never written: both read as no result, not as a crash. */
 export function readJsonRecord(file: string): unknown | null {
   if (!existsSync(file)) return null;
   try {
@@ -127,18 +122,14 @@ export interface VerifyPrIo {
 /**
  * Checks one pull request the agent says is ready: that Qodo's review of its head is complete with no
  * action-required finding open (`review:wait`), and that its own new or changed tests actually catch
- * the change (`revert:check`). Both run from the same freshly fetched checkout of `main`, built once by
- * `buildTrustedCheckout` and removed when this call returns - never from `ws.lab`, the agent's own
- * writable worktree. Otherwise a committed edit to `review-wait.ts`, `revert-check.ts` or a module
- * either imports, on the very pull request being checked, could change the verdict the runner reads
- * about its own review (#161, #170).
+ * the change (`revert:check`). Both run from a freshly fetched checkout of `main`, never from `ws.lab`,
+ * the agent's own worktree: otherwise the pull request being checked could edit the checks that judge it.
  *
- * `trustedRemoteUrl` turns the harness's GitHub address into the address `buildTrustedCheckout` fetches
- * from; a test can pass a local bare repository's path instead, so the whole check runs with no network
- * and no GitHub credentials, the same way `buildTrustedCheckout`'s own tests do (#161).
+ * `trustedRemoteUrl` turns the harness's GitHub address into the address to fetch from; a test can pass a
+ * local bare repository's path instead, so the check runs with no network and no GitHub credentials.
  *
  * With `sandbox` (a CI run), `revert:check` runs the PR's tests as the agent's sandbox user, never as the
- * runner: they are the agent's code too (#335).
+ * runner: they are the agent's code too.
  */
 export function verifyPrWith(
   io: VerifyPrIo,
@@ -213,11 +204,8 @@ export function verifyPrWith(
       "5",
     ]);
     const short = pushed.slice(0, 7);
-    // Copied over whatever review:wait saved before this call's own trusted checkout is removed, win
-    // or lose: a timed-out or skipped review still writes which Qodo comments it saw and the raw API
-    // answers, which are worth keeping even when the PR doesn't count as verified (Qodo on PR 171).
-    // The whole per-PR folder, not just the final record: this is the same permanent path
-    // `saveEvidence` already carries to the private repo.
+    // Keep whatever review:wait saved before the trusted checkout is removed, win or lose: a timed-out or
+    // skipped review still saves the comments and raw API answers it saw, worth keeping as evidence.
     const trustedReviewDir = prEvidenceDir(join(trustedLab, factory.evidence), "reviews", repoKey, pr);
     const reviewRecordFile = join(trustedReviewDir, `${short}.review.json`);
     if (existsSync(trustedReviewDir)) {
@@ -252,7 +240,7 @@ export function verifyPrWith(
       "state,headRefOid,statusCheckRollup",
     );
     problems.push(...prViewProblems(view, pushed));
-    // Read from GitHub by the runner, never taken from the agent's report (#215).
+    // Read from GitHub by the runner, never taken from the agent's report.
     try {
       ownerGates = reviewerRuleGates(io.ghJson("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/files`));
     } catch {
@@ -261,7 +249,7 @@ export function verifyPrWith(
     // A complete review can still have findings open: only none action-required counts as ready.
     if (!existsSync(reviewRecordFile)) problems.push("review:wait saved no review record for the head commit");
     else {
-      // A damaged record is a problem to report, never a crash that loses the rest of this verdict (audit N-12).
+      // A damaged record is a problem to report, never a crash that loses the rest of this verdict.
       const record = readJsonRecord(reviewRecordFile) as Parameters<typeof openActionRequired>[0] | null;
       if (!record) problems.push("review:wait's record for the head commit couldn't be read");
       else {
@@ -270,9 +258,8 @@ export function verifyPrWith(
       }
     }
 
-    // Prove the tests, after the review check: the PR's own new or changed tests must fail without
-    // its change. The runner checks this itself rather than trusting the agent to have run it (#101).
-    // Same trusted checkout as review:wait, for the same reason (#161).
+    // The PR's own new or changed tests must fail without its change. The runner checks this itself
+    // rather than trusting the agent, from the same trusted checkout as review:wait.
     const revertRecordFile = join(
       prEvidenceDir(join(trustedLab, factory.evidence), "revert-checks", repoKey, pr),
       `${short}.revert-check.json`,

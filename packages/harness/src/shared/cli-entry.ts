@@ -1,6 +1,6 @@
 /**
  * Runs a script's body so that every unexpected error, even one while its modules load, ends as the
- * script's "could not run" code, never Node's default 1 (AUD-N3). The entry file imports only this module
+ * script's "could not run" code, never Node's default 1. The entry file imports only this module
  * statically and loads the body with a dynamic `import()` inside `runEntry`, where a failure can be caught:
  * a static import would fail before any handler exists. Imports nothing but Node itself, for that reason.
  *
@@ -26,8 +26,8 @@ export async function runEntry(
 
 /**
  * Exits with `code` once everything already written to stdout and stderr has been handed on: `process.exit`
- * straight away can cut off the end of a long output going to a pipe (Qodo on PR 277). Waits at most
- * `limitMs`: a reader that has stopped reading must never keep the process alive (Qodo on PR 277, round 2).
+ * straight away can cut off the end of a long output going to a pipe. Waits at most `limitMs`: a reader
+ * that has stopped reading must never keep the process alive.
  */
 export async function exitWhenWritten(
   code: number,

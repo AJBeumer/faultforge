@@ -11,7 +11,7 @@ const facts: DocsFacts = {
     ["FF-0001", ["seed-v1"]],
     ["FF-0002", ["pending-v1"]],
     ["FF-0003", ["held-v1"]],
-    // A duplicate entry naming an ordinary template can't hide that the case is held out (Qodo on PR 232).
+    // A duplicate entry naming an ordinary template can't hide that the case is held out.
     ["FF-0004", ["held-v1", "seed-v1"]],
   ]),
   privateTemplates: ["pending-v1", "held-v1", "unused-v1"],
@@ -19,7 +19,7 @@ const facts: DocsFacts = {
 };
 const check = (text: string) => docsProblems([{ path: "docs/x.md", text }], facts);
 
-describe("docsProblems (#224, audit M-24)", () => {
+describe("docsProblems", () => {
   it("allows an adjudicated case and its template, and ids the answer key doesn't hold", () => {
     expect(check("FF-0001 was caught; see seed-v1. A fixture uses FF-0099.")).toEqual([]);
   });
@@ -37,7 +37,7 @@ describe("docsProblems (#224, audit M-24)", () => {
     ]);
   });
 
-  it("reads every spelling of a case id, and a duplicate entry can't hide a held-out case (Qodo on PR 232)", () => {
+  it("reads every spelling of a case id, and a duplicate entry can't hide a held-out case", () => {
     expect(check("see ff-0002 and FF0003")).toEqual([
       "docs/x.md: names FF-0002, which has no verdict yet",
       "docs/x.md: names FF-0003, a held-out case",
@@ -46,7 +46,7 @@ describe("docsProblems (#224, audit M-24)", () => {
   });
 });
 
-describe("publicFiles: the staged copy too (Qodo on PR 232)", () => {
+describe("publicFiles: the staged copy too", () => {
   it("reads a public file's staged copy when the working copy differs", () => {
     const root = mkdtempSync(join(tmpdir(), "docs-check-"));
     const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
@@ -63,7 +63,7 @@ describe("publicFiles: the staged copy too (Qodo on PR 232)", () => {
   });
 });
 
-describe("docsProblems: an id above every case in the answer key (#244)", () => {
+describe("docsProblems: an id above every case in the answer key", () => {
   it("refuses an id past the highest case, unless it is a fixture id", () => {
     expect(check("Next up is FF-0005.")).toEqual([
       "docs/x.md: names FF-0005, above the highest case in the answer key",
@@ -71,13 +71,13 @@ describe("docsProblems: an id above every case in the answer key (#244)", () => 
     expect(check("Fixtures use FF-0099 and FF-9001.")).toEqual([]);
   });
 
-  it("allows an id below the highest case that the answer key doesn't hold, as before", () => {
+  it("allows an id below the highest case that the answer key doesn't hold", () => {
     const sparse: DocsFacts = { ...facts, caseTemplates: new Map([["FF-0004", ["seed-v1"]]]) };
     expect(docsProblems([{ path: "docs/x.md", text: "FF-0002" }], sparse)).toEqual([]);
   });
 });
 
-describe("docsProblems: a malformed id in the answer key (Qodo on PR 264)", () => {
+describe("docsProblems: a malformed id in the answer key", () => {
   it("still refuses an id above the highest well-formed case", () => {
     const odd: DocsFacts = { ...facts, caseTemplates: new Map([...facts.caseTemplates, ["FF-X", ["seed-v1"]]]) };
     expect(docsProblems([{ path: "docs/x.md", text: "FF-0005" }], odd)).toEqual([
@@ -86,14 +86,14 @@ describe("docsProblems: a malformed id in the answer key (Qodo on PR 264)", () =
   });
 });
 
-describe("docsProblems: a colour is not a case id (Qodo on PR 264)", () => {
+describe("docsProblems: a colour is not a case id", () => {
   it("doesn't read #ff5733 as a case above the highest, but still reads FF-5733", () => {
     expect(check("color: #ff5733;")).toEqual([]);
     expect(check("see FF-5733")).toEqual(["docs/x.md: names FF-5733, above the highest case in the answer key"]);
   });
 });
 
-describe("docsProblems: every spelling of a future case id (Qodo on PR 264)", () => {
+describe("docsProblems: every spelling of a future case id", () => {
   it("refuses FF5000 written without a separator, and still passes a colour", () => {
     expect(check("next: FF5000")).toEqual(["docs/x.md: names FF-5000, above the highest case in the answer key"]);
     expect(check("color: #FF5000;")).toEqual([]);

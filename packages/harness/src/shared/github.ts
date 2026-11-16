@@ -133,8 +133,7 @@ export const readRetry = { tries: 3, baseMs: 2_000, pause: pauseSync };
 /**
  * A wall-clock time (ms) that every `gh` call in this process must end by, or undefined for none. A call's time
  * limit is cut to what is left, none starts after it, and a read is not tried again when its pause would end past
- * it. review:wait sets its own time limit here while it waits, so a retried read can't run minutes past it
- * (Qodo on PR 310).
+ * it. review:wait sets its own time limit here while it waits, so a retried read can't run minutes past it.
  */
 export const callDeadline: { at?: number } = {};
 
@@ -167,12 +166,11 @@ export function gh(...args: string[]): string {
   return isReadCall(args) ? retryRead(call) : call();
 }
 
-/** `gh`'s output, parsed as JSON. */
 export function ghJson<T>(...args: string[]): T {
   return JSON.parse(gh(...args)) as T;
 }
 
-/** A REST endpoint through `gh api`, parsed as JSON. The path goes here, never to `ghJson`: `gh repos/...` is not a command (#168). */
+/** A REST endpoint, parsed as JSON. Use this, not `ghJson`, for a path: `gh repos/...` is not a command. */
 export function ghApiJson<T>(path: string): T {
   return ghJson<T>("api", path);
 }

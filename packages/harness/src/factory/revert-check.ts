@@ -11,7 +11,7 @@
  * Exit codes: 0 at least one test ran and failed without the change; 1 every test still passed
  * (the tests don't prove the change), 2 when it can't judge: the PR changes no test file or no code
  * file, the PR changes its dependencies, the PR's tests fail even with the change, the tests only fail
- * to load without it (they import the change, nothing shows they test it; #217), or the scratch copy
+ * to load without it (they import the change, nothing shows they test it), or the scratch copy
  * can't be built. A dependency change is a lock file that differs, or a `package.json` whose
  * install-deciding fields differ between base and head (`DEPENDENCY_SECTIONS`: the dependency maps,
  * `overrides`, `resolutions`, `peerDependenciesMeta`, bundled packages and `workspaces`); a
@@ -23,7 +23,7 @@
  * only FETCH_HEAD). The tests run with a stripped environment: they are agent-written code, and the
  * runner that calls this holds the factory's keys. With `--sandbox` (a CI factory run) they also run as the
  * agent's sandbox user, with no route out but loopback, in a scratch copy under the system's temp folder with its
- * own copy of the packages (`revert-run.ts`, #335); without the sandbox in place it can't judge (exit 2).
+ * own copy of the packages (`revert-run.ts`); without the sandbox in place it can't judge (exit 2).
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -143,7 +143,7 @@ export interface TestRun {
   ran: boolean;
   /** Names of the tests that ran and failed. */
   failed: string[];
-  /** Test files that failed before any test ran: they show an import, not a behaviour (#217). */
+  /** Test files that failed before any test ran: they show an import, not a behaviour. */
   loadFailed?: string[];
   passed: number;
   /** Why the run produced no result, when `ran` is false. */
@@ -227,8 +227,8 @@ export interface CheckInput {
   /** Runs the given test files in a folder and reports. */
   runTests: (dir: string, files: string[]) => TestRun;
   temp?: string;
-  /** In a CI run: each copy gets its own packages (no link to the runner's), is shared with the sandbox user before
-   * its tests run, and the folder is removed through `remove`, whatever that user did to its files' modes (#335). */
+  /** In a CI run: each copy gets its own packages, is shared with the sandbox user before its tests run, and is
+   * removed through `remove`, whatever that user did to its files' modes. */
   sandbox?: { share(scratch: string, copy: string): void; remove(scratch: string): void };
 }
 
@@ -237,7 +237,7 @@ function git(repo: string, args: string[], env?: NodeJS.ProcessEnv): string {
     encoding: "utf8",
     env: env ? { ...process.env, ...env } : process.env,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10 * 60_000, // a fetch must never hang the check, or the runner (audit N-14)
+    timeout: 10 * 60_000, // a fetch must never hang the check, or the runner
   });
 }
 
@@ -268,12 +268,11 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
 
   const scratch = mkdtempSync(join(input.temp ?? tmpdir(), "revert-check-"));
   const links = ["with", "without"].map((name) => join(scratch, name, "node_modules"));
-  // Each run gets a copy of its own, built in full before its tests start: once tests have run in a copy, the runner
-  // never writes there again, so a link a test leaves can't send the runner's writes elsewhere (Qodo on PR 336). The
-  // temporary indexes stay in the scratch folder itself, which the tests never get to write.
+  // Each run gets its own copy, built in full before its tests start: the runner never writes into a copy after
+  // tests ran there, so a link a test leaves can't redirect the runner's writes. The temporary indexes sit in the
+  // scratch folder, which tests can't write, so the repository's own index and working tree stay untouched.
   const build = (name: string, edit?: (copy: string) => void): string => {
     const copy = join(scratch, name);
-    // A temporary index: the repository's own index and working tree are never touched.
     const index = { GIT_INDEX_FILE: join(scratch, `index-${name}`) };
     git(input.repo, ["read-tree", input.head], index);
     git(input.repo, ["checkout-index", "-a", "-f", `--prefix=${copy.replace(/\\/g, "/")}/`], index);
@@ -304,7 +303,7 @@ export function revertCheck(input: CheckInput): Outcome & { changes: Change[] } 
       return judge({ ran: false, failed: [], passed: 0, error: `couldn't build the copy: ${why}` });
     }
     const withChange = input.runTests(copy, files.tests);
-    // A file that fails to load with the change already decides it: no second run (Qodo on PR 219).
+    // A file that fails to load with the change already decides it: no second run.
     if (!withChange.ran || withChange.failed.length || withChange.loadFailed?.length) return judge(withChange);
     return judge(withChange, input.runTests(build("without", revert), files.tests));
   } finally {
@@ -337,7 +336,7 @@ async function main() {
     console.error(`usage: npm run revert:check -- <${Object.keys(factory.repos).join("|")}> <pr> [--sandbox]`);
     process.exit(2);
   }
-  // The tests never run unsandboxed when a sandbox was asked for (#335): this throws first, and exits 2.
+  // When a sandbox was asked for, tests never run without one: this throws first, and exits 2.
   const runner = testSetup(sandboxed);
   const config = repoConfig(factory, repoKey);
   const lab = ROOT;

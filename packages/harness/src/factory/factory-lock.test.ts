@@ -6,7 +6,7 @@ import { acquireLock, beatFile, lastBeat } from "./factory-lock.ts";
 import { ownStartId, sameProcess } from "./factory-process.ts";
 import { lockIsStale, pidAlive } from "./factory-recovery.ts";
 
-describe("acquireLock (#107)", () => {
+describe("acquireLock", () => {
   const tmp = () => mkdtempSync(join(tmpdir(), "ff-lock-"));
 
   it("acquires a fresh lock, and release lets it be acquired again", () => {
@@ -35,12 +35,11 @@ describe("acquireLock (#107)", () => {
     expect(b.note).not.toMatch(/still running/);
   });
 
-  it("the second of two ticks that both try to take over the same stale lock reports busy, never both wins (Qodo on PR 123)", () => {
+  it("the second of two ticks that both try to take over the same stale lock reports busy, never both wins", () => {
     const dir = tmp();
     const file = join(dir, "factory.lock");
     writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
-    // Simulate a second tick's own renameSync, of the exact same stale lock, winning the race: by the
-    // time this tick's own renameSync runs, there is nothing left at `file` to rename away.
+    // Another tick wins the race to rename the same stale lock away, so nothing is left to rename.
     const raced = () => {
       rmSync(file, { force: true });
       return false;
@@ -57,13 +56,11 @@ describe("acquireLock (#107)", () => {
     expect(readdirSync(dir).filter((n) => !n.endsWith(".beat"))).toEqual(["factory.lock"]);
   });
 
-  it("never steals a lock another tick already took over in between this tick's read and its rename (Qodo on PR 123)", () => {
+  it("never steals a lock another tick already took over in between this tick's read and its rename", () => {
     const dir = tmp();
     const file = join(dir, "factory.lock");
     writeFileSync(file, JSON.stringify({ pid: 999999, at: "2026-11-09T00:00:00Z" }));
-    // Simulate another tick completing its own full stale takeover - moving the same stale lock away and
-    // taking a fresh one of its own - in the gap between this tick reading the lock as stale and acting
-    // on that read.
+    // Another tick completes a whole takeover between this tick reading the lock as stale and acting on it.
     const racedToOwnFreshLock = () => {
       writeFileSync(file, JSON.stringify({ pid: 777777, at: "2026-11-10T00:00:00Z" }), { flag: "w" });
       return false;
@@ -71,13 +68,12 @@ describe("acquireLock (#107)", () => {
     const result = acquireLock(dir, racedToOwnFreshLock);
     expect(result.acquired).toBe(false);
     expect(result.note).toMatch(/lost the race/);
-    // The other tick's fresh lock must survive untouched, not be replaced by this tick's own.
     expect(JSON.parse(readFileSync(file, "utf8")).pid).toBe(777777);
     expect(readdirSync(dir)).toEqual(["factory.lock"]);
   });
 });
 
-describe("acquireLock: a live tick keeps its lock however old; only a gone holder frees it (AUD-M19)", () => {
+describe("acquireLock: a live tick keeps its lock however old; only a gone holder frees it", () => {
   const dir = () => mkdtempSync(join(tmpdir(), "ff-lock-live-"));
   const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
   const holder = { isSame: () => true };
@@ -89,8 +85,7 @@ describe("acquireLock: a live tick keeps its lock however old; only a gone holde
       JSON.stringify({ pid: 12345, since: daysAgo(4), at: daysAgo(4), token: "t" }),
     );
     writeFileSync(beatFile(d, "t"), JSON.stringify({ at: daysAgo(3) }));
-    // The old rule took over any lock older than the run's limit plus an hour; a heartbeat limit would
-    // take over a slow step's (Qodo on PR 262).
+    // No age limit on the lock or the heartbeat: either would take a slow but live tick's lock.
     const result = acquireLock(d, () => true, holder);
     expect(result.acquired).toBe(false);
     expect(result.note).toMatch(/pid 12345 since .*last heartbeat/);
@@ -158,7 +153,7 @@ describe("acquireLock: a live tick keeps its lock however old; only a gone holde
   });
 });
 
-describe("acquireLock: the heartbeat (AUD-M19)", () => {
+describe("acquireLock: the heartbeat", () => {
   const tokenIn = (d: string) => JSON.parse(readFileSync(join(d, "factory.lock"), "utf8")).token as string;
   const beatIn = (d: string) => Date.parse(lastBeat(d, tokenIn(d)) ?? "");
   const nextClockTick = async (after: number) => {
@@ -179,7 +174,7 @@ describe("acquireLock: the heartbeat (AUD-M19)", () => {
     lock.release();
   });
 
-  it("a heartbeat after the lock changed hands lands on the old holder's own file, never on the new lock (Qodo on PR 262)", () => {
+  it("a heartbeat after the lock changed hands lands on the old holder's own file, never on the new lock", () => {
     const d = mkdtempSync(join(tmpdir(), "ff-lock-hands-"));
     const file = join(d, "factory.lock");
     const old = acquireLock(d);
@@ -232,7 +227,7 @@ describe("acquireLock: the heartbeat (AUD-M19)", () => {
   });
 });
 
-describe("acquireLock: the release belongs to this run (Qodo on PR 211)", () => {
+describe("acquireLock: the release belongs to this run", () => {
   it("leaves a lock another tick took over when the first one releases", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-lock-own-"));
     const first = acquireLock(dir);
@@ -245,7 +240,7 @@ describe("acquireLock: the release belongs to this run (Qodo on PR 211)", () => 
   });
 });
 
-describe("acquireLock: a runner killed outright leaves no agent behind (AUD-M19)", () => {
+describe("acquireLock: a runner killed outright leaves no agent behind", () => {
   const recent = () => new Date(Date.now() - 5 * 60_000).toISOString();
   const AGENT_START = "ticks:52000";
   /** A lock held by a runner with `held.pid`, whose heartbeat records its agent's pid and start. */
@@ -298,7 +293,7 @@ describe("acquireLock: a runner killed outright leaves no agent behind (AUD-M19)
     lock.release();
   });
 
-  it("kills nothing and keeps the lock when it can't tell whether the pid is the agent (Qodo on PR 268)", () => {
+  it("kills nothing and keeps the lock when it can't tell whether the pid is the agent", () => {
     const killed: number[] = [];
     const noStart = takeOver(lockWith({ pid: 1111, agentPid: 4242 }), AGENT_START, killed);
     const unreadable = takeOver(lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START }), null, killed);
@@ -309,7 +304,7 @@ describe("acquireLock: a runner killed outright leaves no agent behind (AUD-M19)
     expect(killed).toEqual([]);
   });
 
-  it("keeps the lock where it is when the kill fails (Qodo on PR 268)", () => {
+  it("keeps the lock where it is when the kill fails", () => {
     const d = lockWith({ pid: 1111, agentPid: 4242, agentStarted: AGENT_START });
     const lock = takeOver(d, AGENT_START, [], () => {
       throw new Error("access denied");

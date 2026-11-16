@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pullsSince } from "./factory-audit.ts";
 
-describe("pullsSince: the audit's PR list, every page in the window, never the whole history (#114)", () => {
+describe("pullsSince: the audit's PR list, every page in the window, never the whole history", () => {
   it("reads past the first page when the window holds more pulls than fit on one", () => {
     const pages = [
       Array.from({ length: 2 }, (_, i) => ({ number: 100 - i, updated_at: "2026-11-09T12:00:00Z" })),

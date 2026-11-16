@@ -1,5 +1,5 @@
 /**
- * The alert's wiring (#308), read from the workflow files themselves: a red main and a factory tick that ends with
+ * The alert's wiring, read from the workflow files themselves: a red main and a factory tick that ends with
  * exit 2 or 3 call the one alert workflow, which alone holds `issues: write` and the lab's own token, and posts
  * only what alert.ts builds from fixed words.
  */
@@ -23,7 +23,7 @@ function job(workflow: string, name: string): string {
   return next < 0 ? rest : rest.slice(0, next + 1);
 }
 
-describe("the alert workflow (#308)", () => {
+describe("the alert workflow", () => {
   it("is only called, never started by an event of its own", () => {
     expect(alert).toMatch(/\non:\n {2}workflow_call:\n/);
     expect(alert).not.toMatch(/\n {2}(push|pull_request|issues|schedule|workflow_run|workflow_dispatch):/);
@@ -39,8 +39,8 @@ describe("the alert workflow (#308)", () => {
   });
 
   it("checks out only the script and the modules it imports, keeps no token, and installs nothing", () => {
-    // Every module alert.ts imports from this repo must be in the sparse checkout, or the job can't start it
-    // (the shared gh wrapper, Qodo on PR 310).
+    // Every module alert.ts imports from this repo, such as the shared gh wrapper, must be in the sparse
+    // checkout, or the job can't start it.
     const source = readFileSync(join(import.meta.dirname, "alert.ts"), "utf8");
     const local = [...source.matchAll(/from "(\.\.?\/[\w./-]+)"/g)].map((m) =>
       posix.join("packages/harness/src/factory", m[1] ?? ""),
@@ -73,7 +73,7 @@ describe("the alert workflow (#308)", () => {
   });
 });
 
-describe("who raises it (#308)", () => {
+describe("who raises it", () => {
   it("check.yml: after every job, on a failure of a push to main only", () => {
     const caller = job(check, "alert");
     expect(caller).toContain("needs: [check, check-windows, integration]");
@@ -101,7 +101,7 @@ describe("who raises it (#308)", () => {
     expect(factory).toContain('echo "code=$code" >> "$GITHUB_OUTPUT"');
   });
 
-  it("factory.yml: a tick cancelled or out of time hands on an alertable code (Qodo on PR 310)", () => {
+  it("factory.yml: a tick cancelled or out of time hands on an alertable code", () => {
     const tick = job(factory, "tick");
     const step = tick.slice(tick.indexOf("- name: Report a tick that stopped without reporting"));
     expect(step).toMatch(/^- name: Report a tick that stopped without reporting\n {8}id: unreported\n/);

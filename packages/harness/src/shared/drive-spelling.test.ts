@@ -34,7 +34,7 @@ describe("otherDriveSpelling", () => {
   });
 });
 
-describe("realSpelling (#316)", () => {
+describe("realSpelling", () => {
   it("gives the file system's spelling, drive letter included, for either spelling", () => {
     const dir = mkdtempSync(join(tmpdir(), "drive-spelling-"));
     const real = realpathSync.native(dir);

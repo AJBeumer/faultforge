@@ -55,7 +55,7 @@ const posts: Post[] = KINDS.filter((k) => k !== "push").map((kind) => ({
 }));
 const refusedPosts = posts.filter((p) => !(AGENT_DOOR_KINDS as readonly string[]).includes(p.kind));
 
-describe("the door's run gate (#347)", () => {
+describe("the door's run gate", () => {
   it("allows push, pr-create and pr-edit, all kinds the command takes", () => {
     expect([...AGENT_DOOR_KINDS]).toEqual(["push", "pr-create", "pr-edit"]);
     for (const kind of AGENT_DOOR_KINDS) expect(COMMAND_KINDS).toContain(kind);
@@ -195,7 +195,7 @@ describe("the door's run gate (#347)", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("reads the fixed marker for every send with the door's own gh or git, whatever marker a caller names (Qodo on PR 349)", () => {
+  it("reads the fixed marker for every send with the door's own gh or git, whatever marker a caller names", () => {
     const named = markerPath();
     expect(gateMarker(true, named)).toBe(runMarkerPath());
     expect(gateMarker(true)).toBe(runMarkerPath());

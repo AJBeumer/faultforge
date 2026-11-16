@@ -1,18 +1,15 @@
 /**
  * The runner's own calls to git and npm, each with a time limit: an ordinary call gets `CALL_TIMEOUT_MS`
- * (`./github.ts`), a push, fetch or install the longer one here. Split from factory-tick.ts (#227).
+ * (`github.ts`), a push, fetch or install the longer one here.
  */
 import { spawnSync } from "node:child_process";
 import { CALL_TIMEOUT_MS, runExternal } from "../shared/github.ts";
 
-/** The long time limit for a push, a fetch/clone, or an ordinary `npm` call (an install, or `review:wait`,
- * which gives up on its own after its own `--timeout` minutes): a slow network or script can legitimately take
- * longer than everything else the tick runs. An ordinary call gets `CALL_TIMEOUT_MS` (`./github.ts`). */
+/** The time limit for a push, a fetch or clone, or an `npm` call: a slow network or install can take longer than
+ * anything else the tick runs. */
 export const LONG_CALL_TIMEOUT_MS = 10 * 60_000;
-/** `revert:check` can legitimately run two full test suites in sequence - with the change, then
- * without it - each allowed up to ten minutes by `runVitest`'s own timeout, so its outer bound must
- * clear that worst case with room for its `gh`/`git` calls too, or a slow but valid run would be
- * killed and misreported as a failed verification (Qodo on PR 155). */
+/** `revert:check` runs two full test suites, up to ten minutes each, plus its gh and git calls: a tighter limit
+ * would kill a slow but valid run and report it as a failed check. */
 export const REVERT_CHECK_TIMEOUT_MS = 25 * 60_000;
 
 export function git(cwd: string, ...args: string[]): string {
@@ -21,26 +18,22 @@ export function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-/** For a push, or a fetch/clone: the same as `git`, but with the longer time limit. */
+/** `git` with the longer time limit, for a push, a fetch or a clone. */
 export function gitLong(cwd: string, ...args: string[]): string {
   return runExternal(`git ${args[0] ?? ""}`.trim(), "git", ["-C", cwd, ...args], LONG_CALL_TIMEOUT_MS, {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
 
-/** Runs an npm script with one time limit, the cross-platform way: a plain `spawnSync("npm", ...)`
- * can't find `npm.cmd` on Windows without a shell (exported so `verifyPrWith`'s own tests can run real
- * npm scripts, on Linux and Windows alike, instead of each re-implementing this). */
+/** Runs an npm script with a time limit, on Linux and Windows alike. */
 export function npm(
   cwd: string,
   args: string[],
   timeoutMs: number = LONG_CALL_TIMEOUT_MS,
   env?: NodeJS.ProcessEnv,
 ): { status: number | null; output: string } {
-  // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words and
-  // numbers from this file, never ticket text, so joining them into one command line is safe.
-  // Bounded like every other external call, so a hang in a script it runs - a stuck fetch, an API
-  // call with no timeout of its own - can never stall the whole run and its lock (Qodo on PR 155).
+  // npm is a .cmd file on Windows, which only a shell can start. The arguments are fixed words from the
+  // runner, never ticket text, so joining them into one command line is safe.
   const result =
     process.platform === "win32"
       ? spawnSync(["npm", ...args].join(" "), { cwd, encoding: "utf8", shell: true, timeout: timeoutMs, env })

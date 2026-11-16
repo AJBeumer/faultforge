@@ -28,7 +28,7 @@ function repo(): { dir: string; git: (...args: string[]) => string } {
   return { dir, git };
 }
 
-describe("installHooks (#191)", () => {
+describe("installHooks", () => {
   it("writes the three hooks and the script setting, and a second run leaves the same files", () => {
     const { dir, git } = repo();
     const hooks = installHooks(dir, "C:\\somewhere\\git-guard.ts");
@@ -59,7 +59,7 @@ describe("installHooks (#191)", () => {
   });
 });
 
-describe("installHooks: what counts as its own hook (Qodo on PR 213)", () => {
+describe("installHooks: what counts as its own hook", () => {
   it("doesn't take a hook that only mentions the marker somewhere", () => {
     const { dir } = repo();
     const file = join(dir, ".git", "hooks", "pre-commit");
@@ -69,7 +69,7 @@ describe("installHooks: what counts as its own hook (Qodo on PR 213)", () => {
   });
 });
 
-describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
+describe("guardProblem: whether a checkout has git's own guard", () => {
   /** A real file to name as the guard script, so only the hooks decide. */
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
   writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
@@ -103,7 +103,7 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
     expect(guardProblem(elsewhere.dir)).toMatch(/core.hooksPath/);
   });
 
-  it("is missing when the script is some other file, or a hook can't be run (Qodo on PR 266)", () => {
+  it("is missing when the script is some other file, or a hook can't be run", () => {
     const noop = repo();
     const other = join(mkdtempSync(join(tmpdir(), "guard-noop-")), "git-guard.ts");
     writeFileSync(other, "process.exit(0);\n");
@@ -116,7 +116,7 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
     }
   });
 
-  it("reads a relative script path from the checkout, as git does (Qodo on PR 266)", () => {
+  it("reads a relative script path from the checkout, as git does", () => {
     const { dir, git } = repo();
     installHooks(dir, script);
     writeFileSync(join(dir, "git-guard.ts"), readFileSync(script, "utf8"));
@@ -147,11 +147,11 @@ describe("guardProblem: whether a checkout has git's own guard (#242)", () => {
   });
 });
 
-describe("the lab's own hooks (re-grade 5)", () => {
+describe("the lab's own hooks", () => {
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
   writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
 
-  it("installs pre-commit, commit-msg and pre-push in the lab, each calling the lab's stage (re-grade 6, Q21)", () => {
+  it("installs pre-commit, commit-msg and pre-push in the lab, each calling the lab's stage", () => {
     const { dir } = repo();
     const hooks = installHooks(dir, script, "lab");
     expect(LAB_HOOKS).toEqual(["pre-commit", "commit-msg", "pre-push"]);
@@ -182,7 +182,7 @@ describe("the lab's own hooks (re-grade 5)", () => {
   });
 });
 
-describe("the private checkout's own hook (re-grade 6)", () => {
+describe("the private checkout's own hook", () => {
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
   writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
 
@@ -223,7 +223,7 @@ describe("the private checkout's own hook (re-grade 6)", () => {
   });
 });
 
-describe("unguardedCheckouts reports the private checkout (Qodo on PR 333)", () => {
+describe("unguardedCheckouts reports the private checkout", () => {
   const script = join(mkdtempSync(join(tmpdir(), "guard-script-")), "git-guard.ts");
   writeFileSync(script, "// stands in for the guard script\nexport function check(stage: string) {}\n");
 

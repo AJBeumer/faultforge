@@ -1,7 +1,4 @@
-/**
- * Moving a ticket's labels, where a failed removal and a failed add mean different things. Split from
- * factory-tick.ts (#227).
- */
+/** Moving a ticket's labels, where a failed removal and a failed add mean different things. */
 import { ExternalCallError } from "../shared/github.ts";
 
 /**
@@ -24,8 +21,8 @@ export interface RelabelProblems {
 }
 
 /**
- * Adds `add` with `addAll` first, and only once that worked removes each of `remove` with `removeOne`
- * (AUD-M19). The other order left a ticket with no factory label when the add failed after a removal, and
+ * Adds `add` with `addAll` first, and only once that worked removes each of `remove` with `removeOne`.
+ * The other order can leave a ticket with no factory label when the add fails after a removal, and
  * nothing looks for such a ticket. A label in both lists is kept. Never throws: both failures (a removal
  * other than `isLabelAlreadyGone`, or the add itself) are returned, so the caller can treat them differently.
  */

@@ -21,7 +21,7 @@ export interface Workspace {
   root: string;
   /** This repo's worktree, where the agent starts. */
   lab: string;
-  /** The private repo's worktree, on its own branch; empty in a target ticket's run, which has none (AUD-H2). */
+  /** The private repo's worktree, on its own branch; empty in a target ticket's run, which has none. */
   private: string;
   /** Each repo's `main` commit when the run started. */
   mainAtStart: Record<string, string>;
@@ -34,8 +34,8 @@ export interface Workspace {
 /** What `qodo:check` found: `exitCode` 0 means it matches the snapshot, 1 a difference was found (each
  * one in `differences`), 2 it couldn't be checked at all (no key, no snapshot, an API or parse error).
  * Kept structured, not pre-formatted: a difference's full detail (a rule's name and `content`, its field
- * values) can hold text from private storage, so it never goes to a ticket comment (Qodo on PR 145) or to
- * the run log, which CI prints and uploads from a public repository (#187). Both use `summarizeDifference`;
+ * values) can hold text from private storage, so it never goes to a ticket comment or to the run log,
+ * which CI prints and uploads from a public repository. Both use `summarizeDifference`;
  * the full detail is in the private `qodo-state` evidence. */
 export interface QodoCheckOutcome {
   exitCode: 0 | 1 | 2;
@@ -50,7 +50,7 @@ export interface TickDeps {
   /** Actions or the owner's PC: the claim comment records it, and recovery leaves the other's claims alone. */
   mode?: RunMode;
   claimMode?(github: string, number: number): RunMode | null;
-  /** The owner's reviewed checkouts without the git-level guard; a local tick refuses to start beside them (#242). */
+  /** The owner's reviewed checkouts without the git-level guard; a local tick refuses to start beside them. */
   unguarded?(): string[];
   /** Open issues (not PRs) with the label, in one repo. */
   labelled(github: string, label: string): { number: number; title: string }[];
@@ -67,7 +67,7 @@ export interface TickDeps {
   /** Compares Qodo's live configuration with the snapshot, before the workspace (and its hook self-test)
    * is built: a drift in the reviewer is caught before an agent is ever started on it. */
   qodoCheck(runId: string): Promise<QodoCheckOutcome>;
-  /** `repoKey` is the ticket's repo: a target ticket's run gets no private worktree (AUD-H2). */
+  /** `repoKey` is the ticket's repo: a target ticket's run gets no private worktree. */
   workspace(runId: string, repoKey: string): Workspace;
   runAgent(
     ws: Workspace,
@@ -79,7 +79,7 @@ export interface TickDeps {
   ): Promise<AgentRun>;
   verifyPr(ws: Workspace, repoKey: string, pr: number): Verification;
   /** The files that decide the check which differ between the run's base and the PR's head, read by the runner
-   * from GitHub, never from the agent's worktree (#341, `factory-check-files.ts`). */
+   * from GitHub, never from the agent's worktree (`factory-check-files.ts`). */
   checkFiles(ws: Workspace, repoKey: string, pr: number, head?: string): CheckFilesReading;
   /** What actually changed while the agent ran: anything here is a stop for the owner. */
   audit(ws: Workspace, ticket: Candidate, from: string, to: string): string[];

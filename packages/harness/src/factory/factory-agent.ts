@@ -1,6 +1,6 @@
 /**
  * The headless agent: its instructions, its command line and deny rules, and the launcher that runs it with a
- * time limit and reads its `stream-json` output. Split from factory-tick.ts (#227).
+ * time limit and reads its `stream-json` output.
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -24,16 +24,13 @@ export interface AgentRun {
   subtype: string | null;
   costUsd: number | null;
   turns: number | null;
-  /** The last pull request URL in the result of a step that opened one (`gh pr create`, or the door's `pr-create`). Used
-   * when the time limit cuts the run off before it can report a `FACTORY_RESULT` of its own. */
+  /** The last pull request URL a step opened, for when the time limit cuts the run off before its `FACTORY_RESULT`. */
   lastPr?: string | null;
 }
 
 /**
- * The pull request URL of exactly `github` from a `gh pr create` step's tool result, or null. The
- * content of a `tool_result` message is either a plain string or a list of `{type: "text", text}` blocks.
- * Other text in the same result (a path, a ticket excerpt the step happened to print) can contain a
- * pull request URL of some other repository; only one of this ticket's own repo counts.
+ * The pull request URL of exactly `github` from a `gh pr create` step's tool result, or null. Other text in the
+ * result can hold another repo's PR URL, so only this ticket's own repo counts.
  */
 export function prUrlFromToolResult(content: unknown, github: string): string | null {
   const text = Array.isArray(content)
@@ -55,7 +52,7 @@ export function agentInstructions(
   repoKey: string,
   number: number,
   ticketFile: string,
-  /** False in a target ticket's run, which has no private worktree (AUD-H2). A lab ticket's agent only reads its evidence (#299). */
+  /** False in a target ticket's run, which has no private worktree. */
   privateWorktree = true,
   github = repoKey,
 ): string {
@@ -85,21 +82,16 @@ export function agentInstructions(
 }
 
 /**
- * The tools an unattended agent may use, and nothing else (#299). With `--permission-mode dontAsk`, Claude Code
- * (2.1.197, the version the runner pins) denies any tool these don't allow instead of asking, so a run never
- * waits on a prompt nobody answers; the policy and guard hooks then judge each call. Tried with that version:
- * Bash, Write and Edit inside and outside the working folders ran, and WebFetch, not listed, was refused with
- * "Permission to use WebFetch has been denied because Claude Code is running in don't ask mode". So no web
- * fetch or search, no subagent and no MCP tool, which the hooks don't all see; `bypassPermissions` allowed them.
+ * The tools an unattended agent may use, and nothing else. With `--permission-mode dontAsk`, Claude Code (2.1.197,
+ * the pinned version) denies any other tool instead of asking, so a run never waits on a prompt nobody answers.
+ * So no web fetch or search, no subagent and no MCP tool, which the hooks don't all see.
  */
 export const AGENT_TOOLS: readonly string[] = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill", "TodoWrite"];
 
 /**
- * The headless agent's command line. Exported so the flags that keep a run closed can be tested: only the tools in
- * `AGENT_TOOLS` (`dontAsk` refuses the rest, never prompts), no MCP server of the machine running the tick is
- * reachable (only the empty config in `mcpConfigFile`, with `--strict-mcp-config`), the run's deny rules come from
- * `settingsFile`, the budget is capped (#103), and the wakeup tool is taken away: a headless run ends with the
- * agent's turn, so a scheduled wakeup never fires and only loses the run (#129).
+ * The headless agent's command line: only `AGENT_TOOLS`, no MCP server of this machine (an empty config with
+ * `--strict-mcp-config`), the deny rules from `settingsFile`, and a capped budget. The wakeup tool is taken away:
+ * a headless run ends with the agent's turn, so a scheduled wakeup never fires and only loses the run.
  */
 export function agentArgs(input: {
   repoKey: string;
@@ -223,7 +215,7 @@ export async function runAgent(
     instructions: agentInstructions(ws.root, repoKey, number, ticketFile, Boolean(ws.private), github),
     extraDirs,
   });
-  // review:wait goes through the runner, which keeps Qodo's key (AUD-H2): served from a trusted checkout.
+  // review:wait goes through the runner, which keeps Qodo's key, and is served from a trusted checkout.
   const labRepo = Object.values(factory.repos).find((r) => r.path === ".");
   const broker = reviewBroker({
     dir: join(ws.root, "review-requests"),
@@ -237,17 +229,16 @@ export async function runAgent(
   // Built now, before the agent starts: building it at the first request would stop the runner for minutes.
   const unbuilt = broker.prepare();
   if (unbuilt) log("error", { message: `review:wait can't be served in this run: ${unbuilt}` });
-  // Only what the agent's own tools need: no Qodo key, no private-repo token (factory-agent-env.ts). In every
-  // run the policy hook is told which private checkouts it keeps the agent out of (AUD-H2, #299).
+  // The policy hook is told which private checkouts it keeps the agent out of.
   const checkouts = privateCheckoutsFor(runs, process.env, ws.private || undefined);
-  // Its guard hook still needs the template ids to check posts against (AUD-H1).
+  // Its guard hook still needs the template ids to check posts against.
   const guardDir = guardPrivateDir(factory, repoKey);
   const agent = agentEnv(process.env, {
     FAULTFORGE_FACTORY_RUN: runId,
     FAULTFORGE_RUN_ROOT: ws.root,
     FAULTFORGE_TICKET_NUMBER: String(number),
     FAULTFORGE_TICKET_FILE: ticketFile,
-    // The commits the run's repos started from: a script may run only as one of them holds it (#284).
+    // The commits the run's repos started from: a script may run only as one of them holds it.
     FAULTFORGE_RUN_BASES: Object.entries(ws.mainAtStart)
       .filter(([key]) => key in factory.repos)
       .map(([, sha]) => sha)
@@ -328,8 +319,7 @@ export async function runAgent(
             log("agent-step", { step, command: command.slice(0, 120) });
           }
         } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
-          // No output here: the event log can be public (an Actions log or artifact). The full
-          // output stays in the agent transcript, which only goes to the private repo.
+          // No output here: the event log can be public. The full output stays in the private transcript.
           const step = commands.get(part.tool_use_id ?? "");
           log("agent-step-result", { step, error: Boolean(part.is_error) });
           if (step === "pr-opened" && !part.is_error) {
@@ -339,7 +329,7 @@ export async function runAgent(
         }
       }
     };
-    child.stdout.setEncoding("utf8"); // decoded whole, never split mid-character (audit N-12)
+    child.stdout.setEncoding("utf8"); // decoded whole, never split mid-character
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;
       const lines = buffer.split("\n");

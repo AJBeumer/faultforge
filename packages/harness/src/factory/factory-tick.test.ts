@@ -381,7 +381,7 @@ describe("tick: stop paths", () => {
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
-    // A fixed sentence: nothing from the check itself reaches a ticket a reviewer can read (#245).
+    // A fixed sentence: nothing from the check itself reaches a ticket a reviewer can read.
     expect(f.comments.at(-1)?.body).toBe(QODO_CHECK_COMMENT);
     expect(f.events.map((e) => e.event)).toEqual(["picked", "claimed", "qodo-checked", "finished", "saved"]);
   });
@@ -400,7 +400,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toBe(QODO_CHECK_COMMENT);
   });
 
-  it("posts the same fixed sentence for any failed Qodo check, whatever its message or differences say (#245)", async () => {
+  it("posts the same fixed sentence for any failed Qodo check, whatever its message or differences say", async () => {
     const bodies: string[] = [];
     for (const qodo of [
       { exitCode: 2 as const, message: "could not read Qodo's live state: HTTP 500 <secret detail>", differences: [] },
@@ -428,7 +428,7 @@ describe("tick: stop paths", () => {
       "qodo-check",
       "workspace",
       "agent",
-      // The evidence first: agent-done only once it is saved (#245). Then the label, then the log's final copy.
+      // The evidence first: agent-done only once it is saved. Then the label, then the log's final copy.
       "save with workspace",
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       "save with workspace",
@@ -454,7 +454,7 @@ describe("tick: stop paths", () => {
     expect(f.events.find((e) => e.event === "check-files")).toMatchObject({ pr: 19, outcome: "unchanged" });
   });
 
-  it("compares the check's files at the commit the runner verified, not at whatever GitHub shows (#341)", async () => {
+  it("compares the check's files at the commit the runner verified, not at whatever GitHub shows", async () => {
     const seen: (string | undefined)[] = [];
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -470,7 +470,7 @@ describe("tick: stop paths", () => {
     expect(seen).toEqual(["d".repeat(40)]);
   });
 
-  describe("the files that decide the check (#341)", () => {
+  describe("the files that decide the check", () => {
     const ticket = (events: IssueEvent[] = []) => ({
       "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z"), ...events] },
     });
@@ -523,7 +523,7 @@ describe("tick: stop paths", () => {
     });
   });
 
-  it("sets agent-done only after the evidence is saved, and a failed save ends agent-needs-help (#245)", async () => {
+  it("sets agent-done only after the evidence is saved, and a failed save ends agent-needs-help", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -545,7 +545,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain("cleanup");
   });
 
-  it("sets agent-done only after the evidence push went through, not when it only failed quietly (#245)", async () => {
+  it("sets agent-done only after the evidence push went through, not when it only failed quietly", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       { saveEvidence: () => ({ file: "", pushed: false, blocked: [] }) },
@@ -554,7 +554,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`);
   });
 
-  it("downgrades an otherwise-done run to needs-help when the evidence save was blocked, and cleans up once it reached its own branch (#102)", async () => {
+  it("downgrades an otherwise-done run to needs-help when the evidence save was blocked, and cleans up once it reached its own branch", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -576,13 +576,13 @@ describe("tick: stop paths", () => {
       "save with workspace",
       "cleanup",
     ]);
-    // A count, never the paths: they can name private files, and the comment can be public (AUD-M2).
+    // A count, never the paths: they can name private files, and the comment can be public.
     expect(f.comments.at(-1)?.body).toMatch(/changed 1 file in the private repository outside `raw-artifacts\/`/);
     expect(f.comments.at(-1)?.body).not.toMatch(/qodo-rules/);
     expect(f.comments.at(-1)?.body).toMatch(/blocked-20261109-093001-target-18/);
   });
 
-  it("keeps the worktrees when even the blocked-branch push failed: the run folder is the only copy left (#102)", async () => {
+  it("keeps the worktrees when even the blocked-branch push failed: the run folder is the only copy left", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -594,13 +594,13 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).not.toContain("cleanup");
-    // A count, never the paths: they can name private files, and the comment can be public (AUD-M2).
+    // A count, never the paths: they can name private files, and the comment can be public.
     expect(f.comments.at(-1)?.body).toMatch(/changed 1 file in the private repository outside `raw-artifacts\/`/);
     expect(f.comments.at(-1)?.body).not.toMatch(/qodo-rules/);
     expect(f.comments.at(-1)?.body).toMatch(/run folder \(`\/runs\/r`\), kept for inspection/);
   });
 
-  it("still reports the blocked paths' recovery branch on a reviewed ticket, even when the paths themselves must be redacted (#102)", async () => {
+  it("still reports the blocked paths' recovery branch on a reviewed ticket, even when the paths themselves must be redacted", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -618,7 +618,7 @@ describe("tick: stop paths", () => {
     expect(body).toMatch(/blocked-20261109-093001-target-18/);
   });
 
-  it("a blocked run whose relabel keeps failing still ends needs-help, reported as a runner failure, with the block in the log (#102)", async () => {
+  it("a blocked run whose relabel keeps failing still ends needs-help, reported as a runner failure, with the block in the log", async () => {
     let addAttempts = 0;
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -647,7 +647,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain("cleanup");
   });
 
-  it("still relabels the blocked run when posting the comment about it fails (#102)", async () => {
+  it("still relabels the blocked run when posting the comment about it fails", async () => {
     let commentAttempts = 0;
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -714,7 +714,7 @@ describe("tick: stop paths", () => {
     expect((window[1] ?? "") < finished).toBe(true);
   });
 
-  it("never cleans up the worktrees when saving the evidence fails, keeping them for the owner (#107)", async () => {
+  it("never cleans up the worktrees when saving the evidence fails, keeping them for the owner", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -727,7 +727,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain("cleanup");
   });
 
-  it("never starts the agent when the claim's own label add fails: the ticket must not run twice (Qodo on PR 123)", async () => {
+  it("never starts the agent when the claim's own label add fails: the ticket must not run twice", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -750,7 +750,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
-  it("does not report the run as finished when the finish step's own label add fails (Qodo on PR 123)", async () => {
+  it("does not report the run as finished when the finish step's own label add fails", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -771,7 +771,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
-  it("needs help when a gh/git call during the audit times out, names the call, and still relabels (#107)", async () => {
+  it("needs help when a gh/git call during the audit times out, names the call, and still relabels", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -785,7 +785,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
-  it("needs help when a gh/git call during verify times out, names the call, and still relabels (#107)", async () => {
+  it("needs help when a gh/git call during verify times out, names the call, and still relabels", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -799,7 +799,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
   });
 
-  it("reports the opened pull request on the ticket when the time limit is hit after the agent opened one (#107)", async () => {
+  it("reports the opened pull request on the ticket when the time limit is hit after the agent opened one", async () => {
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
       {
@@ -815,7 +815,7 @@ describe("tick: stop paths", () => {
     expect(f.comments.at(-1)?.body).toMatch(/pull\/42/);
   });
 
-  it("a cleanup that fails after the label adds no second label, and the saved log says so (Qodo on PR 262)", async () => {
+  it("a cleanup that fails after the label adds no second label, and the saved log says so", async () => {
     const copies: string[][] = [];
     const f = fake(
       { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -839,14 +839,14 @@ describe("tick: stop paths", () => {
     expect(f.events.filter((e) => e.event === "finished")).toHaveLength(1);
     // The last copy holds the cleanup failure.
     expect(copies.at(-1)?.at(-1)).toBe("error");
-    // Through the run's own worktree, never a fresh one that would clash with its branch (Qodo on PR 262).
+    // Through the run's own worktree, never a fresh one that would clash with its branch.
     expect(f.calls.filter((c) => c.startsWith("save"))).toEqual(Array(3).fill("save with workspace"));
     expect(f.events.find((e) => e.event === "error")).toMatchObject({
       message: expect.stringMatching(/worktree busy/),
     });
   });
 
-  describe("the saved run log ends with the label the ticket shows (AUD-M18)", () => {
+  describe("the saved run log ends with the label the ticket shows", () => {
     /** The last event in the log each time it is copied to private storage. */
     function lastSaved(overrides: Partial<TickDeps> = {}) {
       const copies: Record<string, unknown>[] = [];
@@ -939,7 +939,7 @@ describe("settle", () => {
     });
   });
 
-  it("holds a PR the agent called ready when the runner's own gate says the owner decides (#215)", () => {
+  it("holds a PR the agent called ready when the runner's own gate says the owner decides", () => {
     const gated = () => ({ problems: [], ownerGates: ["it changes the reviewer's rules (AGENTS.md)"] });
     expect(settle(AGENT_OK, result, gated, "owner/target", 120)).toMatchObject({
       label: LABELS.done,
@@ -985,7 +985,7 @@ describe("settle", () => {
     });
   });
 
-  it("reports the pull request the agent opened before the time limit cut it off (#107)", () => {
+  it("reports the pull request the agent opened before the time limit cut it off", () => {
     expect(
       settle(
         { ...AGENT_OK, timedOut: true, resultText: null, lastPr: "https://github.com/owner/target/pull/9" },
@@ -997,7 +997,7 @@ describe("settle", () => {
     ).toMatchObject({ label: LABELS.help, pr: "https://github.com/owner/target/pull/9" });
   });
 
-  it("still reports no pull request when the agent never got that far before timing out (#107)", () => {
+  it("still reports no pull request when the agent never got that far before timing out", () => {
     expect(
       settle({ ...AGENT_OK, timedOut: true, resultText: null }, null, verified, "owner/target", 120).pr,
     ).toBeNull();
@@ -1016,11 +1016,10 @@ describe("settle", () => {
   });
 });
 
-describe("vitest.config: temp directory isolation (#110)", () => {
+describe("vitest.config: temp directory isolation", () => {
   it("runs with its own TMPDIR/TMP/TEMP, not the machine-wide one", () => {
-    // vitest.config.ts sets these for every worker (see its `test.env`). Checked at the environment
-    // the test actually runs in, not by re-reading the config, so this fails if the setting is ever
-    // dropped or stops reaching the worker, not just if the source line is removed.
+    // Read from the running worker, not from the config's text, so this fails if the setting stops
+    // reaching the worker, not only if the line is removed.
     expect(process.env.TMPDIR).toMatch(/faultforge-vitest-/);
     expect(process.env.TMPDIR).toBe(process.env.TMP);
     expect(process.env.TMPDIR).toBe(process.env.TEMP);
@@ -1103,7 +1102,7 @@ describe("audit helpers", () => {
   it("accepts only the exact hook command, not one that merely names the file", () => {
     const wrapped = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/fail-closed.ts" factory-policy.ts';
     expect(runsHook(wrapped, "factory-policy.ts")).toBe(true);
-    // Run without the fail-closed wrapper, a crash or a timeout would let the tool through (AUD-M4).
+    // Run without the fail-closed wrapper, a crash or a timeout would let the tool through.
     expect(runsHook('node "$CLAUDE_PROJECT_DIR/.claude/hooks/factory-policy.ts"', "factory-policy.ts")).toBe(false);
     expect(runsHook("echo factory-policy.ts", "factory-policy.ts")).toBe(false);
     expect(runsHook(`${wrapped} || true`, "factory-policy.ts")).toBe(false);
@@ -1199,7 +1198,7 @@ describe("helpers", () => {
     expect(checkProblems([])[0]).toMatch(/no checks ran/);
   });
 
-  it("proves the tests from revert:check's exit code and saved record, naming the category only (#101)", () => {
+  it("proves the tests from revert:check's exit code and saved record, naming the category only", () => {
     expect(revertCheckProblems(0, { exit: 0 })).toEqual([]);
     expect(revertCheckProblems(1, { exit: 1 })).toEqual([
       "revert:check: every test still passes without the change, so it doesn't prove it (full detail in its saved record)",
@@ -1216,7 +1215,7 @@ describe("helpers", () => {
     expect(revertCheckProblems(null, null)).toEqual(["revert:check gave no result (exit null)"]);
   });
 
-  it("never trusts a bare zero exit on its own: it must agree with a saved record (#101, Qodo on PR 155)", () => {
+  it("never trusts a bare zero exit on its own: it must agree with a saved record", () => {
     // A forged or stubbed revert:check could exit 0 without ever writing a record, or without really
     // running the check it claims to.
     expect(revertCheckProblems(0, null)[0]).toMatch(/can't be trusted/);
@@ -1238,7 +1237,7 @@ describe("helpers", () => {
   });
 });
 
-describe("hooks-checked: the run log records the hook self-test (#126)", () => {
+describe("hooks-checked: the run log records the hook self-test", () => {
   const deny = JSON.stringify({
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "no" },
   });
@@ -1380,7 +1379,7 @@ describe("tick: a Qodo difference in the run log, which CI prints and uploads fr
   });
 });
 
-describe("tick: recovering from an interrupted run (#197)", () => {
+describe("tick: recovering from an interrupted run", () => {
   it("moves a ticket left agent-working to needs-help with a comment before it picks anything", async () => {
     const f = fake({ "owner/target#7": { title: "Old", events: [], labels: [LABELS.working] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("idle");
@@ -1418,7 +1417,7 @@ describe("tick: recovering from an interrupted run (#197)", () => {
   });
 });
 
-describe("tick: a refusal comments once, even when its label removal fails (#245)", () => {
+describe("tick: a refusal comments once, even when its label removal fails", () => {
   /** A ticket that keeps `ready-for-agent` while removals fail, across ticks sharing one comment list. */
   function twoTicks(kind: "stranger" | "not-ready") {
     const labels = new Set<string>([LABELS.ready]);
@@ -1470,7 +1469,7 @@ describe("tick: a refusal comments once, even when its label removal fails (#245
   }
 });
 
-describe("factory:tick exit codes (#245)", () => {
+describe("factory:tick exit codes", () => {
   const header = readFileSync(join(import.meta.dirname, "factory-tick.ts"), "utf8").split("*/")[0] ?? "";
   const codes = header.slice(header.indexOf("Exit codes:"));
 
@@ -1494,7 +1493,7 @@ describe("factory:tick exit codes (#245)", () => {
     expect(codes).toMatch(/3 the tick itself failed/);
   });
 
-  it("a tick failure and a ticket that needs the owner exit with different codes (AUD-M18)", async () => {
+  it("a tick failure and a ticket that needs the owner exit with different codes", async () => {
     // Before any pick: GitHub can't be read. No ticket was touched, so it is no ticket's needs-help.
     const early = fake(
       {},
@@ -1554,7 +1553,7 @@ describe("factory:tick exit codes (#245)", () => {
   });
 });
 
-describe("tick: saved means saved (Qodo on PR 262)", () => {
+describe("tick: saved means saved", () => {
   it("a runner failure whose log reached neither main nor a branch logs no saved event", async () => {
     const f = fake(
       { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -1607,7 +1606,7 @@ describe("tick: saved means saved (Qodo on PR 262)", () => {
   });
 });
 
-describe("tick: the outcome is logged and copied even when a later step fails (Qodo on PR 262, round 2)", () => {
+describe("tick: the outcome is logged and copied even when a later step fails", () => {
   it("a Qodo stop whose log copy fails is copied again by the runner-failure path", async () => {
     let copies = 0;
     const f = fake(
@@ -1658,7 +1657,7 @@ describe("tick: the outcome is logged and copied even when a later step fails (Q
   });
 });
 
-describe("tick: errors stay in the run log, never on a ticket (Qodo on PR 262, round 4)", () => {
+describe("tick: errors stay in the run log, never on a ticket", () => {
   it("a runner failure naming a private path keeps it out of the comment, and in the log", async () => {
     const f = fake(
       { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -1687,7 +1686,7 @@ describe("tick: errors stay in the run log, never on a ticket (Qodo on PR 262, r
   });
 });
 
-describe("tick: the claim says which way of running took the ticket (AUD-M19)", () => {
+describe("tick: the claim says which way of running took the ticket", () => {
   it("ends the claim comment with the mode's mark, which recovery reads back", async () => {
     const f = fake(
       { "owner/target#18": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
@@ -1700,7 +1699,7 @@ describe("tick: the claim says which way of running took the ticket (AUD-M19)", 
   });
 });
 
-describe("tick: a retried ticket continues the earlier run's pull request (AUD-N10)", () => {
+describe("tick: a retried ticket continues the earlier run's pull request", () => {
   it("names the open pull request that closes the ticket in the ticket file, and logs it", async () => {
     let written = "";
     const f = fake(
@@ -1737,7 +1736,7 @@ describe("tick: a retried ticket continues the earlier run's pull request (AUD-N
     expect(earlierPrs(prs, 18, "owner")).toEqual(["u1", "u3", "u6"]);
   });
 
-  it("never names a stranger's pull request, or one from a fork, as the earlier run's (Qodo on PR 268)", () => {
+  it("never names a stranger's pull request, or one from a fork, as the earlier run's", () => {
     const prs = [
       { url: "stranger", body: "Fixes #18", author: { login: "mallory" }, isCrossRepository: false },
       { url: "fork", body: "Fixes #18", author: { login: "owner" }, isCrossRepository: true },
@@ -1747,7 +1746,7 @@ describe("tick: a retried ticket continues the earlier run's pull request (AUD-N
   });
 });
 
-describe("tick: a ticket still agent-working is never picked, and the earlier-PR lookup is only a hint (Qodo on PR 268)", () => {
+describe("tick: a ticket still agent-working is never picked, and the earlier-PR lookup is only a hint", () => {
   it("skips a ticket that carries agent-working beside a leftover ready-for-agent", async () => {
     const f = fake(
       {
@@ -1779,7 +1778,7 @@ describe("tick: a ticket still agent-working is never picked, and the earlier-PR
   });
 });
 
-describe("tick: no private path reaches the log or a comment (AUD-M2)", () => {
+describe("tick: no private path reaches the log or a comment", () => {
   it("a blocked save logs and reports how many files, never which", async () => {
     const f = fake(
       { "owner/lab#5": { title: "F", events: [labelled("owner", "2026-11-09T08:00:00Z")] } },
