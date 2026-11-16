@@ -15,7 +15,7 @@ export const CI_WAIT_MINUTES = 9;
 /** The paragraph for the agent's instructions: one for a lab ticket's run, another for a reviewed repository's. */
 export function ciWaitInstruction(repoKey: string, labTicket: boolean): string {
   return labTicket
-    ? `Before every push to the pull request's branch, the first one too, commit and run npm run ci:wait -- ${repoKey} --timeout ${CI_WAIT_MINUTES} in the foreground, with the Bash tool's longest timeout (600000 ms). It runs the checks on Linux and on Windows for that commit on a scratch branch, which no reviewer reads and which costs no review round. Its last line is ci:wait exit <code>. Push to the pull request only after exit 0. On exit 1, fix what it names and run it again. On exit 2 it could not tell: run it once more, and report stuck if it is 2 again. Run npm run check on its own, never piped into another command: a pipe hides its exit code.`
+    ? `Before every push to the pull request's branch, the first one too, commit, and then run npm run ci:wait -- ${repoKey} --timeout ${CI_WAIT_MINUTES} as a command of its own (nothing chained or piped before or after it: the policy refuses that, because the run log reads its exit code from its last line), in the foreground, with the Bash tool's longest timeout (600000 ms). It runs the checks on Linux and on Windows for that commit on a scratch branch, which no reviewer reads and which costs no review round. Its last line is ci:wait exit <code>. Push to the pull request only after exit 0. On exit 1, fix what it names and run it again. On exit 2 it could not tell: run it once more, and report stuck if it is 2 again. Run npm run check on its own, never piped into another command: a pipe hides its exit code.`
     : "This repository's checks run on the pull request only: don't run ci:wait here, it refuses. Run npm run check on its own, never piped into another command: a pipe hides its exit code.";
 }
 
@@ -44,4 +44,4 @@ export function ciWaitExitCode(content: unknown, command: string): 0 | 1 | 2 | n
  * A command that runs `ci:wait` and nothing else: no second command, pipe, redirect or substitution, whose
  * output or exit could stand in for its own. Only then is the output's last line the command's own.
  */
-const CI_WAIT_ALONE = /^npm run ci:wait(?: -- [\w .:/=-]*)?$/;
+const CI_WAIT_ALONE = /^npm run ci:wait(?: -- [\w .:/=-]*?)?(?: 2>&1)?$/;

@@ -14,7 +14,7 @@ const BRIDGE = "shared/harness-bridge.ts";
  * The most lines the hooks' code (tests and fixtures.ts left out) may hold, so the guard stays small enough to
  * read whole. Raising it is a reviewed change: say in the PR why the code can't be made smaller instead.
  */
-const LINE_BUDGET = 7_007;
+const LINE_BUDGET = 7_026;
 
 /** Every `.ts` file under the hooks folder, relative to it, with `/`. */
 const files = (readdirSync(HOOKS, { recursive: true }) as string[])

@@ -77,6 +77,8 @@ describe("agentInstructions", () => {
     expect(ciWaitExitCode("ci:wait: not green on a7439ec: npm run check (windows)\nci:wait exit 1\n", alone)).toBe(1);
     expect(ciWaitExitCode([{ type: "text", text: "ci:wait: no result\nci:wait exit 2" }], alone)).toBe(2);
     expect(ciWaitExitCode("ci:wait exit 0\r\n", "npm run ci:wait -- faultforge")).toBe(0);
+    // Every form the policy lets a run use is read: alone, with or without its errors sent to its output.
+    expect(ciWaitExitCode("ci:wait exit 1", `${alone} 2>&1`)).toBe(1);
   });
 
   it("reads no exit code from a result that names none: the command was killed or never ran", () => {
