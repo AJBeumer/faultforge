@@ -5,6 +5,7 @@ import {
   builderDeny,
   builderEnv,
   isErrorAnswer,
+  isPlainArgument,
   NO_PUSH,
   readLocalReview,
 } from "./gate-trial-real.ts";
@@ -155,6 +156,15 @@ describe("the builder's confinement", () => {
       HOME: "/home/me",
     });
     expect(env).toEqual({ PATH: "/bin", HOME: "/home/me" });
+  });
+
+  it("calls only plain text a safe command-line argument", () => {
+    for (const arg of ["ci", "--no-audit", "test/not-so.test.ts", "vitest", "a=b", "@scope/pkg", "C:/x"]) {
+      expect(isPlainArgument(arg)).toBe(true);
+    }
+    for (const arg of ["", "a b", "a&b", "a;b", "$(x)", "a|b", "a>b", '"a"', "a\nb", "%PATH%", "a^b"]) {
+      expect(isPlainArgument(arg)).toBe(false);
+    }
   });
 
   it("uses a push address no host answers", () => {

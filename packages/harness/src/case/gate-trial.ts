@@ -267,5 +267,7 @@ export function evidencePathProblem(testFile: string): string | undefined {
   if (path.startsWith("/") || /^[a-zA-Z]:/.test(path)) return "the evidence path is absolute";
   if (path.split("/").includes("..")) return "the evidence path climbs out of the repository";
   if (!/\.test\.[cm]?[jt]s$/.test(path)) return "the evidence is not a test file";
+  // The name comes from the builder and ends up on a command line: only plain path characters.
+  if (!/^[\w./-]+$/.test(path)) return "the evidence path holds characters a plain file name doesn't need";
   return undefined;
 }

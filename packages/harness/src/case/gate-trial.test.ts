@@ -246,5 +246,8 @@ describe("evidencePathProblem", () => {
     expect(evidencePathProblem("/etc/x.test.ts")).toMatch(/absolute/);
     expect(evidencePathProblem("C:/x.test.ts")).toMatch(/absolute/);
     expect(evidencePathProblem("src/a.ts")).toMatch(/not a test file/);
+    for (const name of ["a & calc.test.ts", "a;b.test.ts", "$(x).test.ts", "a b.test.ts", "a|b.test.ts"]) {
+      expect(evidencePathProblem(name)).toMatch(/plain file name/);
+    }
   });
 });

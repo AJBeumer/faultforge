@@ -33,6 +33,11 @@ import { publicCaseIds } from "./gate-replay.ts";
 import { evidencePathProblem, parseDecisions, type TrialFinding, type TrialReview } from "./gate-trial.ts";
 import { gateNamed, type TrialArgs, type TrialCase, type TrialIo, trialCase } from "./gate-trial-run.ts";
 
+/** Pure: true for an argument made only of letters, digits and `. _ / @ : = -`, which no shell reads as syntax. */
+export function isPlainArgument(arg: string): boolean {
+  return /^[\w./@:=-]+$/.test(arg);
+}
+
 /** Runs a command and returns its status and output; never throws for a non-zero exit. */
 function sh(
   cmd: string,
@@ -41,6 +46,11 @@ function sh(
   timeoutMs = 10 * 60_000,
   extra: { input?: string; env?: NodeJS.ProcessEnv } = {},
 ) {
+  // npm and npx are command files on Windows, which only a shell can start. A shell reads its arguments as
+  // text, so there every argument must be plain: nothing a shell could take as a second command.
+  const shell = process.platform === "win32" && !cmd.toLowerCase().endsWith(".exe") && cmd !== "git";
+  const unsafe = shell ? args.find((arg) => !isPlainArgument(arg)) : undefined;
+  if (unsafe !== undefined) throw new Error(`refusing to pass an argument with shell characters to ${cmd}`);
   const result = spawnSync(cmd, args, {
     cwd,
     encoding: "utf8",
@@ -48,8 +58,7 @@ function sh(
     maxBuffer: 256 * 1024 * 1024,
     input: extra.input,
     env: extra.env,
-    // npm and npx are command files on Windows, which only a shell can start.
-    shell: process.platform === "win32" && !cmd.toLowerCase().endsWith(".exe") && cmd !== "git",
+    shell,
     windowsHide: true,
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -173,6 +182,7 @@ export const BUILDER_TOOLS: readonly string[] = [
   "Grep",
   "Bash(npm test:*)",
   "Bash(npm run check:*)",
+  "Bash(npm run format:*)",
   "Bash(npm run test:*)",
   "Bash(npx vitest:*)",
   "Bash(git diff:*)",
@@ -337,8 +347,10 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
       );
     },
     evidencePasses: async (testFile) => {
-      if (evidencePathProblem(testFile) || !existsSync(join(app, testFile))) return false;
-      return sh("npx", ["vitest", "run", testFile], app, 5 * 60_000).status === 0;
+      // The path is the builder's text: checked, and written with forward slashes, before it reaches a command.
+      const path = testFile.replace(/\\/g, "/");
+      if (evidencePathProblem(path) || !existsSync(join(app, path))) return false;
+      return sh("npx", ["vitest", "run", path], app, 5 * 60_000).status === 0;
     },
     publicTests: async () => {
       const result = sh("npm", ["test"], app, 10 * 60_000);
