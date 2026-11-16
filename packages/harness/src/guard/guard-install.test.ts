@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { telltales } from "../shared/neutral.ts";
@@ -265,7 +265,9 @@ describe("mainCheckout: the repo's main checkout, from a linked worktree", () =>
     const main = repo();
     expect(mainCheckout(main.dir)).toBeUndefined();
     const linked = worktreeOf(main, "a-worktree");
-    expect(resolve(mainCheckout(linked) ?? "")).toBe(resolve(main.dir));
+    // realpathSync, not resolve: Windows's temp folder can round-trip through an 8.3 short name, which
+    // mkdtempSync's result keeps and git's own report resolves away.
+    expect(realpathSync(mainCheckout(linked) ?? "")).toBe(realpathSync(main.dir));
   });
 
   it("still names the checkout itself when its git directory is stored elsewhere (--separate-git-dir) and core.worktree records it", () => {
@@ -278,7 +280,7 @@ describe("mainCheckout: the repo's main checkout, from a linked worktree", () =>
     git("config", "core.worktree", dir);
     const linked = worktreeOf({ dir, git }, "separate-git-dir-worktree");
     // The parent of the (separate) git directory is not the checkout; only the recorded core.worktree is.
-    expect(resolve(mainCheckout(linked) ?? "")).toBe(resolve(dir));
+    expect(realpathSync(mainCheckout(linked) ?? "")).toBe(realpathSync(dir));
   });
 });
 
@@ -313,7 +315,7 @@ describe("guardInstall: refuses before writing anything", () => {
     const linked = worktreeOf(main, "another-worktree");
     const error = quiet();
     expect(guardInstall([], linked, "script-path")).toBe(1);
-    expect(error.mock.calls.join("\n")).toContain(resolve(main.dir));
+    expect(error.mock.calls.join("\n")).toContain(realpathSync(main.dir));
     expect(guardProblem(linked)).toBeDefined();
     expect(readFileSync(join(main.dir, ".git", "config"), "utf8")).not.toContain(CONFIG_KEY);
     error.mockRestore();
