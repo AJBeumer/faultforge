@@ -41,8 +41,9 @@ The type of a finding (bug, rule violation, requirement gap) does not change the
 - A High or Medium finding is open, or a finding has a label the gate doesn't know.
 - The saved review is of an older commit than the pull request's head.
 - The review didn't finish, or Qodo skipped it.
-- More review rounds have run than the gate's `maxRounds`. The runner takes the number from Qodo's own
-  record of the pull request, never from the agent.
+- More review rounds have run than the gate's `maxRounds`. A round is one pushed commit that Qodo
+  reviewed. The runner takes the number from Qodo's own record of the pull request, never from the
+  agent, and a record with no countable run blocks too.
 - A round closed nothing that had to be fixed. The agent stops itself here; the runner does not check it.
 
 ## Who decides

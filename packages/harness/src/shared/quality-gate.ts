@@ -29,6 +29,8 @@ export interface GateRecord {
   openFindings?: unknown;
   /** The review rounds Qodo has run on the pull request; absent in a save made before they were recorded. */
   reviewRounds?: unknown;
+  /** When the save was made. */
+  recordedAt?: unknown;
 }
 
 export interface GateOptions {
@@ -118,7 +120,8 @@ export function gateAccount(
     account.problems.push("the saved review didn't finish, so its findings prove nothing");
   }
   const rounds = record.reviewRounds;
-  if (typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 0) account.rounds = rounds;
+  // A reviewed pull request has had at least one round: zero is no count at all.
+  if (typeof rounds === "number" && Number.isInteger(rounds) && rounds >= 1) account.rounds = rounds;
   if (options.rounds !== undefined) {
     if (account.rounds !== null && account.rounds > gate.maxRounds) {
       account.problems.push(
@@ -162,25 +165,31 @@ export function gateAccount(
 }
 
 /**
- * The findings an earlier saved review of the pull request listed that the judged review no longer lists as
- * open: closed since. Matched by id; a finding without an id can't be followed and is left out.
+ * The findings that were open in a saved review made before the judged one, on another commit of the same
+ * pull request, and that the judged review no longer lists as open: closed since. Only a save's list of open
+ * findings counts, since that is all that says a finding was open then. A save made later than the judged
+ * one, the judged save itself, and a save that doesn't say when it was made are left out, so a finding first
+ * raised afterwards is never called closed. Matched by id; a finding without one can't be followed.
  */
-export function closedFindings(record: GateRecord, earlier: unknown[]): GateFinding[] {
+export function closedFindings(record: GateRecord, saves: unknown[]): GateFinding[] {
+  const madeAt = typeof record.recordedAt === "string" ? Date.parse(record.recordedAt) : Number.NaN;
+  if (Number.isNaN(madeAt)) return [];
   const open = new Set(
     (Array.isArray(record.openFindings) ? record.openFindings : [])
       .map((f) => (f && typeof f === "object" ? (f as GateFinding).id : null))
       .filter((id): id is string => typeof id === "string"),
   );
   const closed = new Map<string, GateFinding>();
-  for (const other of earlier) {
+  for (const other of saves) {
     if (!other || typeof other !== "object") continue;
-    const { findings, openFindings } = other as { findings?: unknown; openFindings?: unknown };
-    for (const list of [findings, openFindings]) {
-      if (!Array.isArray(list)) continue;
-      for (const f of list) {
-        const id = f && typeof f === "object" ? (f as GateFinding).id : null;
-        if (typeof id === "string" && !open.has(id) && !closed.has(id)) closed.set(id, f as GateFinding);
-      }
+    const { headSha, recordedAt, openFindings } = other as GateRecord;
+    if (headSha === record.headSha) continue;
+    const otherAt = typeof recordedAt === "string" ? Date.parse(recordedAt) : Number.NaN;
+    if (Number.isNaN(otherAt) || otherAt >= madeAt) continue;
+    if (!Array.isArray(openFindings)) continue;
+    for (const f of openFindings) {
+      const id = f && typeof f === "object" ? (f as GateFinding).id : null;
+      if (typeof id === "string" && !open.has(id) && !closed.has(id)) closed.set(id, f as GateFinding);
     }
   }
   return [...closed.values()];
@@ -196,7 +205,7 @@ export function gateText(gate: QualityGate): string {
       : "No label is exempt.",
     "A finding with any other label, or none, blocks.",
     "A finding you believe is wrong stays open: put the evidence in the PR description and report stuck, because only the owner settles a disagreement.",
-    `At most ${gate.maxRounds} review rounds: the runner counts them from Qodo's own record and doesn't deliver a pull request that took more. If a round closes none of the findings that must be fixed, stop and report stuck.`,
+    `At most ${gate.maxRounds} review rounds. A round is one pushed commit that Qodo reviews: push each round's fixes as one commit, and wait for its review before you push again. The runner counts the rounds from Qodo's own record and doesn't deliver a pull request that took more. If a round closes none of the findings that must be fixed, stop and report stuck.`,
   ].join(" ");
 }
 

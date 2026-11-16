@@ -36,10 +36,24 @@ const realDeps: GateCheckDeps = {
   head: (github, pr) =>
     ghJson<{ headRefOid: string }>("pr", "view", String(pr), "--repo", github, "--json", "headRefOid").headRefOid,
   read: (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined),
-  readAll: (dir) =>
-    readdirSync(dir)
+  // A save that can't be read, or a folder that can't be listed, only shortens the closed list.
+  readAll: (dir) => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return [];
+    }
+    return names
       .filter((f) => f.endsWith(".review.json"))
-      .map((f) => readFileSync(join(dir, f), "utf8")),
+      .flatMap((f) => {
+        try {
+          return [readFileSync(join(dir, f), "utf8")];
+        } catch {
+          return [];
+        }
+      });
+  },
   out: (line) => console.log(line),
   error: (line) => console.error(line),
 };
@@ -88,10 +102,16 @@ export function run(argv: string[], deps: GateCheckDeps = realDeps): number {
   const gate = gateOf(factory);
   // A save made before rounds were recorded can still be judged; one that records them is held to the limit.
   const account = gateAccount(record, gate, { head, requireComplete: true, rounds: "if-recorded" });
-  // Closed findings come from the other saves of this pull request. One that can't be read is passed over:
-  // it can only shorten the closed list, never change the verdict.
+  // Closed findings come from the earlier saves of this pull request. One that can't be read is passed over,
+  // and so is a failure to list them: either can only shorten the closed list, never change the verdict.
   const earlier: unknown[] = [];
-  for (const other of deps.readAll(dirname(path))) {
+  let others: string[] = [];
+  try {
+    others = deps.readAll(dirname(path));
+  } catch {
+    others = [];
+  }
+  for (const other of others) {
     try {
       earlier.push(JSON.parse(other));
     } catch {

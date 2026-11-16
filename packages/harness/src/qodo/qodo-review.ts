@@ -146,14 +146,15 @@ export function findingsFor(review: QodoReview, headSha: string): Finding[] {
 
 /**
  * How many review rounds Qodo has run on the pull request: the distinct commits it reports a run for, not
- * counting a run it skipped. Null when the answer holds no list of runs, so "unknown" is never read as zero.
+ * counting a run it skipped. Null when the answer holds no list of runs, or no run with a commit to count: a
+ * finished review has at least one, so nothing countable means the count is unknown, never zero.
  */
 export function reviewRounds(review: QodoReview): number | null {
   if (!Array.isArray(review.review_runs)) return null;
   const commits = review.review_runs
     .filter((r) => r && r.review_effort !== "skip" && typeof r.commit_sha === "string" && r.commit_sha)
     .map((r) => r.commit_sha);
-  return new Set(commits).size;
+  return new Set(commits).size || null;
 }
 
 /** How deeply Qodo reviewed this commit ("standard", "lite", "skip"…), if it says. */

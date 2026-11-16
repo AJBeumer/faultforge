@@ -140,7 +140,9 @@ describe("open findings, review depth and the last save", () => {
       status: "completed",
     });
     expect(reviewRounds({ review_runs: [run("a"), run("b"), run("b", "lite"), run("c", "skip")] })).toBe(2);
-    expect(reviewRounds({ review_runs: [] })).toBe(0);
+    // A finished review has at least one run: nothing countable is unknown, never zero rounds.
+    expect(reviewRounds({ review_runs: [] })).toBeNull();
+    expect(reviewRounds({ review_runs: [run(""), run("c", "skip")] })).toBeNull();
     expect(reviewRounds({})).toBeNull();
     expect(reviewRounds({ review_runs: "many" } as never)).toBeNull();
   });

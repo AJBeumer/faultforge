@@ -114,7 +114,7 @@ describe("the round limit", () => {
   });
 
   it("blocks on a record without a usable count only when the count is required", () => {
-    for (const reviewRounds of [undefined, null, "2", -1, 1.5]) {
+    for (const reviewRounds of [undefined, null, "2", -1, 0, 1.5]) {
       const strict = gateAccount(record([], { reviewRounds }), GATE, { rounds: "require" });
       expect(strict.problems).toEqual(["the saved review doesn't say how many review rounds have run"]);
       const lenient = gateAccount(record([], { reviewRounds }), GATE, { rounds: "if-recorded" });
@@ -136,16 +136,44 @@ describe("the round limit", () => {
 });
 
 describe("closedFindings", () => {
-  it("lists findings earlier saves held that the judged review no longer has open, once each", () => {
-    const head = record([{ id: "b", severity: "informational", title: "Still open" }]);
-    const earlier = [
-      { findings: [{ id: "a", severity: "action_required", title: "Fixed since" }], openFindings: [{ id: "a" }] },
-      { findings: [{ id: "b", title: "Still open" }], openFindings: [{ id: "a" }, { id: "b" }] },
+  const OLD_HEAD = "b".repeat(40);
+  const at = (minute: number) => `2026-11-16T10:${String(minute).padStart(2, "0")}:00.000Z`;
+  const fixed = { id: "a", severity: "action_required", title: "Fixed since" };
+  const still = { id: "b", severity: "informational", title: "Still open" };
+
+  it("lists findings that were open in an earlier save of another commit and are not open now, once each", () => {
+    const head = record([still], { recordedAt: at(30) });
+    const saves = [
+      { headSha: OLD_HEAD, recordedAt: at(10), openFindings: [fixed, still] },
+      { headSha: "c".repeat(40), recordedAt: at(20), openFindings: [fixed, still] },
       head,
       null,
-      { findings: "not a list" },
+      { headSha: OLD_HEAD, recordedAt: at(5), openFindings: "not a list" },
     ];
-    expect(closedFindings(head, earlier)).toEqual([{ id: "a", severity: "action_required", title: "Fixed since" }]);
+    expect(closedFindings(head, saves)).toEqual([fixed]);
+  });
+
+  it("doesn't call a finding closed because an earlier save only listed it, already closed", () => {
+    const head = record([], { recordedAt: at(30) });
+    const saves = [{ headSha: OLD_HEAD, recordedAt: at(10), findings: [fixed], openFindings: [] }];
+    expect(closedFindings(head, saves)).toEqual([]);
+  });
+
+  it("leaves out the judged save itself, a later save, and a save that doesn't say when it was made", () => {
+    const head = record([], { recordedAt: at(30), findings: [fixed] });
+    const saves = [
+      head,
+      { headSha: HEAD, recordedAt: at(10), openFindings: [fixed] },
+      { headSha: OLD_HEAD, recordedAt: at(40), openFindings: [fixed] },
+      { headSha: OLD_HEAD, openFindings: [fixed] },
+      { headSha: OLD_HEAD, recordedAt: "not a time", openFindings: [fixed] },
+    ];
+    expect(closedFindings(head, saves)).toEqual([]);
+  });
+
+  it("lists nothing when the judged save doesn't say when it was made", () => {
+    const saves = [{ headSha: OLD_HEAD, recordedAt: at(10), openFindings: [fixed] }];
+    expect(closedFindings(record([]), saves)).toEqual([]);
   });
 
   it("shows them under their own heading, and none when there are none", () => {
@@ -206,7 +234,7 @@ describe("gateText", () => {
     const text = gateText({ fix: ["action_required"], flag: [], maxRounds: 2 });
     expect(text).toContain("labelled action_required (High),");
     expect(text).toContain("No label is exempt.");
-    expect(text).toContain("At most 2 review rounds:");
+    expect(text).toContain("At most 2 review rounds.");
     expect(text).not.toContain("remediation_recommended");
     expect(text).not.toContain("informational");
   });
@@ -217,7 +245,8 @@ describe("gateText", () => {
     const text = gateText(gate as QualityGate);
     expect(text).toContain("labelled action_required (High) or remediation_recommended (Medium)");
     expect(text).toContain("Leave findings labelled informational (Low) unchanged");
-    expect(text).toContain("At most 3 review rounds: the runner counts them");
+    expect(text).toContain("At most 3 review rounds. A round is one pushed commit that Qodo reviews");
+    expect(text).toContain("wait for its review before you push again");
     expect(text).toContain("only the owner settles a disagreement");
   });
 });

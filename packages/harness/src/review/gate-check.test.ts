@@ -7,7 +7,7 @@ const HEAD = "c".repeat(40);
 const OLD = "d".repeat(40);
 
 /** Runs the command against saved reviews held in memory, keyed by the path the command would read. */
-function check(argv: string[], saved: Record<string, unknown>, head: string | Error = HEAD) {
+function check(argv: string[], saved: Record<string, unknown>, head: string | Error = HEAD, listFails = false) {
   const out: string[] = [];
   const errors: string[] = [];
   const dir = waitSaveDir("faultforge", 12);
@@ -23,7 +23,10 @@ function check(argv: string[], saved: Record<string, unknown>, head: string | Er
       return head;
     },
     read: (path) => files.get(path),
-    readAll: (folder) => [...files].filter(([path]) => dirname(path) === folder).map(([, text]) => text),
+    readAll: (folder) => {
+      if (listFails) throw new Error("the folder can't be listed");
+      return [...files].filter(([path]) => dirname(path) === folder).map(([, text]) => text);
+    },
     out: (line) => out.push(line),
     error: (line) => errors.push(line),
   };
@@ -33,6 +36,8 @@ function check(argv: string[], saved: Record<string, unknown>, head: string | Er
 const complete = (openFindings: unknown[], headSha = HEAD, extra: object = {}) => ({
   headSha,
   state: "complete",
+  // The head's review is the newer save unless a test says otherwise.
+  recordedAt: headSha === HEAD ? "2026-11-16T10:30:00.000Z" : "2026-11-16T10:10:00.000Z",
   openFindings,
   ...extra,
 });
@@ -82,10 +87,30 @@ describe("gate:check", () => {
     expect(result.out).not.toMatch(/Closed since[\s\S]*A name/);
   });
 
-  it("says none are closed when the head's review is the only save, and passes over a save it can't read", () => {
-    const result = check(["faultforge", "12"], { [HEAD]: complete([]), [OLD]: "{not json" });
+  it("says none are closed when the head's review is the only save, even if it lists findings it closed itself", () => {
+    const closedThere = { id: "f9", severity: "action_required", title: "Dismissed on this commit" };
+    const result = check(["faultforge", "12"], { [HEAD]: { ...complete([]), findings: [closedThere] } });
     expect(result.code).toBe(0);
     expect(result.out).toContain("Closed since an earlier review of this pull request: none");
+  });
+
+  it("never lists as closed a finding first raised on a later commit than the one checked", () => {
+    const later = { id: "f3", severity: "remediation_recommended", title: "Raised afterwards" };
+    const result = check(["faultforge", "12", "--commit", OLD], {
+      [OLD]: complete([], OLD),
+      [HEAD]: complete([later]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.out).not.toContain("Raised afterwards");
+  });
+
+  it("still gives its verdict when an old save can't be read or the folder can't be listed", () => {
+    const unreadable = check(["faultforge", "12"], { [HEAD]: complete([]), [OLD]: "{not json" });
+    expect(unreadable.code).toBe(0);
+    expect(unreadable.out).toContain("Quality gate: MET");
+    const unlisted = check(["faultforge", "12"], { [HEAD]: complete([]) }, HEAD, true);
+    expect(unlisted.code).toBe(0);
+    expect(unlisted.out).toContain("Closed since an earlier review of this pull request: none");
   });
 
   it("holds a save that records its rounds to the gate's limit, and still judges one that doesn't", () => {
