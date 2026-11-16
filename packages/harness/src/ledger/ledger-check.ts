@@ -275,12 +275,20 @@ export function ledgerProblemsWithHistory(paths: string[]): string[] {
   return problems;
 }
 
+/**
+ * Everything `npm run ledger:check` checks, the published anchors included, for a command that must refuse
+ * the same storage `ledger:check` refuses. One function, so the two can't check different things.
+ */
+export function fullLedgerProblems(privateRoot: string): string[] {
+  return ledgerCheckProblems(privateRoot, ANCHORS_FILE);
+}
+
 /** The command: `ledger-check-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export function main(): number {
   const root = privateDir();
   let problems: string[];
   try {
-    problems = ledgerCheckProblems(root, ANCHORS_FILE);
+    problems = fullLedgerProblems(root);
   } catch (error) {
     console.error(`[ledger:check] could not read a file or the private repo's history: ${(error as Error).message}`);
     return 2;
