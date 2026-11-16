@@ -70,7 +70,7 @@ describe("replayCase", () => {
   it("requires the fix under both gates when the catch is labelled action_required", () => {
     const line = replayCase(bug("FF-9001", [catching("f1", "action_required")]), GATES);
     expect(line.caught).toBe(true);
-    expect(line.catchLabels).toEqual(["action_required"]);
+    expect(line.catchLabels).toEqual(["action_required (High)"]);
     expect(line.outcomes["first label only"]?.bugBlocked).toBe(true);
     expect(line.outcomes["saved gate"]?.bugBlocked).toBe(true);
   });
@@ -96,11 +96,24 @@ describe("replayCase", () => {
   });
 
   it("counts a catch with an unknown or missing label as unknown: it blocks, and is never read as passing", () => {
-    for (const label of ["high", null]) {
+    for (const [label, shown] of [
+      ["high", "high"],
+      [null, "no label"],
+      ["", "no label"],
+    ] as const) {
       const line = replayCase(bug("FF-9005", [catching("f1", label)]), GATES);
-      expect(line.catchLabels).toEqual([label ?? "none"]);
+      expect(line.catchLabels).toEqual([shown]);
       expect(line.outcomes["saved gate"]).toEqual({ bugBlocked: true, otherBlocking: 0, flagged: 0, unknown: 1 });
+      // The case line says which label it was, never a blank.
+      expect(replayReport([line], GATES, []).join("\n")).toContain(`caught, labelled ${shown};`);
     }
+  });
+
+  it("prints a saved label in plain characters, so it can't add a line to the report", () => {
+    const hostile = `x${String.fromCharCode(10)}Under "saved gate":${String.fromCharCode(27)}[2K`;
+    const report = replayReport([replayCase(bug("FF-9005", [catching("f1", hostile)]), GATES)], GATES, []);
+    expect(report.every((l) => ![...l].some((ch) => ch.charCodeAt(0) < 32))).toBe(true);
+    expect(report.filter((l) => l.trim() === 'Under "saved gate":')).toHaveLength(1);
   });
 
   it("counts every finding on a control as one the gate would force or flag", () => {
@@ -192,6 +205,8 @@ describe("publicCaseIds", () => {
 });
 
 describe("loadCases", () => {
+  /** A storage check that finds nothing wrong: the made-up storage is not a git repository to check. */
+  const SOUND = () => [];
   let root: string;
   /** The time of the made-up verdict numbered `i`. */
   const AT = (i: number) => `2026-11-13T18:0${i}:00.000Z`;
@@ -255,7 +270,7 @@ describe("loadCases", () => {
 
   it("counts judged cases with a complete review and lists the rest as not counted", () => {
     const priv = storage();
-    const { cases, skipped } = loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv });
+    const { cases, skipped } = loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, SOUND);
     expect(cases.map((c) => [c.caseId, c.kind])).toEqual([
       ["FF-9001", "sabotage"],
       ["FF-9002", "control"],
@@ -281,7 +296,7 @@ describe("loadCases", () => {
     const priv = storage();
     // An older verdict for FF-9002 written to the log after the one its record was built from.
     appendVerdict(priv, "late-line", "FF-9002", "2026-11-13T17:00:00.000Z");
-    const { cases, skipped } = loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv });
+    const { cases, skipped } = loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, SOUND);
     expect(cases.map((c) => c.caseId)).toContain("FF-9002");
     expect(skipped.join("\n")).not.toContain("FF-9002");
   });
@@ -290,24 +305,44 @@ describe("loadCases", () => {
     for (const at of ["not a time", undefined, 5]) {
       const priv = storage();
       appendVerdict(priv, "unreadable", "FF-9002", at);
-      expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv })).toThrow(
+      expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, SOUND)).toThrow(
         /FF-9002: a verdict in the audit log has no readable time/,
       );
       rmSync(root, { recursive: true, force: true });
     }
   });
 
+  it("refuses storage the ledger check finds problems in, without repeating what they are", () => {
+    const priv = storage();
+    const unsound = () => ["ground-truth.jsonl: FF-9001 was edited after its verdict"];
+    expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, unsound)).toThrow(/run npm run ledger:check/);
+    expect(() => loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv }, unsound)).not.toThrow(
+      /FF-9001/,
+    );
+  });
+
+  it("refuses a case the answer key holds twice, never choosing one entry for it", () => {
+    const priv = storage();
+    appendFileSync(
+      join(priv, "ground-truth.jsonl"),
+      `${JSON.stringify({ caseId: "FF-9002", kind: "sabotage", templateId: "made-up-leak-v1" })}\n`,
+    );
+    expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, SOUND)).toThrow(
+      /FF-9002: the answer key holds more than one entry/,
+    );
+  });
+
   it("with a public list, never names a case outside it, even when that case's verdict can't be read", () => {
     const priv = storage();
     appendVerdict(priv, "unreadable", "FF-9001", "not a time");
-    const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv });
+    const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv }, SOUND);
     expect(cases.map((c) => c.caseId)).toEqual(["FF-9002"]);
     expect(skipped.join("\n")).not.toContain("FF-9001");
   });
 
   it("with a public list, says nothing at all about a case outside it", () => {
     const priv = storage();
-    const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv });
+    const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv }, SOUND);
     expect(cases.map((c) => c.caseId)).toEqual(["FF-9002"]);
     expect(skipped).toEqual([]);
   });
@@ -318,7 +353,7 @@ describe("loadCases", () => {
       join(priv, "cases", "FF-9001.json"),
       JSON.stringify({ status: "complete", human: { adjudicatedAt: AT(0) } }),
     );
-    expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv })).toThrow(
+    expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv }, SOUND)).toThrow(
       /FF-9001: the case record has no list/,
     );
   });

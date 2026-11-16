@@ -23,10 +23,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type LedgerEntry, readAuditLog, readLedger } from "../ledger/ledger.ts";
+import { ledgerCheckProblems } from "../ledger/ledger-check.ts";
 import { applyMatchRule, isRange, type MatchFinding } from "../match/match-rule.ts";
 import { gateOf, loadFactory, type QualityGate } from "../shared/factory-config.ts";
 import { CASE_ID, privateDir, ROOT } from "../shared/paths.ts";
-import { gateAccount, labelName } from "../shared/quality-gate.ts";
+import { findingLabel, gateAccount, labelName } from "../shared/quality-gate.ts";
 import { kindTermsOf, templateDir } from "../shared/templates.ts";
 import { latestEvent } from "./case-builder.ts";
 
@@ -95,7 +96,8 @@ export function replayCase(input: ReplayCase, gates: Record<string, QualityGate>
     kind: input.kind,
     config: input.config,
     caught: catching.length > 0,
-    catchLabels: catching.map((f) => (typeof f.severity === "string" ? f.severity : "none")),
+    // As a report shows a label: a known one by name, any other in plain characters, none as "no label".
+    catchLabels: catching.map((f) => findingLabel(f)),
     findings: input.findings.length,
     outcomes,
   };
@@ -159,7 +161,7 @@ export function replayReport(lines: ReplayLine[], gates: Record<string, QualityG
       line.kind === "control"
         ? "control"
         : line.caught
-          ? `caught, labelled ${[...new Set(line.catchLabels)].map(labelName).join(" and ")}`
+          ? `caught, labelled ${[...new Set(line.catchLabels)].join(" and ")}`
           : "missed by the reviewer";
     const per = names
       .map((name) => {
@@ -229,7 +231,19 @@ export interface LoadResult {
 }
 
 /** Reads every case the replay may count from private storage. Throws when the storage itself can't be read. */
-export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.ProcessEnv = process.env): LoadResult {
+export function loadCases(
+  priv: string,
+  only: Set<string> | null,
+  env: NodeJS.ProcessEnv = process.env,
+  /** The check `ledger:check` runs: sound amendments, append-only history, and every verdict's inputs unchanged. */
+  storageProblems: (privateRoot: string) => string[] = ledgerCheckProblems,
+): LoadResult {
+  // The same refusal as the commands that build a case: totals from an answer key with a doubtful entry, or
+  // from findings, templates or reviews changed since their verdict, would be numbers about something else.
+  // The problems themselves are not printed here: under a public list they could name a case outside it.
+  if (storageProblems(priv).length) {
+    throw new Error("the answer key, the audit log or a verdict's inputs have problems: run npm run ledger:check");
+  }
   const casesDir = join(priv, "cases");
   const truth = readLedger(join(priv, "ground-truth.jsonl")) as Record<string, unknown>[];
   // Each case's latest verdict, picked the way `case:build` picks it (`latestEvent`: by time, not by place in
@@ -284,7 +298,9 @@ export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.Pr
       continue;
     }
     if (!Array.isArray(record.findings)) throw new Error(`${caseId}: the case record has no list of findings`);
-    const entry = truth.find((e) => e.caseId === caseId);
+    const entries = truth.filter((e) => e.caseId === caseId);
+    if (entries.length > 1) throw new Error(`${caseId}: the answer key holds more than one entry for it`);
+    const entry = entries[0];
     if (!entry) throw new Error(`${caseId}: the answer key holds no entry for it`);
     const kind = String(entry.kind ?? record.kind ?? "");
     const findings = record.findings as ReplayCase["findings"];
