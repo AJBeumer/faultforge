@@ -14,13 +14,19 @@
  * a push to any other remote or URL is refused, so the private history goes nowhere else. Running it again
  * writes the same files. A hook file this command didn't write is never overwritten.
  *
- * Exit codes: 0 installed in every reviewed checkout, the lab and the private checkout; 1 refused somewhere: a hook file that isn't ours is
- * in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout, git failed, or an
- * unexpected error, even while loading (`npm run guard:install` runs `guard-install-cli.ts`).
+ * It takes no arguments, and runs only from this repository's main checkout: an unknown flag or extra
+ * argument, or a run from a linked worktree, is refused before anything is written, naming the main
+ * checkout when that is why. Otherwise a mistyped flag or the wrong folder could silently re-point the
+ * git-level guard of all three repositories to a worktree that won't be there later.
+ *
+ * Exit codes: 0 installed in every reviewed checkout, the lab and the private checkout; 1 refused: an
+ * unknown argument (it takes none), a run from a linked worktree instead of the main checkout, a hook file
+ * that isn't ours is in the way, or the checkout sets `core.hooksPath`; 2 could not run: no such checkout,
+ * git failed, or an unexpected error, even while loading (`npm run guard:install` runs `guard-install-cli.ts`).
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type FactoryConfig, loadFactory } from "../shared/factory-config.ts";
 import { privateDir, ROOT } from "../shared/paths.ts";
 
@@ -157,9 +163,60 @@ export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT, 
   return privateProblem ? [...problems, privateProblem] : problems;
 }
 
+/**
+ * The repository's main checkout, when `checkout` is instead a linked worktree; undefined when it already is
+ * one, or git can't say. Git's own `rev-parse`, not a guess from `checkout`'s own git folder: a worktree's
+ * `--git-dir` differs from `--git-common-dir` only when it is linked, and the main checkout is `core.worktree`
+ * when the common git directory records one (it needs to, once a repository's git directory is moved out of
+ * its checkout with `git init --separate-git-dir`) or that directory's parent otherwise, as git itself falls
+ * back to for the main checkout's own, ordinary `.git` folder.
+ */
+export function mainCheckout(checkout: string): string | undefined {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const abs = (path: string) => (isAbsolute(path) ? path : resolve(checkout, path));
+  let own: string;
+  let common: string;
+  try {
+    own = abs(git("rev-parse", "--git-dir"));
+    common = abs(git("rev-parse", "--git-common-dir"));
+  } catch {
+    return undefined;
+  }
+  if (own === common) return undefined;
+  let configured = "";
+  try {
+    configured = git("config", "--get", "core.worktree");
+  } catch {
+    // Not set: git takes the common git directory's parent as the main checkout.
+  }
+  return resolve(configured ? resolve(common, configured) : dirname(common));
+}
+
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
-export function main(): number {
-  return installAll(loadFactory(), ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"), privateDir());
+export function main(argv: string[] = []): number {
+  return guardInstall(argv, ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"), privateDir);
+}
+
+/**
+ * The full command against `root` and `script` instead of this process's own, so a test can run it against a
+ * throwaway checkout: an unknown argument (it takes none) or a run from `root` as a linked worktree instead of
+ * its repo's main checkout is refused before anything is written; otherwise every checkout `loadFactory()`
+ * marks reviewed or lab, resolved from `root`, gets the hooks (`installAll`). `priv`, when given, is called for
+ * the private checkout's path only once both refusals are past: it may load `factory.json` (as the real
+ * `privateDir` does), and a problem there must not turn a usage or worktree refusal into an unexpected error.
+ */
+export function guardInstall(argv: string[], root: string, script: string, priv?: () => string | undefined): number {
+  if (argv.length) {
+    console.error(`usage: npm run guard:install   (it takes no arguments, got "${argv.join(" ")}")`);
+    return 1;
+  }
+  const elsewhere = mainCheckout(root);
+  if (elsewhere) {
+    console.error(`[guard:install] refused: run this from the main checkout (${elsewhere}), not this worktree`);
+    return 1;
+  }
+  return installAll(loadFactory(), root, script, priv?.());
 }
 
 /**
