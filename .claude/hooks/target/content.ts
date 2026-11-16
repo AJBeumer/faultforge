@@ -24,12 +24,12 @@ const MAX_COMMITS = 50;
 /** The hook has 15 s in settings.json; the scan gives up well before that, so a timeout can't let the tool run. */
 export const DEFAULT_BUDGET_MS = 8000;
 
-/** Besides the giveaway words, a test for private template ids, while a check that set one runs (AUD-H1). */
+/** Besides the giveaway words, a test for private template ids, while a check that set one runs. */
 let privateNames: ((text: string) => boolean) | undefined;
 
 /**
  * Runs `fn` with `names` as the private-id test every pending-content scan in it applies, so a private
- * template id written into a reviewed checkout can't be committed or pushed (Qodo on PR 265).
+ * template id written into a reviewed checkout can't be committed or pushed.
  */
 export function withPrivateNames<T>(names: ((text: string) => boolean) | undefined, fn: () => T): T {
   const outer = privateNames;
@@ -41,7 +41,7 @@ export function withPrivateNames<T>(names: ((text: string) => boolean) | undefin
   }
 }
 
-/** Besides those, a test for text copied out of private storage, while a check that set one runs (re-grade 6, Q21). */
+/** Besides those, a test for text copied out of private storage, while a check that set one runs. */
 let privateCopies: ((text: string) => boolean) | undefined;
 
 /**
@@ -72,13 +72,13 @@ export function reasonsIn(text: string): string[] {
   return privateNames?.(text) ? [...found, "names a private template"] : found;
 }
 
-/** The one deadline every git call and scan in the current decision shares, while one is set (audit N-4). */
+/** The one deadline every git call and scan in the current decision shares, while one is set. */
 let active: { end: number; ms: number } | undefined;
 
 /**
  * Runs `fn` with one deadline for all of it: every scan and every git call inside shares `ms`, so a commit
  * scan and a push scan in one command can't each take a full budget and together pass the hook's 15 s, after
- * which Claude Code would run the tool unchecked (audit N-4). Running out is a failure to inspect: a deny.
+ * which Claude Code would run the tool unchecked. Running out is a failure to inspect: a deny.
  */
 export function withDeadline<T>(ms: number, fn: () => T): T {
   const outer = active;
@@ -86,7 +86,7 @@ export function withDeadline<T>(ms: number, fn: () => T): T {
   try {
     const result = fn();
     // Git calls check the deadline as they start; a slow scan between them (a large posted file) can only
-    // be caught here, at the end. A decision that finished late is refused, never allowed (Qodo on PR 233).
+    // be caught here, at the end. A decision that finished late is refused, never allowed.
     if (Date.now() > (active?.end ?? Number.POSITIVE_INFINITY)) {
       throw new Uninspectable(`the guard's ${ms} ms for this decision ran out before it finished`);
     }
@@ -199,7 +199,7 @@ export function commitFiles(checkout: string, forceIgnored: boolean): { files: s
 
 /**
  * The telltales in what is staged in `checkout`, exactly what the next commit records: each staged file's
- * name and its index copy. Used by the git-level pre-commit hook (#191), which runs when the commit is made,
+ * name and its index copy. Used by the git-level pre-commit hook, which runs when the commit is made,
  * so unstaged and untracked files are not part of it.
  */
 export function pendingIndex(checkout: string): Pending {
@@ -214,8 +214,7 @@ export function pendingIndex(checkout: string): Pending {
 export function stagedTexts(checkout: string): { staged: string[]; contents: string[] } {
   const staged = list(checkout, ["diff", "--cached", "--name-only", "--diff-filter=d"]);
   if (staged.length > MAX_FILES) throw new Uninspectable(`${staged.length} staged files, more than the guard reads`);
-  // A submodule's entry (mode 160000) is a commit of another repository, not file content here: only its
-  // name is read (Qodo on PR 213).
+  // A submodule's entry (mode 160000) is a commit of another repository, not file content here.
   const submodules = new Set(
     list(checkout, ["ls-files", "--stage"])
       .filter((line) => line.startsWith("160000 "))
@@ -247,15 +246,14 @@ export function pendingPush(checkout: string, budgetMs = DEFAULT_BUDGET_MS): Pen
   const commits = git(checkout, ["rev-list", "--all", "--not", "--remotes"]).split("\n").filter(Boolean);
   const texts = commitTexts(checkout, commits, tick);
   tick();
-  // A push can also create a branch or tag whose name the reviewer sees: every local branch and tag with no
-  // remote branch of the same name is read too (#190). A branch already on a remote was checked when it went.
+  // A push can also create a branch or tag whose name the reviewer sees.
   const refs = (...args: string[]) =>
     git(checkout, ["for-each-ref", ...args])
       .split("\n")
       .map((name) => name.trim())
       .filter(Boolean);
   // Every local branch and tag name is read, pushed or not: a push can send a branch to a remote that doesn't
-  // have it yet, and without asking the remotes the guard can't tell which (Qodo on PR 208). A giveaway name
+  // have it yet, and without asking the remotes the guard can't tell which. A giveaway name
   // shouldn't stay on the target either way, so this blocks pushes until it is removed.
   const giveaways = refs("--format=%(refname:lstrip=2)", "refs/heads", "refs/tags").filter(
     (name) => reasonsIn(name).length,
@@ -307,7 +305,7 @@ export interface PushUpdate {
 const ZERO = /^0+$/;
 
 /**
- * What one push really sends, read from the updates git hands its pre-push hook (#191): each destination
+ * What one push really sends, read from the updates git hands its pre-push hook: each destination
  * ref's name, and every commit an update sends that the remote doesn't have, whatever another remote has.
  * A new ref's commits are the ones no ref of `remote` already holds. Deletions send nothing.
  */

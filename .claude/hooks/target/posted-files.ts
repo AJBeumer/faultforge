@@ -1,7 +1,7 @@
 /**
  * The files a command would post: message and body files behind a flag (`git commit -F`, `--body-file`,
  * `--notes-file`, `--input`, `--template`, a gh API field's `@file`), read so their text can be checked like
- * text written in the command. Split out of guard-target.ts (AUD-M3).
+ * text written in the command.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -10,7 +10,7 @@ import { argumentsFromInput, scriptFiles } from "../shell/exec.ts";
 import { postedRanges, STDIN_BODY } from "../shell/posted.ts";
 import { blankQuoted, gitSteps, quotedMask, substitutions } from "../shell/scan.ts";
 
-/** The most a posted file may hold: read in well under the hook's time limit (Qodo on PR 233). */
+/** The most a posted file may hold, so it is read well inside the hook's time limit. */
 export const MAX_POSTED_BYTES = 1024 * 1024;
 
 /** Thrown when a posted file can't be checked; the guard turns it into a deny with this message. */
@@ -19,7 +19,7 @@ export class Unreadable extends Error {}
 /**
  * Every folder a relative file name in the command could be read from: the folder the hook runs in, and
  * each folder the command moves into before it. `cd ../app && gh pr create --body-file body.md` reads the
- * app's `body.md`, not the hook folder's (AUD-M3). Reading one file too many is harmless.
+ * app's `body.md`, not the hook folder's. Reading one file too many is harmless.
  */
 function folders(cwd: string, command: string): string[] {
   return [...new Set([cwd, ...navigationTargets(command, cwd)])];
@@ -50,7 +50,7 @@ export function readPosted(cwd: string, command: string, file: string): string[]
  * really post exists when the hook runs, and reading one more file is harmless. A `gh api` field
  * (`-F name=value`) is text unless its value is `@file`, which gh reads from that file; a file really
  * named `name=value` is read too, because `git commit -F` would read it. `--template` (gh) and a commit's
- * `-t`/`--template` are posted files too (AUD-N9). A flag whose file doesn't exist is words in a message
+ * `-t`/`--template` are posted files too. A flag whose file doesn't exist is words in a message
  * when it sits in quoted text or a heredoc body, and otherwise a failure: the guard can't check what would
  * be posted, so nothing is posted. A file that exists but can't be read throws, and the hook fails closed.
  */
@@ -64,16 +64,16 @@ export function referencedFiles(cwd: string, command: string): string[] {
   // A bare file name ends at whitespace, a quote or a shell separator: `-F msg.txt; echo` names msg.txt.
   const value = String.raw`(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`;
   const flags = new RegExp(
-    // `--field` is `-F`'s long form, whose `name=@file` gh reads (Qodo on PR 266).
+    // `--field` is `-F`'s long form, whose `name=@file` gh reads.
     String.raw`(\s-F|--field|--file|--body-file|--notes-file|--input${template})(?:[\s=]+|(?<=-F)(?=[^\s=-]))${value}`,
     "dg",
   );
   // `-t` is a commit's template only inside a commit step; to gh it is a title.
-  // Each commit step is searched on its own, so the cost stays linear (AUD-M4).
+  // Each commit step is searched on its own, so the cost stays linear.
   const commitT = new RegExp(String.raw`\s(-t)[\s=]+${value}`, "dg");
   const at = (offset: number) => (m: RegExpMatchArray) => {
     const flag = m[1] ?? "";
-    // The flag's own position: for ` -F` that is after the leading space.
+    // ` -F` matches with its leading space; skip it to point at the flag itself.
     const flagAt = offset + (m.indices?.[1]?.[0] ?? m.index ?? 0) + flag.length - flag.trimStart().length;
     return { named: m[2] ?? m[3] ?? m[4], flagAt };
   };
@@ -104,14 +104,14 @@ export function referencedFiles(cwd: string, command: string): string[] {
 }
 
 /**
- * The files whose text reaches a post through stdin (AUD-M3): an input redirect (`< body.md`) and a file
+ * The files whose text reaches a post through stdin: an input redirect (`< body.md`) and a file
  * piped in by `cat`, `type`, `Get-Content` or `gc`, when a flag reads the body from stdin. Read from every
  * folder the command could read them from; one that exists nowhere can't be checked, so it throws.
  */
 export function stdinFiles(cwd: string, command: string): string[] {
   if (!STDIN_BODY.test(command)) return [];
   const value = String.raw`(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))`;
-  // An input redirect names one file; a reader names every file it is given, all posted (Qodo on PR 265).
+  // An input redirect names one file; a reader posts every file it is given.
   const redirect = new RegExp(String.raw`(?<![<\d])<(?!<)\s*${value}`, "g");
   const reader = /\b(?:cat|type|Get-Content|gc)\s+([^|;&\n<>()]*)/gi;
   const quoted = quotedMask(command);
@@ -119,7 +119,7 @@ export function stdinFiles(cwd: string, command: string): string[] {
   for (const m of command.matchAll(redirect)) if (!quoted[m.index]) named.push(m[1] ?? m[2] ?? m[3] ?? "");
   for (const m of command.matchAll(reader)) {
     if (quoted[m.index]) continue;
-    // A descriptor number before a redirect (`2>/dev/null`) is not a file (Qodo on PR 266).
+    // A descriptor number before a redirect (`2>/dev/null`) is not a file.
     const args = (m[1] ?? "").replace(/\s\d+\s*$/, "");
     const words = [...args.matchAll(new RegExp(value, "g"))].map((w) => w[1] ?? w[2] ?? w[3] ?? "");
     for (let i = 0; i < words.length; i++) {
@@ -149,13 +149,13 @@ function literalHeredoc(inner: string): boolean {
   const lines = inner.replace(/^\s+/, "").split("\n");
   const m = /^cat\s+<<(-?)\s*(['"]?)(\w+)\2\s*$/.exec(lines[0] ?? "");
   if (!m) return false;
-  // The body ends at the first delimiter line, as the shell ends it; nothing may run after it (Qodo on PR 291).
+  // The body ends at the first delimiter line, as in the shell, and nothing may run after it.
   const close = lines.findIndex((line, i) => i > 0 && (m[1] ? line.replace(/^\t+/, "") : line).trim() === m[3]);
   if (close < 0 || lines.slice(close + 1).some((line) => line.trim())) return false;
   return Boolean(m[2]) || !/[$`]/.test(lines.slice(1, close).join("\n"));
 }
 
-/** Text built by a command the guard can't read: refused in a post to a reviewed repo (#242). */
+/** Text built by a command the guard can't read: refused in a post to a reviewed repo. */
 export class BuiltText extends Error {}
 
 /** The file a substitution reads, when all it does is read one: `cat f`, `type f`, `Get-Content f`, `gc f`, `< f`. */
@@ -169,12 +169,12 @@ function fileRead(inner: string): string | undefined {
 }
 
 /**
- * The text a post builds from commands (#242): each substitution inside a posted value, or anywhere when the
+ * The text a post builds from commands: each substitution inside a posted value, or anywhere when the
  * body comes from stdin, that only reads a file is read and returned, so the file's text is checked like
  * the command's own. With `strict` (a post to a reviewed repo), any other substitution, and a body piped in
  * from anything but `cat`, `type`, `Get-Content`, `echo` or `printf`, throws `BuiltText`: what a program
  * prints can't be checked before it runs. A file that can't be read throws `Unreadable`. With `everywhere`
- * false (a lab post, read strictly while private templates exist: #285), only substitutions in posted values
+ * false (a lab post, read strictly while private templates exist), only substitutions in posted values
  * and a body from stdin are held to that.
  */
 export function builtText(
@@ -187,20 +187,20 @@ export function builtText(
   const stdin = STDIN_BODY.test(command);
   const ranges = postedRanges(command);
   // In a post to a reviewed repo every substitution counts, wherever it sits: a label's name or a homepage is
-  // posted text too (Qodo on PR 266). Elsewhere only those in posted values are read.
+  // posted text too. Elsewhere only those in posted values are read.
   const posted = (at: number) => everywhere || stdin || ranges.some(([start, end]) => at >= start && at < end);
   const texts: string[] = [];
-  // A substitution inside another posts its output too, so each nested one is looked at (Qodo on PR 266).
+  // A substitution inside another posts its output too, so each nested one is looked at.
   const nested = (outer: { start: number; inner: string }[]): { start: number; inner: string }[] =>
     outer.flatMap((sub) => [
       sub,
       ...nested(substitutions(sub.inner, backticks)).map((s) => ({ ...s, start: sub.start })),
     ]);
-  // A command that redefines cat, or the path it is found on, could print anything in its place (Qodo on PR 291).
+  // A command that redefines cat, or the path it is found on, could print anything in its place.
   const catIsCat = !/\bcat\s*\(\s*\)|\bfunction\s+cat\b|\balias\s+cat\b|\bPATH\s*[+]?=|\$env:PATH\b/i.test(command);
   for (const sub of nested(substitutions(command, backticks))) {
     if (!posted(sub.start)) continue;
-    // `$(cat <<'EOF' … EOF)` posts a heredoc written in the command, already read with it (Qodo on PR 291).
+    // `$(cat <<'EOF' … EOF)` posts a heredoc written in the command, already read with it.
     if (catIsCat && literalHeredoc(sub.inner)) continue;
     if (!strict && fileRead(sub.inner) === undefined) continue;
     const file = fileRead(sub.inner);
@@ -228,7 +228,7 @@ export function builtText(
     );
   }
   // xargs and parallel turn what they read from a file or a pipe into arguments, and `--post-file` posts a file's
-  // bytes: text the guard never sees (re-grade 5).
+  // bytes: text the guard never sees.
   if (strict && argumentsFromInput(command, backticks)) {
     throw new BuiltText(
       "This post takes its text from input that xargs, parallel or --post-file reads, which the guard can't check before it runs. Write the text to a file and pass it with --body-file.",
@@ -236,13 +236,12 @@ export function builtText(
   }
   if (strict && stdin) {
     const producer = pipedInto(command);
-    // A reader must name its files: a bare `cat` passes on whatever is piped into it (Qodo on PR 266).
+    // A reader must name its files: a bare `cat` passes on whatever is piped into it.
     const reads = /^(?:cat|type|Get-Content|gc)\s+\S/i.test(producer ?? "");
-    // printf with a format (`%s`) or an escape, and `echo -e`, build text the guard would have to run (#285).
+    // printf with a format (`%s`) or an escape, and `echo -e`, build text the guard would have to run.
     // The producer is read with its quoted text blanked, so its format is looked for in the command itself.
     const plain =
-      // Any `-e` among echo's flags, and printf's formats and escapes anywhere in the command (Qodo on PR 291).
-      // A shell option can make a bare echo decode escapes too: xpg_echo, posix (Qodo on PR 291).
+      // A shell option (xpg_echo, posix) can make a bare echo decode escapes too.
       (/^(?:echo|Write-Output)\b/i.test(producer ?? "") &&
         !/\s-[a-zA-Z]*e\b/.test(producer ?? "") &&
         !/\bxpg_echo\b|\bposix\b/.test(command)) ||
@@ -283,12 +282,12 @@ export const WRITE_API =
   /\b(?:api|uploads)\.github\.com\b|\bgithub\.com\/[\w.-]+\/[\w.-]+|\bgraphql\b|\boctokit\b|\bgh\s+(?:api|pr|issue|release|repo|gist|label|workflow)\b|["'`](?:gh|git)(?:\.exe)?["'`]|\bgit\s+push\b|\b(?:GH|GITHUB)_TOKEN\b/i;
 
 /**
- * Why a script file the command runs can't be let through, or undefined (re-grade 5). The guard can't judge
+ * Why a script file the command runs can't be let through, or undefined. The guard can't judge
  * what a script posts, so where a run could reach a reviewed repo (inside its checkout, after a move into one,
  * or anywhere in an unattended factory run, `run`) a script is refused when it can't be read, or when its text
  * names a reviewed repo or something that writes to GitHub. The file is never named: its path could hold a
  * private id. Elsewhere, in an owner's session, a script is read when the command names a reviewed repo (it may pass
- * the name on), and refused anywhere when its own text names one (re-grade 6); other scripts run as they are.
+ * the name on), and refused anywhere when its own text names one; other scripts run as they are.
  */
 export function scriptProblem(
   cwd: string,
@@ -300,8 +299,8 @@ export function scriptProblem(
   const files = scriptFiles(command, backticks);
   if (!files.length || !reviewed.length) return undefined;
   const names = new RegExp(reviewed.flatMap((r) => [esc(r.github), esc(r.name)]).join("|"), "i");
-  // A move the guard can't read (`cd "$DIR"`) may land in a reviewed checkout (re-grade 4). A command that names a
-  // reviewed repo may hand it to the script (re-grade 6).
+  // A move the guard can't read (`cd "$DIR"`) may land in a reviewed checkout, and a command that names a
+  // reviewed repo may hand it to the script.
   const near =
     run ||
     names.test(command) ||
@@ -317,7 +316,7 @@ export function scriptProblem(
     } catch {
       failed = true;
     }
-    // Elsewhere, a script that names a reviewed repo is refused; any other runs as it is, unread or not (re-grade 6).
+    // Elsewhere, a script that names a reviewed repo is refused; any other runs as it is, unread or not.
     if (!near && !texts.some((t) => names.test(t))) continue;
     // A `python -m` module that isn't a local file is installed code, not a script written here.
     if (optional && !failed && !texts.length) continue;

@@ -1,13 +1,12 @@
 /**
- * Code a command runs that no text rule can read before it runs (second re-grade after round 4), shared by the
- * guard and the factory policy:
+ * Code a command runs that no text rule can read before it runs, shared by the guard and the factory policy:
  *  - text built or read at run time and run as shell code: a decoder's output piped into a shell
  *    (`… | base64 -d | bash`), a substitution or a variable handed to `bash -c`, `sh -c`, `cmd /c`, `eval`,
  *    `iex` or `source <(…)`, and a substitution or a variable run as the command itself (`$(…)`). Only a literal
  *    the hooks can read may be run that way (`bash -c 'npm test'`, `echo 'ls' | sh`);
  *  - inline code in an interpreter (`node -e`, `python -c`, `perl -e`, `ruby -e`, a heredoc fed to one) that
  *    starts another program (`system`, `subprocess`, `child_process`) or runs code it builds (`exec`, `eval`):
- *    counted as built code (re-grade 3);
+ *    counted as built code;
  *  - inline code in an interpreter that makes a network call: it can post to a reviewed repo without gh, where
  *    the guard reads nothing (shell/interp.ts, exported here again).
  * Both are refused outright: a decoder can be anything (`base64 -d`, `xxd -r`, `rev`, `openssl enc -d`,
@@ -52,8 +51,6 @@ function literalEcho(step: string): boolean {
   if (/(^|\s)-[a-zA-Z]*e/.test(args)) return false;
   return !/[$`\\]/.test(expanding(args)) && !(name === "printf" && /[%\\]/.test(args));
 }
-
-/** The code a word holds once its quotes are removed: what a shell given it would run. */
 
 /** True when the step runs built text as shell code. `before` is the step a pipe feeds it from. */
 function stepProblem(step: Step, before: Step | undefined, backticks: boolean, depth: number): boolean {
@@ -120,7 +117,7 @@ export function builtCodeProblem(command: string, backticks = true): string | un
 
 /**
  * True when a program in the command passes on text it reads from a file or a pipe as arguments, where the
- * guard never sees it (re-grade 5): `xargs` (it always reads its input), `parallel` given anything but `:::`
+ * guard never sees it: `xargs` (it always reads its input), `parallel` given anything but `:::`
  * words, and a `--post-file` (wget), which posts a file's bytes.
  */
 export function argumentsFromInput(command: string, backticks = true): boolean {
@@ -166,7 +163,7 @@ function stepScripts(text: string): ScriptFile[] {
   const all = words(text);
   const { at } = programAt(all);
   const program = unquote(all[at] ?? "");
-  // A script run as the program itself (`./post.mjs`), through its shebang (Qodo on PR 329).
+  // A script run as the program itself (`./post.mjs`), through its shebang.
   if (/^\.{1,2}[\\/]/.test(program)) return [{ file: program, optional: false }];
   const name = programName(program);
   if (!SCRIPT_RUNNERS.test(name)) return [];
@@ -176,7 +173,7 @@ function stepScripts(text: string): ScriptFile[] {
     if (inlineFlag(name, word)) return found;
     // Subcommands: `deno run x.ts`, `bun x y`, `tsx watch x.ts`. Any other bare word to deno or bun is a
     // subcommand of its own (`bun install`, `deno test`): then only the script files it is given are read
-    // (`deno test ./post_test.ts`), never a package name (Qodo on PR 329).
+    // (`deno test ./post_test.ts`), never a package name.
     if (/^(deno|bun|tsx)$/.test(name) && i === at + 1 && /^(run|x|watch)$/.test(word)) continue;
     if (/^(deno|bun)$/.test(name) && i === at + 1 && /^[a-z]+$/.test(word)) {
       const files = all
@@ -185,7 +182,7 @@ function stepScripts(text: string): ScriptFile[] {
         .filter((w) => !w.startsWith("-") && SCRIPT_FILE.test(w));
       return [...found, ...files.map((file) => ({ file, optional: false }))];
     }
-    // `python -m mod` runs a local module when there is one (Qodo on PR 329); an installed one is not read.
+    // `python -m mod` runs a local module when there is one; an installed one is not read.
     if (/^(python|py|pypy)/.test(name) && word === "-m") {
       const module = (all[i + 1] ?? "").replace(/\./g, "/");
       return module
@@ -193,7 +190,7 @@ function stepScripts(text: string): ScriptFile[] {
         : found;
     }
     if (/^-File$/i.test(word)) continue;
-    // A preload runs too: node's `--require ./x`, `--import ./x`, `--loader ./x` (Qodo on PR 329). A package
+    // A preload runs too: node's `--require ./x`, `--import ./x`, `--loader ./x`. A package
     // name there (`--import tsx`) is installed code, not read. Python's `-W x` and `-X x` take a value.
     if (/^(-r|--require|--import|--loader|--experimental-loader|-W|-X)$/.test(word)) {
       const value = unquote(all[i + 1] ?? "");
@@ -216,10 +213,10 @@ function stepScripts(text: string): ScriptFile[] {
 }
 
 /**
- * The script files the command runs (re-grade 5): the first word after a script runner (`node post.mjs`,
+ * The script files the command runs: the first word after a script runner (`node post.mjs`,
  * `npx tsx x.ts`, `python3 -u post.py`, `deno run x.ts`, `pwsh -File x.ps1`) that isn't one of its options, a
  * local preload, a local `python -m` module, and a script run as the program (`./post.mjs`), in every step and
- * every substitution (`$(node post.mjs)`; Qodo on PR 329). A runner given inline code (`-e`, `bash -lc`) runs no
+ * every substitution (`$(node post.mjs)`). A runner given inline code (`-e`, `bash -lc`) runs no
  * file; that code is judged elsewhere. What a script imports is not followed: only the file named is read.
  */
 export function scriptFiles(command: string, backticks = true, depth = 0): ScriptFile[] {

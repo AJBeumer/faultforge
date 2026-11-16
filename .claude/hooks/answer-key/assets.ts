@@ -1,8 +1,7 @@
 /**
- * The files a gist or a release would publish (re-grade 3), read as the shell would run the command (Qodo on PR
- * 310): its words with quotes and escapes removed (`gh gi''st create`), its wildcards and brace lists expanded
- * (`private/*`), and for a gist the files its stdin comes from (`gh gist create - < f`, `cat f | gh gist create`).
- * Split out of target/posted-files.ts, which may not pass 400 lines.
+ * The files a gist or a release would publish, read as the shell would run the command: quotes and escapes
+ * removed (`gh gi''st create`), wildcards expanded (`private/*`), and for a gist the files its stdin comes from
+ * (`gh gist create - < f`, `cat f | gh gist create`).
  */
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -92,7 +91,7 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
   }
   const runs = pipelines.flat().flatMap((step) => publishes(step) ?? []);
   // A word the shell builds at run time, anywhere in a command that publishes, can name any file: a redirect
-  // (`< "${PWD}/f"`), a step piped in, a here-string. None can be read here, so none is allowed (Qodo on PR 312).
+  // (`< "${PWD}/f"`), a step piped in, a here-string. None can be read here, so none is allowed.
   const expanding = command.replace(/'[^']*'/g, "''");
   if (runs.length && (/\$\{?[A-Za-z_]|\$\(|%[A-Za-z_]\w*%/.test(expanding) || (backticks && expanding.includes("`")))) {
     throw new Unreadable(
@@ -117,7 +116,6 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
           if (redirect[2] === "<" && run.gist) for (const path of named(cwd, command, target)) add(path, true, true);
           continue;
         }
-        // `--add=<file>` and the like: the value after `=`.
         const value = word.replace(/^--?[\w-]+=/, "");
         if (!value || value.startsWith("-")) continue;
         for (const file of new Set([value, value.replace(/#[^\\/]*$/, "")])) {
@@ -130,7 +128,7 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
         const raw = words(before.text.split("\n")[0] ?? "");
         const at = programAt(raw).at;
         const program = programName(raw[at] ?? "");
-        // A step that only prints its words passes on text, not a file (Qodo on PR 312).
+        // A step that only prints its words passes on text, not a file.
         if (PRINTERS.test(program)) continue;
         const reader = READERS.test(program);
         for (const word of raw.slice(at + 1).map((w) => spokenWords(w).replace(/^\d*<|^--?[\w-]+=/, ""))) {
@@ -144,7 +142,7 @@ export function assetFiles(cwd: string, command: string, backticks = true): Asse
   }
   // Text can reach a gist or a release in more ways than a pipe: a subshell (`(cat f) | gh gist create`), a group,
   // a process substitution (`<(cat f)`), a here-string of a substitution. So in a command that publishes, every
-  // file or folder any word names, read as the shell splits it at those marks, counts too (Qodo on PR 312).
+  // file or folder any word names, read as the shell splits it at those marks, counts too.
   // Posted text (a release's notes and title) and what a step only prints are words, not files.
   if (runs.length) {
     const gist = runs.some((run) => run.gist);

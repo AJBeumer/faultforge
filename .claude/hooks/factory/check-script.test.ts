@@ -37,27 +37,27 @@ describe("a run can't change the check script", () => {
     expect(names).not.toContain("preprecheck");
   });
 
-  it("follows npm with flags before run, npm -s test, yarn, pnpm and bun shorthand, and node --run (Qodo on PR 339)", () => {
+  it("follows npm with flags before run, npm -s test, yarn, pnpm and bun shorthand, and node --run", () => {
     const names = checkScriptNames({
       check: "npm --silent run a && npm -s test && yarn b && pnpm c && bun run d && node --run e",
     });
     for (const name of ["a", "test", "b", "c", "d", "e"]) expect(names).toContain(name);
-    // node --run runs no pre or post script (Qodo on PR 339, second round).
+    // node --run runs no pre or post script.
     expect(names).toContain("prea");
     expect(names).not.toContain("pree");
     expect(names).not.toContain("poste");
   });
 
-  it("reads t and tst as test only in npm's shorthand, never after run (Qodo on PR 339, third round)", () => {
+  it("reads t and tst as test only in npm's shorthand, never after run", () => {
     expect(checkScriptNames({ check: "npm run t && node --run tst" })).toContain("t");
     expect(checkScriptNames({ check: "npm run t && node --run tst" })).toContain("tst");
     expect(checkScriptNames({ check: "npm t" })).toContain("test");
     expect(checkScriptNames({ check: "npm run t" })).not.toContain("test");
-    // A node option before --run (Qodo on PR 339, fourth review).
+    // A node option before --run.
     expect(checkScriptNames({ check: "node --no-warnings --run lint" })).toContain("lint");
   });
 
-  it("refuses adding a precheck script, which npm runs before the check (Qodo on PR 339)", () => {
+  it("refuses adding a precheck script, which npm runs before the check", () => {
     const path = pkgPath();
     expect(
       policy("Edit", { file_path: path, old_string: '"check":', new_string: '"precheck": "exit 0",\n    "check":' }),

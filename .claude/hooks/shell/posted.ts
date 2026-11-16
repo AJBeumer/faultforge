@@ -1,7 +1,7 @@
 /**
  * What text a shell command would post, as the shell would post it: flag values, heredoc bodies, and the
- * parts git joins into one commit message. Split out of guard-target.ts along this seam (#199); the guard
- * decides what to do with the text, this module only finds it.
+ * parts git joins into one commit message. The guard decides what to do with the text; this module only
+ * finds it.
  */
 import { gitSteps, heredocBodies } from "./scan.ts";
 
@@ -19,7 +19,7 @@ export function postedText(command: string): string[] {
   const heredocs = spans.map((span) => command.slice(span.start, span.end));
   const stdin = STDIN_BODY.test(command);
   // With no body from stdin and nothing built by the shell, the flag values are all that is posted. Any
-  // heredoc then belongs to another command, and the whole-command check already reads it as before.
+  // heredoc then belongs to another command, and the whole-command check already reads it.
   if (!stdin && !posted.some((p) => /[$`]/.test(p))) return posted;
   // Otherwise the posted text can be anywhere: piped from an earlier step, in a heredoc, or built by a
   // substitution. So the whole command is judged with only the paths it reads from or moves into blanked,
@@ -49,20 +49,19 @@ function blankLocalPaths(text: string, redirects: boolean): string {
   // `--git-dir` and `--work-tree` name where it runs, never what it posts.
   const navigates =
     /\b(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?|\bgit\s+-C\s*|--(?:git-dir|work-tree)[=\s]\s*/;
-  // A reader's own options (`Get-Content -Raw`) come before its file; `$(< file)` reads one too (#242).
+  // A reader's own options (`Get-Content -Raw`) come before its file; `$(< file)` reads one too.
   const readers = /\b(?:cat|type|Get-Content|gc)\s+(?:-(?:Raw|Path|LiteralPath|Encoding\s+\S+)\s+)*|\$\(\s*<\s*/;
   const reader = redirects ? new RegExp(`${readers.source}|<\\s*|${navigates.source}`) : readers;
   return text.replace(new RegExp(`(${reader.source})(["']?)[^\\s"'\`;&|<>()]+\\2`, "gi"), "$1 ");
 }
 
-/** Every part of a chained command that runs `git commit`, each up to the next shell operator. */
 export function commitSteps(command: string): string[] {
   return gitSteps(command, /\bcommit\b/).map((step) => step.text);
 }
 
 /**
  * Every message value in one `git commit` step, `-m`, `--message`, or `m` at the end of combined short
- * flags such as `-am`, and every `--trailer` (re-grade 5): git joins them into one message. A message file
+ * flags such as `-am`, and every `--trailer`: git joins them into one message. A message file
  * (`-F`, `--file`) or a template (`-t`, `--template`) is read by `referencedFiles`.
  */
 export function commitMessages(step: string): string[] {
@@ -81,8 +80,8 @@ export function postedArguments(command: string): string[] {
 
 /**
  * A flag that posts text, with its value. `--subject` is a merge commit's title, `--notes` a release's,
- * `--description` a label's (#190), `--trailer` a line git adds to a commit message (re-grade 5). Their short forms (`-n`, `-d`) mean other things to git, so only the long
- * ones are read here; text after a short one is still in the whole-command check.
+ * `--description` a label's, `--trailer` a line git adds to a commit message. Their short forms (`-n`, `-d`)
+ * mean other things to git, so only the long ones are read here; the whole-command check still reads the rest.
  */
 function postedFlagValue(): RegExp {
   const flag =
@@ -93,8 +92,7 @@ function postedFlagValue(): RegExp {
 
 /**
  * The command with its posted text taken out: flag values and heredoc bodies. What is left is what the shell
- * acts on, so a destination is read from there: `--repo` or `-R` written inside a message names no repo
- * (Qodo on PR 208).
+ * acts on, so a destination is read from there: `--repo` or `-R` written inside a message names no repo.
  */
 export function outsidePostedText(command: string): string {
   let outside = command;
@@ -111,7 +109,7 @@ export function postedRanges(command: string): [number, number][] {
     const value = m.indices?.[1] ?? m.indices?.[2] ?? m.indices?.[3];
     if (!value) return [];
     // The quote before a quoted value belongs to it, and so does whatever the shell joins on after its closing
-    // quote, up to the next blank or operator: `--body="a"$(cat f)` posts f too (Qodo on PR 266).
+    // quote, up to the next blank or operator: `--body="a"$(cat f)` posts f too.
     let end = value[1] + 1;
     while (end < command.length && !/[\s;&|]/.test(command[end] ?? "")) end++;
     return [[Math.max(0, value[0] - (m[3] === undefined ? 1 : 0)), end] as [number, number]];

@@ -1,7 +1,7 @@
 /**
  * A script file run where it could post to a reviewed repo is read first (target/posted-files.ts, shell/exec.ts):
  * in a factory run, inside a reviewed checkout, or anywhere once its text or its command names a reviewed repo.
- * Commands that name no script file run as before. Scripts and folders are made up under the temp folder.
+ * Commands that name no script file run unread. Scripts and folders are made up under the temp folder.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ const T = REPOS.target;
 const POSTS = `await fetch("https://api.github.com/repos/${T}/issues", { method: "POST" });\n`;
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);
-const PRIVATE = privateStore("guard~regrade5-");
+const PRIVATE = privateStore("guard~private-");
 /** A folder that is no checkout, where commands run from unless a test says otherwise. */
 const ELSEWHERE = scratchFolder("guard-elsewhere-", {
   "post.mjs": POSTS,
@@ -60,7 +60,7 @@ describe("a script file run where it could post to a reviewed repo is read first
   it("leaves the owner's own scripts alone outside a run and outside a reviewed checkout, unless one names a reviewed repo", () => {
     expect(bash("node sum.mjs")).toBeUndefined();
     expect(bash("python post.py")).toBeUndefined();
-    // Re-grade 6: a script whose text names a reviewed repo is read and refused from any folder.
+    // A script whose text names a reviewed repo is read and refused from any folder.
     expect(bash("node post.mjs")).toMatch(/runs a script/);
   });
 

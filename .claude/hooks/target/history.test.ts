@@ -160,7 +160,7 @@ describe("lab history never goes into a reviewed repo", () => {
     expect(bash(`gh issue transfer 5 ${L}-notes -R ${L}`)).toBeUndefined();
   });
 
-  it("sends a reviewed checkout's push to its own repo through the door (#340)", () => {
+  it("sends a reviewed checkout's push to its own repo through the door", () => {
     expect(bash("git push origin HEAD:refs/heads/tidy", TARGET_REPO.dir)).toMatch(/go only through the door/);
     expect(bash(`git push https://github.com/${T}.git HEAD:refs/heads/tidy`, TARGET_REPO.dir)).toMatch(
       /go only through the door/,
@@ -184,7 +184,7 @@ describe("lab history never goes into a reviewed repo", () => {
 describe("refs on a reviewed repo can't be rewritten through the API", () => {
   const target = tempRepo(true);
   const config = guardConfig(target.dir);
-  const privateDir = privateStore("guard~regrade5-");
+  const privateDir = privateStore("guard~private-");
   const elsewhere = scratchFolder("guard-elsewhere-", {
     "body.json": '{"title":"Tidy"}',
     "del.graphql": 'mutation { deleteRef(input: {refId: "R_x"}) { clientMutationId } }',

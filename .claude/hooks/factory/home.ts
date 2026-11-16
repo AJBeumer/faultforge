@@ -1,11 +1,11 @@
 /**
- * The factory policy's rule about the home folder (re-grade 6): a run never reads the owner's secrets there. In a
+ * The factory policy's rule about the home folder: a run never reads the owner's secrets there. In a
  * local run the agent runs as the owner, so a plain read would reach the Qodo key (`~/.qodo`), the GitHub tokens
  * (`~/.github`, `~/.config/gh/hosts.yml`), SSH keys (`~/.ssh`), Claude's credentials (`~/.claude`) and any other
  * file whose name says it holds a token, a key or a credential. Refused by the read tools and by the shell, in any
  * spelling of the home folder: `~`, `$HOME`, `%USERPROFILE%`, `$env:USERPROFILE`, or the path itself. The run's
  * own folder and the temp folder may sit under the home folder (on a CI runner, and Windows' temp): those stay
- * readable. Split from factory/paths.ts, which may not pass 400 lines.
+ * readable.
  */
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -91,7 +91,7 @@ export function homeSecretCommand(command: string, env: NodeJS.ProcessEnv): stri
   let text = [command, expanded, spokenWords(expanded)].join("\n").replace(/\\/g, "/").toLowerCase();
   for (const ok of allowed(env)) for (const spelling of spellings(ok)) text = text.split(spelling).join(" ");
   const literal = homes(env).flatMap(spellings);
-  // A bare `cd` (or `pushd`) moves to the home folder without naming it (Qodo on PR 333).
+  // A bare `cd` (or `pushd`) moves to the home folder without naming it.
   const bareMove = /(?:^|[;&|(\n])\s*(?:cd|pushd|chdir)\s*(?=$|[;&|)\n])/m.test(text);
   const named = bareMove || HOME_WORD.test(text) || literal.some((home) => text.includes(home));
   if (!named) return undefined;

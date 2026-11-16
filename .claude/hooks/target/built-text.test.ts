@@ -1,7 +1,4 @@
-/**
- * The guard against text built from a file or a program, GraphQL mutations and other writes, look-alike
- * characters, and commands that switch off git's own guard (#242).
- */
+/** Text a post builds from a file or a program, and commands that switch off git's own guard hooks. */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,14 +28,14 @@ function file(text: string): string {
 
 const R = "-R AJBeumer/faultforge-target";
 
-describe("text built from a file is read and checked (#242)", () => {
+describe("text built from a file is read and checked", () => {
   it("reads a substituted file in a lab post for a link to the target", () => {
     const link = file("see https://github.com/AJBeumer/faultforge-target/issues/3\n");
     expect(bash(`gh issue create --title x --body "$(cat ${link})"`)).toMatch(/link to the target/);
   });
 });
 
-describe("git's own guard can't be switched off in a reviewed checkout (#242)", () => {
+describe("git's own guard can't be switched off in a reviewed checkout", () => {
   it.each([
     'git commit --no-verify -m "Tidy"',
     'git commit -nm "Tidy"',
@@ -61,7 +58,7 @@ describe("git's own guard can't be switched off in a reviewed checkout (#242)", 
   });
 });
 
-describe("holes found in the second review of PR 266", () => {
+describe("nested substitutions, files a chained step could rewrite, and long option runs", () => {
   it("reads a file behind a nested substitution in a lab post", () => {
     const link = file("see https://github.com/AJBeumer/faultforge-target/issues/3\n");
     expect(bash(`gh issue create --title x --body "$(echo $(cat ${link}))"`)).toMatch(/link to the target/);
@@ -75,12 +72,12 @@ describe("holes found in the second review of PR 266", () => {
   });
 
   it("decides a long run of git options that never reaches -C in time linear in their number", () => {
-    // 50 options, then 400 (re-grade 7: no wall-clock limit, which a busy machine failed at random).
+    // Measured by growth, not a wall clock, which a busy machine fails at random.
     expect(growth((k) => bash(`git ${"--a ".repeat(50 * k)}log`))).toBeLessThan(LINEAR_BOUND);
   });
 });
 
-describe("holes found in the third review of PR 266", () => {
+describe("a git config moved by the environment can't switch off the guard either", () => {
   it.each([
     "GIT_CONFIG_GLOBAL=/tmp/g git commit -m Tidy",
     "GIT_CONFIG_SYSTEM=/tmp/g git push origin tidy",

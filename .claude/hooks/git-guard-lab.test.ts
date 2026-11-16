@@ -1,6 +1,6 @@
 /**
- * The lab's own git hooks (re-grade 5): links go one way, so a lab commit message may name target work as plain
- * text, never link a reviewed repo's issue or PR. git runs these for every commit and push, whatever started it.
+ * The lab's own git hooks: links go one way, so a lab commit message may name target work as plain text, never
+ * link a reviewed repo's issue or PR. git runs these for every commit and push, whatever started it.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -74,7 +74,7 @@ describe("the lab's pre-push hook refuses target links in the commits it sends",
   });
 });
 
-describe("the lab's pre-push asks the remote what it has (Qodo on PR 329)", () => {
+describe("the lab's pre-push asks the remote what it has", () => {
   it("isn't fooled by a local remote-tracking ref moved onto the linked commit", () => {
     const { dir, git, head } = lab(`Tidy ${T}#3`);
     git("update-ref", "refs/remotes/origin/cover", head);

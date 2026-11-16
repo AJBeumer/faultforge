@@ -1,9 +1,8 @@
 /**
- * Copies of private storage outside it (re-grade 6, Q21). The answer key (`ground-truth.jsonl`), the audit log
+ * Copies of private storage outside it. The answer key (`ground-truth.jsonl`), the audit log
  * (`audit-events.jsonl`) and the files of every template still private stay in private storage: none may be copied
  * out by a command, written into another file, or committed in the lab or a reviewed repo. Content is compared by
- * hash, line by line for the two logs and file by file for the templates, so nothing of it is printed, and no copy
- * of it is kept here. A line or file shorter than `MIN_CHARS` is too common to count (`}`, a blank line).
+ * hash, so nothing of it is printed or kept here. A line or file shorter than `MIN_CHARS` is too common to count.
  *
  * The lab's commits are checked at three points: the guard reads what a `git commit` would take before it runs,
  * and the lab's git hooks read the staged files (`lab-pre-commit`) and the message (`lab-commit-msg`) when git
@@ -78,7 +77,6 @@ export const PRIVATE_LOGS = ["ground-truth.jsonl", "audit-events.jsonl"];
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const normal = (text: string) => text.replace(/\r\n?/g, "\n").trim();
 
-/** Every file under a folder, recursively. */
 function filesUnder(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -160,11 +158,11 @@ export const COPY_OUT =
 /** Words that name private content even when the guard can't read the rest of the path (`$FAULTFORGE_PRIVATE_DIR`). */
 const PRIVATE_WORDS = /ground-truth|audit-events|FAULTFORGE_(GUARD_)?PRIVATE_DIR|templates/i;
 
-/** Why a shell command copies private content out of private storage, or undefined (Q21). */
+/** Why a shell command copies private content out of private storage, or undefined. */
 export function copyOutProblem(command: string, cwd: string, env: NodeJS.ProcessEnv, backticks = true) {
   const root = privateRoot(env);
   const ids = privateTemplateIds(env);
-  // Each folder's real place is looked up once for the command (AUD-M4).
+  // Look up each folder's real place once, so a long command of paths stays fast.
   const cache = new Map<string, string>();
   const outside = (path: string) => !insideReal(path, root, cache);
   const all = pathSteps(command, cwd, backticks);

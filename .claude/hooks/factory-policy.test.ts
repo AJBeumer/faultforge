@@ -64,7 +64,7 @@ describe("factory policy: commands", () => {
     "git push origin maintenance-window",
     "git merge origin/main",
     "npm run review:wait -- target 12",
-    // #67: the /factory skill passes the pushed commit, and the runner passes the head it checked.
+    // The /factory skill passes the pushed commit, and the runner passes the head it checked.
     "npm run review:wait -- target 12 --commit $(git rev-parse HEAD)",
     "npm run review:wait -- target 12 --commit $(git -C ../faultforge-target rev-parse HEAD)",
     "npm run review:wait -- target 12 --commit 56fb13c1111111111111111111111111111111111 --timeout 5",
@@ -82,12 +82,12 @@ describe("factory policy: commands", () => {
     "git push origin 'HEAD:refs/heads/master'",
     'git push origin "HEAD":main',
     "git push origin 'HEAD':'main'",
-  ])("refuses a push to main however the step ends or quotes it (#194): %s", (command) => {
+  ])("refuses a push to main however the step ends or quotes it: %s", (command) => {
     expect(commandViolations(command)).toContain("never push to main");
   });
 
   it.each(["git push origin main-fixes; echo ok", 'git push origin "maintenance"', "git push -u origin tidy-main"])(
-    "still allows a branch that only starts or ends with main (#194): %s",
+    "still allows a branch that only starts or ends with main: %s",
     (command) => {
       expect(commandViolations(command)).not.toContain("never push to main");
     },
@@ -190,7 +190,7 @@ describe("factory policy: file edits", () => {
     expect(editViolation(join(RUN, "FaultForge", ".claude-notes.md"), RUN, TEMP)).toBeUndefined();
   });
 
-  it("blocks edits to the workflows, which the run's token can't push anyway (Qodo on PR 119)", () => {
+  it("blocks edits to the workflows, which the run's token can't push anyway", () => {
     expect(editViolation(join(RUN, "FaultForge", ".github", "workflows", "factory.yml"), RUN, TEMP)).toMatch(
       /workflows/,
     );
@@ -220,7 +220,7 @@ describe("factory policy: file edits", () => {
     expect(editViolation(join(RUN, "a.ts"), undefined, TEMP)).toMatch(/no FAULTFORGE_RUN_ROOT/);
   });
 
-  describe("the private repository's protected files (#142)", () => {
+  describe("the private repository's protected files", () => {
     const PRIVATE = join(RUN, "FaultForge", "private");
 
     it("denies the answer key, the audit log, templates/ and config/ in the private worktree", () => {
@@ -296,7 +296,7 @@ describe("factory policy hook: the decision", () => {
     expect(decide(view, RUN_ENV)).toEqual({ kind: "allow" });
   });
 
-  describe("fails closed (#104)", () => {
+  describe("fails closed", () => {
     it("answers a blocking error, with a one-line reason, when its input is not JSON inside a run", () => {
       const decision = decide("not json", RUN_ENV);
       expect(decision.kind).toBe("error");
@@ -347,7 +347,7 @@ describe("factory policy hook as a process (node <file>), the way Claude Code ru
     expect(result.stderr.trim().split("\n")).toHaveLength(1);
   });
 
-  it("as a process: a stdin it can't read inside a run is a blocking error too, not a crash (Qodo on PR 131)", () => {
+  it("as a process: a stdin it can't read inside a run is a blocking error too, not a crash", () => {
     const folder = openSync(tmpdir(), "r"); // reading a folder fails with EISDIR
     const result = spawnSync(process.execPath, [HOOK], {
       stdio: [folder, "pipe", "pipe"],
@@ -361,8 +361,8 @@ describe("factory policy hook as a process (node <file>), the way Claude Code ru
   });
 });
 
-describe("factory policy: text that only quotes blocked words (#73)", () => {
-  // Qodo on PR 72: the broad issues rule also blocks a command that only quotes those words.
+describe("factory policy: text that only quotes blocked words", () => {
+  // The broad issues rule also blocks a command that only quotes those words.
   const BODY = "The runner blocks gh api reads of issues during a run.";
 
   it("blocks the text passed inline, and allows the same text passed as a file", () => {
@@ -394,7 +394,7 @@ describe("factory policy: text that only quotes blocked words (#73)", () => {
   });
 });
 
-describe("factory policy: the skills' run-mode steps are allowed, the interactive ones they replace are not (#113)", () => {
+describe("factory policy: the skills' run-mode steps are allowed, the interactive ones they replace are not", () => {
   const ticket = "18";
 
   it.each([
@@ -424,7 +424,7 @@ describe("factory policy: the skills' run-mode steps are allowed, the interactiv
     "gh issue view 18 --repo AJBeumer/faultforge",
     // the interactive token paragraph
     'export GH_TOKEN="$(cat /somewhere/token.txt)"',
-    // the board move, as the skill used to do it
+    // the interactive board move
     "gh project item-edit --id X --field-id Y --project-id Z --single-select-option-id W",
     "gh project item-add 6 --owner AJBeumer --url https://github.com/AJBeumer/faultforge/issues/18",
     "gh api graphql -f query='mutation { updateProjectV2ItemFieldValue(input: {}) { clientMutationId } }'",
@@ -433,8 +433,8 @@ describe("factory policy: the skills' run-mode steps are allowed, the interactiv
   });
 });
 
-describe("factory policy: the first unattended run's denied environment listing (#113)", () => {
-  it("still denies the listing, and the reason now names the one-variable form that is allowed", () => {
+describe("factory policy: an environment listing filtered by grep", () => {
+  it("denies the listing, and the reason names the one-variable form that is allowed", () => {
     const reasons = commandViolations('env | grep -i faultforge; echo "---"; env | grep -i FACTORY');
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatch(/no dumping the environment/);
@@ -442,7 +442,7 @@ describe("factory policy: the first unattended run's denied environment listing 
   });
 });
 
-describe("factory policy: review:wait runs in the foreground (#129)", () => {
+describe("factory policy: review:wait runs in the foreground", () => {
   const WAIT = "npm run review:wait -- faultforge 128 --commit abc1234";
 
   it("denies review:wait started in the background, and says how to run it instead", () => {
@@ -467,22 +467,22 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
     `Start-Job { ${WAIT} }`,
     "Start-Process npm -ArgumentList 'run review:wait -- faultforge 128'",
     "start /b npm run review:wait -- faultforge 128",
-  ])("denies the shell's own backgrounding of the wait: %s (Qodo on PR 132)", (command) => {
+  ])("denies the shell's own backgrounding of the wait: %s", (command) => {
     expect(backgroundViolation(command, false)).toMatch(/in the foreground/);
   });
 
-  it("reads a backtick before a newline as Bash does too: a substitution, not a join (Qodo on PR 132, round 3)", () => {
+  it("reads a backtick before a newline as Bash does too: a substitution, not a join", () => {
     const hidden = "true`\ngit push --force origin HEAD:refs/heads/x`";
     expect(commandViolations(hidden)).toContain("no force push or remote delete");
     expect(commandViolations("true`\ngh pr merge 1`")).toContain("only the owner merges, closes or comments on a PR");
   });
 
-  it("joins a line continuation first, as every other rule does (Qodo on PR 132, round 2)", () => {
+  it("joins a line continuation first, as every other rule does", () => {
     expect(backgroundViolation("npm run review:\\\nwait -- faultforge 128", true)).toMatch(/in the foreground/);
     expect(backgroundViolation("npm run review:`\nwait -- faultforge 128 &", false)).toMatch(/in the foreground/);
   });
 
-  it("sees the wait by its file as well as by its npm script (Qodo on PR 132)", () => {
+  it("sees the wait by its file as well as by its npm script", () => {
     expect(backgroundViolation("npx tsx packages/harness/src/cli/review-wait.ts faultforge 128", true)).toMatch(
       /in the foreground/,
     );
@@ -498,7 +498,7 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
   });
 });
 
-describe("factory policy: the whole environment and network calls from code (#243)", () => {
+describe("factory policy: the whole environment and network calls from code", () => {
   it.each([
     "node -p process.env",
     "node -e 'console.log(JSON.stringify(process.env))'",
@@ -554,7 +554,7 @@ describe("factory policy: the whole environment and network calls from code (#24
 });
 
 describe("factory policy: decides in linear time", () => {
-  // Each command at `k` quarters of 6 KB: the old wall-clock test's size is k = 4.
+  // Each command at `k` quarters of 6 KB.
   const crafted: Record<string, (k: number) => string> = {
     "git then push, over and over": (k) => "git push x ".repeat(150 * k),
     "git words, then a push with a branch at the end": (k) => `${"git ".repeat(375 * k)}push origin ${"a".repeat(30)}`,
@@ -564,8 +564,8 @@ describe("factory policy: decides in linear time", () => {
     "gh, then graphql far away": (k) => `${"gh ".repeat(500 * k)}graphql`,
   };
 
-  // Linear, not under a wall-clock limit (re-grade 7): a busy machine failed that at random, and a fast one let
-  // quadratic code through. `growth` compares 1.5 KB with 12 KB of the same command, timed in the same run.
+  // Growth, not a wall-clock limit: a busy machine fails a time limit at random, and a fast one lets quadratic
+  // code through. `growth` compares 1.5 KB with 12 KB of the same command, timed in the same run.
   it.each(Object.entries(crafted))("a crafted command (%s) decides in time linear in its length", (_name, make) => {
     expect(make(4).length).toBeGreaterThan(5000);
     const ratio = growth((k) => {
@@ -608,7 +608,7 @@ describe("factory policy: decides in linear time", () => {
   });
 });
 
-describe("factory policy: quoted separators, extra calls, Python imports (Qodo on PR 270)", () => {
+describe("factory policy: quoted separators, extra calls, Python imports", () => {
   it.each([
     'gh api -X POST "repos/o/r/issues/1/comments;x" -f body=hi',
     'gh issue edit 5 --title "a & b" --add-label x',
@@ -635,7 +635,7 @@ describe("factory policy: quoted separators, extra calls, Python imports (Qodo o
   });
 });
 
-describe("factory policy: other spellings of the program and of the environment (Qodo on PR 270)", () => {
+describe("factory policy: other spellings of the program and of the environment", () => {
   it.each([
     "/usr/bin/git push --force origin x",
     "\\git push --force origin x",
@@ -657,7 +657,7 @@ describe("factory policy: other spellings of the program and of the environment 
   });
 });
 
-describe("factory policy: compact flags, other env programs, /proc, JS clients (Qodo on PR 270)", () => {
+describe("factory policy: compact flags, other env programs, /proc, JS clients", () => {
   it.each([
     "gh api repos/o/r/pulls/1/reviews -fbody=hi -fevent=COMMENT",
     "/usr/bin/env",

@@ -1,9 +1,8 @@
 /**
- * The factory policy's rules about files (AUD-H2, re-grade after round 4): what a run may not read (the
- * process files under `/proc`, the answer key, and the private checkouts: factory/private-checkouts.ts), which files
- * a shell command may not write (the guardrails: `.claude/` and the giveaway word list), and which scripts it
- * may not run (one this run wrote or changed, which no text rule can read before it runs). Split from
- * factory-policy.ts, which may not pass 400 lines.
+ * The factory policy's rules about files: what a run may not read (the process files under `/proc`, the answer
+ * key, and the private checkouts: factory/private-checkouts.ts), which files a shell command may not write (the
+ * guardrails: `.claude/` and the giveaway word list), and which scripts it may not run (one this run wrote or
+ * changed, which no text rule can read before it runs).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -38,8 +37,7 @@ const SHELL_WRITE = new RegExp(
 
 /**
  * True when a shell command writes a file: `SHELL_WRITE`, an in-place edit (`sed -i`, `perl -i`), a file opened
- * for writing from code, or a git command that changes files. A word then another in one step, each read in
- * linear time (wordThen; re-grade 7).
+ * for writing from code, or a git command that changes files. wordThen keeps each check linear in the text.
  */
 function writesFile(text: string): boolean {
   return (
@@ -61,7 +59,7 @@ const asPath = (text: string) => posix.normalize(text.replace(/\\/g, "/"));
 /**
  * Why a read tool (Read, Grep, Glob) may not read what it names, or undefined: anything under `/proc` and the
  * answer key in any run, and a private checkout the runner names, a folder that holds one, or a private file by
- * name (#284; every run since #299: factory/private-checkouts.ts).
+ * name (factory/private-checkouts.ts).
  */
 export function readViolation(
   args: Record<string, unknown>,
@@ -73,18 +71,18 @@ export function readViolation(
   const texts = ["file_path", "path", "pattern", "glob", "notebook_path"].map(text).filter(Boolean);
   const named = ["file_path", "path", "notebook_path"].map(text).filter(Boolean);
   const pattern = text("pattern");
-  // Glob's pattern is a path too: its fixed start, from its folder (Qodo on PR 288).
+  // Glob's pattern is a path too: its fixed start, from its folder.
   const roots = named.length ? named : [text("path") || "."];
   const paths = [...named, ...(pattern && globBase(pattern) ? [globBase(pattern)] : [])].map((p) => resolve(cwd, p));
   const all = [...new Set([...paths, ...roots.map((p) => resolve(cwd, p))])];
   const resolved = all.flatMap((p) => [p, real(p)]);
-  // A search from a folder that holds /proc reads it too (Qodo on PR 288); Windows has none.
+  // A search from a folder that holds /proc reads it too; Windows has none.
   const holdsProc = process.platform !== "win32" && all.some((p) => inside("/proc", p));
   if ([...texts, ...resolved].some((t) => PROC.test(asPath(t))) || holdsProc)
     return "no reading process files under /proc";
   if ([...texts, ...resolved].some((t) => ANSWER_FILES.test(t)))
     return "no run reads the answer key, the audit log or the templates";
-  // The owner's secrets in the home folder, read as written (`~/…`) and where the path really leads (re-grade 6).
+  // The owner's secrets in the home folder, read as written (`~/…`) and where the path really leads.
   if ([...named.filter((t) => t.startsWith("~")), ...resolved].some((p) => homeSecretPath(p, env)))
     return HOME_SECRET_REASON;
   // A Grep pattern is what it looks for in a file, not a path: searching code for a name reads no private file.
@@ -102,7 +100,7 @@ export function guardrailWriteViolation(command: string, cwd = ""): string | und
   if (!readings.some(writesFile)) return undefined;
   if (readings.some((r) => GUARDRAILS.test(r)) || (cwd && /(^|[/\\])\.claude([/\\]|$)/i.test(resolve(cwd))))
     return "the agent can't change its own guardrails (.claude, neutral.ts) from the shell either";
-  // package.json holds the check script: a shell write could make the check pass trivially, unseen (re-grade 7).
+  // package.json holds the check script: a shell write could make the check pass trivially, unseen.
   // The Edit and Write tools may change it, where the policy compares the scripts the check runs. Like the
   // guardrail rule above, a command that writes anything and names package.json is refused, a read into another
   // file included: telling which word a write lands on would need a shell parser, so it fails closed.
@@ -128,7 +126,6 @@ const VALUE_FLAG = /^(-W|-X|--env-file|--input-type|--conditions|--title)$/;
 const PREFIX =
   /^(sudo|env|exec|time|nice|nohup|command|stdbuf|xargs|timeout|setsid|ionice|taskset|strace|ltrace|valgrind|\(|\{)$/i;
 
-/** One git answer in `cwd`, trimmed, or undefined when git fails. */
 function gitOut(cwd: string, ...args: string[]): string | undefined {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true });
   return r.status === 0 ? r.stdout.trim() : undefined;
@@ -136,7 +133,7 @@ function gitOut(cwd: string, ...args: string[]): string | undefined {
 
 /**
  * True when `file` is, byte for byte, a file of one of the commits the run started from (`bases`): the
- * project's own code, not one this run wrote or changed (Qodo on PR 288). A commit only the agent made, in a
+ * project's own code, not one this run wrote or changed. A commit only the agent made, in a
  * scratch repo or by moving a ref, is not one of them. Without `bases`, its repo's `origin/main` stands in.
  */
 function unchangedFromBase(file: string, bases: string[], runRoot: string | undefined): boolean {
@@ -180,14 +177,14 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
     const program = words[i] ?? "";
     if (/^(cd|pushd|popd|Set-Location|sl)$/i.test(program)) {
       const to = words[i + 1];
-      // In a subshell, or back through popd, the folder that follows can't be known from the text (Qodo on PR 288).
+      // In a subshell, or back through popd, the folder that follows can't be known from the text.
       const unknown = /^popd$/i.test(program) || /^\s*[({]/.test(step) || !to || /[$`%~]/.test(to);
       dir = !unknown && dir ? resolve(dir, to) : undefined;
       continue;
     }
     let at = i;
     let name = basename(program).replace(/\.exe$/i, "");
-    // Package runners and find run the next program: `npm exec`, `pnpm dlx`, `yarn node`, `find -exec` (Qodo on PR 288).
+    // Package runners and find run the next program: `npm exec`, `pnpm dlx`, `yarn node`, `find -exec`.
     const runner =
       /^(npx|pnpx|bunx)$/i.test(name) ||
       (/^(npm|pnpm|yarn)$/i.test(name) && /^(exec|x|dlx|node)$/i.test(words[i + 1] ?? ""));
@@ -248,7 +245,7 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
         j++;
         continue;
       }
-      // A flag whose value is the next word, not the script: `python3 -W ignore x.py` (Qodo on PR 288).
+      // A flag whose value is the next word, not the script: `python3 -W ignore x.py`.
       if (VALUE_FLAG.test(word)) {
         j++;
         continue;
@@ -262,10 +259,10 @@ export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
 }
 
 /**
- * Why a shell command may not run because it runs a script this run wrote or changed, or undefined (#284). A
+ * Why a shell command may not run because it runs a script this run wrote or changed, or undefined. A
  * text rule can't read a file's code before it runs, so such a script could do anything the rules refuse. A
- * script identical to the one in a commit the run started from is the project's own and may run; `npm run`
- * and `npm start` run the project's scripts as before.
+ * script identical to the one in a commit the run started from is the project's own and may run, as do
+ * `npm run` and `npm start`.
  */
 export function scriptViolation(command: string, cwd: string, env: NodeJS.ProcessEnv = {}): string | undefined {
   const bases = (env[RUN_BASES_ENV] ?? "")

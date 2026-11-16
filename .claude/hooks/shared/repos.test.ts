@@ -19,7 +19,7 @@ const at = (path: string) => path.replace(/\\/g, "/");
 /** A reviewed checkout with an origin, private storage, and a folder that is no checkout to run from. */
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);
-const PRIVATE = privateStore("guard~regrade4-");
+const PRIVATE = privateStore("guard~private-");
 const ELSEWHERE = scratchFolder("guard-elsewhere-");
 const bash = (command: string, cwd = ELSEWHERE) =>
   askGuard("Bash", { command }, cwd, { config: CONFIG, privateDir: PRIVATE });
@@ -28,7 +28,7 @@ describe("the lab's name never hides a ref name", () => {
   const LAB_DIR = "D:\\Projects\\FaultForge";
   const TARGET_DIR = "D:\\Projects\\faultforge-target";
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
   const ask = (command: string, cwd = LAB_DIR) => askGuard("Bash", { command }, cwd, { config, privateDir });
 
   it.each([
@@ -150,25 +150,25 @@ describe("a move whose destination can't be read touches every reviewed repo", (
     expect(bash(`cd ${at(ELSEWHERE)} && git push --force origin main`)).toBeUndefined();
   });
 
-  it("reads a move only where the shell acts on it, never in a message (Qodo on PR 322)", () => {
+  it("reads a move only where the shell acts on it, never in a message", () => {
     expect(bash(`git commit -m 'the planted bug: run cd "$DIR" first'`)).toBeUndefined();
     expect(bash(`gh pr create -R ${LAB} --title "Tidy" --body 'then git -C "$X" status'`)).toBeUndefined();
   });
 
-  it("still sees a real move after text that looks like a flag (Qodo on PR 322, second review)", () => {
+  it("still sees a real move after text that looks like a flag", () => {
     expect(bash(`printf ' --message x'; cd "$DIR" && git push --force origin main`)).toMatch(DOOR);
     expect(bash(`printf " -m x"; cd "$DIR" && git push --force origin main`)).toMatch(DOOR);
     expect(unreadableMove('echo "$(cd "$DIR" && git push origin main)"', ELSEWHERE)).toBe(true);
   });
 
-  it("reads a substitution's own command, nested quotes and all (Qodo on PR 322, third review)", () => {
+  it("reads a substitution's own command, nested quotes and all", () => {
     const command = 'echo "$(printf "%s" x; cd "$DIR"; git push --force origin main)"';
     expect(unreadableMove(command, ELSEWHERE)).toBe(true);
     expect(bash(command)).toBeDefined();
     expect(unreadableMove('echo "$(printf \'%s\' x; echo `cd "$DIR"`)"', ELSEWHERE)).toBe(true);
   });
 
-  it("reads single-quoted text and a lone % as written (Qodo on PR 322)", () => {
+  it("reads single-quoted text and a lone % as written", () => {
     expect(unreadableMove("cd '$DIR'", ELSEWHERE)).toBe(false);
     expect(unreadableMove("git -C '$(x)' status", ELSEWHERE)).toBe(false);
     expect(unreadableMove("cd 100%done", ELSEWHERE)).toBe(false);
@@ -176,7 +176,7 @@ describe("a move whose destination can't be read touches every reviewed repo", (
     expect(unreadableMove("cd -", ELSEWHERE)).toBe(true);
   });
 
-  it("counts a wildcard with more matches than the guard follows as unreadable, without walking them (Qodo on PR 322)", () => {
+  it("counts a wildcard with more matches than the guard follows as unreadable, without walking them", () => {
     const many = mkdtempSync(join(tmpdir(), "guard-many-"));
     for (let i = 0; i < 40; i++) mkdirSync(join(many, `d${i}`));
     expect(navigationTargets(`cd ${at(many)}/*`, ELSEWHERE)).toEqual([]);
