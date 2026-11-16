@@ -20,8 +20,12 @@
  *
  * Its last line is always `ci:wait exit <code>`, so a log can keep the code.
  *
- * Exit codes: 0 every job passed; 1 a job failed, named in the output; 2 it could not run or could not tell
- * (a bad argument, a reviewed repository, an `origin` that is another repository, uncommitted changes, the
+ * The jobs that must pass are named in `factory.json` (the repository's `ciJobs`), by the names GitHub shows.
+ * Each must have run and succeeded. A job that is not named still fails the wait when it fails.
+ *
+ * Exit codes: 0 every job passed, each required one by running; 1 a job failed or a required job did not
+ * run, named in the output; 2 it could not run or could not tell (a bad argument, a reviewed repository, a
+ * repository with no `ciJobs`, an `origin` that is another repository, uncommitted changes, the
  * push failed, GitHub could not be read, no check ran, or the runs didn't finish in time), or an unexpected
  * error stopped it, even while loading (`npm run ci:wait` runs `ci-wait-cli.ts`).
  */
@@ -90,16 +94,22 @@ const PASSING = ["success", "skipped", "neutral"];
 
 /**
  * Pure: the verdict on the finished runs' jobs. It passes only when every job ended as success, skipped or
- * neutral and at least one really ran and succeeded: a commit whose jobs were all skipped proves nothing.
+ * neutral, and every job in `required` (the repository's `ciJobs`) ran and ended as success. The required
+ * jobs are named, never guessed from what ran: a commit whose Windows job was skipped or never started is
+ * not green, however many other jobs passed. With no required job named, nothing passes.
  */
-export function jobsVerdict(jobs: Job[]): { passed: boolean; failed: string[]; lines: string[] } {
+export function jobsVerdict(jobs: Job[], required: string[]): { passed: boolean; failed: string[]; lines: string[] } {
   const sorted = [...jobs].sort((a, b) => a.name.localeCompare(b.name));
   const lines = sorted.map((job) => `  ${job.name}: ${job.status === "completed" ? job.conclusion : job.status}`);
   const failed = sorted
     .filter((job) => job.status !== "completed" || !PASSING.includes(job.conclusion ?? ""))
     .map((job) => job.name);
-  const ran = sorted.some((job) => job.conclusion === "success");
-  return { passed: failed.length === 0 && ran, failed: failed.length || ran ? failed : ["(no job ran)"], lines };
+  const succeeded = new Set(sorted.filter((job) => job.conclusion === "success").map((job) => job.name));
+  const missing = required
+    .filter((name) => !succeeded.has(name) && !failed.includes(name))
+    .map((name) => `${name} (required, did not run)`);
+  const all = [...failed, ...missing];
+  return { passed: required.length > 0 && all.length === 0, failed: all, lines };
 }
 
 /** True when a git remote address names the GitHub repository `github` (`owner/name`), by https or ssh. */
@@ -156,6 +166,7 @@ async function wait(
   github: string,
   branch: string,
   sha: string,
+  required: string[],
   deps: CiWaitDeps,
 ): Promise<0 | 1 | 2> {
   const started = deps.now();
@@ -208,7 +219,7 @@ async function wait(
     }
     await deps.sleep(POLL_MS);
   }
-  const verdict = jobsVerdict(jobs);
+  const verdict = jobsVerdict(jobs, required);
   for (const line of verdict.lines) deps.out(line);
   if (verdict.passed) {
     deps.out(`ci:wait: every job passed on ${sha.slice(0, 7)}.`);
@@ -230,6 +241,13 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   if (repo.guard === "reviewed") {
     deps.error(
       `ci:wait: ${args.repoKey} is a reviewed repository. Nothing is pushed there outside the door, so its checks run on the pull request only.`,
+    );
+    return 2;
+  }
+  const required = repo.ciJobs ?? [];
+  if (!required.length) {
+    deps.error(
+      `ci:wait: factory.json names no ciJobs for ${args.repoKey}, so it can't tell which checks must pass. Nothing was pushed.`,
     );
     return 2;
   }
@@ -260,7 +278,7 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   }
   deps.out(`Pushed ${sha.slice(0, 7)} to ${branch}; waiting for its checks (up to ${args.timeoutMinutes} min)…`);
   try {
-    return await wait(args, repo.github, branch, sha, deps);
+    return await wait(args, repo.github, branch, sha, required, deps);
   } catch (e) {
     deps.error(`ci:wait: couldn't read the checks: ${e instanceof Error ? e.message : String(e)}`);
     return 2;

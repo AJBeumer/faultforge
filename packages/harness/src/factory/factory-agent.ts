@@ -307,6 +307,7 @@ export async function runAgent(
     let final: Record<string, unknown> | null = null;
     let lastPr: string | null = null;
     const commands = new Map<string, string>();
+    const waits = new Map<string, string>();
     const onLine = (line: string) => {
       if (!line.trim()) return;
       appendFileSync(transcript, `${JSON.stringify({ t: new Date().toISOString(), line })}\n`);
@@ -323,12 +324,14 @@ export async function runAgent(
           const step = agentStep(command);
           if (step) {
             commands.set(part.id ?? "", step);
+            if (step === "ci-wait") waits.set(part.id ?? "", command);
             log("agent-step", { step, command: command.slice(0, 120) });
           }
         } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
           // No output here: the event log can be public. The full output stays in the private transcript.
           const step = commands.get(part.tool_use_id ?? "");
-          const exit = step === "ci-wait" ? { exitCode: ciWaitExitCode(part.content) } : {};
+          const waited = waits.get(part.tool_use_id ?? "");
+          const exit = waited === undefined ? {} : { exitCode: ciWaitExitCode(part.content, waited) };
           log("agent-step-result", { step, error: Boolean(part.is_error), ...exit });
           if (step === "pr-opened" && !part.is_error) {
             const url = prUrlFromToolResult(part.content, github);

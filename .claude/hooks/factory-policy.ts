@@ -79,12 +79,12 @@ export function backgroundViolation(raw: string, background: boolean): string | 
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
 }
 
-/** `npm run check` with a lone `|` later in its step, within 4,000 characters, so a long command is read in time. */
-const PIPED_CHECK = /\bnpm(?:\s+-\S+)*\s+run(?:\s+-\S+)*\s+check(?![\w:-])(?:(?!;|\n|&&)[^|]){0,4000}\|(?!\|)/;
-
-/** Why a check may not be piped: a pipe ends with its last command's exit code, so a failed check reads as passed. */
+/** `npm run check`, with at most eight flags in each gap, so no start is read far. */
+const RUNS_CHECK = /\bnpm(?:\s+-\S+){0,8}\s+run(?:\s+-\S+){0,8}\s+check(?![\w:-])/;
+/** Why a check may not be piped anywhere later in its step: a pipe ends with its last command's exit code. */
 export function pipedCheckViolation(raw: string): string | undefined {
-  if (!readings(raw).some((command) => PIPED_CHECK.test(command))) return undefined;
+  const piped = (step: string, at = step.search(RUNS_CHECK)) => at >= 0 && step.includes("|", at);
+  if (!readings(raw).some((command) => command.split(/;|\n|&&|\|\|/).some((step) => piped(step)))) return undefined;
   return "run npm run check on its own, never piped into another command: a pipe hides its exit code. For long output, send it to a file (npm run check > check.txt 2>&1) and read the file";
 }
 

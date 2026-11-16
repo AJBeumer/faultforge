@@ -72,19 +72,50 @@ describe("agentInstructions", () => {
   });
 
   it("reads the exit code ci:wait names in its last line, for the run log", () => {
-    expect(ciWaitExitCode("  npm run check: success\nci:wait: every job passed on a7439ec.\nci:wait exit 0")).toBe(0);
-    expect(ciWaitExitCode("ci:wait: not green on a7439ec: npm run check (windows)\nci:wait exit 1\n")).toBe(1);
-    expect(ciWaitExitCode([{ type: "text", text: "ci:wait: no result\nci:wait exit 2" }])).toBe(2);
-    // The last one wins when a command ran it twice.
-    expect(ciWaitExitCode("ci:wait exit 1\nfixed\nci:wait exit 0")).toBe(0);
+    const alone = "npm run ci:wait -- faultforge --timeout 9";
+    expect(ciWaitExitCode("  npm run check: success\nci:wait: every job passed.\nci:wait exit 0", alone)).toBe(0);
+    expect(ciWaitExitCode("ci:wait: not green on a7439ec: npm run check (windows)\nci:wait exit 1\n", alone)).toBe(1);
+    expect(ciWaitExitCode([{ type: "text", text: "ci:wait: no result\nci:wait exit 2" }], alone)).toBe(2);
+    expect(ciWaitExitCode("ci:wait exit 0\r\n", "npm run ci:wait -- faultforge")).toBe(0);
   });
 
   it("reads no exit code from a result that names none: the command was killed or never ran", () => {
-    expect(ciWaitExitCode("Command timed out after 600000 ms")).toBeNull();
-    expect(ciWaitExitCode("echo ci:wait exit 0 later")).toBeNull();
-    expect(ciWaitExitCode("ci:wait exit 7")).toBeNull();
-    expect(ciWaitExitCode(undefined)).toBeNull();
-    expect(ciWaitExitCode([null, { type: "image" }])).toBeNull();
+    const alone = "npm run ci:wait -- faultforge";
+    expect(ciWaitExitCode("Command timed out after 600000 ms", alone)).toBeNull();
+    expect(ciWaitExitCode("echo ci:wait exit 0 later", alone)).toBeNull();
+    expect(ciWaitExitCode("ci:wait exit 7", alone)).toBeNull();
+    expect(ciWaitExitCode(undefined, alone)).toBeNull();
+    expect(ciWaitExitCode([null, { type: "image" }], alone)).toBeNull();
+  });
+
+  it("reads no exit code when the marker is not the output's last line: something ran after it", () => {
+    const alone = "npm run ci:wait -- faultforge";
+    expect(ciWaitExitCode("ci:wait exit 1\nfixed\nci:wait exit 0\nand then more", alone)).toBeNull();
+    expect(ciWaitExitCode("ci:wait exit 0\nci:wait: couldn't delete the branch", alone)).toBeNull();
+  });
+
+  it("still reads the code when npm reports the failed script after the marker", () => {
+    const alone = "npm run ci:wait -- faultforge";
+    expect(
+      ciWaitExitCode("ci:wait exit 1\nnpm error Lifecycle script `ci:wait` failed\nnpm error code 1\n", alone),
+    ).toBe(1);
+    expect(ciWaitExitCode("ci:wait exit 2\n\nnpm ERR! code 2", alone)).toBe(2);
+  });
+
+  it("reads no exit code from a command that runs anything besides ci:wait, which could print the marker", () => {
+    const green = "ci:wait exit 0";
+    for (const command of [
+      "npm run ci:wait -- faultforge; echo ci:wait exit 0",
+      "npm run ci:wait -- faultforge || echo ci:wait exit 0",
+      "npm run ci:wait -- faultforge && echo done",
+      "npm run ci:wait -- faultforge | tail -1",
+      "npm run ci:wait -- faultforge\necho ci:wait exit 0",
+      "echo ci:wait exit 0 # npm run ci:wait -- faultforge",
+      "npm run ci:wait -- $(echo faultforge)",
+      "npm run ci:wait -- faultforge > out.txt",
+    ]) {
+      expect(ciWaitExitCode(green, command)).toBeNull();
+    }
   });
 
   it("names a ci:wait call as its own step in the run log, never as a push or a check", () => {

@@ -24,7 +24,8 @@ export function ciWaitInstruction(repoKey: string, labTicket: boolean): string {
  * (the command was killed, or never ran). Read by the runner for the run log: the code says whether a job
  * failed (1) or the command could not tell (2), which "error" alone does not.
  */
-export function ciWaitExitCode(content: unknown): 0 | 1 | 2 | null {
+export function ciWaitExitCode(content: unknown, command: string): 0 | 1 | 2 | null {
+  if (!CI_WAIT_ALONE.test(command.trim())) return null;
   const text =
     typeof content === "string"
       ? content
@@ -33,7 +34,14 @@ export function ciWaitExitCode(content: unknown): 0 | 1 | 2 | null {
             .map((part) => (part && typeof part === "object" ? String((part as { text?: unknown }).text ?? "") : ""))
             .join("\n")
         : "";
-  const codes = [...text.matchAll(/^ci:wait exit ([012])\s*$/gm)];
-  const last = codes.at(-1)?.[1];
-  return last === undefined ? null : (Number(last) as 0 | 1 | 2);
+  // The marker is the command's last line. Only npm's own report of a failed script may follow it.
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !/^npm (?:error|ERR!)/.test(line));
+  const code = /^ci:wait exit ([012])\s*$/.exec(lines.at(-1) ?? "")?.[1];
+  return code === undefined ? null : (Number(code) as 0 | 1 | 2);
 }
+
+/**
+ * A command that runs `ci:wait` and nothing else: no second command, pipe, redirect or substitution, whose
+ * output or exit could stand in for its own. Only then is the output's last line the command's own.
+ */
+const CI_WAIT_ALONE = /^npm run ci:wait(?: -- [\w .:/=-]*)?$/;

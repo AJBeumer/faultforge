@@ -15,7 +15,15 @@ import {
 const SHA = "a7439ecd94b508ca794789f933ad28cd5d596aa8";
 const BRANCH = scratchBranch(SHA, 0);
 const job = (name: string, conclusion: string | null, status = "completed"): Job => ({ name, status, conclusion });
-const GREEN = [job("npm run check", "success"), job("npm run check (windows)", "success")];
+// The jobs factory.json names for the lab: the fake world answers with these, as GitHub does.
+const REQUIRED = [
+  "npm run check",
+  "npm run check (windows)",
+  "npm run test:integration (ubuntu-latest)",
+  "npm run test:integration (windows-latest)",
+];
+const GREEN = REQUIRED.map((name) => job(name, "success"));
+const windowsRed = GREEN.map((j) => (j.name === "npm run check (windows)" ? job(j.name, "failure") : j));
 const SKIPPED = [job("Alert on a red main", "skipped")];
 const workflow = (id: number, extra: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id,
@@ -42,24 +50,53 @@ describe("parseCiWaitArgs", () => {
 
 describe("jobsVerdict", () => {
   it("passes when every job succeeded or was skipped, and one really ran", () => {
-    const verdict = jobsVerdict([...GREEN, ...SKIPPED]);
+    const verdict = jobsVerdict([...GREEN, ...SKIPPED], REQUIRED);
     expect(verdict.passed).toBe(true);
     expect(verdict.failed).toEqual([]);
     expect(verdict.lines).toContain("  npm run check (windows): success");
   });
 
   it("names the job that failed on one operating system alone", () => {
-    const verdict = jobsVerdict([job("npm run check", "success"), job("npm run check (windows)", "failure")]);
+    const verdict = jobsVerdict(windowsRed, REQUIRED);
     expect(verdict.passed).toBe(false);
     expect(verdict.failed).toEqual(["npm run check (windows)"]);
   });
 
+  it("doesn't pass a commit whose Windows job never ran, however many other jobs passed", () => {
+    const linuxOnly = GREEN.filter((j) => !j.name.includes("windows"));
+    const verdict = jobsVerdict([...linuxOnly, job("some other job", "success")], REQUIRED);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failed).toEqual([
+      "npm run check (windows) (required, did not run)",
+      "npm run test:integration (windows-latest) (required, did not run)",
+    ]);
+  });
+
+  it("doesn't pass a required job that was skipped or ended neutral: it must have run", () => {
+    for (const conclusion of ["skipped", "neutral"]) {
+      const jobs = GREEN.map((j) => (j.name === "npm run check (windows)" ? job(j.name, conclusion) : j));
+      expect(jobsVerdict(jobs, REQUIRED)).toMatchObject({
+        passed: false,
+        failed: ["npm run check (windows) (required, did not run)"],
+      });
+    }
+  });
+
+  it("still fails on a job nobody named, and names a failed required job once", () => {
+    expect(jobsVerdict([...GREEN, job("a new job", "failure")], REQUIRED).failed).toEqual(["a new job"]);
+    expect(jobsVerdict(windowsRed, REQUIRED).failed).toHaveLength(1);
+  });
+
   it("doesn't pass a cancelled, timed-out or unfinished job, or a commit where no job ran", () => {
-    expect(jobsVerdict([job("a", "cancelled")]).passed).toBe(false);
-    expect(jobsVerdict([job("a", "timed_out")]).passed).toBe(false);
-    expect(jobsVerdict([job("a", null, "in_progress")]).failed).toEqual(["a"]);
-    expect(jobsVerdict(SKIPPED)).toMatchObject({ passed: false, failed: ["(no job ran)"] });
-    expect(jobsVerdict([]).passed).toBe(false);
+    expect(jobsVerdict([job("a", "cancelled")], ["a"]).passed).toBe(false);
+    expect(jobsVerdict([job("a", "timed_out")], ["a"]).passed).toBe(false);
+    expect(jobsVerdict([job("a", null, "in_progress")], ["a"]).failed).toEqual(["a"]);
+    expect(jobsVerdict(SKIPPED, ["a"])).toMatchObject({ passed: false, failed: ["a (required, did not run)"] });
+    expect(jobsVerdict([], ["a"]).passed).toBe(false);
+  });
+
+  it("passes nothing when no job is named as required", () => {
+    expect(jobsVerdict(GREEN, []).passed).toBe(false);
   });
 });
 
@@ -165,11 +202,18 @@ describe("ci:wait", () => {
   });
 
   it("exits 1 and names the job when Windows alone is red, and still deletes the branch", async () => {
-    const jobs = [job("npm run check", "success"), job("npm run check (windows)", "failure")];
-    const w = world([{ runs: [workflow(1, { conclusion: "failure" })], jobs }]);
+    const w = world([{ runs: [workflow(1, { conclusion: "failure" })], jobs: windowsRed }]);
     expect(await run(["faultforge"], w.deps)).toBe(1);
-    expect(w.out()).toContain("not green on a7439ec: npm run check (windows)");
+    expect(w.out()).toContain("not green on a7439ec: npm run check (windows)\n");
     expect(w.gitCalls.at(-1)).toContain("--delete");
+    expect(w.lastLine()).toBe("ci:wait exit 1");
+  });
+
+  it("exits 1, never 0, when the Windows jobs the repository names did not run", async () => {
+    const linuxOnly = GREEN.filter((j) => !j.name.includes("windows"));
+    const w = world([{ runs: [workflow(1)], jobs: linuxOnly }]);
+    expect(await run(["faultforge"], w.deps)).toBe(1);
+    expect(w.out()).toContain("npm run check (windows) (required, did not run)");
     expect(w.lastLine()).toBe("ci:wait exit 1");
   });
 

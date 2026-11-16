@@ -479,6 +479,13 @@ describe("factory policy: the check rule reads a long command in time", () => {
     expect(pipedCheckViolation(`${long}| tail`)).toMatch(/never piped/);
     expect(Date.now() - started).toBeLessThan(2000);
   });
+
+  it("finds a pipe however far along the check's own step it is", () => {
+    const far = `npm run check ${"--flag ".repeat(2000)}`;
+    expect(far.length).toBeGreaterThan(4000);
+    expect(pipedCheckViolation(`${far}| tail -5`)).toMatch(/never piped/);
+    expect(pipedCheckViolation(`${far}; git log | head`)).toBeUndefined();
+  });
 });
 
 describe("factory policy: review:wait runs in the foreground", () => {
