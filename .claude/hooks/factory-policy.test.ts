@@ -470,6 +470,17 @@ describe("factory policy: the check's own exit code", () => {
   });
 });
 
+describe("factory policy: the check rule reads a long command in time", () => {
+  it("decides a long command full of checks with no pipe well inside the hook's time", () => {
+    // Small enough not to load the machine while other tests measure their own timing.
+    const long = "npm run check ".repeat(1000);
+    const started = Date.now();
+    expect(pipedCheckViolation(long)).toBeUndefined();
+    expect(pipedCheckViolation(`${long}| tail`)).toMatch(/never piped/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
 describe("factory policy: review:wait runs in the foreground", () => {
   const WAIT = "npm run review:wait -- faultforge 128 --commit abc1234";
 

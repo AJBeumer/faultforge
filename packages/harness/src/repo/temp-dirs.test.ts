@@ -16,6 +16,9 @@ import { ROOT } from "../shared/paths.ts";
 const HARNESS = "packages/harness";
 const LEGACY = join(ROOT, HARNESS, "src/repo/temp-dir-legacy.json");
 
+/** The most files the list may hold: its length when the rule began. It is lowered as the list shrinks. */
+const LEGACY_AT_MOST = 65;
+
 /** Every test file under the harness that calls `tmpdir()` itself, relative to the repository, with `/`. */
 function testFilesCallingTmpdir(): string[] {
   return (
@@ -41,6 +44,12 @@ describe("temp folders in tests", () => {
   it("the list of files that still do only shrinks: a file that stopped is taken off it", () => {
     expect(legacy.filter((file) => !found.includes(file))).toEqual([]);
     expect([...legacy].sort()).toEqual(legacy);
+    expect(new Set(legacy).size).toBe(legacy.length);
+  });
+
+  it("the list never grows: it holds no more files than the number written here", () => {
+    // Lower this number whenever the list gets shorter. Adding a file to the list fails here.
+    expect(legacy.length).toBeLessThanOrEqual(LEGACY_AT_MOST);
   });
 
   it("the helper gives a folder that exists and is already spelled the way the system spells it", () => {

@@ -14,7 +14,7 @@ import {
   killTree,
   prUrlFromToolResult,
 } from "./factory-agent.ts";
-import { ciWaitInstruction } from "./factory-agent-checks.ts";
+import { CI_WAIT_MINUTES, ciWaitExitCode, ciWaitInstruction } from "./factory-agent-checks.ts";
 
 describe("agentInstructions", () => {
   it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
@@ -63,6 +63,28 @@ describe("agentInstructions", () => {
     expect(text).toContain(ciWaitInstruction("target", false));
     expect(text).toContain("don't run ci:wait here");
     expect(text).not.toContain("npm run ci:wait -- target");
+  });
+
+  it("gives ci:wait less time than the Bash tool gives a command, so it ends itself and cleans up", () => {
+    expect(CI_WAIT_MINUTES * 60_000).toBeLessThan(600_000);
+    expect(ciWaitInstruction("faultforge", true)).toContain(`--timeout ${CI_WAIT_MINUTES}`);
+    expect(ciWaitInstruction("faultforge", true)).toContain("600000 ms");
+  });
+
+  it("reads the exit code ci:wait names in its last line, for the run log", () => {
+    expect(ciWaitExitCode("  npm run check: success\nci:wait: every job passed on a7439ec.\nci:wait exit 0")).toBe(0);
+    expect(ciWaitExitCode("ci:wait: not green on a7439ec: npm run check (windows)\nci:wait exit 1\n")).toBe(1);
+    expect(ciWaitExitCode([{ type: "text", text: "ci:wait: no result\nci:wait exit 2" }])).toBe(2);
+    // The last one wins when a command ran it twice.
+    expect(ciWaitExitCode("ci:wait exit 1\nfixed\nci:wait exit 0")).toBe(0);
+  });
+
+  it("reads no exit code from a result that names none: the command was killed or never ran", () => {
+    expect(ciWaitExitCode("Command timed out after 600000 ms")).toBeNull();
+    expect(ciWaitExitCode("echo ci:wait exit 0 later")).toBeNull();
+    expect(ciWaitExitCode("ci:wait exit 7")).toBeNull();
+    expect(ciWaitExitCode(undefined)).toBeNull();
+    expect(ciWaitExitCode([null, { type: "image" }])).toBeNull();
   });
 
   it("names a ci:wait call as its own step in the run log, never as a push or a check", () => {

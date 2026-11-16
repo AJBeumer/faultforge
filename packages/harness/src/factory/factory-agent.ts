@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
 import { type FactoryConfig, gateOf, type QualityGate, repoConfig, STRICTEST_GATE } from "../shared/factory-config.ts";
 import { gateText } from "../shared/quality-gate.ts";
-import { ciWaitInstruction } from "./factory-agent-checks.ts";
+import { ciWaitExitCode, ciWaitInstruction } from "./factory-agent-checks.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
@@ -328,7 +328,8 @@ export async function runAgent(
         } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
           // No output here: the event log can be public. The full output stays in the private transcript.
           const step = commands.get(part.tool_use_id ?? "");
-          log("agent-step-result", { step, error: Boolean(part.is_error) });
+          const exit = step === "ci-wait" ? { exitCode: ciWaitExitCode(part.content) } : {};
+          log("agent-step-result", { step, error: Boolean(part.is_error), ...exit });
           if (step === "pr-opened" && !part.is_error) {
             const url = prUrlFromToolResult(part.content, github);
             if (url) lastPr = url;

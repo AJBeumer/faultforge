@@ -79,8 +79,8 @@ export function backgroundViolation(raw: string, background: boolean): string | 
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
 }
 
-/** `npm run check` with a lone `|` later in the same step (before `;`, a new line, `&&` or `||`). */
-const PIPED_CHECK = /\bnpm(?:\s+-\S+)*\s+run(?:\s+-\S+)*\s+check(?![\w:-])(?:(?!;|\n|&&)[^|])*\|(?!\|)/;
+/** `npm run check` with a lone `|` later in its step, within 4,000 characters, so a long command is read in time. */
+const PIPED_CHECK = /\bnpm(?:\s+-\S+)*\s+run(?:\s+-\S+)*\s+check(?![\w:-])(?:(?!;|\n|&&)[^|]){0,4000}\|(?!\|)/;
 
 /** Why a check may not be piped: a pipe ends with its last command's exit code, so a failed check reads as passed. */
 export function pipedCheckViolation(raw: string): string | undefined {
