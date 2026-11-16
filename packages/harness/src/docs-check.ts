@@ -22,7 +22,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { type MarkdownFile, markdownFiles, structureProblems } from "./docs-check-structure.ts";
+import { type MarkdownFile, markdownFiles, markdownProblems } from "./docs-check-structure.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
 import { privateDir } from "./templates.ts";
@@ -162,16 +162,17 @@ export function main(): number {
   let facts: DocsFacts | undefined;
   let files: { path: string; text: string }[];
   let markdown: MarkdownFile[];
+  let structure: string[];
   try {
     markdown = markdownFiles(ROOT);
+    // The Markdown rules need no private storage, so they hold in CI too (#354), on the working tree and the index.
+    structure = markdownProblems(ROOT);
     facts = docsFacts(privateDir());
     files = publicFiles(ROOT);
   } catch (e) {
     console.error(`docs:check: ${e instanceof Error ? e.message : String(e)}`);
     return 2;
   }
-  // The Markdown rules need no private storage, so they hold in CI too (#354).
-  const structure = structureProblems(markdown, ROOT);
   if (structure.length) {
     console.log(`docs:check: the docs break a Markdown rule:\n${structure.map((p) => `- ${p}`).join("\n")}`);
     return 1;

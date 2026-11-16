@@ -20,16 +20,57 @@ export interface MarkdownFile {
 export const MAX_LINES = 150;
 export const START_PAGE = "docs/README.md";
 
-/** Every Markdown file git tracks or would track (new and not ignored) under `root`. */
+const MARKDOWN = /\.md$/i;
+
+function gitList(root: string, args: string[]): string[] {
+  const listed = spawnSync("git", ["-C", root, "ls-files", "-z", ...args], { encoding: "utf8" });
+  if (listed.status !== 0) throw new Error(`can't list the files: ${(listed.stderr ?? "").trim()}`);
+  return [...new Set(listed.stdout.split("\0").filter(Boolean))];
+}
+
+/**
+ * Every Markdown file git tracks or would track (new and not ignored) under `root`, as the working tree has it.
+ * Any case of the extension counts: `Guide.MD` is a page too (Qodo on PR 357).
+ */
 export function markdownFiles(root: string): MarkdownFile[] {
-  const listed = spawnSync("git", ["-C", root, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.md"], {
-    encoding: "utf8",
-  });
-  if (listed.status !== 0) throw new Error(`can't list the Markdown files: ${(listed.stderr ?? "").trim()}`);
-  const paths = [...new Set(listed.stdout.split("\0").filter(Boolean))];
-  return paths
-    .filter((path) => existsSync(join(root, path)))
+  return gitList(root, ["-co", "--exclude-standard"])
+    .filter((path) => MARKDOWN.test(path) && existsSync(join(root, path)))
     .map((path) => ({ path, text: readFileSync(join(root, path), "utf8") }));
+}
+
+/** The index's Markdown files and every path it holds: what a commit would record (Qodo on PR 357). */
+export function stagedMarkdown(root: string): { files: MarkdownFile[]; paths: Set<string> } {
+  const paths = new Set(gitList(root, ["--cached"]));
+  const files = [...paths]
+    .filter((path) => MARKDOWN.test(path))
+    .map((path) => {
+      const shown = spawnSync("git", ["-C", root, "show", `:${path}`], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      if (shown.status !== 0) throw new Error(`can't read the staged ${path}: ${(shown.stderr ?? "").trim()}`);
+      return { path, text: shown.stdout };
+    });
+  return { files, paths };
+}
+
+/**
+ * The rules on the working tree, then on the index, since a commit records the index: a staged page can break a
+ * rule its working copy keeps (Qodo on PR 357). A staged problem the working tree also has is reported once.
+ */
+export function markdownProblems(root: string): string[] {
+  const working = structureProblems(markdownFiles(root), root);
+  const staged = stagedMarkdown(root);
+  if (!staged.files.length) return working;
+  const inIndex = (p: string) => {
+    const folder = p.endsWith("/") ? p : `${p}/`;
+    return staged.paths.has(p) || [...staged.paths].some((q) => q.startsWith(folder));
+  };
+  const seen = new Set(working);
+  const extra = structureProblems(staged.files, root, inIndex)
+    .filter((p) => !seen.has(p))
+    .map((p) => p.replace(/^([^:]+):/, "$1 (staged):"));
+  return [...working, ...extra];
 }
 
 /** The lines of a Markdown file, with fenced code blocks blanked out (kept as empty lines so counts hold). */
@@ -53,7 +94,8 @@ function lineCount(text: string): number {
 export function tooLong(files: MarkdownFile[]): string[] {
   const inScope = (p: string) => p.startsWith("docs/") || !p.includes("/") || p.startsWith(".claude/skills/");
   // The decision log's weekly files hold its entries verbatim, so a busy week may run long.
-  const weekly = (p: string) => /^docs\/decisions\/[^/]+\.md$/.test(p);
+  // Only the weekly files: any other page there is held to the limit (Qodo on PR 357).
+  const weekly = (p: string) => /^docs\/decisions\/week-\d+\.md$/.test(p);
   return files
     .filter((f) => inScope(f.path) && !weekly(f.path) && lineCount(f.text) > MAX_LINES)
     .map((f) => `${f.path}: ${lineCount(f.text)} lines, over the ${MAX_LINES} a page may have`);
@@ -85,7 +127,10 @@ function linkTargets(text: string): string[] {
   const targets: string[] = [];
   for (const raw of proseLines(text)) {
     const line = raw.replace(/`[^`]*`/g, "");
-    for (const m of line.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) targets.push(m[1] as string);
+    // `(<a b.md>)` may hold spaces; a title may be in double or single quotes or brackets (Qodo on PR 357).
+    for (const m of line.matchAll(/\]\(\s*(?:<([^>]*)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g)) {
+      targets.push((m[1] ?? m[2]) as string);
+    }
     const ref = line.match(/^\s{0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?/);
     if (ref) targets.push(ref[1] as string);
   }
@@ -95,7 +140,11 @@ function linkTargets(text: string): string[] {
 const EXTERNAL = /^[a-z][a-z0-9+.-]*:/i;
 
 /** Relative links whose file, folder or heading doesn't exist. */
-export function brokenLinks(files: MarkdownFile[], root: string): string[] {
+export function brokenLinks(
+  files: MarkdownFile[],
+  root: string,
+  exists: (path: string) => boolean = (path) => existsSync(join(root, path)),
+): string[] {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const anchors = new Map<string, Set<string>>();
   const anchorsOf = (path: string): Set<string> | undefined => {
@@ -115,11 +164,11 @@ export function brokenLinks(files: MarkdownFile[], root: string): string[] {
       const [rawPath = "", anchor] = target.split("#", 2);
       const filePath = decodeURIComponent(rawPath);
       const resolved = filePath ? posix.normalize(posix.join(posix.dirname(f.path), filePath)) : f.path;
-      if (resolved.startsWith("../") || !(byPath.has(resolved) || existsSync(join(root, resolved)))) {
+      if (resolved.startsWith("../") || !(byPath.has(resolved) || exists(resolved))) {
         problems.push(`${f.path}: link to ${target}, which doesn't exist`);
         continue;
       }
-      if (anchor && resolved.endsWith(".md") && !anchorsOf(resolved)?.has(decodeURIComponent(anchor).toLowerCase())) {
+      if (anchor && MARKDOWN.test(resolved) && !anchorsOf(resolved)?.has(decodeURIComponent(anchor).toLowerCase())) {
         problems.push(`${f.path}: link to ${target}, which has no such heading`);
       }
     }
@@ -145,6 +194,6 @@ export function unlistedDocs(files: MarkdownFile[]): string[] {
 }
 
 /** All three rules, in order: length, links, the start page. */
-export function structureProblems(files: MarkdownFile[], root: string): string[] {
-  return [...tooLong(files), ...brokenLinks(files, root), ...unlistedDocs(files)];
+export function structureProblems(files: MarkdownFile[], root: string, exists?: (path: string) => boolean): string[] {
+  return [...tooLong(files), ...brokenLinks(files, root, exists), ...unlistedDocs(files)];
 }

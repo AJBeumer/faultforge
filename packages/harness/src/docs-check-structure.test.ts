@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import {
   brokenLinks,
   type MarkdownFile,
   markdownFiles,
+  markdownProblems,
   slugs,
   structureProblems,
   tooLong,
@@ -32,7 +34,7 @@ describe("tooLong: no page over 150 lines (#354)", () => {
   it("allows 150 lines, a trailing newline, the decision log's weekly files, and files elsewhere", () => {
     const files = [
       file("docs/a.md", `${lines(150)}\n`),
-      file("docs/decisions/2026-w46.md", lines(400)),
+      file("docs/decisions/week-2.md", lines(400)),
       file("packages/harness/test/README.md", lines(400)),
       file(".claude/hooks/README.md", lines(400)),
     ];
@@ -139,6 +141,72 @@ describe("markdownFiles and structureProblems on a real folder", () => {
       "docs/extra.md: 151 lines, over the 150 a page may have",
       "docs/README.md: link to gone.md, which doesn't exist",
       "docs/extra.md: not linked from docs/README.md",
+    ]);
+  });
+});
+
+describe("Qodo on PR 357", () => {
+  const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  const repo = () => {
+    const root = mkdtempSync(join(tmpdir(), "docs-staged-"));
+    git(root, "init", "--quiet", "-b", "main");
+    mkdirSync(join(root, "docs"));
+    writeFileSync(join(root, "docs", "README.md"), "# Docs\n");
+    return root;
+  };
+
+  it("checks the staged copy too, since a commit records the index", () => {
+    const root = repo();
+    writeFileSync(join(root, "docs", "README.md"), "# Docs\n\n[gone](gone.md)\n");
+    writeFileSync(join(root, "docs", "long.md"), lines(151));
+    git(root, "add", ".");
+    // Fixed in the working tree only: the commit would still record the staged text.
+    writeFileSync(join(root, "docs", "README.md"), "# Docs\n");
+    rmSync(join(root, "docs", "long.md"));
+    expect(markdownProblems(root)).toEqual([
+      "docs/long.md (staged): 151 lines, over the 150 a page may have",
+      "docs/README.md (staged): link to gone.md, which doesn't exist",
+      "docs/long.md (staged): not linked from docs/README.md",
+    ]);
+  });
+
+  it("resolves a staged link against the index, not the working tree", () => {
+    const root = repo();
+    writeFileSync(join(root, "docs", "README.md"), "# Docs\n\n[data](data.json)\n");
+    writeFileSync(join(root, "docs", "data.json"), "{}\n");
+    git(root, "add", "docs/README.md");
+    expect(markdownProblems(root)).toEqual(["docs/README.md (staged): link to data.json, which doesn't exist"]);
+    git(root, "add", "docs/data.json");
+    expect(markdownProblems(root)).toEqual([]);
+  });
+
+  it("holds a page in docs/decisions/ that isn't a weekly file to the limit", () => {
+    expect(tooLong([file("docs/decisions/notes.md", lines(151))])).toEqual([
+      "docs/decisions/notes.md: 151 lines, over the 150 a page may have",
+    ]);
+  });
+
+  it("reads Markdown files whatever the case of their extension", () => {
+    const root = repo();
+    writeFileSync(join(root, "docs", "Guide.MD"), lines(151));
+    expect(markdownProblems(root)).toEqual([
+      "docs/Guide.MD: 151 lines, over the 150 a page may have",
+      "docs/Guide.MD: not linked from docs/README.md",
+    ]);
+  });
+
+  it("reads a link in angle brackets, and one with a single-quoted or bracketed title", () => {
+    const root = mkdtempSync(join(tmpdir(), "docs-links-"));
+    const files = [
+      file(
+        "README.md",
+        "[a](<missing page.md>) [b](missing.md 'title') [c](gone.md (title)) [ok](<README.md> \"t\")\n",
+      ),
+    ];
+    expect(brokenLinks(files, root)).toEqual([
+      "README.md: link to missing page.md, which doesn't exist",
+      "README.md: link to missing.md, which doesn't exist",
+      "README.md: link to gone.md, which doesn't exist",
     ]);
   });
 });
