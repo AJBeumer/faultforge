@@ -79,7 +79,7 @@ The proof is `packages/harness/test/agent-sandbox.integration.test.ts`, which ru
 
 ## The door kinds in a run
 
-During a run the door to the reviewed repo sends only `push`, `pr-create` and `pr-edit` (#347; [the door](target-door.md#during-a-factory-run)). The runner marks the run active with a marker file at a fixed path just before the agent starts, and the run log records it as a `door-run` event. The marker is removed when the tick ends, by the lock's release, which runs whatever happened. The runner's own comments and label moves pass a key that only its process holds.
+During a run the door to the reviewed repo sends only `push`, `pr-create` and `pr-edit` (#347; [the door](target-door.md#during-a-factory-run)). The runner marks the run active with a marker file at a fixed path as soon as the tick takes its lock, so recovery's and the claim's writes carry its key too, and a marker a killed run left is replaced then. The run log records a `door-run` event before the agent starts. The marker is removed when the tick ends, by the lock's release, which runs whatever happened. The runner's own comments and label moves pass a key that only its process holds.
 
 - **In Actions** the user split above makes this the operating system's guarantee: the marker is the runner's file in `/tmp`, which `ffagent` can't remove, move or edit, and the key is in the runner's memory, which `ffagent` can't read.
 - **On the owner's PC** it is weaker: the agent runs as the owner and could delete the marker first. The door still refuses every call while the marker is there; the policy hook's first word and the run's audit stand guard beyond that.

@@ -99,7 +99,8 @@ import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
 import { RUNNER_MARKER } from "./factory-comments.ts";
 import type { FactoryConfig, RepoConfig } from "./factory-config.ts";
-import { endsDoorRun, realDeps } from "./factory-deps.ts";
+import { realDeps } from "./factory-deps.ts";
+import { endsDoorRun } from "./factory-door-run.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { localSandbox } from "./factory-sandbox.ts";
@@ -434,11 +435,12 @@ Picked up.`,
   it("ends the door's run before it releases the lock, and releases the lock even when ending throws", () => {
     const ended: string[] = [];
     const base = { lock: () => ({ acquired: true, release: () => ended.push("lock") }) } as unknown as TickDeps;
-    endsDoorRun(base, { end: () => ended.push("door") })
+    endsDoorRun(base, { start: () => "k", end: () => ended.push("door") })
       .lock()
       .release();
     expect(ended).toEqual(["door", "lock"]);
     const failing = endsDoorRun(base, {
+      start: () => "k",
       end: () => {
         throw new Error("gone");
       },
@@ -446,6 +448,35 @@ Picked up.`,
     expect(() => failing.release()).toThrow("gone");
     expect(ended).toEqual(["door", "lock", "lock"]);
   });
+
+  it("releases the lock and starts no tick when the run's marker can't be written", () => {
+    const released: string[] = [];
+    const base = { lock: () => ({ acquired: true, release: () => released.push("lock") }) } as unknown as TickDeps;
+    const deps = endsDoorRun(base, {
+      start: () => {
+        throw new Error("EPERM");
+      },
+      end: () => {},
+    });
+    expect(() => deps.lock()).toThrow("EPERM");
+    expect(released).toEqual(["lock"]);
+  });
+
+  it.each(["local", "ci"] as const)(
+    "replaces a %s marker a killed run left as soon as the lock is taken, so recovery's writes still go (Qodo on PR 349)",
+    (mode) => {
+      writeFileSync(runMarker.path, "left by a killed run");
+      const deps = realDeps(FACTORY, OPTIONS, mode);
+      const lock = deps.lock();
+      door.calls = [];
+      deps.comment("owner/target", 18, "Recovered.");
+      deps.relabel("owner/target", 18, ["agent-working"], ["ready-for-agent"]);
+      expect(door.calls.map((c) => c.args.slice(0, 2))).toContainEqual(["issue", "comment"]);
+      expect(door.calls.length).toBeGreaterThan(1);
+      lock.release();
+      expect(existsSync(runMarker.path)).toBe(false);
+    },
+  );
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {
     const ws = workspace(join(runs, "run-1"));

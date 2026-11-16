@@ -9,6 +9,7 @@ import { auditRun } from "./factory-audit.ts";
 import { readCheckFiles } from "./factory-check-files.ts";
 import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
+import { endsDoorRun } from "./factory-door-run.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { type HooksReport, requireHooks, withCleanupFailure } from "./factory-hooks.ts";
@@ -208,7 +209,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     audit: (ws, ticket, from, to) =>
       auditRun(factory, { checkout: privateRepo, main: access.main }, mode, ws, ticket, from, to),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) => {
-      // Marked before the agent exists, so every door call it makes sees the run (#347); ended when the tick ends.
+      // Marked when the lock was taken (`endsDoorRun`); again here in case it wasn't, before the agent exists (#347).
       doorRun.start(runId);
       log("door-run", { marker: doorRun.marker, allowed: AGENT_DOOR_KINDS });
       return runAgent(
@@ -360,32 +361,4 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     // The VM is thrown away after the run.
     cleanup: () => {},
   });
-}
-
-/**
- * `deps` with `extra` over it, and a lock whose release, at the tick's end whatever happened, first ends the run the
- * door sees (#347). The CI lock is a no-op, so the release is the one place both modes pass.
- */
-export function endsDoorRun(
-  deps: TickDeps,
-  doorRun: Pick<ReturnType<typeof doorRunHolder>, "end">,
-  extra: Partial<TickDeps> = {},
-): TickDeps {
-  const all = { ...deps, ...extra };
-  return {
-    ...all,
-    lock: () => {
-      const lock = all.lock();
-      return {
-        ...lock,
-        release: () => {
-          try {
-            doorRun.end();
-          } finally {
-            lock.release();
-          }
-        },
-      };
-    },
-  };
 }

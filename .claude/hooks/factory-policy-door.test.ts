@@ -34,8 +34,17 @@ describe("factory policy: the door kinds a run's agent may use, as a first layer
     ["after an allowed call", "npm run target:post -- push --branch x && npm run target:post -- pr-close --number 3"],
     ["Windows' npm script", "npm.ps1 run target:post -- pr-close --number 3 --body-file b.md"],
     ["a variable set first", "K=1 npm run target:post -- pr-comment --number 3 --body-file b.md"],
+    ["a quoted kind", `npm run target:post -- "pr-close" --number 3 --body-file b.md`],
+    ["a second command after a semicolon", "npm run target:post -- push --branch x; npm run target:post -- pr-close"],
   ])("refuses %s", (_name, command) => {
     expect(doorKindViolation(command)).toBeDefined();
+  });
+
+  it("reads a `;` inside a quoted file name as part of the name (Qodo on PR 349)", () => {
+    const quoted = "'title; npm run target:post -- pr-close'";
+    expect(
+      doorKindViolation(`npm run target:post -- pr-create --head tidy --title-file ${quoted} --body-file b.md`),
+    ).toBeUndefined();
   });
 
   it.each([

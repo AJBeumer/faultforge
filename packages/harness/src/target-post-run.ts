@@ -5,8 +5,8 @@
  * check sits in `sendPost`, which every send goes through, not in the text of a command. The one exception is the
  * runner's own writes (`ticket-write.ts`), which pass the run's runner key.
  *
- * A run is active while its marker file exists. The runner writes it before the agent starts and removes it when
- * the tick ends (`startDoorRun`). Its path is fixed, never read from the environment, which the agent sets, and no
+ * A run is active while its marker file exists. The runner writes it when a tick takes its lock, before the tick's
+ * first write and before the agent starts, and removes it when the tick ends (`startDoorRun`). Its path is fixed, never read from the environment, which the agent sets, and no
  * caller can name another for a send through the door's own `gh` or `git` (`gateMarker`). It holds the run's id,
  * the runner's pid and the SHA-256 of a random key; the key itself stays in the runner's memory and is never
  * written to a file or given to the agent. A marker that can't be read counts as a run whose key can't match, so

@@ -10,7 +10,8 @@
  * else is left to the door.
  */
 import { AGENT_DOOR_KINDS } from "../../packages/harness/src/target-post-run.ts";
-import { joinedWords, segments } from "./shell-scan.ts";
+import { joinedWords } from "./shell-scan.ts";
+import { steps, words } from "./shell-words.ts";
 
 export { AGENT_DOOR_KINDS };
 
@@ -23,19 +24,20 @@ const ALLOWED: readonly string[] = AGENT_DOOR_KINDS;
 
 /** Why a command may not run in a run because of the door kind it names, or undefined. */
 export function doorKindViolation(command: string): string | undefined {
-  for (const { text } of segments(command)) {
-    // The step's words, after any `NAME=value` it sets first.
-    const all = joinedWords(text).split(/\s+/).filter(Boolean);
-    const words = all.slice(
+  // Split where the shell splits, so a `;` inside a quoted file name is part of that name (Qodo on PR 349).
+  for (const { text } of steps(command, true)) {
+    // The step's words, quotes removed, after any `NAME=value` it sets first.
+    const all = words(text).map(joinedWords);
+    const run = all.slice(
       Math.max(
         0,
         all.findIndex((word) => !/^\w+=/.test(word)),
       ),
     );
-    if (!PACKAGE_MANAGER.test(words[0]?.split(/[\\/]/).pop() ?? "")) continue;
-    const at = words.indexOf("target:post");
+    if (!PACKAGE_MANAGER.test(run[0]?.split(/[\\/]/).pop() ?? "")) continue;
+    const at = run.indexOf("target:post");
     if (at < 0) continue;
-    const kind = words.slice(at + 1).find((word) => !word.startsWith("-"));
+    const kind = run.slice(at + 1).find((word) => !word.startsWith("-"));
     if (kind !== undefined && !ALLOWED.includes(kind)) return DOOR_KIND_REASON;
   }
   return undefined;
