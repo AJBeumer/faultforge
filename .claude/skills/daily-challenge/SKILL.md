@@ -5,11 +5,11 @@ description: Start or finish a FaultForge hackathon day - read the backlog and t
 
 # FaultForge daily challenge
 
-The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16) is the source for this routine.
+The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16, `docs/charter/16-thirty-day-roadmap.md`) is the source for this routine.
 
 ## Start of day
 
-1. Read `private/BACKLOG.md`, the open tickets (`gh issue list --repo AJBeumer/faultforge`), the latest entry in `docs/decision-log.md`, and the roadmap row for today in the charter (section 16).
+1. Read `private/BACKLOG.md`, the open tickets (`gh issue list --repo AJBeumer/faultforge`), the latest entry in `docs/decision-log.md` (it links the weekly files under `docs/decisions/`), and the roadmap row for today in the charter (section 16).
 2. Read the day's challenge text. Its acceptance requirements are mandatory, even when they change the planned order.
 3. Check that all three repos are clean and in sync (`git status -sb` in `.`, `private/` and `../faultforge-target`).
 4. Run `npm run qodo:check` (`QODO_KEY_FILE` set). Exit 0: the reviewer matches the current snapshot. Exit 1: the reviewer changed since the snapshot; stop and tell the owner, with the printed differences. Only the owner decides, because results are only comparable under the same configuration: either Qodo is restored to the snapshot, or the owner records a new configuration version in the decision log and takes a new snapshot folder. Never create or edit a snapshot to make the check pass. Exit 2: the check could not run; fix the setup first.
@@ -29,7 +29,7 @@ The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16) is t
 
 ## End of day
 
-1. Write today's entry in `docs/decision-log.md`:
+1. Write today's entry in `docs/decision-log.md`, at the end of the current week's file under `docs/decisions/` (when a new week starts, add its file and link it from the index):
 
    ```markdown
    ## Day NN: [challenge title]
@@ -42,7 +42,7 @@ The charter is `docs/CHARTER.md`; its daily challenge protocol (section 16) is t
    ```
 
    Measured results only, with links to PRs and commits. Before writing, check the entry against the decision-log rules in `CLAUDE.md`: only adjudicated cases, nothing about held-back cases, and planned work goes in a ticket instead.
-2. Update the Status table in `README.md` if a milestone changed.
+2. Update the Status table (moved from `README.md` to `docs/about/status.md`) if a milestone changed.
 3. Update `private/BACKLOG.md`: tick finished items, add new ones.
 4. Commit and push FaultForge, `private/`, and the target if it changed. Plain-English commit messages, no attribution lines.
 5. Draft the discussion post for the owner: the challenge's prompts, actual results, and one lesson. Mark the audience at the top of your reply.

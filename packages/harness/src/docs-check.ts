@@ -12,14 +12,17 @@
  * long as it isn't above the highest case there: such an id names a case before it exists, and only the
  * fixture ids (`FF-0099`, `FF-9000` to `FF-9999`) may do that.
  * Without private storage (CI) there is nothing to check against, so it says so and passes.
+ * First, everywhere and CI included, it holds every Markdown file to the rules in `docs-check-structure.ts`
+ * (#354): no page over 150 lines, every relative link resolves, and `docs/README.md` links every doc.
  *
- * Exit codes: 0 nothing found, or no private storage to check against; 1 a public file names a case or
- * template it may not, listed on stdout; 2 a file could not be read, or an unexpected error stopped it
- * (`npm run docs:check` runs `docs-check-cli.ts`, so even while loading).
+ * Exit codes: 0 nothing found, or no private storage to check against; 1 the docs fail a check (a Markdown
+ * rule, or a public file names a case or template it may not), listed on stdout; 2 a file could not be read,
+ * or an unexpected error stopped it (`npm run docs:check` runs `docs-check-cli.ts`, so even while loading).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { type MarkdownFile, markdownFiles, structureProblems } from "./docs-check-structure.ts";
 import { readAuditLog, readLedger } from "./ledger.ts";
 import { ROOT } from "./paths.ts";
 import { privateDir } from "./templates.ts";
@@ -158,13 +161,22 @@ export function docsFacts(priv: string): DocsFacts | undefined {
 export function main(): number {
   let facts: DocsFacts | undefined;
   let files: { path: string; text: string }[];
+  let markdown: MarkdownFile[];
   try {
+    markdown = markdownFiles(ROOT);
     facts = docsFacts(privateDir());
     files = publicFiles(ROOT);
   } catch (e) {
     console.error(`docs:check: ${e instanceof Error ? e.message : String(e)}`);
     return 2;
   }
+  // The Markdown rules need no private storage, so they hold in CI too (#354).
+  const structure = structureProblems(markdown, ROOT);
+  if (structure.length) {
+    console.log(`docs:check: the docs break a Markdown rule:\n${structure.map((p) => `- ${p}`).join("\n")}`);
+    return 1;
+  }
+  console.log(`docs:check: ${markdown.length} Markdown files: none too long, every link resolves, all listed`);
   if (!facts) {
     console.log("docs:check: no private storage here, so nothing to check public text against (skipped)");
     return 0;
