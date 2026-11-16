@@ -4,6 +4,7 @@
  * hooks' rules look for words, so they read the command these ways too, beside the text as written. Both
  * hooks use these; neither trusts one reading alone.
  */
+import { joinedWords } from "./scan.ts";
 
 /** One `\…` escape inside `$'…'`, decoded as bash does. */
 function ansiEscape(_m: string, body: string): string {
@@ -63,6 +64,15 @@ export function spokenWords(command: string): string {
     .replace(/\\(?=[\w-])/g, "")
     .replace(/(["'])\s*\+\s*(["'])/g, "")
     .replace(/["'`]/g, "");
+}
+
+/**
+ * The command as the words the shell passes: ANSI-C strings decoded, a backslash before a letter, digit or dash
+ * dropped, and quote marks removed, so `tar''get` and `tar\get` read `target`. Variables stay, so a name built
+ * from one still reads as one the guard can't read.
+ */
+export function shellWords(command: string): string {
+  return joinedWords(decodeAnsiC(command).replace(/\\(?=[\w-])/g, ""));
 }
 
 /**

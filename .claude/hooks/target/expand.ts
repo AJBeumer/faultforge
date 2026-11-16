@@ -176,7 +176,15 @@ export function unreadablePost(command: string): boolean {
   });
 }
 
-/** True when the repo a write goes to is a variable the command doesn't set: where it goes can't be read. */
+/**
+ * True when the repo a write goes to holds, in whole or in part, a variable the command doesn't set or a brace
+ * list the shell turns into several words (`-R o/tar$X`, `repos/o/$N/issues`, `github.com/o/{a,b}`): where it
+ * goes can't be read.
+ */
 export function unreadableDestination(command: string): boolean {
-  return /(?:--repo|(?<=\s)-R)[\s=]*["']?\$|\bGH_REPO\s*=\s*["']?\$/.test(command);
+  const built = String.raw`(?:\$|\{[^\s}]*,)`;
+  const pair = String.raw`(?:[^\s/$]*\/)?[^\s/$]*${built}`;
+  return new RegExp(
+    String.raw`(?:--repo|(?<=\s)-R)[\s=]*[^\s;&|]*?${built}|\bGH_REPO\s*=\s*[^\s;&|]*?${built}|\brepos\/${pair}|github\.com[/:]+${pair}`,
+  ).test(command);
 }

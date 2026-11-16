@@ -1,9 +1,12 @@
 /**
  * Where a command reaches and what kind of write it is: the GitHub repos it names as destinations, whether it
- * writes at all, whether it sends to a remote, and whether it switches git's own guard off. Every test here reads the command with its quote marks removed (`joinedWords`), so `"--force"`,
- * `gi''t` and `'+main'` read as the shell runs them.
+ * writes at all, whether it sends to a remote, and whether it switches git's own guard off. Destinations are
+ * read both as written and as the words the shell passes (`shellWords`), so `faultforge-tar''get`, `tar\get` and
+ * `$'tar\x67et'` name the same repo. The other tests read the command with its quote marks removed
+ * (`joinedWords`), so `"--force"`, `gi''t` and `'+main'` read as the shell runs them.
  */
 import { githubRepos } from "../shared/repos.ts";
+import { shellWords } from "../shell/decode.ts";
 import { blankQuoted, gitSteps, joinedWords, segments, wordThen } from "../shell/scan.ts";
 
 const REPO = String.raw`([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s?#)]|$)`;
@@ -11,9 +14,18 @@ const REPO = String.raw`([\w.-]+\/[\w.-]+?)(?:\.git)?(?=[/"'\s?#)]|$)`;
 /**
  * Every GitHub repo (owner/name, lower case) a command names as a destination: `--repo`, `-R`, `GH_REPO=`,
  * an API route, or a URL given to `gh` or to `git push/pull/fetch/clone/remote`, anywhere in the command,
- * chained parts and quoted text included. The guard applies the strictest rule over all of them.
+ * chained parts and quoted text included, as written and as the shell joins its words. The guard applies the
+ * strictest rule over all of them.
  */
 export function explicitDestinations(command: string): string[] {
+  const words = shellWords(command);
+  const found = namedIn(command);
+  if (words !== command) found.push(...namedIn(words));
+  return [...new Set(found)];
+}
+
+/** The repos one reading of a command names as destinations; see `explicitDestinations`. */
+function namedIn(command: string): string[] {
   const patterns = [
     /--repo[\s=]+["']?([\w.-]+\/[\w.-]+)/gi,
     // gh's short form, `-R`, only in capitals (`-r` is another flag, such as grep's) and with or without a
@@ -55,7 +67,7 @@ export function explicitDestinations(command: string): string[] {
  */
 export function urlDestinations(outside: string): string[] {
   // Only in a gh step: a URL another program is given (a script's argument, say) is not where gh posts.
-  return segments(joinedWords(outside)).flatMap((part) => {
+  return segments(shellWords(outside)).flatMap((part) => {
     const gh = /\bgh\s/.exec(part.text);
     return gh ? githubRepos(part.text.slice(gh.index)) : [];
   });
