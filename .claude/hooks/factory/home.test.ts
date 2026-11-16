@@ -1,59 +1,17 @@
 /**
- * The factory policy's share of the sixth re-grade's paths (#332): a run may not switch off git's own guard hooks
- * in the lab either (`--no-verify`, `core.hooksPath`, the guard's settings, a `.git` folder's files), and may not
- * read the owner's secrets in the home folder.
+ * A factory run never reads the owner's secrets in the home folder (factory/home.ts): not by a read tool, a
+ * search that walks it, or a shell command that names it, however the home folder is spelled. The run's own files
+ * and the temp folder stay readable. The run folder is made up under the temp folder.
  */
-import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { homeSecretCommand, homeSecretPath } from "./factory/home.ts";
-import { decide, editViolation, gitGuardViolation } from "./factory-policy.ts";
+import { policyRun } from "../fixtures.ts";
+import { homeSecretCommand, homeSecretPath } from "./home.ts";
 
-/** A run's own folder, under the temp folder like a real run's scratch, with the lab inside it. */
-const RUN = mkdtempSync(join(tmpdir(), "policy-run6-"));
-const LAB = join(RUN, "faultforge");
-const ENV: NodeJS.ProcessEnv = {
-  FAULTFORGE_FACTORY_RUN: "1",
-  FAULTFORGE_RUN_ROOT: RUN,
-  FAULTFORGE_TICKET_NUMBER: "999",
-};
+const { RUN, ENV, policy } = policyRun("policy-run6-");
 
-function policy(tool: string, input: object, cwd = LAB): string | undefined {
-  const decision = decide(JSON.stringify({ tool_name: tool, cwd, tool_input: input }), ENV);
-  if (decision.kind === "error") throw new Error(decision.message);
-  return decision.kind === "deny" ? decision.reason : undefined;
-}
-
-describe("a run can't switch off git's own guard hooks in the lab (re-grade 6)", () => {
-  it.each([
-    "git commit --no-verify -m x",
-    "git commit -n -m x",
-    "git push --no-verify origin tidy",
-    "git -c core.hooksPath=/tmp push",
-    "git config core.hooksPath /tmp",
-    "git config review-guard.script /dev/null",
-    "git config --unset review-guard.script",
-    "rm .git/hooks/pre-push",
-  ])("refuses %s", (command) => {
-    expect(gitGuardViolation(command)).toMatch(/guard hooks run/);
-    expect(policy("Bash", { command })).toMatch(/guard hooks run/);
-  });
-
-  it("refuses the file tools in a .git folder", () => {
-    expect(editViolation(join(LAB, ".git", "hooks", "pre-push"), RUN)).toMatch(/\.git folder/);
-    expect(policy("Write", { file_path: join(LAB, ".git", "hooks", "pre-push"), content: "exit 0" })).toMatch(
-      /\.git folder/,
-    );
-  });
-
-  it("still lets an ordinary commit through", () => {
-    expect(gitGuardViolation('git commit -m "Tidy the list"')).toBeUndefined();
-    expect(editViolation(join(LAB, "docs", "x.md"), RUN)).toBeUndefined();
-  });
-});
-
-describe("a run never reads the owner's secrets in the home folder (re-grade 6)", () => {
+describe("a run never reads the owner's secrets in the home folder", () => {
   const home = homedir();
   it.each([
     join(home, ".qodo", "qodo-key.txt"),
@@ -109,7 +67,7 @@ describe("a run never reads the owner's secrets in the home folder (re-grade 6)"
   });
 });
 
-describe("a bare cd names the home folder too (Qodo on PR 333)", () => {
+describe("a bare cd names the home folder too", () => {
   it.each(["cd && cat .ssh/id_ed25519", "cd; cat .qodo/config", "cd\ncat .ssh/id_rsa", "pushd && ls"])(
     "refuses %j",
     (command) => {

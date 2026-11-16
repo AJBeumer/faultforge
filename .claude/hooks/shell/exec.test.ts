@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide as policyDecide } from "../factory-policy.ts";
-import { guardConfig, tempRepo } from "../fixtures.ts";
+import { askGuard, guardConfig, privateStore, tempRepo } from "../fixtures.ts";
 import { decide as guardDecide } from "../guard-target.ts";
 import { BUILT_CODE_REASON, builtCodeProblem, INLINE_NETWORK_REASON, inlineNetworkProblem } from "./exec.ts";
 
@@ -174,5 +174,39 @@ describe("a private template id under other spellings, and inside inline code (#
   it("still allows text that only shares a part of the id", () => {
     expect(guard('gh pr create -t x -b "a secret v1 note"', LAB)).toBeUndefined();
     expect(guard('gh pr create -t x -b "box-secret-v1"', LAB)).toBeUndefined();
+  });
+});
+
+describe("code an interpreter runs as a subprocess is built code", () => {
+  const config = guardConfig(tempRepo(true).dir);
+  const privateDir = privateStore("guard~regrade-");
+  const inTarget = (command: string) =>
+    askGuard("Bash", { command }, "D:\\Projects\\faultforge-target", { config, privateDir });
+
+  it.each([
+    ["perl system", `perl -e 'system("git","push","--force")'`],
+    ["perl backticks", "perl -e 'print `git push -f`'"],
+    ["perl exec", `perl -e 'exec "git push -f"'`],
+    ["python subprocess", `python -c "import subprocess;subprocess.run(['g'+'it','pu'+'sh','--for'+'ce'])"`],
+    ["python os.system", `python3 -c "import os;os.system('git push -f')"`],
+    ["python decode then exec", `python3 -c "import base64,os;os.system(base64.b64decode('Z2l0IHB1c2ggLWY='))"`],
+    ["python exec of decoded code", `python -c "import base64;exec(base64.b64decode('cHJpbnQoMSk='))"`],
+    ["python os.popen", `python -c "import os;os.popen('git push -f')"`],
+    ["node child_process", `node -e "require('child_process').execSync('git push --force')"`],
+    ["node child_process import", `node -e "import('node:child_process').then(c=>c.spawnSync('git',['push']))"`],
+    ["node eval of decoded code", `node -e "eval(atob('Y29uc29sZS5sb2coMSk='))"`],
+    ["ruby system", `ruby -e 'system("git push -f")'`],
+    ["php shell_exec", `php -r 'shell_exec("git push -f");'`],
+    ["a heredoc to python", "python3 <<'EOF'\nimport subprocess\nsubprocess.run(['git','push'])\nEOF"],
+  ])("refuses %s", (_name, command) => {
+    expect(builtCodeProblem(command)).toBeDefined();
+    expect(inTarget(command)).toBeDefined();
+  });
+
+  it("allows inline code that runs nothing", () => {
+    expect(builtCodeProblem(`node -e "console.log(require('fs').readdirSync('.'))"`)).toBeUndefined();
+    expect(builtCodeProblem(`python -c "import json;print(json.dumps({'a':1}))"`)).toBeUndefined();
+    expect(builtCodeProblem(`perl -ne 'print if /x/' file.txt`)).toBeUndefined();
+    expect(builtCodeProblem("node scripts/build.js")).toBeUndefined();
   });
 });

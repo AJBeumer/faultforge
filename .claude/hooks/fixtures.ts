@@ -4,9 +4,10 @@
  * reads or changes the owner's real checkouts.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { decide as policyDecide } from "./factory-policy.ts";
 import { decide } from "./guard-target.ts";
 
 /** This repository's factory.json, parsed once; the guard tests change copies of it. */
@@ -32,10 +33,97 @@ export function guardConfig(checkout: string, extra?: (config: typeof FACTORY) =
  * guard-target.test.ts cover how an error is reported.
  */
 export function guardDecision(tool: string, toolInput: object, cwd: string, config: string): string | undefined {
-  const payload = JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput });
-  const decision = decide(payload, { ...process.env, FAULTFORGE_CONFIG: config });
+  return askGuard(tool, toolInput, cwd, { config });
+}
+
+/** How a test asks the guard: its factory.json, its private storage, and whether to clear a factory run first. */
+export interface Asking {
+  config: string;
+  privateDir?: string;
+  outsideRun?: boolean;
+}
+
+/**
+ * The guard's deny reason for one tool call asked in-process, or undefined when allowed; a blocking error throws.
+ * `extra` is added to the environment last, so it can start a factory run or point at other private storage.
+ */
+export function askGuard(
+  tool: string,
+  toolInput: object,
+  cwd: string,
+  how: Asking,
+  extra: NodeJS.ProcessEnv = {},
+): string | undefined {
+  const env: NodeJS.ProcessEnv = { ...process.env, FAULTFORGE_CONFIG: how.config };
+  if (how.privateDir !== undefined) env.FAULTFORGE_PRIVATE_DIR = how.privateDir;
+  if (how.outsideRun) delete env.FAULTFORGE_FACTORY_RUN;
+  Object.assign(env, extra);
+  const decision = decide(JSON.stringify({ tool_name: tool, cwd, tool_input: toolInput }), env);
   if (decision.kind === "error") throw new Error(decision.message);
   return decision.kind === "deny" ? decision.reason : undefined;
+}
+
+/**
+ * Private storage in its own temp folder named from `prefix`, holding the unreleased template `x-secret-v1` and
+ * any `more`. A `~` in the prefix gives the folder a name like a Windows short name (CI runs in `RUNNER~1`).
+ */
+export function privateStore(prefix: string, more: string[] = []): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  for (const id of ["x-secret-v1", ...more]) mkdirSync(join(dir, "templates", id), { recursive: true });
+  return dir;
+}
+
+/** A temp folder that is no checkout, named from `prefix`, holding `files` (name to text). */
+export function scratchFolder(prefix: string, files: Record<string, string> = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+  return dir;
+}
+
+/** The owner's three repos on GitHub, as the guard tests name them. */
+export const REPOS = {
+  target: "AJBeumer/faultforge-target",
+  lab: "AJBeumer/faultforge",
+  private: "AJBeumer/faultforge-private",
+};
+
+/** The deny reason of the door rule (#340): every write to a reviewed repo goes through npm run target:post. */
+export const DOOR = /go only through the door/;
+
+/**
+ * A lab checkout with the private checkout inside it as `private/`, as the owner keeps them: the lab has a `lab`
+ * remote; the private checkout has its own `origin` and a `lab` remote, and holds the template `x-secret-v1`.
+ */
+export function labWithPrivate(): { lab: TempRepo; privateDir: string } {
+  const lab = tempRepo(true);
+  lab.git("remote", "add", "lab", `https://github.com/${REPOS.lab}.git`);
+  const privateDir = join(lab.dir, "private");
+  mkdirSync(join(privateDir, "templates", "x-secret-v1"), { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main", privateDir]);
+  execFileSync("git", ["-C", privateDir, "remote", "add", "origin", `https://github.com/${REPOS.private}.git`]);
+  execFileSync("git", ["-C", privateDir, "remote", "add", "lab", `https://github.com/${REPOS.lab}.git`]);
+  return { lab, privateDir };
+}
+
+/**
+ * A factory run's folder under the temp folder, with the lab inside it (made on disk when `makeLab`), the
+ * environment the runner gives the agent, and the policy hook's deny reason for one tool call asked in-process.
+ */
+export function policyRun(prefix: string, makeLab = false) {
+  const RUN = mkdtempSync(join(tmpdir(), prefix));
+  const LAB = join(RUN, "faultforge");
+  if (makeLab) mkdirSync(LAB, { recursive: true });
+  const ENV: NodeJS.ProcessEnv = {
+    FAULTFORGE_FACTORY_RUN: "1",
+    FAULTFORGE_RUN_ROOT: RUN,
+    FAULTFORGE_TICKET_NUMBER: "999",
+  };
+  const policy = (tool: string, input: object, cwd = LAB): string | undefined => {
+    const decision = policyDecide(JSON.stringify({ tool_name: tool, cwd, tool_input: input }), ENV);
+    if (decision.kind === "error") throw new Error(decision.message);
+    return decision.kind === "deny" ? decision.reason : undefined;
+  };
+  return { RUN, LAB, ENV, policy };
 }
 
 export interface TempRepo {

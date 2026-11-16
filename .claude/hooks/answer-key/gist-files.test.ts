@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { guardConfig, tempRepo } from "../fixtures.ts";
+import { askGuard, guardConfig, privateStore, tempRepo } from "../fixtures.ts";
 import { decide } from "../guard-target.ts";
 
 const CONFIG = guardConfig(tempRepo(true).dir);
@@ -105,5 +105,42 @@ describe("a gist fed on stdin (Qodo on PR 310)", () => {
   it("is allowed when the input is a clean file", () => {
     expect(bash(`cat ${CLEAN} | gh gist create -`)).toBeUndefined();
     expect(bash(`gh gist create - < ${CLEAN}`)).toBeUndefined();
+  });
+});
+
+describe("gists and release assets are posts", () => {
+  const config = guardConfig(tempRepo(true).dir);
+  const privateDir = privateStore("guard~regrade-");
+  const fromLab = (command: string) =>
+    askGuard("Bash", { command }, "D:\\Projects\\FaultForge", { config, privateDir });
+  /** A file in its own temp folder holding `text`, by a path with forward slashes. */
+  const file = (name: string, text: string) => {
+    const path = join(mkdtempSync(join(tmpdir(), "guard-regrade-")), name);
+    writeFileSync(path, text);
+    return path.replace(/\\/g, "/");
+  };
+  const named = file("idnote.txt", "see x-secret-v1\n");
+  const clean = file("clean.txt", "Filter bookings by status.\n");
+
+  it.each([
+    ["a public gist", (f: string) => `gh gist create --public ${f}`],
+    ["a secret gist", (f: string) => `gh gist create ${f}`],
+    ["a gist with a description first", (f: string) => `gh gist create -d notes ${f}`],
+    ["a release with an asset", (f: string) => `gh release create v1 -R ${T} ${f}`],
+    ["a release upload", (f: string) => `gh release upload v1 -R ${T} ${f}`],
+  ])("reads the files of %s for a private id", (_name, command) => {
+    expect(fromLab(command(named))).toMatch(/still private/);
+  });
+
+  it("refuses a gist of a file in private storage", () => {
+    const answer = join(privateDir, "ground-truth.jsonl").replace(/\\/g, "/");
+    writeFileSync(answer, '{"caseId":"FF-9001"}\n');
+    expect(fromLab(`gh gist create --public ${answer}`)).toMatch(/private storage/);
+    expect(fromLab(`gh gist create ${answer}`)).toMatch(/private storage/);
+    expect(fromLab(`gh release create v1 -R ${T} ${answer}#notes`)).toMatch(/private storage/);
+  });
+
+  it("allows a gist of a clean file", () => {
+    expect(fromLab(`gh gist create ${clean}`)).toBeUndefined();
   });
 });

@@ -1,92 +1,16 @@
 /**
- * The factory policy's share of the seventh re-grade (#338): a run may not read stored git credentials, another
- * process's environment through `ps`, or change the check script in package.json (or a script it runs).
+ * A factory run may change a package.json, but not the check script or any script the check runs
+ * (factory/check-script.ts), by a file tool or a shell command. The run folder is made up under the temp folder.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CHECK_SCRIPT_EDIT, checkScriptNames, checkScriptViolation } from "./factory/check-script.ts";
-import { decide } from "./factory-policy.ts";
+import { policyRun } from "../fixtures.ts";
+import { CHECK_SCRIPT_EDIT, checkScriptNames, checkScriptViolation } from "./check-script.ts";
 
-const RUN = mkdtempSync(join(tmpdir(), "policy-run7-"));
-const LAB = join(RUN, "faultforge");
-mkdirSync(LAB, { recursive: true });
-const ENV: NodeJS.ProcessEnv = {
-  FAULTFORGE_FACTORY_RUN: "1",
-  FAULTFORGE_RUN_ROOT: RUN,
-  FAULTFORGE_TICKET_NUMBER: "999",
-};
+const { LAB, policy } = policyRun("policy-run7-", true);
 
-function policy(tool: string, input: object, cwd = LAB): string | undefined {
-  const decision = decide(JSON.stringify({ tool_name: tool, cwd, tool_input: input }), ENV);
-  if (decision.kind === "error") throw new Error(decision.message);
-  return decision.kind === "deny" ? decision.reason : undefined;
-}
-
-describe("a run can't read stored credentials (re-grade 7)", () => {
-  it.each([
-    "printf 'host=github.com\\nprotocol=https\\n' | git credential fill",
-    "git credential fill < req.txt",
-    "git -c credential.helper= credential fill",
-    "git -C repo credential approve",
-    "git credential-store get",
-    "git credential-manager get",
-    "git-credential-manager get",
-    "/usr/lib/git-core/git-credential-store get",
-    "gh auth git-credential get",
-  ])("refuses %s", (command) => {
-    expect(policy("Bash", { command })).toMatch(/stored credentials/);
-  });
-
-  it("lets a commit message that says credential through", () => {
-    expect(policy("Bash", { command: "git commit -F msg.txt" })).toBeUndefined();
-    expect(policy("Bash", { command: 'git log --grep "credential fill"' })).toBeUndefined();
-  });
-});
-
-describe("a run can't read another process's environment through ps (re-grade 7)", () => {
-  it.each([
-    "ps e",
-    "ps eww",
-    "ps eww -o command",
-    "ps auxe",
-    "ps axeww",
-    "ps e -o pid,command",
-    "ps -o pid -e e",
-    "sudo ps e",
-    "/bin/ps e",
-    // Behind a value, an assignment or a shell (Qodo on PR 339).
-    "ps -p 1 e",
-    "ps -o pid,args e",
-    "A=1 ps e",
-    'sh -c "ps e"',
-    "timeout 5 ps e",
-    // From inline code (Qodo on PR 339, second round).
-    "node -e \"require('child_process').execFileSync('ps',['e'])\"",
-    "python3 -c \"import subprocess; subprocess.run(['ps', 'eww'])\"",
-    // An option before the e, from inline code (Qodo on PR 339, third round).
-    "node -e \"require('child_process').execFileSync('ps',['-p','1','e'])\"",
-  ])("refuses %s", (command) => {
-    expect(policy("Bash", { command })).toMatch(/environment \(ps e, ps eww\)/);
-  });
-
-  it.each([
-    "ps aux",
-    "ps -ef",
-    "ps -o pid,user",
-    "ps -o user -p 1",
-    "ps -e | grep node",
-    // A format list after a combined option (Qodo on PR 339).
-    "ps -eo pid,user",
-    "ps -axo pid,etime,args",
-    "ps -eo pid,ppid,cmd,%mem --sort=-%mem",
-  ])("lets %s through", (command) => {
-    expect(policy("Bash", { command })).toBeUndefined();
-  });
-});
-
-describe("a run can't change the check script (re-grade 7)", () => {
+describe("a run can't change the check script", () => {
   const PKG = {
     name: "x",
     scripts: {

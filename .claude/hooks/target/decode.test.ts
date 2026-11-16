@@ -2,13 +2,12 @@
  * The guard reads text as the shell would post it (#285): the re-grade after round 4 got these spellings
  * through. Each is a payload the hook gets, judged by its decision.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { leetReadings, telltales } from "../../../packages/harness/src/neutral.ts";
 import { privateIdMatcher } from "../answer-key/private-ids.ts";
-import { hookFileProblem, MIN_HOOK_BYTES, run } from "../fail-closed.ts";
 import { guardConfig, tempRepo } from "../fixtures.ts";
 import { decide } from "../guard-target.ts";
 import { expandVariables, type RepositoryResolver, setRepositoryResolver } from "./expand.ts";
@@ -198,35 +197,6 @@ describe("markup that renders as nothing can't split a word or an id (re-grade 7
     expect(verdict('gh pr create -R AJBeumer/faultforge -t Tidy -b "demo x-se<!---->cret-v1"')).toMatch(
       /name a bug template that is still private/,
     );
-  });
-});
-
-describe("the fail-closed wrapper refuses a hook file that can't be the hook (AUD-M4)", () => {
-  const scratch = mkdtempSync(join(tmpdir(), "guard-hookfile-"));
-  const file = (name: string, text: string) => {
-    const path = join(scratch, name);
-    writeFileSync(path, text);
-    return path;
-  };
-  const real = join(import.meta.dirname, "../guard-target.ts");
-
-  it("accepts both real hooks", () => {
-    expect(hookFileProblem(real)).toBeUndefined();
-    expect(hookFileProblem(join(import.meta.dirname, "../factory-policy.ts"))).toBeUndefined();
-  });
-
-  it.each([
-    ["emptied", ""],
-    ["truncated", "export function decide(stdin) {\n"],
-    ["a one-line allow", "process.exit(0)"],
-    ["padded but without decide", `// ${"x".repeat(MIN_HOOK_BYTES)}\nif (isEntry(import.meta.url)) main();\n`],
-    ["padded with decide but no entry point", `export function decide() {}\n// ${"x".repeat(MIN_HOOK_BYTES)}\n`],
-  ])("refuses a hook file %s", (_name, text) => {
-    const hook = file(`${_name.replace(/\W+/g, "-")}.ts`, text);
-    expect(hookFileProblem(hook)).toBeDefined();
-    const result = run([hook], () => Buffer.from("{}"));
-    expect(result.code).toBe(2);
-    expect(result.stderr).toMatch(/refused/);
   });
 });
 
