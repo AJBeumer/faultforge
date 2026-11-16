@@ -2,7 +2,7 @@
  * The files a gist or a release would publish (re-grade 3), read as the shell would run the command (Qodo on PR
  * 310): its words with quotes and escapes removed (`gh gi''st create`), its wildcards and brace lists expanded
  * (`private/*`), and for a gist the files its stdin comes from (`gh gist create - < f`, `cat f | gh gist create`).
- * Split out of guard-files.ts, which may not pass 400 lines.
+ * Split out of target/posted-files.ts, which may not pass 400 lines.
  */
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";

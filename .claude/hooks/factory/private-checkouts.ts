@@ -1,6 +1,6 @@
 /**
  * The factory policy's rules about the private repo (AUD-H2, #284, #299): which of its files no run reads, and
- * which checkouts of it a run's tools must stay out of. Split from factory-policy-paths.ts, which may not pass
+ * which checkouts of it a run's tools must stay out of. Split from factory/paths.ts, which may not pass
  * 400 lines.
  *
  * Every run, a lab ticket's included, is kept out of the private checkouts the runner names in
@@ -11,9 +11,10 @@
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, relative, resolve } from "node:path";
+import { esc } from "../shared/repos.ts";
 import { spokenWords } from "../shell/decode.ts";
 import { globMatches, hasWildcard } from "../shell/glob.ts";
-import { joinedWords, quotedMask, quotedSpans } from "../shell/scan.ts";
+import { joinedWords, quotedSpans, splitSteps } from "../shell/scan.ts";
 
 /** The runner's list of private checkouts a run must not read, as the agent's environment holds it. */
 export const PRIVATE_CHECKOUTS_ENV = "FAULTFORGE_PRIVATE_CHECKOUTS";
@@ -85,9 +86,7 @@ function labNames(): string[] {
  */
 function evidenceRead(path: string, checkout: string): boolean {
   const rel = relative(checkout, path).replace(/\\/g, "/");
-  const names = labNames()
-    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("|");
+  const names = labNames().map(esc).join("|");
   return new RegExp(`^raw-artifacts/(reviews/(${names})-pr\\d+|factory-log|revert-checks)(/|$)`, "i").test(rel);
 }
 
@@ -141,20 +140,6 @@ export function privateReadViolation(
     if (reason) return reason;
   }
   return undefined;
-}
-
-/** The command's steps, split at `|`, `;`, `&` and new lines outside quoted text. */
-function steps(command: string): string[] {
-  const quoted = quotedMask(command);
-  const parts: string[] = [];
-  let start = 0;
-  for (let i = 0; i < command.length; i++) {
-    if (quoted[i] || !"|;&\n".includes(command[i] ?? "")) continue;
-    parts.push(command.slice(start, i));
-    start = i + 1;
-  }
-  parts.push(command.slice(start));
-  return parts.map((p) => p.trim()).filter(Boolean);
 }
 
 /** Tools that read a folder's whole tree, always or with a flag, and how they name it. */
@@ -323,7 +308,7 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv,
     }
   }
   // A recursive read from a folder that holds the run's own private worktree reads that too.
-  for (const step of steps(expanded.text)) {
+  for (const step of splitSteps(expanded.text)) {
     for (const target of recursiveTargets(step)) {
       if (dirs.some((dir) => nested.some((c) => inside(c, resolve(dir, fixedPart(target)))))) return HOLDER_REASON;
     }

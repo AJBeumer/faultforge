@@ -9,8 +9,8 @@
  *  - `sendsRaw`: a command that sends to a remote some other way: a push, a gh call that isn't a known read, or an
  *    HTTP write. The guard refuses it where it reaches a reviewed repo.
  *  - `mcpReads`: an MCP tool whose name says it only reads; any other tool naming a reviewed repo is refused.
- * Script files that could write to a reviewed repo are refused in guard-files.ts (`scriptProblem`), and inline
- * interpreter code that starts a program or reaches the network everywhere, in shell-exec.ts.
+ * Script files that could write to a reviewed repo are refused in target/posted-files.ts (`scriptProblem`), and inline
+ * interpreter code that starts a program or reaches the network everywhere, in shell/exec.ts.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

@@ -3,7 +3,7 @@
  * runs in, followed through `cd`, `pushd` and `Set-Location`, with quotes and escapes removed as the shell joins a
  * word (`".claude"/hooks`), Git Bash's drive spelling read (`/d/x` is `D:\x` on Windows), wildcards and brace lists
  * expanded against what exists, and the files its redirects read and write apart. Shared by the checks on the
- * guard's own files (guard-self.ts) and on copies out of private storage (guard-answer-key.ts), re-grade 6. Words
+ * guard's own files (self/own-files.ts) and on copies out of private storage (answer-key/copies.ts), re-grade 6. Words
  * in a commit message or a post body are posted text, not paths, and are left out.
  */
 
@@ -13,7 +13,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { existingFolder } from "../shared/repos.ts";
 import { braces, globMatches, hasWildcard } from "./glob.ts";
 import { outsidePostedText } from "./posted.ts";
-import { programAt, programName, steps, words } from "./words.ts";
+import { MOVES, programAt, programName, steps, unreadable, words } from "./words.ts";
 
 /** One step: its program, its words after it, the paths they name, and the files its redirects read and write. */
 export interface PathStep {
@@ -39,9 +39,7 @@ export const MOVERS = /^(mv|move|move-item|mi)$/;
 /** A flag that makes a copy take a whole folder. */
 export const RECURSIVE = /^(-[a-z]*[rRa][a-z]*|--recursive|--archive|-recurse|\/s|\/e)$/i;
 
-const MOVES = /^(cd|pushd|chdir|set-location|sl)$/;
-const unreadable = (word: string) => /[$`%]/.test(word);
-/** Redirects that write no file: to another descriptor or to the null device. */
+/** A redirect's target that writes no file: another descriptor or the null device. */
 const HARMLESS = /^(&\d*|\/dev\/null|nul|\$null)$/i;
 
 /** A word as the shell passes it on: quotes removed wherever they are, and in bash its escapes too. */

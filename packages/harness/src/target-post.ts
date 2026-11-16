@@ -49,7 +49,7 @@ import { addressesQodo, telltales } from "./neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
 import { gateMarker, runGateRefusal } from "./target-post-run.ts";
 
-// The door imports only the guard's own files (guard-self.ts holds them) and Node's: a module it imported that a
+// The door imports only the guard's own files (the hooks' self/own-files.ts holds them) and Node's: a module it imported that a
 // session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
 // guard does, from factory.json with the target always among them, and runs with node, not a package's runner.
 

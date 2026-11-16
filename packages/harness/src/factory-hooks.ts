@@ -296,7 +296,7 @@ export function realHookRunner(lab: string, limitSeconds: number): HookRunner {
 
 /**
  * The reviewed repo the self-test writes to: the config's first, or with none marked, the first the guard itself
- * protects (`guard-repos.ts` always has the target), never a copy of its name (Qodo on PR 346).
+ * protects (the hooks' `shared/repos.ts` always has the target), never a copy of its name (Qodo on PR 346).
  */
 export function selfTestRepo(factory: FactoryConfig, guarded = reviewedRepos(process.env.FAULTFORGE_CONFIG)): string {
   const marked = Object.values(factory.repos).find((r) => r.guard === "reviewed")?.github;

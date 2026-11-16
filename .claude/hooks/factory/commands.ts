@@ -165,7 +165,7 @@ function psReadsEnvironment(text: string): boolean {
 /**
  * The command's steps: its text between `|`, `;`, `&` and new lines that are not inside quotes or a heredoc
  * (a quoted separator is part of an argument, and splitting there would cut a flag off from its command:
- * Qodo on PR 270). One pass over a mask `shell-scan.ts` builds in one pass.
+ * Qodo on PR 270). One pass over a mask `shell/scan.ts` builds in one pass.
  */
 function steps(command: string): string[] {
   const quoted = quotedMask(command);

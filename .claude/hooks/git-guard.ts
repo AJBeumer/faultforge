@@ -12,7 +12,7 @@
  * PR, because links go one way, and a private template's id (re-grade 6). The lab's pre-push also refuses a remote
  * that is a reviewed repo, by URL or local path: the lab's history never goes there (re-grade 6). Its pre-commit and
  * commit-msg refuse a copy of the answer key, the audit log or a private template, compared by hash
- * (guard-answer-key.ts; re-grade 6, Q21), and the pre-commit a private template's id in a staged file.
+ * (answer-key/copies.ts; re-grade 6, Q21), and the pre-commit a private template's id in a staged file.
  *
  *   node git-guard.ts lab-pre-commit <checkout>                  the staged files and their names
  *   node git-guard.ts lab-commit-msg <checkout> <message file>   the commit message
@@ -23,7 +23,7 @@
  *
  *   node git-guard.ts private-pre-push <checkout> <remote> <url>
  *
- * The checks are the Claude Code guard's own (guard-content.ts), read from git at the moment the content
+ * The checks are the Claude Code guard's own (target/content.ts), read from git at the moment the content
  * would travel. A push must also keep the reviewed repo's history (re-grade 3): it may not delete a ref, and
  * each ref it updates must move forward from what the remote holds (`git merge-base --is-ancestor`). Git gives
  * the hook both commits for every ref, so this holds however the push was started: a script, a subprocess, a

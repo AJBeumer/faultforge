@@ -18,7 +18,7 @@ import { spokenWords } from "../shell/decode.ts";
 import { hasWildcard } from "../shell/glob.ts";
 import { outsidePostedText } from "../shell/posted.ts";
 import { blankQuoted } from "../shell/scan.ts";
-import { programAt, programName, steps, unquote, words } from "../shell/words.ts";
+import { HARMLESS_REDIRECT, MOVES, programAt, programName, steps, unquote, words } from "../shell/words.ts";
 
 /** Settings that decide whether git runs the guard's hooks, or where a remote really goes. */
 const GUARD_SETTINGS =
@@ -31,15 +31,9 @@ const GIT_FOLDER = /(?:^|[\s"'=/\\;&|(<>])\.git(?![\w.-])|--git-(?:path|common-d
 const READERS =
   /^(cat|ls|dir|head|tail|type|get-content|gc|get-childitem|gci|get-item|gi|stat|file|wc|grep|egrep|fgrep|rg|findstr|select-string|sls|less|more|echo|printf|write-output|test|\[|diff|cmp|sha1sum|sha256sum|md5sum|test-path|cd|pushd|popd|set-location|sl|pwd|true|find)$/;
 
-/** Programs that move into a folder. */
-const MOVES = /^(cd|pushd|chdir|set-location|sl)$/;
-
 /** Git commands that only read. */
 const GIT_READS =
   /^(log|show|status|diff|grep|rev-parse|ls-files|ls-tree|cat-file|describe|blame|shortlog|help|version|var)$/;
-
-/** Redirects that write no file: to another descriptor or to the null device. */
-const HARMLESS_REDIRECT = /\d?>&\d|\d?>\s*\/dev\/null|\d?>\s*nul\b/gi;
 
 /**
  * True when a `git config` call only reads: a `--get…`, `--list` or `-l` option anywhere, or the newer `get` and

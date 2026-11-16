@@ -192,6 +192,23 @@ export function quotedMask(command: string): boolean[] {
 }
 
 /**
+ * The command's steps as plain text, split at `|`, `;`, `&` and new lines outside quoted text, each trimmed, empty
+ * ones left out. Shared by the private-id check and the factory policy's path rules, which each had a copy.
+ */
+export function splitSteps(command: string): string[] {
+  const quoted = quotedMask(command);
+  const parts: string[] = [];
+  let start = 0;
+  for (let i = 0; i < command.length; i++) {
+    if (quoted[i] || !"|;&\n".includes(command[i] ?? "")) continue;
+    parts.push(command.slice(start, i));
+    start = i + 1;
+  }
+  parts.push(command.slice(start));
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/**
  * True when `then` matches after the first match of `first`, in one part of `text` cut at any of `stops`: what
  * `/first[^stops]*then/` tests, in linear time. That pattern tries every `first` and reads to the part's end from
  * each, so a command of many `git` words took time quadratic in its length (re-grade 7). The first `first` leaves

@@ -11,14 +11,14 @@
  * made in a held checkout itself, the owner unlocks the repo by hand: an empty file named `faultforge-guard-unlock`
  * in its main git folder (`.git/`), deleted again afterwards. Why a file, and not "allowed off main": a session can
  * switch branches itself (`git switch -c x`), and the edited guard would then run at once. The unlock file sits in
- * the git folder, which no program but git may write (guard-hooks.ts), and no command may name it, so the session
+ * the git folder, which no program but git may write (self/git-hooks.ts), and no command may name it, so the session
  * can't make it; only the owner can, outside it.
  *
  * Refused while locked:
  *  - a program that writes, deletes or moves files (`rm`, `mv`, `tee`, `sed -i`, `Remove-Item`, …) naming one of
  *    them, a folder they are in, or a wildcard or brace list that matches one; a copy or link whose destination is
  *    one, or a folder that would take one (`cp -r x/.claude .`); a redirect into one;
- *  - git commands that would put another version of them in place (guard-self-git.ts);
+ *  - git commands that would put another version of them in place (self/own-files-git.ts);
  *  - inline interpreter code that names them, or the `.claude` folder (`node -e "fs.rmSync('.claude', …)"`);
  *  - a Write or Edit of one of them.
  * Refused always: any command that does more than read and names the unlock file.

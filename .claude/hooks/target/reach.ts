@@ -162,7 +162,7 @@ export function isWrite(command: string): boolean {
 }
 
 /**
- * True when the command makes a gh or raw API write. With a push (guard-door.ts reads git's own subcommand for
+ * True when the command makes a gh or raw API write. With a push (target/door.ts reads git's own subcommand for
  * that), that is everything that sends to a remote; a commit, tag or note stays in the checkout until a push sends
  * it.
  */

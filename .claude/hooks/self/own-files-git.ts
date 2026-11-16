@@ -1,6 +1,6 @@
 /**
  * Git commands that would put another version of the guard's own files in place in a held checkout (re-grade 6,
- * Qodo on PR 337). Split from guard-self.ts, which says which files and checkouts are held. Refused there:
+ * Qodo on PR 337). Split from self/own-files.ts, which says which files and checkouts are held. Refused there:
  *  - `checkout`, `restore`, `rm` and `mv` that name one of the files or a folder holding one, from any source;
  *  - `checkout`, `switch` and `reset` to a commit whose guard files differ from HEAD's,
  *    `merge` and `rebase` of one that changes them since the two met, and `cherry-pick` and `revert` of one that

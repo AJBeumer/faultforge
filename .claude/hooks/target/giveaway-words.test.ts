@@ -3,8 +3,8 @@
  * synonyms for a planted bug are giveaways too, while ordinary text that shares a word is not.
  */
 import { describe, expect, it } from "vitest";
-import { telltales } from "../../../packages/harness/src/neutral.ts";
 import { askGuard, guardConfig, privateStore, REPOS, tempRepo } from "../fixtures.ts";
+import { telltales } from "../shared/harness-bridge.ts";
 
 describe("synonyms for a planted bug", () => {
   const config = guardConfig(tempRepo(true).dir);

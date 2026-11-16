@@ -20,7 +20,7 @@ import { configReads } from "../self/git-hooks.ts";
 import { checkoutAt, githubRepos, inCheckout, locate, type Reviewed, within } from "../shared/repos.ts";
 import { outsidePostedText } from "../shell/posted.ts";
 import { joinedWords } from "../shell/scan.ts";
-import { programAt, programName, steps, unquote, words } from "../shell/words.ts";
+import { MOVES, programAt, programName, steps, unquote, unreadable, words } from "../shell/words.ts";
 import { referencedFiles } from "./posted-files.ts";
 import type { Context } from "./tools.ts";
 
@@ -31,8 +31,6 @@ export interface Call {
   text: string;
   dir: string | undefined;
 }
-
-const unreadable = (word: string) => /[$`%]/.test(word);
 
 /** Programs that send an HTTP request, whose payload could make a repo public. */
 const WEB = /^(curl|wget|http|https|xh|irm|iwr|invoke-restmethod|invoke-webrequest)$/;
@@ -46,7 +44,7 @@ export function calls(command: string, cwd: string, backticks: boolean): Call[] 
     const { at } = programAt(all);
     const name = programName(all[at] ?? "");
     const rest = all.slice(at + 1);
-    if (/^(cd|pushd|chdir|set-location|sl)$/.test(name)) {
+    if (MOVES.test(name)) {
       const to = rest.find((w) => !w.startsWith("-"));
       if (!to) here = homedir();
       else if (unreadable(to) || !here) here = undefined;

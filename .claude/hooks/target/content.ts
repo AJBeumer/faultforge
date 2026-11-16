@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { telltales } from "../../../packages/harness/src/neutral.ts";
+import { telltales } from "../shared/harness-bridge.ts";
 
 /** Thrown when git can't answer for a checkout, or can't answer in time: the caller fails closed. */
 export class Uninspectable extends Error {}
@@ -46,7 +46,7 @@ let privateCopies: ((text: string) => boolean) | undefined;
 
 /**
  * Runs `fn` with `copies` as the test every pending-content scan in it applies to each file on its own: a copy of
- * the answer key, the audit log or a private template's file (`guard-answer-key.ts`) may not be committed.
+ * the answer key, the audit log or a private template's file (`answer-key/copies.ts`) may not be committed.
  */
 export function withPrivateCopies<T>(copies: ((text: string) => boolean) | undefined, fn: () => T): T {
   const outer = privateCopies;

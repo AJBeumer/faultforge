@@ -4,24 +4,24 @@
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. Every write to one goes through
  * one door, `npm run target:post` (`packages/harness/src/target-post.ts`), which checks the exact text it sends
  * (#340). So for each reviewed repo this hook:
- *  - lets a command that is exactly `npm run target:post -- …` through, without reading it (guard-door.ts);
+ *  - lets a command that is exactly `npm run target:post -- …` through, without reading it (target/door.ts);
  *  - refuses every other command that sends to it: a push, a gh call that isn't a known read, a gh or raw API
  *    write, or a write whose destination it can't read. It doesn't read what such a write would say;
  *  - refuses script files that could write to it, which it can't read either;
  *  - keeps git's own guard hooks on in its checkout and its recorded case branches in place, and refuses a commit or
- *    push anywhere while its checkout holds pending content that names the lab or the bug (guard-pending.ts);
+ *    push anywhere while its checkout holds pending content that names the lab or the bug (target/pending.ts);
  *  - refuses a local commit message there that names the lab or the bug, as git's commit-msg hook does, and Edit
  *    and Write content in its checkout that does; and MCP tools that write to it.
  * A command is "in" a reviewed repo when it names the repo as a destination, moves into its checkout
  * (cd, pushd, Set-Location, git -C, git --work-tree, GIT_DIR=), or runs from inside it. A checkout is
- * recognised by its folder name or by a remote that points at the repo (guard-repos.ts).
+ * recognised by its folder name or by a remote that points at the repo (shared/repos.ts).
  * Everywhere else it blocks issues, PRs and commit messages that link to a reviewed repo, and every post,
- * to any repo but private storage, that names a template still held in private storage (guard-private.ts).
- * Everywhere, it blocks code it can't read before it runs (shell-exec.ts): text built at run time run as a
+ * to any repo but private storage, that names a template still held in private storage (answer-key/private-ids.ts).
+ * Everywhere, it blocks code it can't read before it runs (shell/exec.ts): text built at run time run as a
  * shell (`… | base64 -d | bash`, `bash -c "$(…)"`, `eval`), and inline interpreter code that makes a network
  * call (`node -e "fetch(…)"`). It keeps the guard's own files as they are in the checkout it runs from
- * (guard-self.ts), and the answer key, the audit log and private templates in private storage and out of every
- * commit (guard-answer-key.ts).
+ * (self/own-files.ts), and the answer key, the audit log and private templates in private storage and out of every
+ * commit (answer-key/copies.ts).
  *
  * `decide()` takes the hook payload as text and returns the decision without printing or exiting, so the
  * tests call it in-process. Run as `node <this file>`, `main()` reads the payload from stdin and answers:
@@ -32,12 +32,12 @@
  * Exit codes: 0 answered (a deny decision on stdout, or nothing to allow); 2 couldn't check, so refused.
  */
 
-import { telltales } from "../../packages/harness/src/neutral.ts";
 import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./answer-key/copies.ts";
 import { checkPrivateFiles, checkPrivateIds, postedPieces } from "./answer-key/posts.ts";
 import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "./answer-key/private-ids.ts";
 import { guardSwitchOff } from "./self/git-hooks.ts";
 import { selfShellProblem } from "./self/own-files.ts";
+import { telltales } from "./shared/harness-bridge.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./shared/hook-io.ts";
 import {
   entersCheckout,
@@ -303,7 +303,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
       );
     }
   }
-  // A commit there is checked against what it would carry, read from git (guard-pending.ts).
+  // A commit there is checked against what it would carry, read from git (target/pending.ts).
   const pending = pendingProblem(ctx.reviewed, command, touched);
   if (pending) deny(pending);
 }

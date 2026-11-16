@@ -12,11 +12,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { leetReadings, readerViews } from "../../../packages/harness/src/neutral.ts";
-import { checkoutAt, githubRepos, within } from "../shared/repos.ts";
-import { blankQuoted, gitSteps, quotedMask } from "../shell/scan.ts";
-
-const LAB_ROOT = join(import.meta.dirname, "../../..");
+import { leetReadings, readerViews } from "../shared/harness-bridge.ts";
+import { checkoutAt, esc, githubRepos, LAB_ROOT, within } from "../shared/repos.ts";
+import { blankQuoted, gitSteps, splitSteps } from "../shell/scan.ts";
 
 /**
  * Folder names directly under `dir`, or none when it doesn't exist. A folder that exists but can't be read
@@ -135,7 +133,7 @@ function privateIdPattern(ids: string[]): RegExp {
     id
       .split(/[^\p{L}\p{N}]+/u)
       .filter(Boolean)
-      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .map(esc)
       .join("[^\\p{L}\\p{N}]{0,3}"),
   );
   return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives.join("|")})(?![\\p{L}\\p{N}])`, "iu");
@@ -144,21 +142,6 @@ function privateIdPattern(ids: string[]): RegExp {
 /** The denial, which never repeats the id. */
 export const PRIVATE_ID_REASON =
   "This would name a bug template that is still private, in a post anyone (the reviewer included) can read. Leave the template's name out; describe the work instead.";
-
-/** The command's steps, split at `;`, `&`, `|` and new lines outside quoted text, each trimmed. */
-function steps(command: string): string[] {
-  const quoted = quotedMask(command);
-  const parts: string[] = [];
-  let start = 0;
-  for (let i = 0; i < command.length; i++) {
-    if (!quoted[i] && /[;&|\n]/.test(command[i] ?? "")) {
-      parts.push(command.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter(Boolean);
-}
 
 /**
  * True when every write in the command stays in private storage, where template ids belong: each git
@@ -184,7 +167,7 @@ export function onlyPrivateRepo(command: string, cwd: string, root: string, dest
   let here = cwd;
   let wrote = false;
   // Split only at operators outside quoted text: a `cd` inside a message moves nowhere (Qodo on PR 265).
-  for (const step of steps(command)) {
+  for (const step of splitSteps(command)) {
     const move = /^(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?["']?([^"'\s]+)/i.exec(step);
     if (move?.[1]) {
       if (/[$`%]|^~/.test(move[1])) return false;

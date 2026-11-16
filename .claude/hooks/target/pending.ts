@@ -1,6 +1,6 @@
 /**
  * The pending-content check of the Claude Code guard: before any `git commit` or `git push`, wherever it
- * runs, what every reviewed checkout would send is read from git (guard-content.ts). Split out of
+ * runs, what every reviewed checkout would send is read from git (target/content.ts). Split out of
  * guard-target.ts to keep it under the size limit.
  */
 import { existsSync } from "node:fs";

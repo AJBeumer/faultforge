@@ -9,7 +9,7 @@
  *    starts another program (`system`, `subprocess`, `child_process`) or runs code it builds (`exec`, `eval`):
  *    counted as built code (re-grade 3);
  *  - inline code in an interpreter that makes a network call: it can post to a reviewed repo without gh, where
- *    the guard reads nothing (shell-interp.ts, exported here again).
+ *    the guard reads nothing (shell/interp.ts, exported here again).
  * Both are refused outright: a decoder can be anything (`base64 -d`, `xxd -r`, `rev`, `openssl enc -d`,
  * `printf '\x..'`), so the rule is about where the text goes, not how it was made.
  */

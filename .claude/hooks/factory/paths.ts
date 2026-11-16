@@ -1,6 +1,6 @@
 /**
  * The factory policy's rules about files (AUD-H2, re-grade after round 4): what a run may not read (the
- * process files under `/proc`, the answer key, and the private checkouts: factory-policy-private.ts), which files
+ * process files under `/proc`, the answer key, and the private checkouts: factory/private-checkouts.ts), which files
  * a shell command may not write (the guardrails: `.claude/` and the giveaway word list), and which scripts it
  * may not run (one this run wrote or changed, which no text rule can read before it runs). Split from
  * factory-policy.ts, which may not pass 400 lines.
@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve } from "node:path";
 import { codeAsWords, spokenWords } from "../shell/decode.ts";
-import { quotedMask, wordThen } from "../shell/scan.ts";
+import { splitSteps, wordThen } from "../shell/scan.ts";
+import { HARMLESS_REDIRECT } from "../shell/words.ts";
 import { HOME_SECRET_REASON, homeSecretPath } from "./home.ts";
 import { ANSWER_FILES, globBase, inside, privateReadViolation, real } from "./private-checkouts.ts";
 
@@ -23,9 +24,6 @@ const PROC = /(^|[^\w.-])\/proc(\/|$)/i;
 
 /** The guardrails a shell command may not write: anything under `.claude`, and the giveaway word list. */
 const GUARDRAILS = /(?<![\w-])\.claude(?![\w-])|\bneutral\.ts\b/i;
-
-/** Redirects that write no file: to another descriptor or to the null device. */
-const HARMLESS_REDIRECT = /\d?>&\d|\d?>\s*\/dev\/null|\d?>\s*nul\b/gi;
 
 /** Ways a shell command writes a file: a redirect, a file tool, or a write from code. */
 const SHELL_WRITE = new RegExp(
@@ -63,7 +61,7 @@ const asPath = (text: string) => posix.normalize(text.replace(/\\/g, "/"));
 /**
  * Why a read tool (Read, Grep, Glob) may not read what it names, or undefined: anything under `/proc` and the
  * answer key in any run, and a private checkout the runner names, a folder that holds one, or a private file by
- * name (#284; every run since #299: factory-policy-private.ts).
+ * name (#284; every run since #299: factory/private-checkouts.ts).
  */
 export function readViolation(
   args: Record<string, unknown>,
@@ -130,20 +128,6 @@ const VALUE_FLAG = /^(-W|-X|--env-file|--input-type|--conditions|--title)$/;
 const PREFIX =
   /^(sudo|env|exec|time|nice|nohup|command|stdbuf|xargs|timeout|setsid|ionice|taskset|strace|ltrace|valgrind|\(|\{)$/i;
 
-/** The command's steps, split at `|`, `;`, `&` and new lines outside quoted text. */
-function steps(command: string): string[] {
-  const quoted = quotedMask(command);
-  const parts: string[] = [];
-  let start = 0;
-  for (let i = 0; i < command.length; i++) {
-    if (quoted[i] || !"|;&\n".includes(command[i] ?? "")) continue;
-    parts.push(command.slice(start, i));
-    start = i + 1;
-  }
-  parts.push(command.slice(start));
-  return parts.map((p) => p.trim()).filter(Boolean);
-}
-
 /** One git answer in `cwd`, trimmed, or undefined when git fails. */
 function gitOut(cwd: string, ...args: string[]): string | undefined {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true });
@@ -182,7 +166,7 @@ interface Script {
 export function scriptsRun(command: string, cwd: string, depth = 0): Script[] {
   const found: Script[] = [];
   let dir: string | undefined = cwd;
-  for (const step of steps(command)) {
+  for (const step of splitSteps(command)) {
     const words = spokenWords(step).split(/\s+/).filter(Boolean);
     let i = 0;
     while (i < words.length) {

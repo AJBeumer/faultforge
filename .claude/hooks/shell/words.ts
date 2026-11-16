@@ -1,7 +1,7 @@
 /**
  * How the hooks split a shell command the way the shell does: its simple commands (steps) at pipes and
  * separators outside quotes, substitutions and heredoc bodies; each step's words; and the program a step runs,
- * past assignments and words that run the next word (`sudo`, `env`, `npx`). Split out of shell-exec.ts, which
+ * past assignments and words that run the next word (`sudo`, `env`, `npx`). Split out of shell/exec.ts, which
  * may not pass 400 lines (Qodo on PR 310 needed the steps for inline code too).
  */
 import { spokenWords } from "./decode.ts";
@@ -10,6 +10,15 @@ import { quotedSpans } from "./scan.ts";
 /** Words that run the next word as the program. `xargs` also feeds it its own input. */
 export const PREFIXES =
   /^(sudo|doas|env|exec|command|builtin|nohup|time|nice|stdbuf|timeout|setsid|ionice|taskset|xargs|wsl|busybox|npx|pnpx|bunx|!|\(|\{)$/i;
+
+/** Programs that move into a folder. */
+export const MOVES = /^(cd|pushd|chdir|set-location|sl)$/;
+
+/** True when the shell builds this word at run time (a variable, a substitution, `%VAR%`), so no hook can read it. */
+export const unreadable = (word: string) => /[$`%]/.test(word);
+
+/** Redirects that write no file: to another descriptor or to the null device. Use it with `replace`, never `test`. */
+export const HARMLESS_REDIRECT = /\d?>&\d|\d?>\s*\/dev\/null|\d?>\s*nul\b/gi;
 
 /** Index of the `)` closing the `$(` at `i`, past quoted text inside it, or the end of the text. */
 function closeSubstitution(s: string, i: number): number {

@@ -9,7 +9,7 @@
  * manager running `target:post` with a kind written out after it, and tells the agent before it tries. Anything
  * else is left to the door.
  */
-import { AGENT_DOOR_KINDS } from "../../../packages/harness/src/target-post-run.ts";
+import { AGENT_DOOR_KINDS } from "../shared/harness-bridge.ts";
 import { joinedWords } from "../shell/scan.ts";
 import { steps, words } from "../shell/words.ts";
 

@@ -6,10 +6,10 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { leetReadings, telltales } from "../../../packages/harness/src/neutral.ts";
 import { privateIdMatcher } from "../answer-key/private-ids.ts";
 import { guardConfig, tempRepo } from "../fixtures.ts";
 import { decide } from "../guard-target.ts";
+import { leetReadings, telltales } from "../shared/harness-bridge.ts";
 import { expandVariables, type RepositoryResolver, setRepositoryResolver } from "./expand.ts";
 
 const LAB = "D:\\Projects\\FaultForge";

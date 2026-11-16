@@ -1,7 +1,7 @@
 /**
  * Inline code in a language interpreter (`node -e`, `python -c`, `perl -e`, a heredoc or a pipe into one that
  * reads its code from stdin), shared by the guard and the factory policy: what that code is, whether it starts
- * another program or runs code it builds, and whether it makes a network call. Split out of shell-exec.ts.
+ * another program or runs code it builds, and whether it makes a network call. Split out of shell/exec.ts.
  *
  * Only the code an interpreter is handed counts (Qodo on PR 310): a script's path and its arguments are not code,
  * and neither is the text of another step in the pipeline, unless that step pipes the code in.

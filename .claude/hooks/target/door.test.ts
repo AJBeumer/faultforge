@@ -90,7 +90,7 @@ describe("the door rule (#340)", () => {
       expect(bash(`node ${script.replace(/\\/g, "/")}`)).toMatch(/npm run target:post/);
     });
 
-    it("node or python inline code that runs gh or reaches the network (shell-exec.ts refuses it everywhere)", () => {
+    it("node or python inline code that runs gh or reaches the network (shell/exec.ts refuses it everywhere)", () => {
       const built = /inline interpreter code that starts another program|network/;
       expect(
         bash(

@@ -4,11 +4,11 @@
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { telltales } from "../../../packages/harness/src/neutral.ts";
 import { copyOutEdit } from "../answer-key/copies.ts";
 import { PRIVATE_ID_REASON, privateRoot } from "../answer-key/private-ids.ts";
 import { gitFolderEdit } from "../self/git-hooks.ts";
 import { selfFileEdit } from "../self/own-files.ts";
+import { telltales } from "../shared/harness-bridge.ts";
 import {
   checkoutAt,
   esc,

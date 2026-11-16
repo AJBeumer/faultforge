@@ -5,10 +5,11 @@
  * file whose name says it holds a token, a key or a credential. Refused by the read tools and by the shell, in any
  * spelling of the home folder: `~`, `$HOME`, `%USERPROFILE%`, `$env:USERPROFILE`, or the path itself. The run's
  * own folder and the temp folder may sit under the home folder (on a CI runner, and Windows' temp): those stay
- * readable. Split from factory-policy-paths.ts, which may not pass 400 lines.
+ * readable. Split from factory/paths.ts, which may not pass 400 lines.
  */
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { esc } from "../shared/repos.ts";
 import { spokenWords } from "../shell/decode.ts";
 
 /** Folders directly under the home folder that hold credentials. */
@@ -100,7 +101,7 @@ export function homeSecretCommand(command: string, env: NodeJS.ProcessEnv): stri
     /(?:^|[\s"'=:(])~(?=[\s"')]|$)|\$\{?home\}?(?![/\w])|%userprofile%(?![/\w])|\$env:userprofile(?![/\w])/i.test(
       text,
     ) ||
-    literal.some((home) => new RegExp(`${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/?(?=[\\s"')]|$)`).test(text));
+    literal.some((home) => new RegExp(`${esc(home)}/?(?=[\\s"')]|$)`).test(text));
   if (alone || /[*?[]/.test(text) || SECRET_TEXT.test(text)) return HOME_SECRET_REASON;
   return undefined;
 }
