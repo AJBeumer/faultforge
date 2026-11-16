@@ -47,7 +47,7 @@ export default defineConfig({
         test: {
           name: "integration",
           include: ["packages/*/test/**/*.test.ts"],
-          // The folder may be empty until the first integration test lands.
+          // Has no effect at project level: a run that finds no integration test file still exits 1.
           passWithNoTests: true,
         },
       },

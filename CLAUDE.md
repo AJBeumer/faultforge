@@ -70,7 +70,7 @@ Run `npm run check` before every commit, in this repo and in the target (planted
 
 ## Daily routine
 
-Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for each ticket, and `/new-case` to run a case end to end. In short: read `private/BACKLOG.md` and the day's challenge, pick the smallest increment that meets it, build one testable slice, get it reviewed, record the entry in `docs/decision-log.md`, and push all three repositories.
+Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for each ticket, and `/new-case` to run a case end to end. In short: read `private/BACKLOG.md` and the day's challenge, pick the smallest increment that meets it, build one testable slice, get it reviewed, record the entry in the decision log (the current week's file under `docs/decisions/`), and push all three repositories.
 
 ## Code layout
 

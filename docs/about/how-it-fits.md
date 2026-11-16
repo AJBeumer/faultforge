@@ -60,10 +60,10 @@ Solid boxes work today; dashed boxes are planned. Qodo reviews both repositories
 | `packages/harness/` | The inject command, the review capture, the factory runner and their checks |
 | `templates/seed/` | Bug templates and proof tests, published after their case is adjudicated |
 | `examples/` | Sanitized public case records, published after their case is adjudicated |
-| `schemas/` | JSON Schemas for the case record (v1 and v2), the bug template and `factory.json` |
+| `schemas/` | JSON Schemas for the case record (v1 and v2), the answer-key entry, the audit event, the saved review, the bug template and `factory.json` |
 | `factory.json` | The two repositories the factory works in, described once |
 | `docs/README.md` | The docs' start page: every document, one line each |
 | `docs/CHARTER.md` | The plan: goals, principles, method, roadmap |
-| `docs/decision-log.md` | One entry per daily challenge: decisions, results, lessons, and dated corrections |
+| `docs/decision-log.md` | The decision log's index: one entry per daily challenge, plus dated decisions and corrections, kept by week under `docs/decisions/` |
 | `docs/ledger-anchors.txt` | Commit ids of the private history, so a rewrite of it is detected |
 | `CLAUDE.md`, `.claude/` | Rules and tooling for the coding agent that helps build this project, including a hook that blocks hints from reaching the target repository |
