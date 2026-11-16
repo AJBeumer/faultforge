@@ -12,8 +12,10 @@ const AREAS = ["case", "verdict", "ledger", "inject", "match", "qodo", "review",
 const FOLDERS = [...AREAS.map((area) => join(HARNESS, "src", area)), join(HARNESS, "test")];
 
 const HISTORY: RegExp[] = [
-  /\bre-?grades?\b/i,
-  /\brounds? (\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i,
+  // Not followed by a letter, so a number glued to the word in a file name is caught too.
+  /\bre-?grades?(?![a-z])/i,
+  // A space, hyphen or underscore before the number, as file names join words.
+  /\brounds?[ _-]?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i,
   /\bAUD-[A-Z]*\d+/,
   /(?<![-\w])([CHMN]-?\d{1,3}[a-f]?|L-\d{1,3}|I\d{2})\b/,
   /#\d+\b/,
@@ -73,11 +75,11 @@ function eachRowStrings(source: string): string[] {
   return strings;
 }
 
-function sources(dir: string): string[] {
+/** Every file under `dir`, of any type: a README's name can carry history as easily as a module's. */
+function files(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
-    if (statSync(path).isDirectory()) return sources(path);
-    return path.endsWith(".ts") ? [path] : [];
+    return statSync(path).isDirectory() ? files(path) : [path];
   });
 }
 
@@ -90,6 +92,12 @@ describe("the history scan", () => {
     expect(historyIn("untrimmed (audit N-14), as Qodo flagged")).toEqual(["N-14", "Qodo flagged"]);
     expect(historyIn("the ids M44b and I07")).toEqual(["M44b"]);
     expect(historyIn("as I07 says")).toEqual(["I07"]);
+  });
+
+  it("finds review rounds in file names, whatever joins the words", () => {
+    expect(historyIn("case/review-round-9.test.ts")).toEqual(["round-9"]);
+    expect(historyIn("case/round_3.md")).toEqual(["round_3"]);
+    expect(historyIn("case/regrade9.test.ts")).toEqual(["regrade"]);
   });
 
   it("passes a plain reason", () => {
@@ -119,10 +127,11 @@ describe("comments, test names and file names in these areas", () => {
   for (const folder of FOLDERS) {
     it(`name no review round, audit id, pull request or ticket in ${relative(HARNESS, folder)}`, () => {
       const found: string[] = [];
-      for (const file of sources(folder)) {
+      for (const file of files(folder)) {
         const name = relative(HARNESS, file).replace(/\\/g, "/");
-        const source = readFileSync(file, "utf8");
         for (const hit of historyIn(name)) found.push(`${name}: file name has ${hit}`);
+        if (!file.endsWith(".ts")) continue;
+        const source = readFileSync(file, "utf8");
         for (const text of [...commentsIn(source), ...testNamesIn(source)])
           for (const hit of historyIn(text)) found.push(`${name}: ${hit} in "${text.trim().slice(0, 80)}"`);
       }
