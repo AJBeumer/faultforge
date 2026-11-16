@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BUILDER_TOOLS, builderArgs, builderDeny, builderEnv, NO_PUSH, readLocalReview } from "./gate-trial-real.ts";
+import {
+  BUILDER_TOOLS,
+  builderArgs,
+  builderDeny,
+  builderEnv,
+  isErrorAnswer,
+  NO_PUSH,
+  readLocalReview,
+} from "./gate-trial-real.ts";
 
 /** An answer in the shape `qodo review --json` gives: findings with a `location`, and state lists of ids. */
 function answer(extra: object = {}): Record<string, unknown> {
@@ -92,6 +100,17 @@ describe("readLocalReview", () => {
   it("is incomplete when a finding can't be read, so a broken entry never drops out silently", () => {
     expect(read(answer({ findings: [{ title: "No id" }] })).complete).toBe(false);
     expect(read(answer({ findings: ["text"] })).complete).toBe(false);
+  });
+});
+
+describe("isErrorAnswer", () => {
+  it("is true for an error or for output that isn't JSON, and false for any review, complete or not", () => {
+    expect(isErrorAnswer(JSON.stringify({ error: { message: "the stream closed" } }))).toBe(true);
+    expect(isErrorAnswer("")).toBe(true);
+    expect(isErrorAnswer("null")).toBe(true);
+    expect(isErrorAnswer(JSON.stringify(answer()))).toBe(false);
+    expect(isErrorAnswer(JSON.stringify(answer({ meta: { coverage: { complete: false } } })))).toBe(false);
+    expect(isErrorAnswer(`${JSON.stringify(answer())}\n  trace 3a27381a47e9d9b7ec6cb123f79a30b8\n`)).toBe(false);
   });
 });
 

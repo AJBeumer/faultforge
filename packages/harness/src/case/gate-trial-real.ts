@@ -148,6 +148,22 @@ export function readLocalReview(stdout: string, evidence: string): TrialReview {
   return { complete: meta.coverage?.complete === true && skipped === 0, open, evidence };
 }
 
+/** How many times one round's review is asked for when the reviewer answers with an error. */
+export const REVIEW_ATTEMPTS = 3;
+
+/**
+ * Pure: true when the CLI's output is an error and not a review, or isn't JSON at all. Only then is the
+ * review asked for again: a review that came back incomplete is a result, and stays one.
+ */
+export function isErrorAnswer(stdout: string): boolean {
+  try {
+    const payload = JSON.parse(stdout.replace(/\r?\n\s*trace [0-9a-f]+\s*$/i, ""));
+    return !payload || typeof payload !== "object" || Boolean((payload as { error?: unknown }).error);
+  } catch {
+    return true;
+  }
+}
+
 /** The tools the builder may use: files in its folder, and the repository's own checks. No network, no git writes. */
 export const BUILDER_TOOLS: readonly string[] = [
   "Read",
@@ -270,26 +286,35 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
       return proofs.map(({ proof }, i): Outcome => runProof(places, "variant", proof, i));
     },
     review: async (round) => {
-      const result = sh(
-        qodoBinary(),
-        [
-          "review",
-          "--repo",
-          target.github,
-          "--base",
-          facts.targetCommit,
-          "--ticket",
-          facts.ticket.url,
-          "--full",
-          "--json",
-        ],
-        app,
-        20 * 60_000,
-      );
-      const evidence = join(recordDir, `review-${round}.json`);
-      writeFileSync(evidence, result.stdout);
-      writeFileSync(join(recordDir, `review-${round}.stderr.txt`), result.stderr);
-      return readLocalReview(result.stdout, evidence);
+      // The reviewer's service sometimes ends a review with an error and no result. That says nothing about
+      // the gate, so the same review is asked for again, at most three times; every answer is kept.
+      let review: TrialReview = { complete: false, open: [], evidence: "" };
+      for (let attempt = 1; attempt <= REVIEW_ATTEMPTS; attempt++) {
+        const result = sh(
+          qodoBinary(),
+          [
+            "review",
+            "--repo",
+            target.github,
+            "--base",
+            facts.targetCommit,
+            "--ticket",
+            facts.ticket.url,
+            "--full",
+            "--json",
+          ],
+          app,
+          20 * 60_000,
+        );
+        const name = attempt === 1 ? `review-${round}` : `review-${round}.attempt-${attempt}`;
+        const evidence = join(recordDir, `${name}.json`);
+        writeFileSync(evidence, result.stdout);
+        writeFileSync(join(recordDir, `${name}.stderr.txt`), result.stderr);
+        review = readLocalReview(result.stdout, evidence);
+        if (!isErrorAnswer(result.stdout)) break;
+        log(`  the reviewer answered with an error (attempt ${attempt} of ${REVIEW_ATTEMPTS})`);
+      }
+      return review;
     },
     build: async (round, prompt, mustFix) => {
       writeFileSync(join(recordDir, `builder-${round}.prompt.txt`), prompt);
