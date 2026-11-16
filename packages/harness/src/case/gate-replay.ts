@@ -23,7 +23,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type LedgerEntry, readAuditLog, readLedger } from "../ledger/ledger.ts";
-import { ledgerCheckProblems } from "../ledger/ledger-check.ts";
+import { fullLedgerProblems } from "../ledger/ledger-check.ts";
 import { applyMatchRule, isRange, type MatchFinding } from "../match/match-rule.ts";
 import { gateOf, loadFactory, type QualityGate } from "../shared/factory-config.ts";
 import { CASE_ID, privateDir, ROOT } from "../shared/paths.ts";
@@ -225,6 +225,12 @@ export function publicCaseIds(texts: string[]): Set<string> {
   return ids;
 }
 
+/**
+ * The storage check the replay runs unless a test hands it another: all of `ledger:check`, the published
+ * anchors included, so a private history that was squashed or rewritten is refused here as it is there.
+ */
+export const STORAGE_CHECK: (privateRoot: string) => string[] = fullLedgerProblems;
+
 export interface LoadResult {
   cases: ReplayCase[];
   skipped: string[];
@@ -236,7 +242,7 @@ export function loadCases(
   only: Set<string> | null,
   env: NodeJS.ProcessEnv = process.env,
   /** The check `ledger:check` runs: sound amendments, append-only history, and every verdict's inputs unchanged. */
-  storageProblems: (privateRoot: string) => string[] = ledgerCheckProblems,
+  storageProblems: (privateRoot: string) => string[] = STORAGE_CHECK,
 ): LoadResult {
   // The same refusal as the commands that build a case: totals from an answer key with a doubtful entry, or
   // from findings, templates or reviews changed since their verdict, would be numbers about something else.

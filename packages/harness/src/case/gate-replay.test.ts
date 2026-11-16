@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { fullLedgerProblems } from "../ledger/ledger-check.ts";
 import type { QualityGate } from "../shared/factory-config.ts";
 import {
   firstLabelOnly,
@@ -10,6 +11,7 @@ import {
   type ReplayCase,
   replayCase,
   replayReport,
+  STORAGE_CHECK,
   summarise,
 } from "./gate-replay.ts";
 
@@ -310,6 +312,10 @@ describe("loadCases", () => {
       );
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("checks storage with all of ledger:check, the published anchors included, unless told otherwise", () => {
+    expect(STORAGE_CHECK).toBe(fullLedgerProblems);
   });
 
   it("refuses storage the ledger check finds problems in, without repeating what they are", () => {
