@@ -3,7 +3,8 @@
  * reviewed repo spelled that way still goes through the door, and a read spelled that way still passes.
  */
 import { describe, expect, it } from "vitest";
-import { askGuard, DOOR, guardConfig, tempRepo } from "../fixtures.ts";
+import { askGuard, DOOR, growth, guardConfig, LINEAR_BOUND, tempRepo } from "../fixtures.ts";
+import { unreadableDestination } from "./expand.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
 const FIXTURE = tempRepo(true);
@@ -62,6 +63,11 @@ describe("a write to the reviewed repo whose name the shell joins", () => {
     expect(bash(`git -C ${splitPath()} push origin tidy`)).toMatch(DOOR);
     expect(bash(`cd ${splitPath()} && git push origin tidy`)).toMatch(DOOR);
   });
+
+  it("does not read a move split by quotes inside a message to another repo", () => {
+    const body = `c''d ${FIXTURE.dir.replace(/\\/g, "/")}`;
+    expect(bash(`gh issue comment 5 -R AJBeumer/other-app --body "${body}"`)).toBeUndefined();
+  });
 });
 
 describe("a write whose repo name holds a variable the command doesn't set, or a brace list", () => {
@@ -78,6 +84,16 @@ describe("a write whose repo name holds a variable the command doesn't set, or a
     "gh api repos/{AJBeumer/faultforge-target,o/n}/issues -f body=x",
   ])("is refused as unreadable: %s", (command) => {
     expect(bash(command)).toMatch(UNKNOWN);
+  });
+
+  it("reads only the repo, not the message, for a variable", () => {
+    expect(bash("gh issue comment 5 -R AJBeumer/other-app --body 'See repos/o/$X'")).toBeUndefined();
+    expect(bash("gh issue comment 5 -R AJBeumer/other-app --body 'Try --repo o/$X'")).toBeUndefined();
+  });
+
+  it("takes time linear in the command's length", () => {
+    const ratio = growth((k) => unreadableDestination(`gh issue comment 5 ${"--repo".repeat(1000 * k)}`));
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
   });
 
   it("still passes a variable or a brace list elsewhere in a write to another repo", () => {
