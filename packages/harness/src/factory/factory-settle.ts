@@ -12,6 +12,8 @@ export const LABELS = {
   working: "agent-working",
   done: "agent-done",
   help: "agent-needs-help",
+  /** The runner asked the owner questions before building; nothing was built. */
+  answer: "needs-owner-answer",
 } as const;
 
 export interface IssueEvent {
@@ -75,9 +77,11 @@ export function prNumber(url: string | null, github: string): number | null {
 }
 
 export interface Finish {
-  label: typeof LABELS.done | typeof LABELS.help;
+  label: typeof LABELS.done | typeof LABELS.help | typeof LABELS.answer;
   reason: string;
   pr: string | null;
+  /** For `needs-owner-answer`: the comment to post, in place of the usual report. */
+  comment?: string;
 }
 
 /**
@@ -171,7 +175,7 @@ export function runIdFor(now: Date, repoKey: string, number: number): string {
  * How one tick ended. `failed` is the runner itself failing (an exception, before or after a pick), kept
  * apart from a run that stopped for the owner, so a red Actions run for a runner fault stands out.
  */
-export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-help" | "failed";
+export type TickOutcome = "busy" | "idle" | "refused" | "not-ready" | "done" | "needs-answer" | "needs-help" | "failed";
 
 /**
  * The tick's exit code for each outcome, as factory-tick.ts's header states it: 1 when the run or the ticket
@@ -185,6 +189,8 @@ export const EXIT_CODES: Record<TickOutcome, 0 | 1 | 3> = {
   refused: 0,
   "not-ready": 1,
   done: 0,
+  // The runner asked its questions and nothing went wrong: the ticket waits for the owner's reply.
+  "needs-answer": 0,
   "needs-help": 1,
   failed: 3,
 };

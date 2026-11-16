@@ -4,7 +4,7 @@
  */
 
 import { gh } from "../shared/github.ts";
-import { isRunnerComment } from "./factory-comments.ts";
+import { isQuestionsComment, isRunnerComment } from "./factory-comments.ts";
 
 export interface Provenance {
   author: string;
@@ -45,6 +45,11 @@ export interface TicketSnapshot {
   provenance: Provenance;
   /** Who edited the body and how many edits each comment has: an edit undone later still shows here. */
   history?: string;
+  /**
+   * Whether the runner has asked the owner questions on this ticket, and whether the owner has commented
+   * since. Absent means it has not asked.
+   */
+  questions?: "asked" | "answered";
 }
 
 /**
@@ -108,13 +113,21 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   // The runner's own comments are left out of the text: it posts as the owner, and a stop comment can quote
   // an earlier agent's reason or a review finding's title, which must never come back as the owner's
   // instructions on a retry. They still count for who commented, and for the history.
+  // One exception: the runner's questions, once the owner has commented after them. The owner's reply
+  // ("1a, 2b") means nothing without the questions, and by replying the owner has read them.
+  const lastQuestions = comments.findLastIndex((c) => isQuestionsComment(c.body));
+  const answered = lastQuestions >= 0 && comments.slice(lastQuestions + 1).some((c) => !isRunnerComment(c.body));
   const text = [
     `# ${issue.title}`,
     "",
     issue.body ?? "",
-    ...comments
-      .filter((c) => !isRunnerComment(c.body))
-      .flatMap((c) => ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body]),
+    ...comments.flatMap((c, i) => {
+      if (i === lastQuestions && answered) {
+        return ["", "---", `Questions asked before the build, ${c.createdAt}:`, "", c.body];
+      }
+      if (isRunnerComment(c.body)) return [];
+      return ["", "---", `Comment by ${login(c.author)}, ${c.createdAt}:`, "", c.body];
+    }),
   ].join("\n");
   const history = JSON.stringify({
     body: edits.nodes.map((n) => login(n.editor)),
@@ -124,6 +137,7 @@ export function buildSnapshot(fetch: FetchIssuePage): TicketSnapshot {
   return {
     text,
     history,
+    ...(lastQuestions >= 0 ? { questions: answered ? ("answered" as const) : ("asked" as const) } : {}),
     provenance: {
       author: login(issue.author),
       editors: edits.nodes.map((n) => login(n.editor)),

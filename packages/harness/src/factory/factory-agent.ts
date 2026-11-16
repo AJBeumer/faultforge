@@ -132,7 +132,7 @@ export function agentArgs(input: {
 }
 
 /** The Claude Code binary: FAULTFORGE_CLAUDE, else the npm install's `claude.exe` on Windows, else `claude`. */
-function claudeBinary(): string {
+export function claudeBinary(): string {
   if (process.env.FAULTFORGE_CLAUDE) return process.env.FAULTFORGE_CLAUDE;
   const exe = join(process.env.APPDATA ?? "", "npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe");
   return process.platform === "win32" && existsSync(exe) ? exe : "claude";

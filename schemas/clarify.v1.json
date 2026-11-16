@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AJBeumer/faultforge/blob/main/schemas/clarify.v1.json",
+  "title": "The clarify step's answer, version 1",
+  "description": "What the read-only agent returns when the factory asks it which questions a builder would have to guess at in a ticket. An empty list means the ticket can be built as it is. Anything that doesn't fit this schema counts as no answer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["questions"],
+  "properties": {
+    "questions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "options", "recommended"],
+        "properties": {
+          "question": { "type": "string", "minLength": 10, "maxLength": 400 },
+          "options": {
+            "description": "The answers to choose from.",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+          },
+          "recommended": {
+            "description": "Which option the agent would pick: its place in the list, counted from 1.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "why": {
+            "description": "One sentence on why it recommends that option.",
+            "type": "string",
+            "maxLength": 400
+          }
+        }
+      }
+    }
+  }
+}

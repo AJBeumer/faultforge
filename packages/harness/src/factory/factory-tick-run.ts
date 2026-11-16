@@ -6,6 +6,7 @@
  */
 import type { AgentRun } from "./factory-agent.ts";
 import { checkFilesProblems } from "./factory-check-files.ts";
+import { type ClarifyOutcome, questionsComment } from "./factory-clarify.ts";
 import {
   type AgentResult,
   type Candidate,
@@ -15,6 +16,7 @@ import {
   parseAgentResult,
   prNumber,
   RunnerStop,
+  safeText,
   settle,
 } from "./factory-settle.ts";
 import type { Logger, TickDeps, Workspace } from "./factory-tick-deps.ts";
@@ -29,6 +31,8 @@ export interface ClaimedRun {
   owner: string;
   runId: string;
   log: Logger;
+  /** True for a ticket in a reviewed repository, where a comment may not give the lab away. */
+  reviewed?: boolean;
 }
 
 /** What the agent did, and when, for `checkRun`. */
@@ -38,6 +42,71 @@ export interface AgentOutcome {
   result: AgentResult | null;
   from: string;
   to: string;
+}
+
+/**
+ * Before the build: asks a read-only agent which questions a builder would have to guess at. Returns how the
+ * run ends when it has questions (they go to the owner, under their own label) or couldn't check, and null
+ * when the build should start. A ticket is asked once: when it already holds the runner's questions,
+ * answered or not, the build starts.
+ */
+export async function clarifyTicket(run: ClaimedRun): Promise<Finish | null> {
+  const { deps, ws, pick, owner, runId, log } = run;
+  if (!deps.clarify) return null;
+  const snapshot = deps.snapshot(pick.github, pick.number);
+  const late = provenanceProblems(snapshot.provenance, owner);
+  if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
+  if (snapshot.questions) {
+    log("clarify-skipped", {
+      reason:
+        snapshot.questions === "answered"
+          ? "the owner replied to the questions asked earlier"
+          : "questions were asked earlier and the owner started the ticket again without a reply",
+    });
+    return null;
+  }
+  let outcome: ClarifyOutcome;
+  let cost: { costUsd: number | null; turns: number | null } = { costUsd: null, turns: null };
+  try {
+    const result = await deps.clarify(ws, runId, pick.repoKey, snapshot.text, log);
+    outcome = result.outcome;
+    cost = { costUsd: result.costUsd, turns: result.turns };
+  } catch (error) {
+    // The error stays in the run log: it can name a path, and the comment can be on a public ticket.
+    log("error", { message: `the clarify step failed: ${error instanceof Error ? error.message : error}` });
+    outcome = { kind: "failed", reason: "the agent that checks a ticket could not be run" };
+  }
+  if (outcome.kind === "none") {
+    log("clarified", { result: "no open questions", ...cost });
+    return null;
+  }
+  if (outcome.kind === "questions") {
+    const count = outcome.questions.length;
+    const comment = questionsComment(outcome.questions, LABELS.ready);
+    // On a reviewed repository a comment with a giveaway word is replaced whole by a fixed sentence. The
+    // owner would then be asked to answer questions nobody can see, so the ticket needs help instead.
+    if (run.reviewed && safeText(comment, true) !== comment) {
+      log("clarified", { result: "questions that can't be posted on this ticket", questions: count, ...cost });
+      return {
+        label: LABELS.help,
+        reason: "the questions about this ticket hold a word that can't be posted here; they are in the run's files",
+        pr: null,
+      };
+    }
+    log("clarified", { result: "questions for the owner", questions: count, ...cost });
+    return {
+      label: LABELS.answer,
+      reason: `${count} question${count === 1 ? "" : "s"} for the owner before building`,
+      pr: null,
+      comment,
+    };
+  }
+  log("clarified", { result: "could not check", reason: outcome.reason, ...cost });
+  return {
+    label: LABELS.help,
+    reason: `the ticket couldn't be checked for open questions (${outcome.reason})`,
+    pr: null,
+  };
 }
 
 /** Runs the agent on the ticket's text as the owner left it, taken now, after the claim. */

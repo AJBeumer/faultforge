@@ -6,7 +6,8 @@ import type { FactoryConfig } from "../shared/factory-config.ts";
 import { ExternalCallError } from "../shared/github.ts";
 import { type AgentRun, agentStep } from "./factory-agent.ts";
 import { windowProblems } from "./factory-audit.ts";
-import { claimModeOf } from "./factory-comments.ts";
+import type { ClarifyRun } from "./factory-clarify.ts";
+import { claimModeOf, QUESTIONS_MARKER } from "./factory-comments.ts";
 import {
   type HookRunner,
   HooksCheckError,
@@ -378,7 +379,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done,needs-owner-answer +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
@@ -394,7 +395,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done,needs-owner-answer +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
       "save without workspace",
     ]);
@@ -425,7 +426,7 @@ describe("tick: stop paths", () => {
     const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done,needs-owner-answer +${LABELS.working}`,
       "qodo-check",
       "workspace",
       "agent",
@@ -540,7 +541,7 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     const relabels = f.calls.filter((c) => c.startsWith("relabel"));
     expect(relabels).toEqual([
-      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done},${LABELS.answer} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
     expect(f.calls.indexOf("save with workspace")).toBeLessThan(f.calls.indexOf(relabels[1] ?? ""));
@@ -570,7 +571,7 @@ describe("tick: stop paths", () => {
     );
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
     expect(f.calls).toEqual([
-      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done,needs-owner-answer +${LABELS.working}`,
       "qodo-check",
       "workspace",
       "agent",
@@ -748,7 +749,7 @@ describe("tick: stop paths", () => {
     expect(f.calls).not.toContain("agent");
     // The fallback strips ready-for-agent too, so a later tick can't pick the same ticket up again.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done},${LABELS.answer} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
     expect(f.comments.at(-1)?.body).toMatch(/runner failed; the run log has the error/);
@@ -768,7 +769,7 @@ describe("tick: stop paths", () => {
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
     // The fallback relabel is still tried, even though the finish-step one failed.
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done},${LABELS.answer} +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.help}`,
     ]);
@@ -836,7 +837,7 @@ describe("tick: stop paths", () => {
     };
     expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
     expect(f.calls.filter((c) => c.startsWith("relabel"))).toEqual([
-      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done +${LABELS.working}`,
+      `relabel owner/target#18 -ready-for-agent,agent-needs-help,agent-done,needs-owner-answer +${LABELS.working}`,
       `relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.done}`,
     ]);
     expect(f.comments).toHaveLength(2);
@@ -1389,7 +1390,7 @@ describe("tick: recovering from an interrupted run", () => {
     const f = fake({ "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } });
     await tick(FACTORY, f.deps, OPTIONS);
     expect(f.calls[0]).toBe(
-      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done} +${LABELS.working}`,
+      `relabel owner/target#18 -${LABELS.ready},${LABELS.help},${LABELS.done},${LABELS.answer} +${LABELS.working}`,
     );
   });
 
@@ -1472,10 +1473,11 @@ describe("factory:tick exit codes", () => {
       refused: 0,
       "not-ready": 1,
       done: 0,
+      "needs-answer": 0,
       "needs-help": 1,
       failed: 3,
     });
-    for (const outcome of ["busy", "idle", "refused", "done"] as const) {
+    for (const outcome of ["busy", "idle", "refused", "done", "needs-answer"] as const) {
       expect(exitCodeFor(outcome)).toBe(0);
       expect(codes).toMatch(new RegExp(`0 [^;]*\\b${outcome === "done" ? "agent-done" : outcome}\\b`));
     }
@@ -1788,5 +1790,166 @@ describe("tick: no private path reaches the log or a comment", () => {
     expect(shown.join("\n")).not.toMatch(/x-secret-v1|FF-9001/);
     expect(f.events.find((e) => e.event === "evidence-blocked")).toMatchObject({ files: 2 });
     expect(f.comments.at(-1)?.body).toMatch(/changed 2 files in the private repository/);
+  });
+});
+
+describe("tick: questions before the build", () => {
+  const ticket = { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+  const question = {
+    question: "Which status code should a full room get?",
+    options: ["409", "422"],
+    recommended: 1,
+    why: "The other refusals use 409.",
+  };
+  const asking = (outcome: ClarifyRun["outcome"]): Partial<TickDeps> => ({
+    clarify: async () => ({ outcome, costUsd: 0.4, turns: 6 }),
+  });
+
+  it("posts one comment with the questions, labels the ticket for the owner, and builds nothing", async () => {
+    const f = fake(ticket, asking({ kind: "questions", questions: [question] }));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-answer");
+    expect(exitCodeFor("needs-answer")).toBe(0);
+    expect(f.calls).not.toContain("agent");
+    expect(f.calls).toContain(`relabel owner/target#18 -${LABELS.working},${LABELS.ready} +${LABELS.answer}`);
+    // The claim, then the questions: one comment, not a thread.
+    expect(f.comments).toHaveLength(2);
+    const body = f.comments[1]?.body ?? "";
+    expect(body.split("\n")[0]).toBe(QUESTIONS_MARKER);
+    expect(body).toContain("**1. Which status code should a full room get?**");
+    expect(body).toContain("a. 409 (recommended)");
+    expect(f.events.find((e) => e.event === "clarified")).toMatchObject({
+      result: "questions for the owner",
+      questions: 1,
+      costUsd: 0.4,
+    });
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({ label: LABELS.answer, pr: null });
+    // Nothing was built, so nothing is kept: the workspace is cleaned up.
+    expect(f.calls.at(-1)).toBe("cleanup");
+  });
+
+  it("starts the build when there is nothing to ask, and the run log says so", async () => {
+    const f = fake(ticket, asking({ kind: "none" }));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.calls).toContain("agent");
+    expect(f.events.find((e) => e.event === "clarified")).toMatchObject({ result: "no open questions" });
+    const order = f.events.map((e) => e.event);
+    expect(order.indexOf("clarified")).toBeLessThan(order.indexOf("agent-started"));
+  });
+
+  it("stops for the owner, and builds nothing, when the ticket couldn't be checked", async () => {
+    const f = fake(ticket, asking({ kind: "failed", reason: "the agent's answer doesn't fit the schema (/ x)" }));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain("agent");
+    expect(f.comments.at(-1)?.body).toMatch(/couldn't be checked for open questions/);
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({ label: LABELS.help });
+  });
+
+  it("stops for the owner when the clarify step throws, and keeps the error out of the ticket", async () => {
+    const f = fake(ticket, {
+      clarify: async () => {
+        throw new Error("spawn /secret/path/claude ENOENT");
+      },
+    });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).not.toContain("agent");
+    expect(f.comments.map((c) => c.body).join("\n")).not.toMatch(/secret\/path/);
+    expect(f.events.find((e) => e.event === "error")).toMatchObject({ message: expect.stringMatching(/ENOENT/) });
+  });
+
+  it.each([
+    ["answered", "the owner replied to the questions asked earlier"],
+    ["asked", "questions were asked earlier and the owner started the ticket again without a reply"],
+  ] as const)("asks a ticket once: one already %s builds without the step", async (questions, reason) => {
+    let asked = 0;
+    const f = fake(ticket, {
+      clarify: async () => {
+        asked++;
+        return { outcome: { kind: "questions", questions: [question] }, costUsd: null, turns: null };
+      },
+      snapshot: () => ({
+        text: "# Filter\n\nbody",
+        provenance: { author: "owner", editors: ["owner"], commenters: ["owner"] },
+        questions,
+      }),
+    });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(asked).toBe(0);
+    expect(f.calls).toContain("agent");
+    expect(f.events.find((e) => e.event === "clarify-skipped")).toMatchObject({ reason });
+  });
+
+  it("refuses to ask about a ticket someone else changed after the claim", async () => {
+    let reads = 0;
+    const f = fake(ticket, {
+      ...asking({ kind: "none" }),
+      snapshot: () => ({
+        text: "# Filter\n\nbody",
+        provenance: { author: "owner", editors: ["owner"], commenters: reads++ === 0 ? [] : ["stranger"] },
+      }),
+    });
+    // The same stop as before a build: the tick fails and the ticket goes to the owner.
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("failed");
+    expect(f.calls).not.toContain("agent");
+    expect(f.calls.some((call) => call.includes(`+${LABELS.help}`))).toBe(true);
+  });
+
+  it("builds as before when the runner has no clarify step", async () => {
+    const f = fake(ticket);
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("done");
+    expect(f.events.some((e) => e.event === "clarified" || e.event === "clarify-skipped")).toBe(false);
+  });
+
+  it("takes the questions label off when the owner starts the ticket again", async () => {
+    const f = fake(ticket, asking({ kind: "none" }));
+    await tick(FACTORY, f.deps, OPTIONS);
+    expect(f.calls[0]).toContain(LABELS.answer);
+    expect(f.calls[0]).toContain(`+${LABELS.working}`);
+  });
+});
+
+describe("tick: questions that can't reach the owner", () => {
+  const question = { question: "Which status code should a full room get?", options: ["409", "422"], recommended: 1 };
+  const asks = (questions: (typeof question)[]): Partial<TickDeps> => ({
+    clarify: async () => ({ outcome: { kind: "questions", questions }, costUsd: 0.4, turns: 6 }),
+  });
+
+  it("needs help, and doesn't wait for an answer, when the questions couldn't be posted", async () => {
+    const ticket = { "owner/lab#5": { title: "Tool", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    let posts = 0;
+    const f = fake(ticket, {
+      ...asks([question]),
+      comment: () => {
+        // The claim goes through; the questions don't.
+        if (++posts > 1) throw new Error("GitHub said 502");
+      },
+    });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toContain(`relabel owner/lab#5 -${LABELS.answer} +${LABELS.help}`);
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({
+      label: LABELS.help,
+      reason: expect.stringMatching(/couldn't be posted/),
+    });
+    expect(f.calls).not.toContain("agent");
+  });
+
+  it("needs help on a reviewed ticket when a question holds a word that would be replaced by a stub", async () => {
+    const ticket = { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    const leaky = { ...question, question: "Is this the planted bug FaultForge is looking for?" };
+    const f = fake(ticket, asks([leaky]));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls.some((call) => call.includes(`+${LABELS.answer}`))).toBe(false);
+    const posted = f.comments.map((c) => c.body).join("\n");
+    expect(posted).not.toMatch(/planted|FaultForge/i);
+    expect(posted).not.toContain(QUESTIONS_MARKER);
+    expect(f.events.find((e) => e.event === "clarified")).toMatchObject({
+      result: "questions that can't be posted on this ticket",
+    });
+  });
+
+  it("posts the same question on a lab ticket, where naming the lab gives nothing away", async () => {
+    const ticket = { "owner/lab#5": { title: "Tool", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    const f = fake(ticket, asks([{ ...question, question: "Should the FaultForge report name the case?" }]));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-answer");
+    expect(f.comments.at(-1)?.body).toContain(QUESTIONS_MARKER);
   });
 });

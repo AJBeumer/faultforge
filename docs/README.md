@@ -60,6 +60,7 @@ New to the project's words? The [glossary](glossary.md) defines each one.
 - [One door to the reviewed repository](target-door.md): `npm run target:post`, the only way to write to the target.
 - [Reviewing before you commit](review-local.md): `npm run review:local`.
 - [review:gate](review-gate.md): whether a commit's files were seen by a finished local review.
+- [Questions before the build](ticket-questions.md): the factory asks the owner about a gap in a ticket before it builds, and `npm run clarify:measure`.
 - [The quality gate](quality-gate.md): which findings must be fixed before a task is done, and `npm run gate:check`.
 
 ## Rules for coding agents

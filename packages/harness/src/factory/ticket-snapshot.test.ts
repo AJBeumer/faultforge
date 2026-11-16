@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRunnerComment, RUNNER_MARKER, runnerComment } from "./factory-comments.ts";
+import { isRunnerComment, QUESTIONS_MARKER, RUNNER_MARKER, runnerComment } from "./factory-comments.ts";
 import { buildSnapshot, provenanceProblems, type SnapshotField, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 describe("buildSnapshot: GitHub's pages", () => {
@@ -47,6 +47,48 @@ describe("buildSnapshot: GitHub's pages", () => {
     expect(snapshot.text).toContain("Owner: try again, smaller this time.");
     expect(snapshot.provenance.commenters).toEqual(["owner", "owner"]);
     expect(JSON.parse(snapshot.history ?? "{}").comments).toHaveLength(2);
+  });
+
+  describe("the runner's questions", () => {
+    const questions = {
+      ...comment("owner", "2026-11-09T09:00:00Z"),
+      body: runnerComment(`${QUESTIONS_MARKER}\nBefore building, one question.\n\n**1. Which code?**\n   a. 409`),
+    };
+    const stop = { ...comment("owner", "2026-11-09T09:05:00Z"), body: runnerComment("Agent run `r1` stopped.") };
+    const reply = { ...comment("owner", "2026-11-09T10:00:00Z"), body: "1a, and keep the message short." };
+    const snapshotOf = (...nodes: unknown[]) =>
+      buildSnapshot(
+        github({ userContentEdits: { "": { nodes: [], next: null } }, comments: { "": { nodes, next: null } } }).fetch,
+      );
+
+    it("stay out of the text while the owner hasn't replied, and the snapshot says they were asked", () => {
+      const snapshot = snapshotOf(questions, stop);
+      expect(snapshot.questions).toBe("asked");
+      expect(snapshot.text).not.toContain("Which code?");
+    });
+
+    it("are in the text, before the owner's reply, once the owner has replied", () => {
+      const snapshot = snapshotOf(questions, stop, reply);
+      expect(snapshot.questions).toBe("answered");
+      expect(snapshot.text).toContain("Questions asked before the build, 2026-11-09T09:00:00Z:");
+      expect(snapshot.text.indexOf("Which code?")).toBeLessThan(
+        snapshot.text.indexOf("1a, and keep the message short."),
+      );
+      // No other runner comment comes back with them.
+      expect(snapshot.text).not.toContain("Agent run");
+    });
+
+    it("don't count an owner's comment made before them as a reply", () => {
+      const earlier = { ...comment("owner", "2026-11-09T08:00:00Z"), body: "A note from before." };
+      expect(snapshotOf(earlier, questions).questions).toBe("asked");
+    });
+
+    it("are not reported for a ticket the runner never asked about", () => {
+      expect(snapshotOf(reply).questions).toBeUndefined();
+      // An owner who quotes the mark has not been asked anything.
+      const quoting = { ...comment("owner", "2026-11-09T08:00:00Z"), body: `See ${QUESTIONS_MARKER}` };
+      expect(snapshotOf(quoting).questions).toBeUndefined();
+    });
   });
 
   it("tells a runner comment by its first line only", () => {

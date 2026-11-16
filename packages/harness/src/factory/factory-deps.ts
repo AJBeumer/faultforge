@@ -14,6 +14,7 @@ import { ticketWriter } from "../tickets/ticket-write.ts";
 import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
 import { readCheckFiles } from "./factory-check-files.ts";
+import { runClarify } from "./factory-clarify-run.ts";
 import { runnerComment } from "./factory-comments.ts";
 import { endsDoorRun } from "./factory-door-run.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
@@ -195,6 +196,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     },
     audit: (ws, ticket, from, to) =>
       auditRun(factory, { checkout: privateRepo, main: access.main }, mode, ws, ticket, from, to),
+    // The same sandbox as the builder: in Actions the read-only agent runs behind the allow-list too.
+    clarify: (ws, runId, _repoKey, ticketText, log) =>
+      runClarify(runs, ws, runId, ticketText, log, sandboxFor(mode, factory)),
     runAgent: (ws, runId, repoKey, number, ticketFile, log) => {
       // Marked when the lock was taken (`endsDoorRun`); again here in case it wasn't, before the agent exists.
       doorRun.start(runId);
