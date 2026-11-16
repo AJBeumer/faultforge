@@ -34,6 +34,8 @@ export interface ReplayCase {
   caseId: string;
   /** "sabotage" for a planted bug, "control" for a clean change. */
   kind: string;
+  /** The Qodo configuration version the case was reviewed under, as its record names it; null when it names none. */
+  config: string | null;
   /** Null for a control: nothing was planted. */
   injection: { file: string; lines: [number, number] } | null;
   kindTerms: string[];
@@ -55,6 +57,7 @@ export interface GateOutcome {
 export interface ReplayLine {
   caseId: string;
   kind: string;
+  config: string | null;
   caught: boolean;
   /** Labels of the findings that describe the planted bug, as recorded; "none" for a finding without one. */
   catchLabels: string[];
@@ -89,6 +92,7 @@ export function replayCase(input: ReplayCase, gates: Record<string, QualityGate>
   return {
     caseId: input.caseId,
     kind: input.kind,
+    config: input.config,
     caught: catching.length > 0,
     catchLabels: catching.map((f) => (typeof f.severity === "string" ? f.severity : "none")),
     findings: input.findings.length,
@@ -132,7 +136,14 @@ export function summarise(lines: ReplayLine[], gate: string): ReplaySummary {
   };
 }
 
-/** The report's lines: one per case, then one block per gate. */
+/** A line's configuration for the report: the version its record names, in plain characters, or "not recorded". */
+function configName(line: ReplayLine): string {
+  return typeof line.config === "string" && line.config
+    ? line.config.replace(/[^\w. -]/g, "?").slice(0, 40)
+    : "not recorded";
+}
+
+/** The report's lines: one per case, then for each configuration one block per gate. */
 export function replayReport(lines: ReplayLine[], gates: Record<string, QualityGate>, skipped: string[]): string[] {
   const names = Object.keys(gates);
   const out: string[] = [];
@@ -158,18 +169,29 @@ export function replayReport(lines: ReplayLine[], gates: Record<string, QualityG
         return `${name}: ${[verdict, extra].filter(Boolean).join(", ")}`;
       })
       .join(" | ");
-    out.push(`${line.caseId}  ${catchText}; ${line.findings} finding(s)  ->  ${per}`);
+    out.push(`${line.caseId}  [${configName(line)}]  ${catchText}; ${line.findings} finding(s)  ->  ${per}`);
   }
-  out.push("");
-  for (const name of names) {
-    const s = summarise(lines, name);
-    out.push(`Under "${name}":`);
-    out.push(`  bug runs: ${s.bugRuns}; the reviewer caught ${s.caught}`);
-    out.push(`  of those caught: fix required in ${s.caughtAndBlocked}; passes with the bug in ${s.caughtButPassed}`);
-    out.push(
-      `  other findings to act on: ${s.forcedOnBugRuns} on bug runs, ${s.forcedOnControls} on ${s.controls} control(s)`,
-    );
-    out.push(`  only flagged: ${s.flagged}; unknown label: ${s.unknown}`);
+  // Results are only comparable under the same configuration: one block per configuration, then all together.
+  const configs = [...new Set(lines.map(configName))].sort();
+  const groups: [string, ReplayLine[]][] = [
+    ...configs.map((c): [string, ReplayLine[]] => [`configuration ${c}`, lines.filter((l) => configName(l) === c)]),
+    ...(configs.length > 1 ? [["every configuration together", lines] as [string, ReplayLine[]]] : []),
+  ];
+  for (const [title, group] of groups) {
+    out.push("");
+    out.push(`${title}:`);
+    for (const name of names) {
+      const s = summarise(group, name);
+      out.push(`  Under "${name}":`);
+      out.push(`    bug runs: ${s.bugRuns}; the reviewer caught ${s.caught}`);
+      out.push(
+        `    of those caught: fix required in ${s.caughtAndBlocked}; passes with the bug in ${s.caughtButPassed}`,
+      );
+      out.push(
+        `    other findings to act on: ${s.forcedOnBugRuns} on bug runs, ${s.forcedOnControls} on ${s.controls} control(s)`,
+      );
+      out.push(`    only flagged: ${s.flagged}; unknown label: ${s.unknown}`);
+    }
   }
   if (skipped.length) {
     out.push("");
@@ -209,11 +231,15 @@ export interface LoadResult {
 export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.ProcessEnv = process.env): LoadResult {
   const casesDir = join(priv, "cases");
   const truth = readLedger(join(priv, "ground-truth.jsonl")) as Record<string, unknown>[];
-  const adjudicated = new Set(
-    (readAuditLog(join(priv, "audit-events.jsonl")) as { type?: string; caseId?: string }[])
-      .filter((e) => e.type === "case.adjudicated" && e.caseId)
-      .map((e) => e.caseId as string),
-  );
+  // Each case's latest verdict, by the time it was given: the log is in order, so a later one replaces an earlier.
+  const latestVerdict = new Map<string, unknown>();
+  for (const e of readAuditLog(join(priv, "audit-events.jsonl")) as {
+    type?: string;
+    caseId?: string;
+    at?: unknown;
+  }[]) {
+    if (e.type === "case.adjudicated" && e.caseId) latestVerdict.set(e.caseId, e.at);
+  }
   const cases: ReplayCase[] = [];
   const skipped: string[] = [];
   const files = readdirSync(casesDir)
@@ -227,9 +253,18 @@ export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.Pr
       kind?: string;
       status?: string;
       findings?: unknown;
+      review?: { configVersion?: unknown } | null;
+      human?: { adjudicatedAt?: unknown } | null;
     };
-    if (!adjudicated.has(caseId)) {
+    const config = typeof record.review?.configVersion === "string" ? record.review.configVersion : null;
+    if (!latestVerdict.has(caseId)) {
       skipped.push(`${caseId}: no verdict yet`);
+      continue;
+    }
+    // A record built from an earlier verdict holds that verdict's findings and status, not the case's own now.
+    const verdictAt = latestVerdict.get(caseId);
+    if (typeof verdictAt !== "string" || record.human?.adjudicatedAt !== verdictAt) {
+      skipped.push(`${caseId}: its saved record doesn't hold its latest verdict; build it again with case:build`);
       continue;
     }
     if (record.status !== "complete") {
@@ -242,7 +277,7 @@ export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.Pr
     const kind = String(entry.kind ?? record.kind ?? "");
     const findings = record.findings as ReplayCase["findings"];
     if (kind === "control") {
-      cases.push({ caseId, kind, injection: null, kindTerms: [], findings });
+      cases.push({ caseId, kind, config, injection: null, kindTerms: [], findings });
       continue;
     }
     const templateId = String(entry.templateId ?? "");
@@ -255,11 +290,20 @@ export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.Pr
     cases.push({
       caseId,
       kind,
+      config,
       injection: { file: entry.injectedFile, lines: entry.injectedLines },
       kindTerms,
       findings,
     });
   }
+  // A case with a verdict and no saved record is said, never dropped in silence. Under a public list, only
+  // the cases on it are spoken of.
+  const withRecord = new Set(files.map((f) => f.replace(/\.json$/, "")));
+  for (const caseId of [...latestVerdict.keys()].sort()) {
+    if (withRecord.has(caseId) || (only && !only.has(caseId))) continue;
+    skipped.push(`${caseId}: it has a verdict but no saved record; build one with case:build`);
+  }
+  skipped.sort();
   return { cases, skipped };
 }
 

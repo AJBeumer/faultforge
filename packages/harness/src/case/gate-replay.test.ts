@@ -22,11 +22,19 @@ const GATES = { "first label only": firstLabelOnly(SAVED), "saved gate": SAVED }
 
 /** A made-up bug case: the planted change is in `src/a.ts`, lines 10 to 12, and its kind term is "leak". */
 function bug(caseId: string, findings: ReplayCase["findings"]): ReplayCase {
-  return { caseId, kind: "sabotage", injection: { file: "src/a.ts", lines: [10, 12] }, kindTerms: ["leak"], findings };
+  return {
+    caseId,
+    kind: "sabotage",
+    config: "qodo-v9",
+    injection: { file: "src/a.ts", lines: [10, 12] },
+    kindTerms: ["leak"],
+    findings,
+  };
 }
 const control = (caseId: string, findings: ReplayCase["findings"] = []): ReplayCase => ({
   caseId,
   kind: "control",
+  config: "qodo-v9",
   injection: null,
   kindTerms: [],
   findings,
@@ -142,11 +150,33 @@ describe("summarise and replayReport", () => {
 
   it("prints one line per case, a block per gate, and what was not counted", () => {
     const report = replayReport(lines, GATES, ["FF-9008: no verdict yet"]).join("\n");
-    expect(report).toMatch(/FF-9002 {2}caught, labelled remediation_recommended \(Medium\).*PASSES WITH THE BUG/);
-    expect(report).toMatch(/FF-9004 {2}missed by the reviewer/);
-    expect(report).toMatch(/FF-9007 {2}control/);
+    expect(report).toMatch(
+      /FF-9002 {2}\[qodo-v9\] {2}caught, labelled remediation_recommended \(Medium\).*PASSES WITH THE BUG/,
+    );
+    expect(report).toMatch(/FF-9004 {2}\[qodo-v9\] {2}missed by the reviewer/);
+    expect(report).toMatch(/FF-9007 {2}\[qodo-v9\] {2}control/);
+    // One configuration: one block, and no "together" block to repeat it.
+    expect(report).toContain("configuration qodo-v9:");
+    expect(report).not.toContain("every configuration together");
     expect(report).toContain("of those caught: fix required in 1; passes with the bug in 1");
     expect(report).toContain("Not counted:\n  FF-9008: no verdict yet");
+  });
+
+  it("gives each configuration its own block, then all together, and names a case with no configuration", () => {
+    const mixed = [
+      ...lines,
+      { ...replayCase(bug("FF-9010", [catching("f1", "action_required")]), GATES), config: "qodo-v10" },
+      { ...replayCase(control("FF-9011"), GATES), config: null },
+    ];
+    const report = replayReport(mixed, GATES, []);
+    const titles = report.filter((l) => /^(configuration |every configuration)/.test(l));
+    expect(titles).toEqual([
+      "configuration not recorded:",
+      "configuration qodo-v10:",
+      "configuration qodo-v9:",
+      "every configuration together:",
+    ]);
+    expect(report.join("\n")).toMatch(/FF-9011 {2}\[not recorded\] {2}control/);
   });
 });
 
@@ -163,6 +193,8 @@ describe("publicCaseIds", () => {
 
 describe("loadCases", () => {
   let root: string;
+  /** The time of the made-up verdict numbered `i`. */
+  const AT = (i: number) => `2026-11-13T18:0${i}:00.000Z`;
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
   /** Private storage with one caught bug, one control, one unjudged case and one incomplete review. */
@@ -192,20 +224,31 @@ describe("loadCases", () => {
         injectedLines: [10, 12],
       },
       { caseId: "FF-9004", kind: "control", templateId: "made-up-leak-v1" },
+      { caseId: "FF-9005", kind: "control", templateId: "made-up-leak-v1" },
+      { caseId: "FF-9006", kind: "control", templateId: "made-up-leak-v1" },
     ];
     writeFileSync(join(priv, "ground-truth.jsonl"), `${truth.map((t) => JSON.stringify(t)).join("\n")}\n`);
-    const events = ["FF-9001", "FF-9002", "FF-9004"].map((caseId, i) => ({
+    // FF-9005 has a verdict and no saved record. FF-9006 was judged twice, and its record holds the first verdict.
+    const events = ["FF-9001", "FF-9002", "FF-9004", "FF-9005", "FF-9006", "FF-9006"].map((caseId, i) => ({
       eventId: `e${i}`,
       type: "case.adjudicated",
       caseId,
+      at: AT(i),
     }));
     writeFileSync(join(priv, "audit-events.jsonl"), `${events.map((e) => JSON.stringify(e)).join("\n")}\n`);
     const save = (id: string, record: object) =>
       writeFileSync(join(priv, "cases", `${id}.json`), JSON.stringify(record));
-    save("FF-9001", { status: "complete", findings: [catching("f1", "remediation_recommended")] });
-    save("FF-9002", { status: "complete", findings: [] });
+    const judged = (i: number) => ({ human: { adjudicatedAt: AT(i) } });
+    save("FF-9001", {
+      status: "complete",
+      review: { configVersion: "qodo-v9" },
+      findings: [catching("f1", "remediation_recommended")],
+      ...judged(0),
+    });
+    save("FF-9002", { status: "complete", findings: [], ...judged(1) });
     save("FF-9003", { status: "complete", findings: [] });
-    save("FF-9004", { status: "incomplete", findings: [] });
+    save("FF-9004", { status: "incomplete", findings: [], ...judged(2) });
+    save("FF-9006", { status: "complete", findings: [], ...judged(4) });
     writeFileSync(join(priv, "cases", "FF-9001.overlay.json"), "{}");
     return priv;
   }
@@ -218,7 +261,13 @@ describe("loadCases", () => {
       ["FF-9002", "control"],
     ]);
     expect(cases[0]?.kindTerms).toEqual(["leak"]);
-    expect(skipped).toEqual(["FF-9003: no verdict yet", "FF-9004: its review is incomplete"]);
+    expect(cases.map((c) => c.config)).toEqual(["qodo-v9", null]);
+    expect(skipped).toEqual([
+      "FF-9003: no verdict yet",
+      "FF-9004: its review is incomplete",
+      "FF-9005: it has a verdict but no saved record; build one with case:build",
+      "FF-9006: its saved record doesn't hold its latest verdict; build it again with case:build",
+    ]);
   });
 
   it("with a public list, says nothing at all about a case outside it", () => {
@@ -230,7 +279,10 @@ describe("loadCases", () => {
 
   it("stops, and never counts a case as passing, when a record has no findings list", () => {
     const priv = storage();
-    writeFileSync(join(priv, "cases", "FF-9001.json"), JSON.stringify({ status: "complete" }));
+    writeFileSync(
+      join(priv, "cases", "FF-9001.json"),
+      JSON.stringify({ status: "complete", human: { adjudicatedAt: AT(0) } }),
+    );
     expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv })).toThrow(
       /FF-9001: the case record has no list/,
     );
