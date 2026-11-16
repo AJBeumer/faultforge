@@ -47,7 +47,7 @@ export default defineConfig({
         test: {
           name: "integration",
           include: ["packages/*/test/**/*.test.ts"],
-          // The folder may be empty until the first integration test lands.
+          // Has no effect here: Vitest honours it only at the top level, so a run with no test file exits 1.
           passWithNoTests: true,
         },
       },

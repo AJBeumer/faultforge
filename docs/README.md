@@ -7,9 +7,11 @@ Everything here is public, except what would tell the reviewer the answer before
 Start with the [project README](../README.md) for results so far and a quick start.
 
 Every document under `docs/` is listed below, one line each. `npm run docs:check` fails if one is missing.
+New to the project's words? The [glossary](glossary.md) defines each one.
 
 ## About the project
 
+- [Glossary](glossary.md): each project term in one or two sentences, with a link to where it is used.
 - [Status](about/status.md): each hackathon day's milestone, and where it is recorded.
 - [How the parts fit](about/how-it-fits.md): a diagram, the three repositories and the repository layout.
 - [Where it is going](about/where-it-is-going.md): what the month should deliver.
@@ -65,6 +67,7 @@ The rules themselves are in [CLAUDE.md](../CLAUDE.md) and the house rules in [AG
 
 - [Three repositories](rules/three-repos.md): what each repository holds and never holds, and links that go one way.
 - [The door and the guard](rules/guard.md): how writes to the target are sent and checked.
+- [Threat model](rules/threat-model.md): what the guard protects against, its known gaps, and the layers behind it.
 - [Tickets](rules/tickets.md): how work is planned and tracked.
 - [Code layout](rules/code-layout.md): where tests and helpers live, portability, module size, exit codes.
 

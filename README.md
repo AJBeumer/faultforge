@@ -28,7 +28,7 @@ FaultForge replaces the guessing with evidence.
 
 1. **Break it.** A saboteur injects a realistic bug into a TypeScript codebase using deterministic templates, such as a removed guard clause, a flipped comparison, a missing auth check, or a broken idempotency check. A template is published only after its case is adjudicated; one is public so far.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
-3. **Prove it.** The answer key lives in a private repository the reviewer can't read. Hints are checked, not assumed away: a guard refuses giveaway words in the target's branches, commits, pull requests and tickets; a test reads every file, commit message and branch name in the target for them; and `npm run qodo:check` compares the target's relationships in Qodo, and Qodo's rules, with a recorded snapshot. These checks cover the leaks we know of, not every possible one. Every finding is matched against the answer key with a fixed rule: right file, overlapping lines, right kind of problem.
+3. **Prove it.** The answer key lives in a private repository the reviewer can't read. Hints are checked, not assumed away: every write to the target goes through one command that checks the exact text it sends, and a guard refuses any other write there; a test reads every file, commit message and branch name in the target for them; and `npm run qodo:check` compares the target's relationships in Qodo, and Qodo's rules, with a recorded snapshot. These checks are built against accidental hints from agents doing normal work, not against a deliberate attacker; the [threat model](docs/rules/threat-model.md) lists what they don't cover. Every finding is matched against the answer key with a fixed rule: right file, overlapping lines, right kind of problem.
 
 Every case is written to an append-only log, and every number in a report can be traced back to it. The private history is anchored here, in [`docs/ledger-anchors.txt`](docs/ledger-anchors.txt), so it can't be rewritten unnoticed. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches.
 
@@ -45,6 +45,7 @@ Published cases only. Held-out cases are reported with the final benchmark. The 
 How to read these numbers:
 - **What the catches rest on.** In benchmark v1, most catches were Qodo checking the diff against its ticket or a house rule that stated the broken behaviour, not finding the bug unaided. Benchmark v2 was designed against that: tickets that don't state the oracle, controls that change behaviour and carry a test, and results split by Qodo's own source label. In v2, one catch was Qodo's own issue finding, on behaviour no target rule states; the other was a house-rule finding.
 - **Sample size.** These are small diffs in a 450-line app. A clean sweep is a lower bound, not a rate.
+- **Web search was on.** Every case so far ran with Qodo's web search on, so a review could have searched the public web, this repository included. It was switched off on 16 November (configuration v11), and later cases are reported as their own group.
 - **Where the corrections are.** An independent audit on 14 November found the gaps behind these caveats. They are corrected in the decision log, never by editing earlier entries.
 
 ## Try it
@@ -69,6 +70,8 @@ The command applies the template on a new branch in the target (`tidy-replay-loo
 ## Read more
 
 - [The docs' start page](docs/README.md): every document, one line each.
+- [Glossary](docs/glossary.md): every project term in a sentence or two.
+- [Threat model](docs/rules/threat-model.md): what the guard protects against, and what it doesn't.
 - [Status](docs/about/status.md): each hackathon day's milestone and where it is recorded.
 - [How the parts fit](docs/about/how-it-fits.md): a diagram, the three repositories and the repository layout.
 - [Where it is going](docs/about/where-it-is-going.md) and [principles](docs/about/principles.md).
