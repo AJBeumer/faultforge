@@ -26,6 +26,23 @@ Exit codes: 0 sent; 1 usage; 2 refused, nothing sent; 3 `gh` or `git` failed aft
 
 `case:ticket` and `case:pr` send through the same module (`packages/harness/src/target-post.ts`), and so does the factory's runner for its comments and label moves on a reviewed repo's ticket (`ticket-write.ts`, #345). Its agent pushes and opens its PR with `npm run target:post`, like anyone else.
 
+### During a factory run
+
+While a factory run is active, the door sends only `push`, `pr-create` and `pr-edit` (#347). Every other kind (commenting on a PR, closing one, writing an issue, moving a label) is refused with exit 2, whoever calls the door and however: `npm run target:post`, `node` on the door's file, or code that imports it and calls `main` or `sendPost`. The check is in `sendPost` itself (`packages/harness/src/target-post-run.ts`), which every send goes through. The list lives in one place, `AGENT_DOOR_KINDS` in that file, which the door, the policy hook and the agent's prompt all read.
+
+A run is active while its marker file exists. The runner writes it as soon as a tick takes its lock, before the tick's first write and before the agent starts, and removes it when the tick ends. Its path is fixed: it never comes from the environment, and a send with the door's own `gh` or `git` reads it whatever marker the caller names. It is `/tmp/faultforge-factory-run.json` on Linux, `.faultforge-factory-run.json` in the user's profile folder on Windows. It holds the run's id, the runner's pid and the SHA-256 of a random runner key. The key stays in the runner's memory and is never written to a file or given to the agent. The runner's own comments and label moves (`ticket-write.ts`) pass the key, so they still go. A marker the door can't read counts as a run, and the door refuses.
+
+What holds where:
+
+- **In Actions (CI)** the guarantee is the operating system's. The agent runs as its own user, `ffagent`. The marker belongs to the runner's user, with mode 0644, in `/tmp`, whose sticky bit lets only a file's owner remove or rename it. So the agent can't remove, move or edit the marker, and it can't read the runner's memory, where the key is.
+- **On the owner's PC (local mode)** there is no sandbox, and the guarantee is weaker. The agent runs as the owner, so it could delete the marker before it calls the door. The door still refuses every call made while the marker is there; the policy hook's first word and the run's audit are what stand guard beyond that.
+
+In both modes the gate covers calls through the door. Code that skips the door and writes with `gh` or `git` directly is the guard's to refuse (below).
+
+The policy hook keeps a short first layer: it refuses `npm run target:post -- <kind>` with a kind other than the three written out, so the agent hears early. It doesn't try to read every spelling; the door does the enforcing.
+
+Outside a run the owner's door commands are unaffected. A local run that was killed outright can leave its marker behind: the door then refuses the owner's comments too, and says where the marker is. Remove it by hand, or let the next tick replace it when it takes the lock (a live tick holds the lock, so a marker found then is a dead one's).
+
 The module has one kind the command doesn't take: `label`, which only the runner uses, so a run's agent can't move a ticket's labels itself. It adds labels in one edit, then removes each other one. A label name is checked like any text, and must also be one plain line of at most 50 characters with no comma (gh would split it into two labels). A label post can't add and remove the same label.
 
 ## What the guard does

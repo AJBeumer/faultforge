@@ -77,6 +77,13 @@ The proof is `packages/harness/test/agent-sandbox.integration.test.ts`, which ru
 
 **A local run has no sandbox.** On the owner's PC (Windows), the agent runs as the owner, with the owner's network; only the hooks and the audit stand guard. The run log says so as its `network-sandbox` event: "no network sandbox: local mode".
 
+## The door kinds in a run
+
+During a run the door to the reviewed repo sends only `push`, `pr-create` and `pr-edit` (#347; [the door](target-door.md#during-a-factory-run)). The runner marks the run active with a marker file at a fixed path as soon as the tick takes its lock, so recovery's and the claim's writes carry its key too, and a marker a killed run left is replaced then. The run log records a `door-run` event before the agent starts. The marker is removed when the tick ends, by the lock's release, which runs whatever happened. The runner's own comments and label moves pass a key that only its process holds.
+
+- **In Actions** the user split above makes this the operating system's guarantee: the marker is the runner's file in `/tmp`, which `ffagent` can't remove, move or edit, and the key is in the runner's memory, which `ffagent` can't read.
+- **On the owner's PC** it is weaker: the agent runs as the owner and could delete the marker first. The door still refuses every call while the marker is there; the policy hook's first word and the run's audit stand guard beyond that.
+
 ## Following a run
 
 Every step goes to `<runs>/<run id>.jsonl` as it happens, and the agent's full transcript to `<run id>.agent.jsonl`. Both are pushed to `private/raw-artifacts/factory-runs/` at the end. In Actions, the steps also show in the job's log, and the event log (never the transcript: a public repo's artifacts can be downloaded) is kept as an artifact for 30 days. When a job is cancelled or times out, or the tick crashes before its last copy, an `if: always()` step (`npm run factory:keep`) pushes the event log and transcript of every run that didn't log `saved` to a branch of the private repo, `unsaved-<Actions run id>-<attempt>`, never to `main`; the tick step stops ten minutes inside the job's limit so this step has time to run. The run's page shows the outcome too: a summary line for every tick, naming the run and its outcome, and an error annotation when the tick failed (exit 3), couldn't set up (exit 2), or was cancelled or ran out of time before it could say.

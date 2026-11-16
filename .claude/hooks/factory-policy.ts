@@ -3,6 +3,8 @@
  * is set, which `npm run factory:tick` does for the agent it starts. Inside a run it blocks what only
  * the owner may do:
  *  - merging, closing, approving or commenting on a PR (so no reply to a review finding)
+ *  - any door kind but push, pr-create and pr-edit, written out (`npm run target:post`; factory-policy-door.ts,
+ *    #347): a first word only, since the door itself refuses them during a run (target-post-run.ts)
  *  - commenting on, closing or relabelling a ticket (the runner reports on the ticket, not the agent)
  *  - API writes through `gh api`, and repo, label, secret, variable and workflow changes
  *  - force pushes, deleting remote branches, and pushing to `main` or `master`
@@ -42,6 +44,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { checkScriptViolation } from "./factory-policy-check.ts";
 import { commandViolations, readings } from "./factory-policy-commands.ts";
+import { doorKindViolation } from "./factory-policy-door.ts";
 import { HOME_SECRET_REASON, homeSecretCommand } from "./factory-policy-home.ts";
 import {
   guardrailWriteViolation,
@@ -215,6 +218,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
           scriptViolation(command, cwd, env),
           homeSecretCommand(command, env) && HOME_SECRET_REASON,
           gitGuardViolation(command, tool !== "PowerShell", cwd),
+          doorKindViolation(command),
         ])
           if (reason && !reasons.includes(reason)) reasons.push(reason);
       }

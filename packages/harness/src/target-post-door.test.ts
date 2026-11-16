@@ -68,7 +68,7 @@ describe("one door to the reviewed repository (#340)", () => {
       return OWN_FILES.some((own) => (own.endsWith("/") ? rel.startsWith(own) : rel === own));
     };
     const door = readdirSync(SRC).filter((f) => /^target-post[\w-]*\.ts$/.test(f) && !f.endsWith(".test.ts"));
-    expect(door.sort()).toEqual(["target-post-cli.ts", "target-post-push.ts", "target-post.ts"]);
+    expect(door.sort()).toEqual(["target-post-cli.ts", "target-post-push.ts", "target-post-run.ts", "target-post.ts"]);
     for (const file of door) {
       expect(held(join(SRC, file)), file).toBe(true);
       const imports = [...readFileSync(join(SRC, file), "utf8").matchAll(/from "(\.[^"]+)"|import\("(\.[^"]+)"\)/g)];

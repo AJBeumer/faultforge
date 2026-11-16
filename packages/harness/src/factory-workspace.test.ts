@@ -105,6 +105,8 @@ describe("fingerprints: what the agent must not change", () => {
     expect(prints).toEqual({
       [`the run's guardrail files (${join(lab, ".claude")})`]: sha256("hooks/guard.ts\ndeny\nsettings.json\n{}"),
       "the run's guardrail file packages/harness/src/neutral.ts": sha256("(missing)"),
+      // The door's run gate, whose kind list the policy hook reads (#347).
+      "the run's guardrail file packages/harness/src/target-post-run.ts": sha256("(missing)"),
     });
   });
 
@@ -162,6 +164,7 @@ describe("fingerprints: what the agent must not change", () => {
       `the owner's checkout ${privateRepo}`,
       `the run's guardrail files (${join(lab, ".claude")})`,
       "the run's guardrail file packages/harness/src/neutral.ts",
+      "the run's guardrail file packages/harness/src/target-post-run.ts",
     ]);
     expect(Object.keys(first).sort()).toEqual([...expected].sort());
     writeFileSync(join(privateRepo, "notes.md"), "uncommitted\n");

@@ -55,6 +55,8 @@ vi.mock("./target-post.ts", async (importOriginal) => {
     ...real,
     sendPost: vi.fn((post: import("./target-post.ts").Post, deps: import("./target-post.ts").Deps = {}) =>
       real.sendPost(post, {
+        // With this fake gh the gate reads the test's run marker, never the machine's (#347).
+        runMarker: runMarker.path,
         ...deps,
         gh: (args, input) => {
           door.calls.push({ args, input });
@@ -65,6 +67,15 @@ vi.mock("./target-post.ts", async (importOriginal) => {
       }),
     ),
   };
+});
+// The runner marks its runs in a file of this test's own, never the machine's fixed marker (#347).
+const runMarker = vi.hoisted(() => ({ path: "" }));
+vi.mock("./target-post-run.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./target-post-run.ts")>();
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  runMarker.path = join(tmpdir(), `door-run-deps-${process.pid}-${Date.now()}.json`);
+  return { ...real, doorRunHolder: () => real.doorRunHolder(runMarker.path) };
 });
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
@@ -89,17 +100,22 @@ import { auditRun } from "./factory-audit.ts";
 import { RUNNER_MARKER } from "./factory-comments.ts";
 import type { FactoryConfig, RepoConfig } from "./factory-config.ts";
 import { realDeps } from "./factory-deps.ts";
+import { endsDoorRun } from "./factory-door-run.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { localSandbox } from "./factory-sandbox.ts";
 import { stopAgentProcesses } from "./factory-sandbox-setup.ts";
-import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
+import { type Candidate, setupRefusal, type TickDeps, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
+import { sendPost } from "./target-post.ts";
 import { checkTicket } from "./ticket-ready.ts";
+
+// A test that starts an agent marks a run for the door (#347) and never reaches the tick's end, which clears it.
+afterEach(() => rmSync(runMarker.path, { force: true }));
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
@@ -388,6 +404,79 @@ Picked up.`,
     await realDeps(FACTORY, OPTIONS, "local").runAgent(ws, "run-1", "target", 18, "/t.md", log);
     expect(vi.mocked(runAgent).mock.calls.at(-1)?.[10]).toBe(localSandbox);
   });
+
+  it.each(["local", "ci"] as const)(
+    "marks the run for the door before a %s agent starts; the runner's own writes still go; the tick's end clears it (#347)",
+    async (mode) => {
+      const ws = workspace(join(runs, "run-1"));
+      const events: string[] = [];
+      let markedAtStart = false;
+      vi.mocked(runAgent).mockImplementationOnce(async () => {
+        markedAtStart = existsSync(runMarker.path);
+        return { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
+      });
+      const deps = realDeps(FACTORY, OPTIONS, mode);
+      const lock = deps.lock();
+      await deps.runAgent(ws, "run-1", "target", 18, "/t.md", (event) => events.push(event));
+      expect(markedAtStart).toBe(true);
+      expect(events).toContain("door-run");
+      // A comment from another caller is refused while the run is marked; the runner's own goes through.
+      expect(() => sendPost({ kind: "issue-comment", repo: "owner/target", number: 18, body: "x" })).toThrow(
+        "the door takes only push, pr-create, pr-edit",
+      );
+      door.calls = [];
+      deps.comment("owner/target", 18, "Done.");
+      expect(door.calls.map((c) => c.args.slice(0, 2))).toEqual([["issue", "comment"]]);
+      lock.release();
+      expect(existsSync(runMarker.path)).toBe(false);
+    },
+  );
+
+  it("ends the door's run before it releases the lock, and releases the lock even when ending throws", () => {
+    const ended: string[] = [];
+    const base = { lock: () => ({ acquired: true, release: () => ended.push("lock") }) } as unknown as TickDeps;
+    endsDoorRun(base, { start: () => "k", end: () => ended.push("door") })
+      .lock()
+      .release();
+    expect(ended).toEqual(["door", "lock"]);
+    const failing = endsDoorRun(base, {
+      start: () => "k",
+      end: () => {
+        throw new Error("gone");
+      },
+    }).lock();
+    expect(() => failing.release()).toThrow("gone");
+    expect(ended).toEqual(["door", "lock", "lock"]);
+  });
+
+  it("releases the lock and starts no tick when the run's marker can't be written", () => {
+    const released: string[] = [];
+    const base = { lock: () => ({ acquired: true, release: () => released.push("lock") }) } as unknown as TickDeps;
+    const deps = endsDoorRun(base, {
+      start: () => {
+        throw new Error("EPERM");
+      },
+      end: () => {},
+    });
+    expect(() => deps.lock()).toThrow("EPERM");
+    expect(released).toEqual(["lock"]);
+  });
+
+  it.each(["local", "ci"] as const)(
+    "replaces a %s marker a killed run left as soon as the lock is taken, so recovery's writes still go (Qodo on PR 349)",
+    (mode) => {
+      writeFileSync(runMarker.path, "left by a killed run");
+      const deps = realDeps(FACTORY, OPTIONS, mode);
+      const lock = deps.lock();
+      door.calls = [];
+      deps.comment("owner/target", 18, "Recovered.");
+      deps.relabel("owner/target", 18, ["agent-working"], ["ready-for-agent"]);
+      expect(door.calls.map((c) => c.args.slice(0, 2))).toContainEqual(["issue", "comment"]);
+      expect(door.calls.length).toBeGreaterThan(1);
+      lock.release();
+      expect(existsSync(runMarker.path)).toBe(false);
+    },
+  );
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {
     const ws = workspace(join(runs, "run-1"));

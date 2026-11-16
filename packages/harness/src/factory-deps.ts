@@ -9,6 +9,7 @@ import { auditRun } from "./factory-audit.ts";
 import { readCheckFiles } from "./factory-check-files.ts";
 import { runnerComment } from "./factory-comments.ts";
 import type { FactoryConfig } from "./factory-config.ts";
+import { endsDoorRun } from "./factory-door-run.ts";
 import { commitAndPublish, type EvidencePush, evidenceFile } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { type HooksReport, requireHooks, withCleanupFailure } from "./factory-hooks.ts";
@@ -28,6 +29,7 @@ import { ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
+import { AGENT_DOOR_KINDS, doorRunHolder } from "./target-post-run.ts";
 import { checkTicket } from "./ticket-ready.ts";
 import { ghSnapshot } from "./ticket-snapshot.ts";
 import { ticketWriter } from "./ticket-write.ts";
@@ -44,10 +46,13 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
   // In CI there is no private checkout until the runner makes one, and none while a target ticket's agent runs.
   const access = privateAccess(mode, privateRepo, runs);
   // The runner's comments and labels: a reviewed repo's ticket gets them through the door, which checks them (#345).
+  // While the agent runs, the door takes only its kinds; the runner's own writes carry the run's key (#347).
+  const doorRun = doorRunHolder();
   const tickets = ticketWriter(
     Object.values(factory.repos)
       .filter((repo) => repo.guard === "reviewed")
       .map((repo) => repo.github),
+    { runnerKey: doorRun.key },
   );
 
   // The lock this tick holds, so the agent's pid can be written into it once the agent starts.
@@ -203,8 +208,11 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     },
     audit: (ws, ticket, from, to) =>
       auditRun(factory, { checkout: privateRepo, main: access.main }, mode, ws, ticket, from, to),
-    runAgent: (ws, runId, repoKey, number, ticketFile, log) =>
-      runAgent(
+    runAgent: (ws, runId, repoKey, number, ticketFile, log) => {
+      // Marked when the lock was taken (`endsDoorRun`); again here in case it wasn't, before the agent exists (#347).
+      doorRun.start(runId);
+      log("door-run", { marker: doorRun.marker, allowed: AGENT_DOOR_KINDS });
+      return runAgent(
         factory,
         options,
         runs,
@@ -217,7 +225,8 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
         (pid) => held?.recordAgent(pid, pid ? (processStartId(pid) ?? undefined) : undefined),
         // In Actions the agent runs behind the network allow-list, or not at all; on a PC without one (#330).
         sandboxFor(mode, factory),
-      ),
+      );
+    },
     verifyPr(ws, repoKey, pr) {
       return verifyPrWith(
         { ghJson, git, npm },
@@ -304,9 +313,9 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
       if (leftovers.length) throw new Error(`cleanup failed: ${leftovers.join("; ")}`);
     },
   };
-  if (mode === "local") return deps;
+  if (mode === "local") return endsDoorRun(deps, doorRun);
 
-  return {
+  return endsDoorRun(deps, doorRun, {
     ...deps,
     // The VM's target checkout gets the guard from the workflow's own step (factory.yml), not from here.
     unguarded: () => [],
@@ -351,5 +360,5 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     },
     // The VM is thrown away after the run.
     cleanup: () => {},
-  };
+  });
 }
