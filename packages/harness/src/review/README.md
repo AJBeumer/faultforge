@@ -6,9 +6,10 @@ A PR's review, waited for and saved as evidence, and the checks built on it.
   it. `saved-review.ts`: where a saved review lives and how it is read, for every reader.
 - `review-gate.ts` with `review-gate-cache.ts` and `review-gate-records.ts`: whether a commit's tree was
   covered by a completed local review.
+- `gate-check.ts`: whether a PR's saved review meets the quality gate in `factory.json`.
 - `review-local.ts` with `local-*.ts`: Qodo's review of a local diff, before a PR.
 
-Entry points: `npm run review:wait` (`cli/review-wait.ts`), `npm run review:gate` (`review-gate.ts`),
+Entry points: `npm run review:wait` (`cli/review-wait.ts`), `npm run review:gate` (`review-gate.ts`), `npm run gate:check` (`cli/gate-check-cli.ts`),
 `npm run review:local` (`review-local.ts`).
 
 Uses: `shared`, `match`, `qodo`.

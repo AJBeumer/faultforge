@@ -42,14 +42,14 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
 
   /** A stand-in for `review-wait.ts`, run through real `npm run`, so the test proves npm picks the script
    * of whichever checkout it runs from. It saves `openFindings` where `verifyPrWith` reads them back. */
-  function reviewWaitStub(openFindings: unknown[]): string {
+  function reviewWaitStub(openFindings: unknown[], recordHead?: string): string {
     return `import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const [repoKey, pr, , commit] = process.argv.slice(2);
 const dir = join(process.cwd(), 'evidence', 'reviews', \`\${repoKey}-pr\${pr}\`);
 mkdirSync(dir, { recursive: true });
 const openFindings = ${JSON.stringify(openFindings)};
-writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify({ openFindings }));
+writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify({ headSha: ${JSON.stringify(recordHead ?? null)} ?? commit, state: 'complete', openFindings }));
 `;
   }
 
@@ -68,7 +68,10 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
    * agent's worktree: its branch edits that script to always report a clean review, as an agent's own pull
    * request could.
    */
-  function sourceWithForgedStub() {
+  function sourceWithForgedStub(
+    genuine: unknown[] = [{ severity: "action_required", title: "a real finding Qodo raised" }],
+    recordHead?: string,
+  ) {
     root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
     const origin = join(root, "origin.git");
     const sourceRepo = join(root, "source");
@@ -76,10 +79,7 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     sh(root, "clone", "-q", origin, sourceRepo);
     sh(sourceRepo, "config", "user.email", "t@example.com");
     sh(sourceRepo, "config", "user.name", "t");
-    writeFileSync(
-      join(sourceRepo, "review-wait-stub.mjs"),
-      reviewWaitStub([{ severity: "action_required", title: "a real finding Qodo raised" }]),
-    );
+    writeFileSync(join(sourceRepo, "review-wait-stub.mjs"), reviewWaitStub(genuine, recordHead));
     writeFileSync(join(sourceRepo, "revert-check-stub.mjs"), REVERT_CHECK_STUB);
     writeFileSync(
       join(sourceRepo, "package.json"),
@@ -104,11 +104,12 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     return { sourceRepo, origin, pushed };
   }
 
-  it("settles the verdict from the real checkout's script, never the doctored worktree's", () => {
-    const { sourceRepo, origin, pushed } = sourceWithForgedStub();
+  /** Runs the runner's check on a source made by `sourceWithForgedStub`, under the checked-in gate's labels. */
+  function verify({ sourceRepo, origin, pushed }: ReturnType<typeof sourceWithForgedStub>, sandbox = false) {
     const short = pushed.slice(0, 7);
     const factory: FactoryConfig = {
       evidence: EVIDENCE,
+      gate: { fix: ["action_required", "remediation_recommended"], flag: ["informational"], maxRounds: 3 },
       repos: {
         lab: {
           github: "example/lab",
@@ -147,12 +148,19 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     const git: VerifyPrIo["git"] = (cwd, ...args) => sh(cwd, ...args);
 
     const verifyRoot = join(root, "runs");
-    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42, true);
+    const result = verifyPrWith({ ghJson, git, npm }, factory, verifyRoot, () => origin, ws, "lab", 42, sandbox);
+    return { result, calls, verifyRoot, short };
+  }
+
+  it("settles the verdict from the real checkout's script, never the doctored worktree's", () => {
+    const source = sourceWithForgedStub();
+    const { sourceRepo } = source;
+    const { result, calls, verifyRoot, short } = verify(source, true);
 
     // In a CI run the PR's tests run as the sandbox user: revert:check is told so.
     const revertCall = calls.find((c) => c.args.includes("revert:check"));
     expect(revertCall?.args.slice(-3)).toEqual(["lab", "42", "--sandbox"]);
-    expect(result.problems).toEqual(["1 action-required finding(s) still open: a real finding Qodo raised"]);
+    expect(result.problems).toEqual(["1 action_required (High) finding(s) still open: a real finding Qodo raised"]);
     const reviewCall = calls.find((c) => c.args.includes("review:wait"));
     expect(reviewCall?.cwd).not.toBe(sourceRepo);
     // The genuine finding reached the permanent evidence path before the trusted checkout was removed.
@@ -163,6 +171,36 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     // Nothing of the trusted checkout lingers to tamper with afterwards.
     expect(existsSync(verifyRoot)).toBe(true);
     expect(readdirSync(verifyRoot)).toHaveLength(0);
+  });
+
+  // The agent's branch says the review is clean each time; the runner's own read of the review decides.
+  it.each([
+    [
+      "an open remediation-recommended finding",
+      [{ severity: "remediation_recommended", title: "an unread page" }],
+      undefined,
+      ["1 remediation_recommended (Medium) finding(s) still open: an unread page"],
+    ],
+    [
+      "an open finding with a label the gate doesn't know",
+      [{ severity: "blocker", title: "a new kind" }],
+      undefined,
+      ["1 open finding(s) with a label the gate doesn't know (blocker): a new kind"],
+    ],
+    [
+      "a record of another commit",
+      [],
+      "e".repeat(40),
+      [expect.stringMatching(/^the saved review is of eeeeeee, not of /)],
+    ],
+  ])("doesn't count a pull request as delivered with %s", (_name, genuine, recordHead, problems) => {
+    const { result } = verify(sourceWithForgedStub(genuine, recordHead));
+    expect(result.problems).toEqual(problems);
+  });
+
+  it("counts a pull request with only informational findings open as delivered", () => {
+    const { result } = verify(sourceWithForgedStub([{ severity: "informational", title: "a name" }]));
+    expect(result.problems).toEqual([]);
   });
 
   it("keeps review:wait's evidence even when the review doesn't complete", () => {

@@ -5,13 +5,40 @@
   "description": "The repositories the factory works on, and how each one is checked, started, guarded and ticketed. Read by the guard hook, the readiness check and the skills. Holds no secrets.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["evidence", "network", "repos"],
+  "required": ["evidence", "gate", "network", "repos"],
   "properties": {
     "$schema": { "type": "string" },
     "evidence": {
       "description": "Where saved reviews and live-check transcripts go, relative to this repo. Always inside the git-ignored private/ folder, never a public one.",
       "type": "string",
       "pattern": "^private/(?!(.*/)?\\.\\.(/|$))[^\\s\\\\]*$"
+    },
+    "gate": {
+      "description": "The quality gate for coding tasks, by Qodo's label on a finding (action_level). The runner decides it from the saved review of a pull request's head, and the agent's instructions are written from it. An open finding whose label is in neither list blocks.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fix", "flag", "maxRounds"],
+      "properties": {
+        "fix": {
+          "description": "An open finding with one of these labels must be fixed before the task is done, whatever its type.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }
+        },
+        "flag": {
+          "description": "An open finding with one of these labels is left unchanged and reported to the owner.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }
+        },
+        "maxRounds": {
+          "description": "The most review rounds a task gets.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
     },
     "network": {
       "description": "The agent's network in a CI run: the only hosts it can reach, through the runner's proxy, on port 443. Exact host names, no wildcards and no addresses. Adding one is a reviewed change to this file (#330).",

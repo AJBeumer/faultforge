@@ -37,7 +37,7 @@ import {
   tokenFrom,
   type Workspace,
 } from "./factory-tick.ts";
-import { checkProblems, openActionRequired, revertCheckProblems } from "./factory-verify.ts";
+import { checkProblems, revertCheckProblems } from "./factory-verify.ts";
 import { provenanceProblems, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 const FACTORY: FactoryConfig = {
@@ -1117,18 +1117,6 @@ describe("audit helpers", () => {
       },
     });
     expect(hookProblems(fake)).toHaveLength(14);
-  });
-
-  it("lists only action-required findings as blocking", () => {
-    expect(
-      openActionRequired({
-        openFindings: [
-          { severity: "action_required", title: "Bug" },
-          { severity: "remediation_recommended", title: "Nit" },
-        ],
-      }),
-    ).toEqual(["Bug"]);
-    expect(openActionRequired({})).toEqual([]);
   });
 
   it("requires both hooks on notebook and PowerShell tools too", () => {

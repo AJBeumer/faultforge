@@ -19,8 +19,27 @@ export interface RepoConfig {
   checkFiles?: { files: string; scripts: string };
 }
 
+/** The quality gate: Qodo's labels (`action_level`) that must be fixed, and those only reported to the owner. */
+export interface QualityGate {
+  /** An open finding with one of these labels blocks. */
+  fix: string[];
+  /** An open finding with one of these labels is reported and left unchanged. */
+  flag: string[];
+  /** The most review rounds a task gets. */
+  maxRounds: number;
+}
+
+/**
+ * The gate for a configuration with none: nothing is exempt, so every open finding blocks. Only a test's
+ * made-up configuration lacks a gate; the schema requires one.
+ */
+export const STRICTEST_GATE: QualityGate = { fix: [], flag: [], maxRounds: 1 };
+
 export interface FactoryConfig {
   evidence: string;
+  /** Required by the schema; optional here so a test's made-up config needs none (`gateOf` then blocks on
+   * every open finding). */
+  gate?: QualityGate;
   /** The hosts a CI run's agent may reach, through the runner's proxy (`factory-sandbox.ts`). Required by
    * the schema; optional here so a test's made-up config needs none. */
   network?: { allow: string[] };
@@ -36,8 +55,11 @@ export function configProblems(config: unknown): string[] {
   if (!schemaCheck(config)) {
     return (schemaCheck.errors ?? []).map((e) => `${e.instancePath || "/"} ${e.message}`);
   }
-  const { repos } = config as FactoryConfig;
+  const { repos, gate } = config as FactoryConfig;
   const problems: string[] = [];
+  for (const label of gate?.fix ?? []) {
+    if (gate?.flag.includes(label)) problems.push(`gate: "${label}" is both to fix and to flag`);
+  }
   for (const [key, repo] of Object.entries(repos)) {
     if (!repo.tickets.sections.includes(repo.tickets.checklist)) {
       problems.push(`${key}: checklist "${repo.tickets.checklist}" is not one of its sections`);
@@ -64,6 +86,11 @@ export function loadFactory(path = process.env.FAULTFORGE_CONFIG ?? join(root, "
   const problems = configProblems(config);
   if (problems.length) throw new Error(`Invalid factory config ${path}:\n${problems.join("\n")}`);
   return config;
+}
+
+/** The configuration's quality gate, or the strictest one when it has none. */
+export function gateOf(config: FactoryConfig): QualityGate {
+  return config.gate ?? STRICTEST_GATE;
 }
 
 export function repoConfig(config: FactoryConfig, key: string): RepoConfig {

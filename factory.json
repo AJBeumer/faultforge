@@ -1,6 +1,11 @@
 {
   "$schema": "./schemas/factory.v1.json",
   "evidence": "private/raw-artifacts",
+  "gate": {
+    "fix": ["action_required", "remediation_recommended"],
+    "flag": ["informational"],
+    "maxRounds": 3
+  },
   "network": {
     "allow": [
       "api.anthropic.com",
