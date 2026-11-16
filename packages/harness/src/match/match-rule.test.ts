@@ -162,7 +162,7 @@ describe("applyMatchRule against the published FF-0001 record", () => {
   });
 });
 
-describe("applyMatchRule: ranges that aren't ranges (Qodo on PR 128)", () => {
+describe("applyMatchRule: ranges that aren't ranges", () => {
   it("fails the lines criterion for a reversed finding range and reports no width", () => {
     const reversed = finding({ lines: [20, 10], title: "Replay", summary: "", category: "" });
     const result = applyMatchRule({ file: injection.file, lines: [5, 25] }, [reversed], kindTerms);
@@ -179,7 +179,7 @@ describe("applyMatchRule: ranges that aren't ranges (Qodo on PR 128)", () => {
   });
 });
 
-describe("applyMatchRule: behaviour pinned after the 13 November audit (#188)", () => {
+describe("applyMatchRule: kind, range, case and path separator edge cases", () => {
   const finding = (overrides: Partial<MatchFinding> = {}): MatchFinding => ({
     id: "qodo:1",
     file: "src/bookings/create.ts",
@@ -235,7 +235,7 @@ describe("applyMatchRule: behaviour pinned after the 13 November audit (#188)", 
   });
 });
 
-describe("applyMatchRule: one finding must meet all three criteria (M06, M08b, AUD-M11)", () => {
+describe("applyMatchRule: one finding must meet all three criteria", () => {
   it("doesn't combine criteria met by different findings into a catch", () => {
     const placedButWrongKind = finding({ id: "qodo:1", title: "Naming", summary: "A name", category: "Style" });
     const rightKindElsewhere = finding({ id: "qodo:2", file: "src/other.ts" });

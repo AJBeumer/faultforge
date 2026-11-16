@@ -39,7 +39,7 @@ const ARGS: PrArgs = {
   dryRun: false,
 };
 
-/** A fake gh: the branch and the opened PR's head are `head`, and `pr create` prints PR 31's URL. */
+/** A fake gh: the branch and the opened PR's head are `head`, and `pr create` prints the URL of pull 31. */
 function fakeGh(head = COMMIT) {
   const calls: string[][] = [];
   const gh = (args: string[], input?: string) => {
@@ -80,7 +80,7 @@ async function open(root: string, args: Partial<PrArgs> = {}, gh = fakeGh()) {
   return { code, err: err.join("\n"), events, calls: gh.calls };
 }
 
-describe("case:pr (#251, AUD-M5)", () => {
+describe("case:pr", () => {
   it("opens the PR with the commit message and Closes #N, and writes a valid pr.opened event", async () => {
     const { code, err, events, calls } = await open(fixture());
     expect(err).toBe("");
@@ -168,7 +168,7 @@ describe("case:pr (#251, AUD-M5)", () => {
   });
 });
 
-describe("case:pr: what Qodo found on PR 269", () => {
+describe("case:pr: the Qodo check and the template, just before the PR", () => {
   it("refuses, before gh pr create, when Qodo doesn't match its snapshot or can't be checked", async () => {
     const original = qodo;
     for (const exitCode of [1, 2]) {
@@ -198,7 +198,7 @@ describe("case:pr: what Qodo found on PR 269", () => {
   });
 });
 
-describe("case:pr: round two on PR 269", () => {
+describe("case:pr: the ticket number and the template's names", () => {
   it("refuses a ticket number that isn't a whole positive number, before gh pr create", async () => {
     for (const number of [0, 1.5]) {
       const { code, calls } = await open(fixture([PLANTED, { type: "case.ticket-created", issue: { number } }]));
@@ -215,7 +215,7 @@ describe("case:pr: round two on PR 269", () => {
   });
 });
 
-describe("case:pr: round three on PR 269", () => {
+describe("case:pr: a PR opened by hand, the ticket's repository and slashed branches", () => {
   it("records a PR opened by hand with --existing, opening nothing", async () => {
     const { code, events, calls } = await open(fixture(), { existing: 31 });
     expect(code).toBe(0);

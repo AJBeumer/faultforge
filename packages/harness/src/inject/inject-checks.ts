@@ -21,7 +21,7 @@ export interface VariantChecks {
 
 type RunStep = (places: StepPlaces, name: string, cmd: string, args: string[]) => Outcome;
 
-/** Runs the checks on the variant now in `places.targetDir`. */
+/** Runs the checks on the variant checked out in `places.targetDir`. */
 export function runVariantChecks(
   runStep: RunStep,
   places: StepPlaces,
@@ -31,7 +31,7 @@ export function runVariantChecks(
   const { targetDir } = places;
   const node = process.execPath;
   const vitest = join(targetDir, "node_modules/vitest/vitest.mjs");
-  // With the target's own test config when it has one: that is what its own check compiles (AUD-N7).
+  // With the target's own test config when it has one: that is what its own check compiles.
   const tsconfig = existsSync(join(targetDir, "tsconfig.test.json")) ? "tsconfig.test.json" : "tsconfig.json";
   const typecheck = runStep(places, "typecheck", node, [
     join(targetDir, "node_modules/typescript/bin/tsc"),

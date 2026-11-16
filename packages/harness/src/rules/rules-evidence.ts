@@ -101,10 +101,8 @@ export function casePrs(casesDir: string): Set<string> {
  * is an error, for the same reason as `casePrs`.
  */
 export function groundTruthCommits(groundTruthFile: string): Set<string> {
-  // Every value an entry's commit has had (AUD-N1): as first written, each applied amendment's change, and the
-  // result. A commit an amendment replaced stays excluded, even after a later one replaced it again.
-  // `readLedger` applies only amendments whose target is one entry, so an amendment that names no entry, or an
-  // ambiguous one, excludes nothing (Qodo on PR 260).
+  // Every value an entry's commit has had, so a commit an amendment replaced stays excluded. An amendment
+  // that names no entry, or more than one, excludes nothing: it could otherwise hide an unrelated PR.
   let entries: Record<string, unknown>[];
   try {
     const asWritten = readJsonLines(groundTruthFile).filter((line) => line.kind !== "amendment");
@@ -137,8 +135,7 @@ export function readSavedReviews(reviewsDir: string): { key: string; review: Sav
   for (const dir of dirs) {
     const match = /^(.+)-pr(\d+)$/.exec(dir);
     if (!match) continue;
-    // A stray file that happens to match the folder pattern (e.g. a leftover ".zip") is not a reviews
-    // folder: skip it instead of letting readdirSync throw ENOTDIR.
+    // A stray file can match the folder pattern; reading it as a folder would throw.
     if (!statSync(join(reviewsDir, dir)).isDirectory()) continue;
     for (const file of readdirSync(join(reviewsDir, dir))) {
       if (!file.endsWith(".review.json")) continue;
@@ -150,10 +147,8 @@ export function readSavedReviews(reviewsDir: string): { key: string; review: Sav
 
 /**
  * One row per finding. A finding keeps the review where it was first seen in the archive, and is
- * open only if the PR's last saved *complete* review (state "complete"; a save with no state is unfinished, as
- * in the verdict) still lists it among the open findings. With
- * no complete review saved for a PR, nothing there is called closed: an incomplete answer can be
- * missing findings, and absence from it is not resolution.
+ * open only if the PR's last saved complete review still lists it. With no complete review saved for a PR,
+ * nothing there is called closed: an incomplete review can miss findings, and absence from it is not resolution.
  */
 export function buildTable(
   reviews: { key: string; review: SavedReview }[],

@@ -1,5 +1,5 @@
 /**
- * Marks a case as a rerun of another, by appending one amendment to the answer key (AUD-M13). It never edits
+ * Marks a case as a rerun of another, by appending one amendment to the answer key. It never edits
  * a line: the earlier entry stays as it was, and the rerun's entry gains `rerunOf` when the file is read.
  *
  *   npm run case:rerun -- FF-0019 --of FF-0015
@@ -100,10 +100,10 @@ export function markProblem(entries: LedgerEntry[], caseId: string, of: string):
   if (original.rerunOf !== undefined) {
     return `${of} is itself a rerun of ${String(original.rerunOf)}: mark it against that case`;
   }
-  // No chains the other way either: a case another names as its original stays an original (Qodo on PR 273).
+  // No chains the other way either: a case another names as its original stays an original.
   const named = entries.find((e) => e.rerunOf === caseId);
   if (named) return `${String(named.caseId)} is already marked a rerun of ${caseId}, so ${caseId} stays an original`;
-  // A missing template on both sides is no evidence of the same template (Qodo on PR 273).
+  // A missing template on both sides is no evidence of the same template.
   for (const entry of [rerun, original]) {
     if (typeof entry.templateId !== "string" || !entry.templateId) return `${String(entry.caseId)} names no template`;
   }
@@ -125,8 +125,8 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
   };
 
   const auditEventsPath = join(root, "audit-events.jsonl");
-  // Everything ledger:check would report, not only the amendments and the history (Qodo on PR 273): every
-  // event readable, and every tool's inputHash still recomputing.
+  // Everything ledger:check would report, not only the amendments and the history: every event readable, and
+  // every tool's inputHash still recomputing.
   let problems: string[];
   try {
     problems = [
@@ -178,7 +178,7 @@ export function run(args: RerunArgs, options: RerunOptions = {}): number {
   }
   let raced: string | undefined;
   try {
-    // Checked again under the lock: another run may have marked either case meanwhile (Qodo on PR 273).
+    // Checked again under the lock: another run may have marked either case meanwhile.
     appendAmendment(groundTruthPath, amendment, () => {
       raced = markProblem(readLedger(groundTruthPath), args.caseId, args.of);
       if (raced) throw new Error(raced);

@@ -1,6 +1,6 @@
 /**
  * The ledger's history check on a synthetic private repo with many commits and a history whose `git log -p`
- * is larger than the old 64 MB buffer (AUD-N6): it reads it as a stream, finds the one bad commit, and
+ * is larger than a 64 MB buffer: it reads it as a stream, finds the one bad commit, and
  * still passes a clean history.
  */
 import { execFileSync } from "node:child_process";
@@ -48,7 +48,7 @@ function repo(commits: number, opts: { removeAt?: number; bigLast?: number } = {
   return dir;
 }
 
-describe("the ledger history check reads history as a stream (AUD-N6)", () => {
+describe("the ledger history check reads history as a stream", () => {
   it("passes a clean history of many commits", () => {
     expect(appendOnlyProblems(repo(1500), "log.jsonl")).toEqual([]);
   }, 120_000);
@@ -59,7 +59,7 @@ describe("the ledger history check reads history as a stream (AUD-N6)", () => {
     expect(problems[0]).toMatch(/log\.jsonl: commit [0-9a-f]{12} removed or changed a line/);
   }, 120_000);
 
-  it("reads a history whose log is larger than the old 64 MB buffer", () => {
+  it("reads a history whose log is larger than a 64 MB buffer", () => {
     const dir = repo(50, { bigLast: 70 * 1024 * 1024, removeAt: 20 });
     let bytes = 0;
     eachGitLine(dir, ["log", "--no-color", "-p", "--", "log.jsonl"], (line) => {

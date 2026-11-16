@@ -117,9 +117,8 @@ export function propose(
   const lab = Object.values(factory.repos).find((r) => r.guard === "lab")?.github;
   if (!lab) throw new Error("no lab repo in factory.json");
   const evidence = evidenceDir(factory, root);
-  // Derived from `root` directly, never from FAULTFORGE_PRIVATE_DIR: `root` names exactly which
-  // checkout to scan (the owner's, or a test fixture), and an env override would read someone else's
-  // private storage instead (the same escape `privateDir()`'s own doc warns against).
+  // From `root`, never FAULTFORGE_PRIVATE_DIR: `root` names the checkout to scan, and an env override
+  // would read someone else's private storage.
   const priv = dirname(evidence);
   const excluded = {
     prs: casePrs(join(priv, "cases")),
@@ -175,10 +174,8 @@ export function propose(
 export function proposeAfterRun(root: string, print: (line: string) => void): ProposeResult {
   const factory = loadFactory();
   try {
-    // Literal, not derived from the evidence path: this refreshes the physical "private" checkout
-    // itself (always that name, directly under root), which a nested evidence folder — not yet
-    // created locally when it was only just pushed — would otherwise make `git -C` fail to enter
-    // (Qodo on PR 154, round 2).
+    // The "private" checkout itself, not the evidence path: a nested evidence folder that was only just
+    // pushed doesn't exist locally yet, so `git -C` couldn't enter it.
     execFileSync("git", ["-C", join(root, "private"), "pull", "--ff-only", "--quiet"], { timeout: 60_000 });
   } catch (error) {
     print(`private checkout not refreshed (${error instanceof Error ? error.message : error}); scanning as-is`);
@@ -196,7 +193,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     main();
   } catch (error) {
     // The stack, so the failing step can be found; and exitCode, not exit(), so every "Opened <url>" line
-    // already printed for a ticket reaches the output before the process ends (Qodo on PR 260).
+    // already printed for a ticket reaches the output before the process ends.
     console.error(
       `rules:propose could not run: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
     );

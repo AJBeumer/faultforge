@@ -5,16 +5,15 @@ import { isRange, normalisePath, overlaps } from "../match/match-rule.ts";
 import { ROOT } from "../shared/paths.ts";
 
 const root = ROOT;
-// Formats are documentation here; the checks that matter are structure and the fixed fields. Version 2 is
-// version 1 plus what a control records: two outcomes, its `change` and `notes` (#162); a record is checked
-// against the version it names.
+// Formats are documentation here; the checks that matter are structure and the fixed fields. Version 2 adds
+// what a control records (two outcomes, its `change` and `notes`). A record is checked against the version it names.
 const ajv = new Ajv2020({ allErrors: true, validateFormats: false });
 const schemaChecks = {
   1: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v1.json"), "utf8"))),
   2: ajv.compile(JSON.parse(readFileSync(join(root, "schemas/case-record.v2.json"), "utf8"))),
 };
 
-/** A record's version: 2 for a control (its `change` block and `notes`, and two outcomes, are new in 2), else 1. */
+/** A record's version: 2 for a control, since only version 2 has its `change`, `notes` and two outcomes; else 1. */
 export function recordVersionFor(kind: string): 1 | 2 {
   return kind === "control" ? 2 : 1;
 }
@@ -76,8 +75,7 @@ function consistencyProblems({ findings, detection, human, injection, change, re
   if (change && !isRange(change.lines)) {
     problems.push(`change.lines ${(change.lines as number[]).join("-")} ends before it starts`);
   }
-  // What each outcome says about the findings and the review, checked for every kind of case: a control
-  // has no detection to check against (AUD-M1).
+  // Checked for every kind of case, before the detection checks: a control has no detection to check against.
   if (human.disposition === "confirmed_clean" && findings.length) {
     problems.push(`confirmed_clean, but Qodo raised ${findings.length} finding(s): a clean control has none`);
   }

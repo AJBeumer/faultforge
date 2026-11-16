@@ -11,7 +11,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("apiKey (audit N-6)", () => {
+describe("apiKey", () => {
   it("falls back to the key file when QODO_API_KEY is empty", () => {
     const file = join(mkdtempSync(join(tmpdir(), "qodo-key-")), "key.txt");
     writeFileSync(file, `${KEY}\n`);
@@ -22,7 +22,7 @@ describe("apiKey (audit N-6)", () => {
   });
 });
 
-describe("parseToolText (audit N-7)", () => {
+describe("parseToolText", () => {
   it("throws for a result with no text, never returns null as data", () => {
     expect(() => parseToolText({ content: [] })).toThrow(/no text/);
     expect(() => parseToolText({})).toThrow(/no text/);
@@ -35,7 +35,7 @@ describe("parseToolText (audit N-7)", () => {
   });
 });
 
-describe("QodoTransport: the key never reaches an error or saved evidence (audit N-6)", () => {
+describe("QodoTransport: the key never reaches an error or saved evidence", () => {
   it("redacts the key before cutting an HTTP error short, and in the saved body", async () => {
     vi.stubEnv("QODO_API_KEY", KEY);
     // The key sits across the 300-character cut: cut first, then redact, would leave half of it.

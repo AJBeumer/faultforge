@@ -1,7 +1,7 @@
 /**
  * Is a ticket ready to work? It needs every required section, a checklist to verify against, no open
  * blockers, and no stale premise: every path, npm script and exported function it names as existing
- * (outside its deliverable sections) must exist in the repo's checkout (`ticket-premises.ts`, #147).
+ * (outside its deliverable sections) must exist in the repo's checkout (`ticket-premises.ts`).
  * Used by `/work-ticket` and the factory runner before any work starts:
  *
  *   npm run ticket:ready -- faultforge 47
@@ -26,7 +26,7 @@ function isEmpty(text: string): boolean {
   return text === "_No response_" || text.replace(/^\s*-\s*(\[[ xX]\])?\s*$/gm, "").trim() === "";
 }
 
-/** Issue numbers in this repo written in the "Depends on" section, e.g. "#12, #15". */
+/** Issue numbers in this repo written as `#N` in the "Depends on" section. */
 export function writtenDependencies(body: string): number[] {
   const text = sectionsOf(body).get("depends on") ?? "";
   return [...text.matchAll(/(?<![\w/-])#(\d+)\b/g)].map((m) => Number(m[1]));
@@ -77,7 +77,7 @@ export function checkTicket(
   if (!existsSync(checkout)) throw new Error(`checkout for ${repoKey} not found at ${checkout}`);
   const issue = JSON.parse(run("api", `repos/${repo}/issues/${number}`));
   const body: string = issue.body ?? "";
-  // Native "blocked by" links, every page, plus blockers only written in the Depends on text.
+  // Blockers can be linked natively or only written in the Depends on text; both count.
   const linked = openNumbers(
     JSON.parse(run("api", "--paginate", "--slurp", `repos/${repo}/issues/${number}/dependencies/blocked_by`)),
   );

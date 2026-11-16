@@ -1,5 +1,5 @@
 /**
- * The factory runner's own writes on a ticket: its comments and its label moves (#345). A ticket in a reviewed repo
+ * The factory runner's own writes on a ticket: its comments and its label moves. A ticket in a reviewed repo
  * gets them through the door (`target-post.ts`), which checks the exact text and label names it sends, the same way
  * as every other write there. Only a ticket of any other repo, the lab's own, gets them with `gh` straight away.
  *
@@ -28,7 +28,7 @@ export interface TicketWriteDeps {
   /** The reviewed repos as the guard reads them; by default from factory.json. */
   guardReviewed?: string[];
   /**
-   * The run's runner key while a factory run is marked active (`target-post-run.ts`, #347): the door then takes a
+   * The run's runner key while a factory run is marked active (`target-post-run.ts`): the door then takes a
    * comment or label move only with it. Read at each write, since the run is marked after the writer is made.
    */
   runnerKey?: () => string | undefined;

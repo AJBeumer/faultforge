@@ -25,11 +25,11 @@ export interface Args {
   repoKey: string;
   pr: number;
   timeoutMinutes: number;
-  /** The commit the PR's head must be before its review counts; null to take whatever head GitHub shows. */
+  /** The head the review must be of; null takes whatever head GitHub shows. */
   commit: string | null;
 }
 
-/** The command line, or null when it's wrong. */
+/** Null when the command line is wrong. */
 export function parseArgs(argv: string[]): Args | null {
   let values: { commit?: string; timeout?: string };
   let positionals: string[];
@@ -54,20 +54,16 @@ export function parseArgs(argv: string[]): Args | null {
 
 /** Everything `run` reads or waits on, passed in so the tests drive it without GitHub, Qodo or a clock. */
 export interface WaitScriptDeps {
-  /** `owner/repo` of the PR. */
+  /** `owner/repo`. */
   github: string;
-  /** The PR's saves folder. */
   dir: string;
   readHead: () => Promise<string>;
-  /** When each check suite for a commit was created: the first is when GitHub saw the push. */
+  /** The first is when GitHub saw the push: GitHub records no push time. */
   checkSuiteTimes: (sha: string) => string[];
-  /** The two comment feeds, raw (`gh api --paginate --slurp`). */
   commentFeeds: () => { pr: string; inline: string };
-  /** The formal GitHub reviews, raw. Supplementary: a failure is logged and skipped. */
+  /** Supplementary: a failure is logged and skipped. */
   formalReviews: () => string;
-  /** Qodo's `get-pr-review-findings` answer for the PR. */
   fetchReview: () => Promise<unknown>;
-  /** The raw text of Qodo's last answer, and of any answers a session recovery replaced. */
   rawAnswers: () => { last: string; recovered: string[] };
   checkRuns: (sha: string) => { name: string; status: string; conclusion: string | null }[];
   now: () => number;
@@ -84,7 +80,7 @@ export const SAVED_STATE = {
   moved: "head moved during the review",
 } as const;
 
-/** Runs one wait and returns its exit code (see the header); every failure is caught and is exit 2. */
+/** Every failure is caught and is exit 2. */
 export async function run(args: Args, deps: WaitScriptDeps): Promise<number> {
   try {
     return await wait(args, deps);
@@ -99,9 +95,8 @@ export async function run(args: Args, deps: WaitScriptDeps): Promise<number> {
 async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScriptDeps): Promise<number> {
   const { dir, github, log } = deps;
   const deadline = deps.now() + timeoutMinutes * 60_000;
-  // The wait's own polls of the PR head end by its time limit, so a retried read can't run past it (Qodo on PR
-  // 310). Evidence reads (check suites, comment feeds, check runs) keep their full time limit: a review seen
-  // complete at the limit is still saved, never lost to the deadline (Qodo on PR 312).
+  // Reads of the PR head end by the time limit, so a retried read can't run past it. Evidence reads keep
+  // their full time: a review seen complete at the limit is still saved, never lost to the deadline.
   const headBy = Date.now() + timeoutMinutes * 60_000;
   const readHead = async () => {
     callDeadline.at = headBy;
@@ -111,9 +106,8 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
       callDeadline.at = undefined;
     }
   };
-  // A complete save is never overwritten (AUD-M26): refused before any waiting once the commit is known. An
-  // unfinished one may be waited for again: it is moved, with every raw answer and feed saved beside it,
-  // into a folder of its own first, so this wait overwrites none of its evidence (Qodo on PR 264).
+  // A complete save is never overwritten, so it is refused before any waiting. An unfinished one is moved,
+  // with its evidence, into a folder of its own first, so this wait overwrites none of it.
   const refuseExisting = (sha: string) => {
     const refusal = savedReviewRefusal(savedReviewPath(dir, sha.toLowerCase()));
     if (refusal) throw new Error(refusal);
@@ -166,9 +160,8 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
   let lastContent = "";
   const onPoll = async () => {
     lastContent = saveCommentFeeds(deps.commentFeeds(), lastContent, (f, t) => writeFileSync(join(dir, f), t), short);
-    // `pulls/{n}/reviews` isn't where Qodo's comments live, but it's saved on every poll too: a bounded
-    // endpoint list is only trustworthy while every endpoint that could hold the data is actually read.
-    // It's supplementary, so a failure here is logged and never fails the poll.
+    // Qodo's comments don't live here, but every place that could hold them is saved, so none is missed.
+    // It's supplementary, so a failure is logged and never fails the poll.
     try {
       writeFileSync(join(dir, `${short}.reviews.latest.raw.json`), deps.formalReviews());
     } catch (e) {
@@ -192,7 +185,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
           }
           if (raw.last) writeFileSync(join(dir, `${short}.qodo-api.latest.raw.json`), raw.last);
         }
-        // `null` or text is not a review: a failed poll, never a review still running (C-15).
+        // `null` or text is not a review: a failed poll, never a review still running.
         if (typeof answer !== "object" || answer === null || Array.isArray(answer)) {
           throw new Error(`Qodo answered ${JSON.stringify(answer)?.slice(0, 80)}, not a review`);
         }
@@ -282,8 +275,8 @@ export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
   };
   return {
     github,
-    // Under this checkout's own evidence folder, whatever FAULTFORGE_PRIVATE_DIR says: factory-verify runs it in a
-    // trusted checkout and copies the saves from there (Qodo on PR 264).
+    // This checkout's own evidence folder, whatever FAULTFORGE_PRIVATE_DIR says: factory-verify runs this in a
+    // trusted checkout and copies the saves from there.
     dir: savedReviewDir(repoKey, pr, {}),
     readHead: async () => gh("api", `repos/${github}/pulls/${pr}`, "--jq", ".head.sha").trim(),
     checkSuiteTimes: (sha) =>
@@ -311,7 +304,7 @@ export function liveDeps(repoKey: string, pr: number): WaitScriptDeps {
   };
 }
 
-/** The command line as `review-wait.ts` gets it; returns the exit code. */
+/** Returns the exit code. */
 export async function main(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
   if (!args) {

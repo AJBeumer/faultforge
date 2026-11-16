@@ -68,7 +68,7 @@ describe("readinessProblems", () => {
   });
 });
 
-describe("review findings on PR 53", () => {
+describe("readinessProblems: placeholders, code blocks and written blockers", () => {
   it("treats the form's untouched placeholder as empty", () => {
     const body = ready.replace("- The other thing", "- ");
     expect(readinessProblems(body, SECTIONS.faultforge, [])).toEqual(['section "Must not break" is empty']);
@@ -125,7 +125,7 @@ describe("ticketReadyReport", () => {
   });
 });
 
-describe("stale premises (#147)", () => {
+describe("stale premises", () => {
   const issue = (body: string) => JSON.stringify({ title: "A thing", body });
   const fakeGh =
     (body: string) =>
@@ -160,7 +160,7 @@ describe("stale premises (#147)", () => {
     );
     expect(ticketReadyReport("target", 1, { error: new Error("checkout for target not found at x") }).code).toBe(2);
   });
-  it("refreshes origin/main of the ticket's repo and every present sibling before reading (Qodo round 2)", () => {
+  it("refreshes origin/main of the ticket's repo before reading, and no sibling it doesn't need", () => {
     const refreshed: string[] = [];
     checkTicket(
       factory,
@@ -175,7 +175,7 @@ describe("stale premises (#147)", () => {
     expect(refreshed).toEqual([LAB]);
   });
 
-  it("consults a sibling only when the ticket's own repo lacks a premise, so an unreachable sibling can't halt a check that doesn't need it (Qodo round 3)", () => {
+  it("consults a sibling only when the ticket's own repo lacks a premise, so an unreachable sibling can't halt a check that doesn't need it", () => {
     const sibling = gitRepo({ "INVARIANTS.md": "# invariants\n" });
     const checkoutOf = (path: string) => (path === "." ? LAB : sibling);
     const refreshed: string[] = [];

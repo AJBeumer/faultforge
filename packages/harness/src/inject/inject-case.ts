@@ -1,6 +1,6 @@
 /**
  * The body of `npm run inject` (see `inject.ts` for the command and its exit codes), as a function the tests
- * drive with fakes (AUD-M6): every git call, proof run, typecheck and test run is passed in, and private
+ * drive with fakes: every git call, proof run, typecheck and test run is passed in, and private
  * storage is a folder. `run` returns 0, 1 for a refusal or a failed validation, or 2 for anything
  * unexpected; it never exits the process.
  */
@@ -130,9 +130,9 @@ export function run(args: InjectArgs, deps: InjectDeps): number {
 function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) => void): number {
   const { validateOnly } = args;
   const caseId = args.caseId;
-  // A case id becomes a folder name and a permanent answer-key line, so a typo must stop here (#193).
+  // A case id becomes a folder name and a permanent answer-key line, so a typo must stop here.
   if (!validateOnly && !/^FF-\d{4}$/.test(caseId ?? "")) refuse(`--case must look like FF-NNNN, not ${caseId}`);
-  // The real spelling, drive letter included: Vitest loads twice from another one (#316).
+  // The real spelling, drive letter included: Vitest loads twice from another one.
   const targetDir = realSpelling(args.target);
   const templateDir =
     deps.findTemplateDir(args.template) ??
@@ -141,14 +141,14 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
   const refusal = templateRefusal(template, args.template, templateDir, deps.allTemplates());
   if (refusal) refuse(refusal);
 
-  // A bug's own proofs must break; a control must break none of the corpus (AUD-M8).
+  // A bug's own proofs must break; a control must break none of the corpus.
   const proofs: Proof[] = template.kind === "bug" ? proofsOf(template) : deps.corpus();
   if (template.kind === "control" && !proofs.length)
     refuse("no bug template's proof was found to check the control against");
 
   const ledgerPath = join(deps.privateDir, "ground-truth.jsonl");
   const auditPath = join(deps.privateDir, "audit-events.jsonl");
-  // History too, in --validate-only as well: nothing is planted next to a broken answer key (#224).
+  // History too, in --validate-only as well: nothing is planted next to a broken answer key.
   const ledgerIssues = deps.ledgerProblems([ledgerPath, auditPath]);
   if (ledgerIssues.length) refuse(`the answer key or audit log has problems: ${ledgerIssues.join("; ")}`);
   if (!validateOnly && readJsonl(ledgerPath).some((entry) => entry.caseId === caseId)) {
@@ -158,12 +158,12 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
   if (git("status", "--porcelain")) refuse(`target has uncommitted changes: ${targetDir}`);
   const baseBranch = git("rev-parse", "--abbrev-ref", "HEAD");
   const baseCommit = git("rev-parse", "HEAD");
-  // The checkout is put back on this branch at the end, so it must be one (#193).
+  // The checkout is put back on this branch at the end, so it must be one.
   if (baseBranch === "HEAD") refuse(`target is on a detached HEAD: switch to main first (${targetDir})`);
-  // The reviewer reads the whole tree, not only the diff (#224, audit H-4).
+  // The reviewer reads the whole tree, not only the diff.
   const baseGiveaways = deps.baseTreeProblems(targetDir, baseCommit);
   if (baseGiveaways.length) refuse(`the target's base commit can't be used: ${baseGiveaways.join("; ")}`);
-  // A case is planted on the published main, never on top of an earlier case branch (#193).
+  // A case is planted on the published main, never on top of an earlier case branch.
   if (!validateOnly) {
     const originMain = deps.originMain(targetDir);
     if (baseCommit !== originMain) {
@@ -172,7 +172,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
       );
     }
   }
-  // A real case commits in the target, so git's own guard must be there to check that commit (#242).
+  // A real case commits in the target, so git's own guard must be there to check that commit.
   if (!validateOnly) {
     const unguarded = deps.guardProblem(targetDir);
     if (unguarded) refuse(`${unguarded}. Run npm run guard:install first.`);
@@ -223,7 +223,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
     if (template.testChange && applyTestChange(targetDir, template.testChange)) {
       git("add", "--intent-to-add", "--", template.testChange.file);
     }
-    const diff = deps.diff(targetDir); // untrimmed (N-14); a failed diff stops the run (Qodo on PR 233)
+    const diff = deps.diff(targetDir); // untrimmed; a failed diff stops the run
     if (diff.status !== 0 || diff.error) throw new Error(`git diff failed: ${diff.stderr.trim()}`);
     if (!validateOnly) writeFileSync(join(artefactDir, "variant.diff"), diff.stdout);
 
@@ -234,7 +234,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
       checksFailure(checks, validateOnly);
 
     if (!failure && !validateOnly) {
-      // A body as ordinary commits have, from the ticket the PR closes (#321): only new cases change.
+      // A body as ordinary commits have, from the ticket the PR closes: only new cases change.
       git("commit", "--quiet", "--all", "-m", template.publish.commitMessage, "-m", commitBody(template.ticket.what));
       injectionCommit = git("rev-parse", "HEAD");
     }
@@ -266,7 +266,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
     copyFileSync(join(templateDir, proof.proofTest), dest);
   }
   const createdAt = deps.now();
-  // The fields both kinds share, in the order the answer key has always had them.
+  // The fields both kinds share, in the order every answer-key line holds them.
   const located = {
     targetRepo: git("remote", "get-url", "origin"),
     targetCommit: baseCommit,
@@ -303,7 +303,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
           kind: "control",
           templateId: template.id,
           ...located,
-          // Every corpus proof by file and hash, so the control's validation can be checked later (Qodo on PR 271).
+          // Every corpus proof by file and hash, so the control's validation can be checked later.
           validation: {
             typecheck: checks.typecheck,
             publicTests: checks.publicTests,
@@ -314,7 +314,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
               proofOnBase: proofsOnBase[i],
               proofOnVariant: proofsOnVariant[i],
             })),
-            // Any template left out of the corpus, said on the record, never silently (Qodo on PR 274).
+            // Any template left out of the corpus, said on the record, never silently.
             ...(deps.corpusSkipped?.().length ? { corpusSkipped: deps.corpusSkipped() } : {}),
           },
           validated: true,
@@ -335,7 +335,7 @@ function inject(args: InjectArgs, deps: InjectDeps, scratchMade: (dir: string) =
     ),
   };
   // Checked before the answer key is written: an event refused after it would leave a case id with no
-  // injection event, which no rerun could repair (Qodo on PR 269).
+  // injection event, which no rerun could repair.
   const eventIssues = eventProblems(event);
   if (eventIssues.length) refuse(`the injection event would be refused: ${eventIssues.join("; ")}`);
   appendAnswerKeyEntry(ledgerPath, entry);
@@ -356,7 +356,7 @@ const USAGE =
   "usage: npm run inject -- --template <id> --target <path> --case <FF-NNNN>\n" +
   "   or: npm run inject -- --template <id> --target <path> --validate-only";
 
-/** The command line as `inject.ts` gets it: a usage problem is a refusal (1), as it always was. */
+/** The command line as `inject.ts` gets it: a usage problem is a refusal (1). */
 export function main(argv: string[], deps: () => InjectDeps = liveInjectDeps): number {
   let values: { template?: string; target?: string; case?: string; "validate-only"?: boolean };
   try {

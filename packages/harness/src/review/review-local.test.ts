@@ -47,8 +47,7 @@ describe("runReviewLocal", () => {
     return baseOperation({ status: "completed", terminal: true, result_available: true, ...overrides });
   }
 
-  /** Wraps a review payload the way Qodo's own managed-agent envelope does (confirmed live, 12
-   * November): `{output: "<json>"}` where that json is `{result: payload, status}`. */
+  /** Wraps a payload as Qodo does: `{output: "<json>"}`, where that JSON is `{result: payload, status}`. */
   function chunkPayload(payload: LocalReviewPayload): ResultChunkPage {
     const text = JSON.stringify({ output: JSON.stringify({ result: payload, status: "completed" }) });
     return { chunk: text, next_cursor: null, sha256: createHash("sha256").update(text, "utf8").digest("hex") };
@@ -146,7 +145,7 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(3);
   });
 
-  it("counts a finding listed both open and resolved as open, so a blocker can't hide (Qodo on PR 209)", async () => {
+  it("counts a finding listed both open and resolved as open, so a blocker can't hide", async () => {
     const finding = { id: "f1", action_level: "action_required", title: "Both" };
     const payload = completePayload({
       findings: [finding] as never,
@@ -164,7 +163,7 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it("is exit 3, not a crash, when a state list holds null or isn't a list (Qodo on PR 209)", async () => {
+  it("is exit 3, not a crash, when a state list holds null or isn't a list", async () => {
     for (const finding_state of [
       { complete: true, introduced: [], still_open: [], resolved: [null], dismissed: [] },
       { complete: true, introduced: "f1", still_open: [], resolved: [], dismissed: [] },
@@ -177,7 +176,7 @@ describe("runReviewLocal", () => {
     }
   });
 
-  it("retries a poll that fails once and finishes the review (#196)", async () => {
+  it("retries a poll that fails once and finishes the review", async () => {
     let polls = 0;
     const result = await runReviewLocal(
       makeDeps({
@@ -194,7 +193,7 @@ describe("runReviewLocal", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("waits a bounded interval when Qodo gives none or zero, so it never loops hot or forever (#196)", async () => {
+  it("waits a bounded interval when Qodo gives none or zero, so it never loops hot or forever", async () => {
     for (const interval of [undefined, 0, -3, 1_000]) {
       let now = 0;
       const waits: number[] = [];
@@ -221,7 +220,7 @@ describe("runReviewLocal", () => {
     }
   });
 
-  it("cancels the operation when every poll fails until the deadline, naming the last error (#196)", async () => {
+  it("cancels the operation when every poll fails until the deadline, naming the last error", async () => {
     let now = 0;
     let cancelled = false;
     const result = await runReviewLocal(
@@ -245,7 +244,7 @@ describe("runReviewLocal", () => {
     expect(cancelled).toBe(true);
   });
 
-  it("counts a finding no state list names as open, and is exit 3 when a list holds bare ids (#196)", async () => {
+  it("counts a finding no state list names as open, and is exit 3 when a list holds bare ids", async () => {
     const finding = { id: "f9", action_level: "action_required", title: "Unlisted" };
     const unlisted = completePayload({ findings: [finding] as never });
     const listed = await runReviewLocal(makeDeps({ fetchResultChunk: async () => chunkPayload(unlisted) }), {
@@ -264,7 +263,7 @@ describe("runReviewLocal", () => {
     expect(shape.exitCode).toBe(3);
   });
 
-  it("is exit 3, never 0, when the result omits its finding inventory, not just when it says false (#188)", async () => {
+  it("is exit 3, never 0, when the result omits its finding inventory, not just when it says false", async () => {
     const { finding_state: _omitted, ...withoutState } = completePayload();
     const withoutFlag = completePayload({
       finding_state: { introduced: [], still_open: [], resolved: [], dismissed: [] } as never,
@@ -287,8 +286,7 @@ describe("runReviewLocal", () => {
   });
 
   it("is exit 3, never 0 or 1, when Qodo did not report its finding inventory as complete", async () => {
-    // Real answer from this command's own first live run, 12 November: `finding_state.complete` was
-    // `false` while `meta.coverage.complete` was `true`, and there was an open action-required finding.
+    // A real answer's shape: finding list incomplete, coverage complete, and an open action-required finding.
     const payload = completePayload({
       findings: [
         {

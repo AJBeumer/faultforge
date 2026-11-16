@@ -1,7 +1,7 @@
 /**
  * Creates the target ticket a case PR will claim to make, from a template's own `ticket` field: an
- * ordinary issue on the target repository, so Qodo reads the same context a developer's PR would carry
- * (#12). Works for both kinds of template: a control gets a ticket the same way a bug does.
+ * ordinary issue on the target repository, so Qodo reads the same context a developer's PR would carry.
+ * Works for both kinds of template: a control gets a ticket the same way a bug does.
  *
  *   npm run case:ticket -- --template <id> --case FF-NNNN
  *   npm run case:ticket -- --template <id> --case FF-NNNN --dry-run
@@ -16,7 +16,7 @@
  *
  * The ticket text is also refused if it links to any GitHub issue or PR (a URL or a short `repo#N`
  * reference): a template has no reason to need one. The issue is created through the one door to the
- * reviewed repository (`target-post.ts`, #340), which checks the exact title and body it sends. Its checks
+ * reviewed repository (`target-post.ts`), which checks the exact title and body it sends. Its checks
  * also run before the attempt marker is written, so a refusal leaves no marker behind.
  *
  * `--dry-run` prints the issue text and the `gh` command it would run, without creating anything or
@@ -198,7 +198,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
     return 1;
   }
 
-  // Nothing is posted next to a broken answer key or audit log, as with every other case command (AUD-M24).
+  // Nothing is posted next to a broken answer key or audit log, as with every other case command.
   const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
   if (ledgerIssues.length) {
     error(`case:ticket: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
@@ -214,7 +214,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
     return 2;
   }
   // The ticket must be for the template the case actually planted: a wrong id would post a wrong public
-  // ticket. A real run comes after inject, so the case must be in the answer key by then (AUD-M24).
+  // ticket. A real run comes after inject, so the case must be in the answer key by then.
   if (entry ? entry.templateId !== templateId : !options.dryRun) {
     error(
       entry
@@ -223,12 +223,12 @@ export async function run(templateId: string, caseId: string, options: RunOption
     );
     return 1;
   }
-  // The ticket text is read from the template file now: it must be the file the case was planted from, not
-  // one edited since (Qodo on PR 264). Checked through the injection event's hash, like ledger:check does.
+  // The ticket text comes from the template file, so it must be the file the case was planted from, not one
+  // edited since. Checked through the injection event's hash, like ledger:check does.
   const injected = events.find(
     (e) => e.caseId === caseId && (e.type === "sabotage.injected" || e.type === "control.injected"),
   );
-  // A real ticket needs the case's planting on record, not only its answer-key line (Qodo on PR 264).
+  // A real ticket needs the case's planting on record, not only its answer-key line.
   if (!options.dryRun && !injected) {
     error(`case:ticket: refused, ${caseId} has no injection event: its planting wasn't recorded`);
     return 1;
@@ -264,7 +264,7 @@ export async function run(templateId: string, caseId: string, options: RunOption
   }
 
   // An attempt is marked before the call: if `gh` times out after GitHub created the issue, nothing else
-  // would show it exists, and a rerun would post a second one on the repo the reviewer reads (#216).
+  // would show it exists, and a rerun would post a second one on the repo the reviewer reads.
   // Created exclusively ("wx"), so of two runs started together only one gets past this point.
   const attempt = join(evidenceDir, "gh-issue-create.attempt.txt");
   mkdirSync(evidenceDir, { recursive: true });

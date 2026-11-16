@@ -68,7 +68,7 @@ describe("ticketFieldProblems", () => {
     );
   });
 
-  it("names a non-string criterion instead of crashing (#152)", () => {
+  it("names a non-string criterion instead of crashing", () => {
     // biome-ignore lint/suspicious/noExplicitAny: a malformed template can hold anything in JSON
     expect(ticketFieldProblems({ ...TICKET, criteria: ["ok", 5 as any] })).toContain(
       "ticket.criteria is missing, empty, or has a blank entry",
@@ -96,7 +96,7 @@ describe("buildBody", () => {
     );
   });
 
-  it("still puts criteria as checkboxes when the checklist is the first section (#152)", () => {
+  it("still puts criteria as checkboxes when the checklist is the first section", () => {
     const reordered = { sections: ["Acceptance criteria", "What", "Must not break"], checklist: "Acceptance criteria" };
     const body = buildBody(reordered, TICKET);
     expect(body).toBe(
@@ -115,7 +115,7 @@ describe("buildBody", () => {
   });
 });
 
-describe("ticketLinkGiveaways (#152)", () => {
+describe("ticketLinkGiveaways", () => {
   it("is empty for ordinary ticket text", () => {
     expect(ticketLinkGiveaways(TICKET)).toEqual([]);
   });
@@ -209,7 +209,7 @@ describe("run", () => {
     });
 
     expect(code).toBe(0);
-    // Through the door (#340): the body it checked goes to gh on stdin.
+    // Through the door: the body it checked goes to gh on stdin.
     expect(ghCalls).toEqual([
       [
         "issue",
@@ -303,7 +303,7 @@ describe("run", () => {
     expect(ghCalled).toBe(false);
   });
 
-  it("refuses a template whose ticket text links to a GitHub issue (#152)", async () => {
+  it("refuses a template whose ticket text links to a GitHub issue", async () => {
     const base = mkdtempSync(join(tmpdir(), "faultforge-case-ticket-"));
     const privateDir = join(base, "private");
     const templatesDir = join(privateDir, "templates", "linked-template");
@@ -334,7 +334,7 @@ describe("run", () => {
     expect(ghCalled).toBe(false);
   });
 
-  it("refuses a case id that would escape private storage (#152)", async () => {
+  it("refuses a case id that would escape private storage", async () => {
     const { env } = setup();
     let ghCalled = false;
     const code = await run("a-template", "../../outside", {
@@ -352,7 +352,7 @@ describe("run", () => {
     expect(ghCalled).toBe(false);
   });
 
-  it("saves the raw gh output before parsing, so a parse failure doesn't lose a created issue (#152)", async () => {
+  it("saves the raw gh output before parsing, so a parse failure doesn't lose a created issue", async () => {
     const { env, auditEventsPath, evidenceDir } = setup();
     const code = await run("a-template", "FF-0009", {
       env,
@@ -446,7 +446,7 @@ describe("run", () => {
     expect(readFileSync(auditEventsPath, "utf8")).toBe(INJECTED_LINE);
   });
 
-  it("refuses a rerun after a call that may have created the issue, and never calls gh again (#216)", async () => {
+  it("refuses a rerun after a call that may have created the issue, and never calls gh again", async () => {
     const { env, auditEventsPath, evidenceDir } = setup();
     let calls = 0;
     const timesOut = () => {
@@ -462,7 +462,7 @@ describe("run", () => {
   });
 });
 
-describe("run: the ticket matches the case's answer-key entry (#249, AUD-M24)", () => {
+describe("run: the ticket matches the case's answer-key entry", () => {
   async function attempt(caseId: string, options: { dryRun?: boolean; groundTruth?: string } = {}) {
     const { env, auditEventsPath, evidenceDir } = setup();
     const groundTruthPath = join(env.FAULTFORGE_PRIVATE_DIR, "ground-truth.jsonl");
@@ -520,7 +520,7 @@ describe("run: the ticket matches the case's answer-key entry (#249, AUD-M24)", 
   });
 });
 
-describe("run: a template changed after its case was planted (Qodo on PR 264)", () => {
+describe("run: a template changed after its case was planted", () => {
   it("is refused through the injection event's hash, before gh is called", async () => {
     const { env, auditEventsPath, evidenceDir } = setup();
     writeFileSync(
@@ -547,7 +547,7 @@ describe("run: a template changed after its case was planted (Qodo on PR 264)", 
   });
 });
 
-describe("run: a case whose planting wasn't recorded (Qodo on PR 264)", () => {
+describe("run: a case whose planting wasn't recorded", () => {
   it("is refused for a real ticket, and a dry run still prints", async () => {
     const { env, auditEventsPath, evidenceDir } = setup();
     writeFileSync(auditEventsPath, "");

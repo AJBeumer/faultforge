@@ -86,7 +86,7 @@ describe("readLedger / readAuditLog: applying amendments", () => {
     expect(entry?.note).toBeUndefined();
   });
 
-  it("targets one audit event by eventId, never the other event sharing its caseId (Qodo on PR 135)", () => {
+  it("targets one audit event by eventId, never the other event sharing its caseId", () => {
     const first = { eventId: "evt-1", caseId: "FF-0001", type: "sabotage.injected" };
     const second = { eventId: "evt-2", caseId: "FF-0001", type: "review.recorded" };
     const amendment = {
@@ -178,7 +178,7 @@ describe("ledgerProblems", () => {
     expect(ledgerProblems(path)).toEqual(["amendment amending FF-0001: has no evidence"]);
   });
 
-  it("refuses a whitespace-only reason or evidence the same as a missing one (Qodo on PR 135)", () => {
+  it("refuses a whitespace-only reason or evidence the same as a missing one", () => {
     const path = fileOf(CASE_A, {
       kind: "amendment",
       amends: "FF-0001",
@@ -193,7 +193,7 @@ describe("ledgerProblems", () => {
     ]);
   });
 
-  it("refuses an id held by more than one entry, and the amendment naming it, instead of picking one (Qodo on PR 135)", () => {
+  it("refuses an id held by more than one entry, and the amendment naming it, instead of picking one", () => {
     const path = fileOf(CASE_A, CASE_A, {
       kind: "amendment",
       amends: "FF-0001",
@@ -256,7 +256,7 @@ describe("ledgerProblems", () => {
   });
 });
 
-describe("readLedger: a line that isn't JSON (M88)", () => {
+describe("readLedger: a line that isn't JSON", () => {
   it("throws rather than drop the line", () => {
     const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
     writeFileSync(path, '{"caseId":"FF-0001"}\nnot json\n');
@@ -264,7 +264,7 @@ describe("readLedger: a line that isn't JSON (M88)", () => {
   });
 });
 
-describe("entryVersions (#249, Qodo on PR 264)", () => {
+describe("entryVersions", () => {
   it("gives every version an entry has had, by file order of its amendments, whatever times they claim", () => {
     const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "ground-truth.jsonl");
     const amend = (amends: string, at: string, n: number) =>
@@ -289,7 +289,7 @@ describe("entryVersions (#249, Qodo on PR 264)", () => {
   });
 });
 
-describe("ledgerProblems: locked fields and the shape of a change (AUD-M10, #251)", () => {
+describe("ledgerProblems: locked fields and the shape of a change", () => {
   const file = (lines: object[]) => {
     const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "audit-events.jsonl");
     writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));
@@ -326,7 +326,7 @@ describe("ledgerProblems: locked fields and the shape of a change (AUD-M10, #251
   });
 });
 
-describe("ledgerProblems: the injection facts are locked too (Qodo on PR 269)", () => {
+describe("ledgerProblems: the injection facts are locked too", () => {
   it.each(["targetRepo", "invariantId", "defectClass", "branch", "validation"])(
     "reports an amendment that changes %s",
     (field) => {
@@ -343,7 +343,7 @@ describe("ledgerProblems: the injection facts are locked too (Qodo on PR 269)", 
   );
 });
 
-describe("ledgerProblems: which review, configuration and PR a case stands on is set once (AUD-M10)", () => {
+describe("ledgerProblems: which review, configuration and PR a case stands on is set once", () => {
   const file = (lines: object[]) => {
     const path = join(mkdtempSync(join(tmpdir(), "ledger-")), "audit-events.jsonl");
     writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(""));

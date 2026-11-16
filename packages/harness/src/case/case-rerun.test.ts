@@ -43,7 +43,7 @@ function rerun(root: string, args: Partial<RerunArgs> = {}, trees: Record<string
   return { code, err: err.join("\n"), out: out.join("\n") };
 }
 
-describe("case:rerun (AUD-M13)", () => {
+describe("case:rerun", () => {
   it("appends one amendment marking the rerun, keeps every line, and ledger:check accepts it", () => {
     const root = fixture();
     const path = join(root, "ground-truth.jsonl");
@@ -99,7 +99,7 @@ describe("case:rerun (AUD-M13)", () => {
   });
 });
 
-describe("case:rerun: what Qodo found on PR 273", () => {
+describe("case:rerun: chains, races and the target checkout", () => {
   it("refuses to mark a case that another already names as its original", () => {
     const marked = { kind: "amendment", amends: "FF-9602", change: { rerunOf: "FF-9601" }, reason: "r", evidence: "e" };
     const root = fixture([
@@ -145,7 +145,7 @@ describe("case:rerun: what Qodo found on PR 273", () => {
   });
 });
 
-describe("case:rerun: round two on PR 273", () => {
+describe("case:rerun: missing templates and an unreadable audit log", () => {
   it("refuses two cases that name no template", () => {
     const root = fixture([
       { caseId: "FF-9611", kind: "sabotage", injectionCommit: A },

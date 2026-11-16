@@ -239,7 +239,7 @@ describe("repoSlug", () => {
     expect(repoSlug("https://github.com/AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
   });
 
-  it("strips an ssh remote too, in both spellings (audit N-14)", () => {
+  it("strips an ssh remote too, in both spellings", () => {
     expect(repoSlug("git@github.com:AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
     expect(repoSlug("ssh://git@github.com/AJBeumer/faultforge-target.git")).toBe("AJBeumer/faultforge-target");
     expect(repoSlug("https://github.com/AJBeumer/faultforge-target")).toBe("AJBeumer/faultforge-target");
@@ -372,8 +372,8 @@ describe("parseCliArgs", () => {
 describe("run: legacy path only applies with no genuine saved review", () => {
   const CASE_ID = "FF-0001";
   const INJECTION_COMMIT = "d".repeat(40);
-  // overlay.legacyFindingsPath names a path like "private/raw-artifacts/<case>/...", read inside private
-  // storage whatever its folder is called: the fixture's is a temp folder named otherwise (Qodo on PR 286).
+  // legacyFindingsPath says "private/...", but is read inside private storage whatever its folder is called:
+  // the fixture's is a temp folder with another name.
   const legacyPathOf = (_fx: { root: string }) => "private/legacy-findings.json";
   const writeLegacy = (fx: { root: string }, review: unknown) =>
     writeFileSync(join(fx.root, "legacy-findings.json"), JSON.stringify(review));
@@ -469,7 +469,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     return { out, err, code };
   }
 
-  it("refuses a bug case whose overlay sets notes: only a control may (Qodo on PR 222)", async () => {
+  it("refuses a bug case whose overlay sets notes: only a control may", async () => {
     const fx = fixture();
     const reviewDir = join(fx.root, "raw-artifacts", "reviews", "target-pr5");
     mkdirSync(reviewDir, { recursive: true });
@@ -558,7 +558,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     expect(out.join("\n")).toContain("qodo:legacy-1");
   });
 
-  it("refuses the legacy path for any case but the closed list's, with no saved review at all (AUD-M1)", async () => {
+  it("refuses the legacy path for any case but the closed list's, with no saved review at all", async () => {
     const fx = fixture("FF-9007");
     writeLegacy(fx, legacyReview());
     const { code, err, out } = await runOn(fx, { legacyFindingsPath: legacyPathOf(fx) });
@@ -567,7 +567,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     expect(out).toEqual([]);
   });
 
-  it("refuses an incomplete legacy review with a final verdict, as for a saved one (AUD-M1)", async () => {
+  it("refuses an incomplete legacy review with a final verdict, as for a saved one", async () => {
     const fx = fixture();
     writeFileSync(
       fx.auditEventsPath,
@@ -582,9 +582,9 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     expect(err.join("\n")).toContain('state is "running", not "complete"');
   });
 
-  it("refuses a legacy file that isn't a review's shape (AUD-M1)", async () => {
+  it("refuses a legacy file that isn't a review's shape", async () => {
     const shortSha = { findings: [{ id: "x", git_sha: INJECTION_COMMIT.slice(0, 7) }] };
-    // review_runs that aren't a list threw out of run instead of a refusal (Qodo on PR 286).
+    // review_runs that aren't a list must be refused, not thrown out of run.
     for (const bad of [[], shortSha, { ...legacyReview(), review_runs: {} }]) {
       const fx = fixture();
       writeLegacy(fx, bad);
@@ -594,7 +594,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     }
   });
 
-  it("builds an inconclusive record from a save of a review that never finished (#192)", async () => {
+  it("builds an inconclusive record from a save of a review that never finished", async () => {
     const fx = fixture();
     writeFileSync(
       fx.auditEventsPath,
@@ -623,7 +623,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
     expect(record).toMatchObject({ human: { disposition: "review_incomplete" }, status: "incomplete" });
   });
 
-  it("refuses to build while the audit log has an amendment that changes a locked field (#192)", async () => {
+  it("refuses to build while the audit log has an amendment that changes a locked field", async () => {
     const fx = fixture();
     appendFileSync(
       fx.auditEventsPath,
@@ -635,7 +635,7 @@ describe("run: legacy path only applies with no genuine saved review", () => {
   });
 });
 
-describe("run: a control case (#162)", () => {
+describe("run: a control case", () => {
   const CASE_ID = "FF-9002";
   const COMMIT = "e".repeat(40);
   const CONTROL_TEMPLATE = {
@@ -756,14 +756,14 @@ describe("run: a control case (#162)", () => {
     expect(validateCaseRecord(record)).toEqual([]);
   });
 
-  it("refuses a control whose change ends before it starts (Qodo on PR 222)", async () => {
+  it("refuses a control whose change ends before it starts", async () => {
     const { record } = await build(fixture("confirmed_clean"));
     expect(validateCaseRecord({ ...record, change: { ...record.change, lines: [10, 2] } })).toEqual([
       "change.lines 10-2 ends before it starts",
     ]);
   });
 
-  it("links only a template inside templates/seed itself, not a folder whose name starts the same (Qodo on PR 222)", () => {
+  it("links only a template inside templates/seed itself, not a folder whose name starts the same", () => {
     const seed = join(ROOT, "templates", "seed");
     expect(isPublishedTemplate(join(seed, "c1"))).toBe(true);
     expect(isPublishedTemplate(join(`${seed}-private`, "c1"))).toBe(false);
@@ -799,7 +799,7 @@ describe("run: a control case (#162)", () => {
     expect(problems({ notes: ["x"] })).toMatch(/must NOT be valid/);
   });
 
-  it("refuses a control with no review event, naming the stage (Qodo on PR 214)", async () => {
+  it("refuses a control with no review event, naming the stage", async () => {
     const fx = fixture("confirmed_clean");
     const lines = readFileSync(fx.auditEventsPath, "utf8").trim().split("\n");
     writeFileSync(fx.auditEventsPath, `${lines.filter((l) => !l.includes("review.recorded")).join("\n")}\n`);
@@ -815,12 +815,12 @@ describe("run: a control case (#162)", () => {
   });
 });
 
-describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26, #244)", () => {
+describe("run: the record stands on the review the owner judged", () => {
   const CASE_ID = "FF-9003";
   const COMMIT = "c".repeat(40);
   const TEMPLATE_TEXT = JSON.stringify({ match: { kindTerms: ["off by one"] } });
 
-  /** A bug case adjudicated by verdict (tool-written, with its inputHash) on a finished review of PR 7. */
+  /** A bug case adjudicated by verdict (tool-written, with its inputHash) on a finished review of pull 7. */
   function fixture(opts: { state?: string | null; disposition?: string; ruleVersion?: unknown } = {}) {
     const root = mkdtempSync(join(tmpdir(), "case-build-gate-"));
     const groundTruthPath = join(root, "ground-truth.jsonl");
@@ -987,7 +987,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect(err).toContain("only review_incomplete can");
   });
 
-  it("refuses, exit 2, a final verdict on a save with no state, and builds review_incomplete on it (M1)", async () => {
+  it("refuses, exit 2, a final verdict on a save with no state, and builds review_incomplete on it", async () => {
     for (const disposition of ["confirmed_missed", "clean_control"]) {
       const { code, err } = await build(fixture({ state: null, disposition }));
       expect(code).toBe(2);
@@ -996,7 +996,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect((await build(fixture({ state: null, disposition: "review_incomplete" }))).code).toBe(0);
   });
 
-  it("never uses a save of the same commit on another PR (M44b)", async () => {
+  it("never uses a save of the same commit on another PR", async () => {
     const fx = fixture();
     const other = join(fx.root, "raw-artifacts", "reviews", "target-pr8");
     mkdirSync(other, { recursive: true });
@@ -1007,7 +1007,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect(err).toContain("on PR 7");
   });
 
-  it("refuses, exit 1, a record that leaks a private path or fails the schema (M44, M44c)", async () => {
+  it("refuses, exit 1, a record that leaks a private path or fails the schema", async () => {
     const leak = await build(fixture(), { overlay: { detection: { notes: ["see private/raw-artifacts/x"] } } });
     expect(leak.code).toBe(1);
     expect(leak.progress).toContain("problems found");
@@ -1017,7 +1017,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
     expect(invalid.progress).toContain("/challenge/verdict");
   });
 
-  it("--save writes private/cases/<id>.json, and never replaces a different record there (#249)", async () => {
+  it("--save writes private/cases/<id>.json, and never replaces a different record there", async () => {
     const fx = fixture();
     expect((await build(fx, { save: true })).code).toBe(0);
     const saved = readFileSync(join(fx.root, "cases", `${CASE_ID}.json`), "utf8");
@@ -1031,7 +1031,7 @@ describe("run: the record stands on the review the owner judged (AUD-M1, AUD-M26
   });
 });
 
-describe("run: a review stage whose PR can't be read (Qodo on PR 264)", () => {
+describe("run: a review stage whose PR can't be read", () => {
   it("refuses, exit 2, rather than fall back to an overlay's legacy findings", async () => {
     const root = mkdtempSync(join(tmpdir(), "case-build-pr-"));
     const commit = "9".repeat(40);
@@ -1058,7 +1058,7 @@ describe("run: a review stage whose PR can't be read (Qodo on PR 264)", () => {
   });
 });
 
-describe("run: the findings come from the file the verdict judged (Qodo on PR 264)", () => {
+describe("run: the findings come from the file the verdict judged", () => {
   it("refuses, exit 2, when the verdict names another file than the save found", async () => {
     const root = mkdtempSync(join(tmpdir(), "case-build-file-"));
     const commit = "8".repeat(40);
@@ -1107,7 +1107,7 @@ describe("run: the findings come from the file the verdict judged (Qodo on PR 26
   });
 });
 
-describe("case:build: the case id is checked before it names a file (#299)", () => {
+describe("case:build: the case id is checked before it names a file", () => {
   it.each(["../x", "FF-12", "ff-0002", "FF-0002/../../x"])("refuses %s with exit 2 and writes nothing", async (id) => {
     const dir = mkdtempSync(join(tmpdir(), "case-build-id-"));
     const errors: string[] = [];

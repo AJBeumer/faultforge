@@ -1,6 +1,6 @@
 /**
  * The launcher behind `npm test` (`vitest-run.ts`), run as a real process. It gives the same result whichever
- * case the drive letter was typed in (AUD-M25, #253), and a direct `vitest` from the other spelling stops with a
+ * case the drive letter was typed in, and a direct `vitest` from the other spelling stops with a
  * message that says what to run instead; those two are Windows only, since elsewhere a path has no drive letter.
  * Each run starts a real Vitest on one small test file.
  */
@@ -42,13 +42,13 @@ describe.runIf(process.platform === "win32" && other)("both drive spellings", ()
       ]);
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toMatch(/Tests\s+\d+ passed/);
-      // A cold Vitest start on a Windows runner can take longer than the 5 s default (Qodo on PR 260).
+      // A cold Vitest start on a Windows runner can take longer than the 5 s default.
     },
     120_000,
   );
 
   // Only when `root` is the checkout's real path, so `other` is that path in another case. Loaded through a
-  // junction or symlink, the config rightly leaves the alias alone (Qodo on PR 260).
+  // junction or symlink, the config rightly leaves the alias alone.
   it.runIf(realpathSync.native(root) === root)(
     "a direct Vitest from the spelling that isn't real says to use npm test",
     () => {

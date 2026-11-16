@@ -21,17 +21,17 @@
  * (`LOCKED_FIELDS`: the ones that identify a line and place it in history, and the ones a result
  * stands on). It also flags any id held by more than one entry, whether or not an amendment names it.
  * `SET_ONCE_FIELDS` (which review, configuration and PR a case stands on, and who judged it) may be added
- * by an amendment to an entry that lacks them, as FF-0001's events, written before those fields existed,
- * were; never changed once there, by the entry itself or an earlier amendment (AUD-M10).
+ * by an amendment to an entry written before those fields existed, but never changed once there, whether
+ * the entry itself or an earlier amendment set them.
  *
- * The audit log's events, one per stage, read by `case-build.ts` (#11):
+ * The audit log's events, one per stage, read by `case-build.ts`:
  *  - `sabotage.injected` / `control.injected`: the case was planted. Carries only `branch`, the name
  *    actually used in the target (the template's base name, or that with a numeric suffix when a case
  *    already used the base name); otherwise its presence just confirms the stage happened.
  *  - `review.recorded`: `pr` (`repo`, `number`, `url`) and the parts of the public record's `review`
  *    a saved `review:wait` file doesn't carry — `reviewer`, `path`, `configVersion`, `reviewedCommit`,
  *    `reviewedAt`, `url`.
- *  - `case.adjudicated`: the owner's verdict (`#19`'s `verdict.ts`). `disposition` becomes
+ *  - `case.adjudicated`: the owner's verdict, written by `verdict.ts`. `disposition` becomes
  *    `human.disposition`; `by` becomes `human.adjudicatedBy`; `at` becomes `human.adjudicatedAt`.
  *  - `case.evidence-added`: extra evidence was saved after adjudication (a free-text `note`). Not
  *    required to build a record.
@@ -61,7 +61,7 @@ export type LedgerEntry = LedgerLine & { amendments: Amendment[] };
 const ID_FIELDS = ["eventId", "caseId"] as const;
 /**
  * Fields no amendment may change. The first four identify a line and place it in history. The rest are
- * what a result stands on (AUD-M10): what was planted and where (`templateId`, `injectedFile`,
+ * what a result stands on: what was planted and where (`templateId`, `injectedFile`,
  * `injectedLines`, the commits), what was reviewed and hashed, and the owner's verdict and its original
  * reason. A wrong verdict is replaced by a new `verdict --supersede`, a wrong location by a new case.
  */
@@ -92,7 +92,7 @@ export const LOCKED_FIELDS = [
 
 /**
  * Fields an amendment may add to an entry that doesn't hold them, but never change: a review event's `pr`
- * and `review` (the reviewed commit, configuration version and PR), and a verdict's `by` (AUD-M10).
+ * and `review` (the reviewed commit, configuration version and PR), and a verdict's `by`.
  */
 export const SET_ONCE_FIELDS = ["review", "pr", "by"] as const;
 
@@ -155,7 +155,6 @@ function applyAmendments(path: string, keep?: (amendment: Amendment, nth: number
   return baseEntries.map((entry) => ({ ...entry, amendments: amendmentsFor.get(entry) ?? [] }));
 }
 
-/** The answer key's cases, amendments applied. */
 export function readLedger(path: string): LedgerEntry[] {
   return applyAmendments(path);
 }
@@ -173,14 +172,13 @@ export function entryVersions(path: string, id: string): LedgerEntry[] {
   ).filter((e): e is LedgerEntry => e !== undefined);
 }
 
-/** The audit log's events, amendments applied. */
 export function readAuditLog(path: string): LedgerEntry[] {
   return applyAmendments(path);
 }
 
 /**
  * `ledgerProblems` for each file that exists, each problem prefixed with its file. `verdict` and
- * `case:build` refuse to run while this is not empty (#192); a missing file is not a problem here.
+ * `case:build` refuse to run while this is not empty; a missing file is not a problem here.
  */
 export function ledgerProblemsIn(paths: string[]): string[] {
   return paths.filter((path) => existsSync(path)).flatMap((path) => ledgerProblems(path).map((p) => `${path}: ${p}`));

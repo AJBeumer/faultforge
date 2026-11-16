@@ -17,7 +17,7 @@ export interface ReviewLocalDeps {
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   newRequestId: () => string;
-  /** Called with the final, decoded review payload; not a raw Qodo answer (`callAndSaveRaw` covers those). */
+  /** For the decoded payload; raw answers are saved by `callAndSaveRaw`. */
   saveArtifact: (name: string, data: string) => void;
 }
 
@@ -28,22 +28,18 @@ export interface ReviewLocalResult {
   operationId: string | null;
 }
 
-/** How many result pages `get-managed-agent-result` may be followed through before this gives up,
- * so a cyclic or endless `next_cursor` can never keep the command running past its own time limit. */
+/** An endless `next_cursor` must never keep the command running past its time limit. */
 const MAX_RESULT_PAGES = 1000;
 
-/** The wait between polls: Qodo's own interval, kept between 1 and 60 seconds, 5 when it gives none (#196). */
+/** Qodo's own interval, kept between 1 and 60 seconds, so a bad value can neither spin nor stall. */
 export function pollIntervalMs(seconds: unknown): number {
   const n = typeof seconds === "number" ? seconds : Number.NaN;
   return (Number.isFinite(n) && n >= 0 ? Math.min(Math.max(n, 1), 60) : 5) * 1000;
 }
 
 /**
- * Submits the diff, polls at Qodo's own interval until the operation is terminal, reads the result
- * back in chunks (bounded by the time limit, a page cap, and a check for a repeating cursor) and
- * verifies its hash, then decides the exit code from the review's own state: never 0 or 1 when Qodo
- * skipped the review, its coverage was incomplete, or it didn't report its finding inventory complete
- * — however few, or many, findings came back.
+ * The exit code comes from the review's own state: never 0 or 1 when Qodo skipped the review or didn't
+ * report it complete, however many findings came back.
  */
 export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: number }): Promise<ReviewLocalResult> {
   if (!deps.startParams.diff.trim()) {
@@ -54,16 +50,15 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   const requestId = deps.newRequestId();
   let state = await deps.submit(requestId, deps.startParams);
   const operationId = state.operation_id;
-  // The folder is named by our own request id; this file lets an auditor starting from Qodo's operation
-  // id find it (searching the folders for this file's contents).
+  // The folder is named by our request id; this file lets someone holding Qodo's operation id find it.
   deps.saveArtifact(
     "operation.json",
     `${JSON.stringify({ requestId, operationId }, null, 2)}
 `,
   );
 
-  // A failed poll is retried until the deadline, as review:wait does: one network error must not lose a
-  // review that takes minutes. Leaving without a finished operation, for any reason, cancels it (#196).
+  // One network error must not lose a review that takes minutes, so a failed poll is retried until the
+  // deadline. Leaving without a finished operation, for any reason, cancels it.
   let lastPollError: string | null = null;
   try {
     while (!state.terminal) {
@@ -112,8 +107,7 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
       };
     }
     const chunk = await deps.fetchResultChunk(operationId, cursor);
-    // Checked again, not only before the request: a single fetch can itself take up to the
-    // transport's own timeout, well past the deadline this loop otherwise only checked on the way in.
+    // Checked again: one fetch can take up to the transport's own timeout, well past the deadline.
     if (deps.now() > deadline) {
       return { exitCode: 2, message: "fetching the review result exceeded the time limit", findings: [], operationId };
     }
@@ -165,8 +159,7 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   }
   deps.saveArtifact("review.json", `${JSON.stringify(payload, null, 2)}\n`);
 
-  // Checked before the labels are read from them: a state list that doesn't hold findings with ids can't
-  // say which findings are open, and may not even be a list (Qodo on PR 209).
+  // A state list that doesn't hold findings with ids can't say which findings are open.
   if (!stateListsReadable(payload)) {
     return {
       exitCode: 3,
@@ -177,8 +170,7 @@ export async function runReviewLocal(deps: ReviewLocalDeps, opts: { timeoutMs: n
   }
   const findings = labelFindings(payload);
   const effort = payload.meta?.run?.effort?.effective ?? null;
-  // Absent coverage counts as incomplete, same as an explicit `false`: a result that marks its finding
-  // inventory complete without saying what it actually covered is not evidence of a clean review.
+  // Absent coverage counts as incomplete: a result that doesn't say what it covered proves no clean review.
   const coverageComplete = payload.meta?.coverage?.complete === true;
   const findingsComplete = payload.finding_state?.complete === true;
   const scopeComplete = deps.startParams.review_scope.complete;

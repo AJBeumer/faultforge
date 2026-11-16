@@ -9,9 +9,8 @@ import type { Finding } from "../qodo/qodo-review.ts";
 import { toMatchFinding } from "../review/saved-review.ts";
 import { recordVersionFor } from "./case-record.ts";
 
-/** Where a record names its schema, by version (#162: version 2 adds two outcomes a control can have). */
 const schemaRef = (version: number) => `../schemas/case-record.v${version}.json`;
-/** A record whose overlay says nothing about a challenge says it hasn't run (#162: a control needs no overlay). */
+/** A record whose overlay says nothing about a challenge says it hasn't run, so a control needs no overlay. */
 const NOT_CHALLENGED = { verdict: "not_run", note: "Not challenged yet." };
 
 export interface Overlay {
@@ -42,7 +41,7 @@ export interface BuildInputs {
   templateUrl?: string;
   /**
    * The saved review's own `state` ("" when it has none), or null for a legacy review with no save. Read
-   * from the save, never from the `review.recorded` event: eight hand-written events carry no state.
+   * from the save, never from the `review.recorded` event: hand-written events carry no state.
    */
   reviewState?: string | null;
 }
@@ -55,7 +54,7 @@ export function repoSlug(url: string): string {
 /**
  * The most recent event of `types`, so a later verdict or a re-review is the one that counts. Compared as
  * instants, not as text (`11:00:00Z` is earlier than `11:00:00.500Z`); a tie goes to the later line in the
- * file. An event whose `at` isn't a time is refused, never silently skipped (AUD-N8).
+ * file. An event whose `at` isn't a time is refused, never silently skipped.
  */
 export function latestEvent(events: LedgerEntry[], types: string[], stage: string): LedgerEntry {
   const matches = events.filter((e) => types.includes(e.type as string));
@@ -121,8 +120,8 @@ export function buildCaseRecord(inputs: BuildInputs): Record<string, unknown> {
     throw new Error(`the review was recorded for commit ${reviewedCommit}, not the injected commit ${injectionCommit}`);
   }
   // A miss, a clean control or a false alarm says the review finished: an unfinished one proves none of them,
-  // so only review_incomplete may stand on it (AUD-M1). Checked here, where the record is built, not only
-  // where the verdict was asked: four verdicts were written by hand.
+  // so only review_incomplete may stand on it. Checked here too, not only where the verdict was asked,
+  // because some verdicts were written by hand.
   if (reviewState !== null && reviewState !== "complete" && disposition !== "review_incomplete") {
     throw new Error(
       `the saved review's state is ${JSON.stringify(reviewState)}, not "complete", so ${disposition} can't stand on it; only review_incomplete can`,

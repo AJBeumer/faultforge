@@ -28,7 +28,7 @@ FaultForge replaces the guessing with evidence.
 
 1. **Break it.** A saboteur injects a realistic bug into a TypeScript codebase using deterministic templates, such as a removed guard clause, a flipped comparison, a missing auth check, or a broken idempotency check. A template is published only after its case is adjudicated; one is public so far.
 2. **Review it.** The change goes out as an ordinary-looking pull request, and Qodo reviews it.
-3. **Prove it.** The answer key lives in a private ledger outside the repository, so the reviewer never gets a hint. Every finding is matched against it with a fixed rule: right file, overlapping lines, right kind of problem.
+3. **Prove it.** The answer key lives in a private repository the reviewer can't read. Hints are checked, not assumed away: a guard refuses giveaway words in the target's branches, commits, pull requests and tickets; a test reads every file, commit message and branch name in the target for them; and `npm run qodo:check` compares the target's relationships in Qodo, and Qodo's rules, with a recorded snapshot. These checks cover the leaks we know of, not every possible one. Every finding is matched against the answer key with a fixed rule: right file, overlapping lines, right kind of problem.
 
 Every case is written to an append-only log, and every number in a report can be traced back to it. The private history is anchored here, in [`docs/ledger-anchors.txt`](docs/ledger-anchors.txt), so it can't be rewritten unnoticed. Clean control PRs with no injected bug go through the same review, so false positives are measured too, not just catches.
 

@@ -2,17 +2,14 @@
  * A review as `review:wait` saved it (`*.review.json`): where it lives, how it is written (once), found by
  * the commit it reviewed, and its findings in the shape the match rule reads. `review:wait` writes it;
  * `verdict`, `case:build` and `case:review` read it, all through this module, so the folder can't be
- * computed two ways (AUD-M24).
+ * computed two ways.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { MatchFinding } from "../match/match-rule.ts";
 import { evidenceDir, evidenceKindDir, prEvidenceDir, privateDir } from "../shared/paths.ts";
 
-/**
- * The folder every saved review lives under: `<evidence>/reviews`, with the evidence folder taken from
- * `factory.json` and moved with private storage when `FAULTFORGE_PRIVATE_DIR` is set.
- */
+/** `<evidence>/reviews`, which moves with private storage when `FAULTFORGE_PRIVATE_DIR` is set. */
 export function savedReviewsDir(env: NodeJS.ProcessEnv = process.env): string {
   return evidenceKindDir(join(privateDir(env), basename(evidenceDir())), "reviews");
 }
@@ -69,10 +66,10 @@ export function archiveUnfinished(dir: string, headSha: string): string | undefi
 }
 
 /**
- * Writes a save, never over another (AUD-M26): a complete save makes this throw. An unfinished save is kept,
- * renamed `<sha7>.unfinished-<n>.json` (no longer a `.review.json`, so no lookup finds it), and the new save
- * is created exclusively, so two writers racing can't both succeed. A verdict that judged the unfinished save
- * names it in its hash, so `case:build` then refuses until the verdict is superseded.
+ * Never writes over another save: a complete one makes this throw. An unfinished one is renamed out of the
+ * way, where no lookup finds it, and the new save is created exclusively, so two racing writers can't both
+ * win. A verdict that judged the unfinished save names it in its hash, so `case:build` refuses until the
+ * verdict is superseded.
  */
 export function writeSavedReview(path: string, record: object): void {
   const refusal = savedReviewRefusal(path);
@@ -108,8 +105,8 @@ export interface SavedReview {
   pr?: number;
   headSha: string;
   /**
-   * "complete" only when `review:wait` saw the review of this commit finish. Anything else, including no
-   * state at all, means the review did not finish, so a clean result proves nothing (AUD-M1).
+   * "complete" only when `review:wait` saw the review of this commit finish. Anything else means it did not
+   * finish, so a clean result proves nothing.
    */
   state?: string;
   findings?: SavedFinding[];
@@ -123,9 +120,8 @@ export function prNumberOf(value: unknown): number | undefined {
 }
 
 /**
- * A case's PR, from its own events: the latest `pr.opened` (hand-written ones carry the number in three
- * shapes), else its `review.recorded`. Undefined when neither names one. The saved review is looked up by
- * it, so another PR's save of the same commit is never the one judged (AUD-M24).
+ * A case's PR, from its latest `pr.opened`, else its `review.recorded`. The saved review is looked up by it,
+ * so another PR's save of the same commit is never the one judged.
  */
 export function casePr(caseEvents: Record<string, unknown>[]): number | undefined {
   for (const type of ["pr.opened", "review.recorded"]) {
@@ -136,7 +132,7 @@ export function casePr(caseEvents: Record<string, unknown>[]): number | undefine
   return undefined;
 }
 
-/** True only for a save whose review finished: an absent or unknown state is unfinished. */
+/** An absent or unknown state counts as unfinished. */
 export function isComplete(review: { state?: unknown }): boolean {
   return review.state === "complete";
 }
@@ -154,10 +150,8 @@ export function toMatchFinding(finding: SavedFinding): MatchFinding {
 }
 
 /**
- * The saved review whose `headSha` is `commit`, searched under `<reviewsDir>/<repoKey>-pr<N>/*.review.json`
- * (the layout `review:wait` writes). Undefined when the directory can't be read or no file matches. A
- * subfolder, or a `.review.json` file, that can't be listed, read or parsed is skipped, not thrown: one
- * case's malformed evidence must never abort the scan for a different case's valid review.
+ * The saved review whose `headSha` is `commit`. A folder or file that can't be read is skipped: one case's
+ * malformed evidence must never abort the search for another case's valid review.
  */
 export function findSavedReview(
   reviewsDir: string,
@@ -187,7 +181,7 @@ export function findSavedReview(
         const review = JSON.parse(text) as SavedReview;
         if (review.headSha === commit && (pr === undefined || review.pr === pr)) return { path, text, review };
       } catch {
-        // Malformed or unreadable: not a candidate, but not fatal to the scan either.
+        // Malformed or unreadable: not a candidate.
       }
     }
   }

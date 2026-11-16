@@ -318,9 +318,8 @@ describe("runCheck", () => {
         },
       }),
     );
-    // compareRelations itself tolerates a malformed entry (see its own describe block), so this
-    // reports the appeared relationship rather than crashing; the point of this test is that a
-    // comparison failure of any kind can never throw out of runCheck.
+    // compareRelations tolerates a malformed entry, so this reports a difference. What matters here is
+    // that no comparison failure can throw out of runCheck.
     expect([0, 1, 2]).toContain(result.exitCode);
     expect(() => result).not.toThrow();
   });

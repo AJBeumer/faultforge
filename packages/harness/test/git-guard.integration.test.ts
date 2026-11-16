@@ -26,7 +26,6 @@ function guarded() {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
-  /** Runs git and returns its exit status instead of throwing. */
   const status = (...args: string[]) => {
     try {
       git(...args);
@@ -45,7 +44,7 @@ function guarded() {
   return { dir, git, status };
 }
 
-describe("the git-level guard, run by git itself (#191)", () => {
+describe("the git-level guard, run by git itself", () => {
   it("refuses a commit whose message or staged file gives the change away, and allows a clean one", () => {
     const { dir, git, status } = guarded();
     const head = git("rev-parse", "HEAD");
@@ -92,12 +91,12 @@ describe("the git-level guard, run by git itself (#191)", () => {
   }, 60_000);
 });
 
-describe("the git-level guard reads what a push really sends (Qodo on PR 213)", () => {
+describe("the git-level guard reads what a push really sends", () => {
   it("refuses a push to a destination ref named with a giveaway word, from a clean local branch", () => {
     const { git, status } = guarded();
     expect(status("push", "-q", "origin", `HEAD:refs/heads/${WORD}-fix`)).not.toBe(0);
     expect(status("push", "-q", "origin", "HEAD:refs/heads/tidy-fix")).toBe(0);
-    // A deletion is refused (re-grade 3); the test cleans up around the hook.
+    // The hook refuses a deletion in the reviewed repo, so the test cleans up around it.
     git("push", "-q", "--no-verify", "origin", "--delete", "tidy-fix");
   }, 60_000);
 
@@ -122,7 +121,7 @@ describe("the git-level guard reads what a push really sends (Qodo on PR 213)", 
   }, 60_000);
 });
 
-describe("the git-level guard keeps the reviewed repo's history, however the push starts (re-grade 3)", () => {
+describe("the git-level guard keeps the reviewed repo's history, however the push starts", () => {
   /** A guarded clone whose last pushed commit has been rewritten locally. */
   function rewritten() {
     const repo = guarded();
@@ -188,7 +187,7 @@ describe("the git-level guard keeps the reviewed repo's history, however the pus
   }, 60_000);
 });
 
-describe("the lab's own hooks, run by git itself (re-grade 5)", () => {
+describe("the lab's own hooks, run by git itself", () => {
   it("refuse a commit or a push that links a target issue or PR, and allow plain text", () => {
     const { dir, git, status } = guarded();
     installHooks(dir, SCRIPT, "lab");
@@ -204,7 +203,7 @@ describe("the lab's own hooks, run by git itself (re-grade 5)", () => {
   }, 60_000);
 });
 
-describe("where the lab's and the private checkout's history may go, as git runs the hooks (re-grade 6)", () => {
+describe("where the lab's and the private checkout's history may go, as git runs the hooks", () => {
   /** A clone with a bare origin and the hooks of `role` installed. */
   function clone(role: "lab" | "private") {
     const { dir, git, status } = guarded();

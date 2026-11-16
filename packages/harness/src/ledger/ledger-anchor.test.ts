@@ -62,7 +62,7 @@ function squash(repo: string) {
   sh(repo, "branch", "--quiet", "-m", "main");
 }
 
-describe("recordAnchor (AUD-M11)", () => {
+describe("recordAnchor", () => {
   it("appends the date and the private HEAD's commit id, and nothing else", () => {
     const w = world();
     const head = sh(w.repo, "rev-parse", "HEAD");
@@ -79,7 +79,7 @@ describe("recordAnchor (AUD-M11)", () => {
     expect(readAnchors(w.anchors).anchors).toHaveLength(2);
   });
 
-  it("starts a new line after a last anchor that has no line break, so two never run together (Qodo on PR 286)", () => {
+  it("starts a new line after a last anchor that has no line break, so two never run together", () => {
     const w = world();
     writeFileSync(w.anchors, `2026-11-13 ${"a".repeat(40)}`);
     recordAnchor(w.repo, w.anchors);
@@ -97,7 +97,7 @@ describe("recordAnchor (AUD-M11)", () => {
   });
 });
 
-describe("anchorProblems (AUD-M11)", () => {
+describe("anchorProblems", () => {
   it("passes a history that only grew after the anchor", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
@@ -105,7 +105,7 @@ describe("anchorProblems (AUD-M11)", () => {
     expect(anchorProblems(w.repo, w.anchors)).toEqual([]);
   });
 
-  it("catches a squashed history that rewrote a line, which the commit-by-commit check can no longer see", () => {
+  it("catches a squashed history that rewrote a line, which the commit-by-commit check can't see", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
     writeFileSync(w.key, '{"caseId":"FF-9001","changed":true}\n{"caseId":"FF-9002"}\n');
@@ -117,7 +117,7 @@ describe("anchorProblems (AUD-M11)", () => {
     ]);
   });
 
-  it("catches a squash even with the same content, and an anchored commit the repository no longer holds", () => {
+  it("catches a squash even with the same content, and an anchored commit the repository has lost", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
     squash(w.repo);
@@ -128,7 +128,7 @@ describe("anchorProblems (AUD-M11)", () => {
     ]);
   });
 
-  it("catches a file that is no longer what the anchored commit held, followed only by new lines", () => {
+  it("catches a file that starts other than the anchored commit held it, followed only by new lines", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
     writeFileSync(w.key, '{"caseId":"FF-9001"}\n');
@@ -174,7 +174,7 @@ function labRepo(anchors: string): string {
   return lab;
 }
 
-describe("anchorsFileProblems: an anchor can't be swapped for another (Qodo on PR 286)", () => {
+describe("anchorsFileProblems: an anchor can't be swapped for another", () => {
   it("catches an anchor replaced by one naming a rewritten history, which the anchor check alone passes", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
@@ -200,13 +200,13 @@ describe("anchorsFileProblems: an anchor can't be swapped for another (Qodo on P
     const other = join(lab, "other-anchors.txt");
     writeFileSync(other, readFileSync(w.anchors, "utf8"));
     expect(anchorsFileProblems(other)).toEqual([expect.stringContaining("not committed")]);
-    // Staged but never committed: no history to check it against (Qodo on PR 286).
+    // Staged but never committed: no history to check it against.
     sh(lab, "add", "other-anchors.txt");
     expect(anchorsFileProblems(other)).toEqual([expect.stringContaining("not committed")]);
   });
 });
 
-describe("an anchors file whose last line has no line break (Qodo on PR 286)", () => {
+describe("an anchors file whose last line has no line break", () => {
   it("takes a new anchor on a line of its own, and the file still only grew, before and after the commit", () => {
     const w = world();
     recordAnchor(w.repo, w.anchors);
@@ -221,7 +221,7 @@ describe("an anchors file whose last line has no line break (Qodo on PR 286)", (
   });
 });
 
-describe("an anchors file replaced by a link (Qodo on PR 286)", () => {
+describe("an anchors file replaced by a link", () => {
   it("is refused, never followed to another file's anchors", (context) => {
     const w = world();
     recordAnchor(w.repo, w.anchors);

@@ -37,12 +37,12 @@ import { answerKeyProblems, savedReviewProblems } from "./ledger-schemas.ts";
 const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
 
 /**
- * How a unified diff breaks "only appended", read one line at a time so a diff of any size is never held
- * (AUD-N6): `removed` when a hunk removes or changes a line, `inserted` when an added line is followed by an
- * old one, in its hunk or a later hunk of the same file, so it went in before the end (AUD-M10). Header lines
- * carry no content. One removal is not a change: a last line that had no line break ("\ No newline at end of
- * file") shown as removed and added back unchanged, which is how git shows lines appended after it (Qodo on
- * PR 286). Any other removal is, as is that one when the line comes back different, or doesn't.
+ * Reads a unified diff one line at a time, so a diff of any size fits, and says how it breaks "only appended".
+ * `removed`: a line was removed or changed. `inserted`: a line was added before an old one, not at the end.
+ *
+ * One removal is allowed. When lines are appended after a last line that had no line break, git shows that
+ * line as removed and added back. If it comes back exactly the same, it is not a change. If it comes back
+ * different, or not at all, it counts as `removed`, like every other removal.
  */
 export class AppendOnlyScanner {
   private inHunk = false;
@@ -129,9 +129,9 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
     // `-m` shows a merge once per parent, one right after another. A merge of two branches that each appended
     // puts one side's lines before the other's against one parent, but is a plain append against the other:
     // two appends meeting, not an insertion. So a commit is an insertion only when it inserts against every
-    // parent it is shown against; a removal against any parent is always a problem (Qodo on PR 269).
+    // parent it is shown against; a removal against any parent is always a problem.
     // Read as a stream, one line at a time, and judged as each commit ends: neither the history nor one
-    // commit's diff is ever held, so there is no size or time ceiling to outgrow (AUD-N6, Qodo on PR 280).
+    // commit's diff is ever held, so there is no size or time ceiling to outgrow.
     let sha: string | null = null;
     let breaks: ("removed" | "inserted" | undefined)[] = [];
     let scanner: AppendOnlyScanner | null = null;
@@ -182,12 +182,12 @@ export function appendOnlyProblems(repoRoot: string, relPath: string): string[] 
 /**
  * Problems with the anchors file itself, in the public repository that holds it: it must be committed there,
  * and its history and working copy may only add lines. An anchor replaced by a line naming a rewritten
- * private HEAD would otherwise pass every other check (Qodo on PR 286).
+ * private HEAD would otherwise pass every other check.
  */
 export function anchorsFileProblems(anchorsPath: string): string[] {
   if (!existsSync(anchorsPath)) return []; // `anchorProblems` reports a missing file.
   // The file itself, never what a link points to: a link to another file would swap in its anchors while the
-  // anchors file's own history looked untouched (Qodo on PR 286).
+  // anchors file's own history looked untouched.
   if (lstatSync(anchorsPath).isSymbolicLink()) return [`${anchorsPath}: is a link, not the anchors file itself`];
   const folder = dirname(resolve(anchorsPath));
   const top = spawnSync("git", ["-C", folder, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -197,10 +197,9 @@ export function anchorsFileProblems(anchorsPath: string): string[] {
   const relPath = relative(realpathSync.native(repoRoot), join(realpathSync.native(folder), basename(anchorsPath)))
     .split(sep)
     .join("/");
-  // Committed as a plain file, not a link (git mode 120000), in HEAD.
   const mode = spawnSync("git", ["-C", repoRoot, "ls-tree", "HEAD", "--", relPath], { encoding: "utf8" });
   if (mode.status === 0 && mode.stdout.startsWith("120000")) return [`${relPath}: is committed as a link`];
-  // In HEAD itself: a file only staged would have no history, and every line of it would read as added (Qodo on PR 286).
+  // In HEAD itself: a file only staged would have no history, and every line of it would read as added.
   const committed = spawnSync("git", ["-C", repoRoot, "cat-file", "-e", `HEAD:${relPath}`], { encoding: "utf8" });
   if (committed.status !== 0) return [`${relPath}: not committed, so an anchor in it could be changed unseen`];
   return appendOnlyProblems(repoRoot, relPath);
@@ -208,9 +207,9 @@ export function anchorsFileProblems(anchorsPath: string): string[] {
 
 /**
  * Every problem with the private ledger: unsound amendments, any non-append-only history, any anchored
- * commit that today's history no longer holds or no longer extends, or an anchors file that was changed
- * other than by adding lines (`anchorsPath`, AUD-M11), and any tool's `inputHash` that no longer recomputes
- * from today's template, proofs or saved review (AUD-M26).
+ * commit that today's history doesn't hold or extend, an anchors file changed other than by adding lines
+ * (`anchorsPath`), and any tool's `inputHash` that doesn't recompute from today's template, proofs or saved
+ * review.
  */
 export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): string[] {
   const problems: string[] = [];
@@ -220,7 +219,7 @@ export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): 
   }
   if (anchorsPath !== undefined)
     problems.push(...anchorsFileProblems(anchorsPath), ...anchorProblems(privateRoot, anchorsPath));
-  // Every event readable as an event: the lenient check every shape on disk passes (AUD-M5).
+  // Every event readable as an event: the lenient check every shape on disk passes.
   const auditPath = join(privateRoot, FILES[1] as string);
   if (existsSync(auditPath)) {
     for (const event of readAuditLog(auditPath)) {
@@ -229,7 +228,7 @@ export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): 
     }
   }
   const env = { ...process.env, FAULTFORGE_PRIVATE_DIR: privateRoot };
-  // Every answer-key line and every saved review in the shape its schema describes (AUD-N5).
+  // Every answer-key line and every saved review in the shape its schema describes.
   problems.push(
     ...answerKeyProblems(join(privateRoot, FILES[0] as string)),
     ...savedReviewProblems(savedReviewsDir(env)),
@@ -250,7 +249,7 @@ export function ledgerCheckProblems(privateRoot: string, anchorsPath?: string): 
 /**
  * What `verdict`, `case:review`, `case:build` and `inject` check before they read or write the files: unsound
  * amendments, and for a file at the root of its own git repository (the private repository holds both there),
- * any commit or uncommitted change that removed or changed a line (#224). A file elsewhere, such as a test's
+ * any commit or uncommitted change that removed or changed a line. A file elsewhere, such as a test's
  * scratch copy, has no history of its own to check. Never throws: what it can't check is a problem too.
  */
 export function ledgerProblemsWithHistory(paths: string[]): string[] {
@@ -264,7 +263,7 @@ export function ledgerProblemsWithHistory(paths: string[]): string[] {
     const root = dirname(resolve(path));
     // Only "not a git repository" means there is no history to check. Anything else (git missing or failing,
     // a folder inside another repository instead of at its own root) is a problem, never a silent skip, as
-    // `npm run ledger:check` would refuse it too (Qodo on PR 232).
+    // `npm run ledger:check` would refuse it too.
     const probe = spawnSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
     if (probe.status !== 0 && /not a git repository/i.test(probe.stderr ?? "")) continue;
     try {

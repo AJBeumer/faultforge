@@ -100,7 +100,7 @@ function shapeProblem(record: unknown): string | undefined {
     return "needs templateId, file and a line range in its injection";
   }
   // A detection that is there must be whole: comparing against a broken one would crash or read as a
-  // disagreement (exit 1) when the record itself is unreadable (exit 2, audit N-1).
+  // disagreement (exit 1) when the record itself is unreadable (exit 2).
   if (r.detection !== undefined) {
     const d = r.detection as Partial<NonNullable<CaseRecord["detection"]>> | null;
     const criteria = ["file", "lines", "kind"] as const;

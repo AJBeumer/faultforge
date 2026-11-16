@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { outcomeOf } from "../src/shared/run-outcome.ts";
 
-describe("outcomeOf: a real process that doesn't finish (#114)", () => {
+describe("outcomeOf for a real process that doesn't finish", () => {
   it("is not_run, never fail, when a real time limit kills the process", () => {
     const result = spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], {
       encoding: "utf8",

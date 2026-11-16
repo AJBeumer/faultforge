@@ -1,6 +1,6 @@
 /**
  * Records a case's review in the audit log from what `review:wait` saved, so `case:build` has its review
- * stage without an event written by hand (#162).
+ * stage without an event written by hand.
  *
  *   npm run case:review -- FF-0006
  *   npm run case:review -- FF-0006 --dry-run      # prints the event, writes nothing
@@ -48,7 +48,7 @@ export interface RunOptions {
 /**
  * Qodo's review comment in a saved `comments.latest.raw.json`: its URL and when it was last updated. Qodo
  * rewrites its comment in place after every push, so only a version updated at or after `since` (the push
- * `review:wait` saw) can be this commit's review (Qodo on PR 214).
+ * `review:wait` saw) can be this commit's review.
  */
 export function qodoReviewComment(
   savedFeeds: string,
@@ -102,8 +102,7 @@ export function run(caseId: string, options: RunOptions = {}): number {
       return 2;
     }
 
-    // The save must be for the case's own PR: read from pr.opened however it was written, and passed to the
-    // search so another PR's save of the same commit is never picked first (Qodo on PR 214).
+    // The save must be for the case's own PR, so another PR's save of the same commit is never picked first.
     const casePr = prNumberOf(opened?.pr);
     if (casePr === undefined) {
       error(`case:review: ${caseId}'s pr.opened event names no PR (${JSON.stringify(opened?.pr)})`);
@@ -130,9 +129,8 @@ export function run(caseId: string, options: RunOptions = {}): number {
     }
     const short = entry.injectionCommit.slice(0, 7);
     const feedsPath = join(dirname(found.path), `${short}.comments.latest.raw.json`);
-    // A review that never finished may have no review comment, or no saved feed at all when every poll of it
-    // failed; its stage is still recorded, pointing at the PR and the time review:wait gave up, so an
-    // inconclusive record can be built (Qodo on PR 214). A complete review must have its feed.
+    // A review that never finished may have no comment or no saved feed. It is still recorded, pointing at the PR
+    // and the time review:wait gave up, so an inconclusive record can be built. A complete review needs its feed.
     const unfinished = save.state !== "complete";
     const comment =
       unfinished && !existsSync(feedsPath)

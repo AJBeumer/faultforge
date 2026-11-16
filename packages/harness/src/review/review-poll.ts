@@ -6,13 +6,12 @@ import { type QodoReview, reviewState } from "../qodo/qodo-review.ts";
 
 export interface WaitDeps {
   fetchReview: () => Promise<QodoReview>;
-  /** Called on every poll; return the comment's `updated_at` to have new versions saved. */
   onPoll?: () => Promise<void>;
-  /** Called when a poll fails; the wait goes on until the deadline. */
+  /** A failed poll doesn't end the wait; it goes on until the deadline. */
   onError?: (error: unknown) => void;
   /**
-   * The PR's head now. When given, a finished review counts only if the head is still `headSha`:
-   * someone may have pushed again while Qodo was reviewing (PR 98).
+   * When given, a finished review counts only if the head is still `headSha`: someone may have pushed
+   * again while Qodo was reviewing.
    */
   readHead?: () => Promise<string>;
   now: () => number;
@@ -25,10 +24,8 @@ export type WaitResult =
   | { state: "timeout"; review: QodoReview | undefined; polls: number };
 
 /**
- * Polls until the review of `headSha` is complete or `timeoutMs` has passed.
- * A failed poll is reported and retried. A finished review is reported only once its comments were saved
- * after it finished, and, with `readHead`, only while the head is still `headSha` ("moved" otherwise).
- * At the deadline, the last error is thrown if no poll succeeded or the final save never did.
+ * A finished review is reported only once its comments were saved after it finished. At the deadline, the
+ * last error is thrown if no poll succeeded or the final save never did.
  */
 export async function waitForReview(
   headSha: string,
@@ -81,25 +78,21 @@ export async function waitForReview(
 export type HeadWaitResult =
   | {
       state: "reached" | "moved" | "timeout";
-      /** The PR head at the last read: the full id of the commit waited for, or the one that stopped the wait. */
       head: string;
       polls: number;
-      /** Every distinct head seen, in order. */
       seen: string[];
     }
   | { state: "failed"; head: null; polls: number; seen: []; error: string };
 
-/** True when `head` (a full id) is the commit `target` names, in full or by a prefix of at least 7. */
+/** `target` may be a prefix of at least 7 characters. */
 export function sameCommit(head: string, target: string): boolean {
   return target.length >= 7 && head.toLowerCase().startsWith(target.toLowerCase());
 }
 
 /**
- * Polls the PR head until it is `target`. Right after a push GitHub can show the previous head for a
- * moment: on PR 65 a wait started within a second of a push reported the old commit's finished review
- * as the answer. That first head is waited out. Any other head means someone pushed again: "moved".
- * A failed read is reported and retried; if no read succeeded by the deadline, the result is "failed"
- * with the last error, so the caller can record the attempt before it stops.
+ * Right after a push GitHub can show the previous head for a moment, and its finished review would pass
+ * for the answer. That first head is waited out; any other head means someone pushed again. If no read
+ * succeeds, the result is "failed", so the caller can record the attempt before it stops.
  */
 export async function waitForHead(
   target: string,

@@ -8,7 +8,7 @@ import { DRAFTED_QUESTION } from "./verdict-ask.ts";
 
 const COMMIT = "f".repeat(40);
 
-/** Private storage with one judged case (FF-9300, PR 3) and one other case's verdict. */
+/** Private storage with one judged case, with its PR's saved review, and one other case's verdict. */
 function fixture(verdictExtra: Record<string, unknown> = {}) {
   const root = mkdtempSync(join(tmpdir(), "verdict-amend-"));
   writeFileSync(
@@ -44,7 +44,7 @@ function fixture(verdictExtra: Record<string, unknown> = {}) {
   return root;
 }
 
-/** Each of `list` in turn; whether the owner wrote the reason is answered `drafted` without taking one (#321). */
+/** Each of `list` in turn; whether the owner wrote the reason is answered `drafted` without taking one. */
 function answers(list: string[], drafted = "y") {
   let i = 0;
   return async (question: string) => (question === DRAFTED_QUESTION ? drafted : (list[i++] ?? ""));
@@ -65,7 +65,7 @@ async function amend(root: string, extra: Partial<AmendOptions> = {}) {
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-describe("verdict:amend (#250, AUD-H4)", () => {
+describe("verdict:amend adds a reason to a verdict without replacing it", () => {
   it("appends one amendment that adds a reason written later, and ledger:check accepts it", async () => {
     const root = fixture();
     const auditPath = join(root, "audit-events.jsonl");
@@ -152,7 +152,7 @@ describe("verdict:amend (#250, AUD-H4)", () => {
   });
 });
 
-describe("verdict:amend: the evidence is what the verdict judged (Qodo on PR 267)", () => {
+describe("verdict:amend cites the evidence the verdict judged", () => {
   it("cites the file the verdict names", async () => {
     const root = fixture({ reviewFile: "elsewhere/judged.review.json" });
     const { code, out } = await amend(root, { dryRun: true, ask: answers(["a reason of its own"]) });
@@ -161,7 +161,7 @@ describe("verdict:amend: the evidence is what the verdict judged (Qodo on PR 267
   });
 });
 
-describe("verdict:amend: who wrote the amended reason (#321)", () => {
+describe("verdict:amend records who wrote the amended reason", () => {
   it("asks right after the reason and records amendedReasonDraftedBy", async () => {
     for (const [answer, drafted] of [
       ["y", "owner"],

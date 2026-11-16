@@ -38,7 +38,7 @@ export interface FindingMatch {
 /**
  * The version of the rule below. The rule is fixed: a change to what it computes is a new version, recorded
  * in the decision log, and never applied to a case adjudicated under an earlier one. Every result carries it,
- * so a stored result says which rule produced it (AUD-M11).
+ * so a stored result says which rule produced it.
  */
 export const RULE_VERSION = "1";
 

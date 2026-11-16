@@ -12,8 +12,7 @@ const finding = (overrides: Partial<RawFinding> = {}): RawFinding => ({
 });
 
 describe("labelFindings", () => {
-  // `finding_state`'s lists hold full finding objects, not plain ids — confirmed live, 12 November,
-  // on `review:local`'s own first real run against this repository.
+  // `finding_state`'s lists hold full finding objects, not plain ids, as Qodo's live answers do.
   const f1 = finding({ id: "f1", title: "Replay exposes another user's data", category: "Security" });
   const f2 = finding({
     id: "f2",

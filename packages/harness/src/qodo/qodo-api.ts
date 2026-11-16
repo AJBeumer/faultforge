@@ -30,7 +30,7 @@ export class QodoApi {
     return this.transport.lastRecoveredRaw;
   }
 
-  /** Calls one allow-listed tool and returns its text result parsed as JSON. */
+  /** Returns the tool's text result parsed as JSON. */
   async call(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (!READ_ONLY_TOOLS.has(tool)) throw new Error(`Refusing ${tool}: not on the read-only allow-list.`);
     return this.transport.callTool(tool, args);

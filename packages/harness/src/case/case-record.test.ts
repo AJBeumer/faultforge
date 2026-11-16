@@ -162,7 +162,7 @@ describe("findLeaks", () => {
   });
 });
 
-describe("validateCaseRecord: what the schema can't say (Qodo on PR 128)", () => {
+describe("validateCaseRecord: what the schema can't say", () => {
   it("rejects a finding id that appears more than once", () => {
     const record = ff0001();
     record.findings.push({ ...record.findings[0], file: null, lines: null });
@@ -183,7 +183,7 @@ describe("validateCaseRecord: what the schema can't say (Qodo on PR 128)", () =>
   });
 });
 
-describe("validateCaseRecord: outcomes against the findings and the status (#244)", () => {
+describe("validateCaseRecord: outcomes against the findings and the status", () => {
   it("refuses review_incomplete with status complete, and status incomplete with a final verdict", () => {
     const incomplete = { ...ff0001(), human: { ...ff0001().human, disposition: "review_incomplete" } };
     expect(validateCaseRecord({ ...incomplete, status: "complete" })).toContain(
@@ -194,7 +194,7 @@ describe("validateCaseRecord: outcomes against the findings and the status (#244
     );
   });
 
-  it("lets an incomplete review disagree with caught: its verdict claims nothing about the catch (M42f)", () => {
+  it("lets an incomplete review disagree with caught: its verdict claims nothing about the catch", () => {
     const incomplete = { ...ff0001(), human: { ...ff0001().human, disposition: "review_incomplete" } };
     expect(validateCaseRecord({ ...incomplete, status: "incomplete" })).toEqual([]);
   });
@@ -215,7 +215,7 @@ describe("validateCaseRecord: outcomes against the findings and the status (#244
   });
 });
 
-describe("findLeaks: the answer key's name (M42d)", () => {
+describe("findLeaks: the answer key's name", () => {
   it("flags ground-truth in any case", () => {
     expect(findLeaks('{"note":"see Ground-Truth"}')).toEqual(["Ground-Truth"]);
   });

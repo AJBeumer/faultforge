@@ -186,7 +186,7 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["inj9999", "inj8888", "rev7777"]));
   });
 
-  it("excludes both the commit an amendment replaced and the one it names (AUD-N1)", () => {
+  it("excludes both the commit an amendment replaced and the one it names", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);
     const amendment = { kind: "amendment", amends: "FF-9001", change: { injectionCommit: "new2222" }, reason: "r" };
@@ -197,7 +197,7 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["old1111", "new2222"]));
   });
 
-  it("keeps a commit two amendments passed through excluded (Qodo on PR 260)", () => {
+  it("keeps a commit two amendments passed through excluded", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);
     const amend = (sha: string) => ({
@@ -215,7 +215,7 @@ describe("readSavedReviews, casePrs and groundTruthCommits", () => {
     expect(groundTruthCommits(join(dir, "ground-truth.jsonl"))).toEqual(new Set(["aaa1111", "bbb2222", "ccc3333"]));
   });
 
-  it("ignores the commit of an amendment that names no entry, so it can't hide an unrelated PR (Qodo on PR 260)", () => {
+  it("ignores the commit of an amendment that names no entry, so it can't hide an unrelated PR", () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-evidence-"));
     dirs.push(dir);
     const stray = { kind: "amendment", amends: "FF-9999", change: { injectionCommit: "stray33" }, reason: "r" };
@@ -317,7 +317,7 @@ describe("citationProblems", () => {
   });
 });
 
-describe("one completeness rule for the verdict and the rules evidence (Qodo on PR 280)", () => {
+describe("one completeness rule for the verdict and the rules evidence", () => {
   it("uses saved-review.ts's isComplete, not a copy", () => {
     const text = readFileSync(join(import.meta.dirname, "rules-evidence.ts"), "utf8");
     expect(text).toMatch(/import \{[^}]*\bisComplete\b[^}]*\} from "\.\.\/review\/saved-review\.ts"/);

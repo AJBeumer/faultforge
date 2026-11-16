@@ -18,7 +18,7 @@ const review = (tree: string) =>
     },
   });
 
-describe("review:gate's cache (AUD-N6)", () => {
+describe("review:gate's cache", () => {
   let dir: string;
   let evidence: string;
   let cacheFile: string;
@@ -142,13 +142,13 @@ describe("review:gate's cache (AUD-N6)", () => {
     expect(ReviewCache.load(cacheFile).get("x.json", null)).toBeUndefined();
   });
 
-  it("keeps one cache per evidence folder, in the checkout's node_modules, never a shared temp folder (Qodo on PR 278)", () => {
+  it("keeps one cache per evidence folder, in the checkout's node_modules, never a shared temp folder", () => {
     const checkout = join(dir, "checkout");
     expect(defaultCacheFile(join(dir, "a"), checkout)).not.toBe(defaultCacheFile(join(dir, "b"), checkout));
     expect(defaultCacheFile(evidence, checkout).startsWith(join(checkout, "node_modules", ".cache"))).toBe(true);
   });
 
-  it("never caches a review whose split.json could not be read, only one that could not be parsed (Qodo on PR 278)", () => {
+  it("never caches a review whose split.json could not be read, only one that could not be parsed", () => {
     const split = join(evidence, "local-reviews", "r1", "split.json");
     rmSync(split);
     mkdirSync(split); // stat works, reading fails: as a file locked or briefly unreadable would
@@ -164,7 +164,7 @@ describe("review:gate's cache (AUD-N6)", () => {
   });
 });
 
-describe("review:gate's cache entries (Qodo on PR 278)", () => {
+describe("review:gate's cache entries", () => {
   it("are not trusted when a field a fresh read always writes is missing or of the wrong kind", () => {
     const dir = mkdtempSync(join(tmpdir(), "review-gate-cache-"));
     try {

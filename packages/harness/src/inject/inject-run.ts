@@ -27,11 +27,11 @@ export function runProof(places: StepPlaces, stage: "base" | "variant", proof: P
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(proof.dir ?? places.templateDir, proof.proofTest), dest);
     // The JSON report says whether a test ran and failed; an exit code alone can't tell that from a
-    // proof that failed to load (#217).
+    // proof that failed to load.
     const report = join(scratch, "proof-report.json");
     const outcome = runStep(
       places,
-      // Numbered: two proofs may share an invariant id, and each keeps its own log (#193).
+      // Numbered: two proofs may share an invariant id, and each keeps its own log.
       `proof-${stage}-${index + 1}-${proof.invariantId}`,
       process.execPath,
       [

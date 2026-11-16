@@ -1,10 +1,8 @@
 /** The evidence `review:wait` saves besides Qodo's answer: the PR's comment feeds and its CI summary. */
 
 /**
- * Saves one poll of the two comment feeds (each the raw `gh api --paginate --slurp` text: an array of
- * pages). The raw text is written first, every poll, so an answer that can't be parsed is still kept;
- * then a new version file is written when the content changed and Qodo has commented. Returns the
- * content to compare the next poll with. Throws when a feed doesn't parse, after the raw save.
+ * Saves one poll of the two comment feeds (raw `gh api --paginate --slurp` text). The raw text is written
+ * first, so an answer that can't be parsed is still kept. Returns the content to compare the next poll with.
  */
 export function saveCommentFeeds(
   raw: { pr: string; inline: string },
@@ -13,11 +11,8 @@ export function saveCommentFeeds(
   short: string,
 ): string {
   write(`${short}.comments.latest.raw.json`, JSON.stringify(raw));
-  // `user` is null on a comment whose author account was deleted: substituted with "unknown" rather
-  // than read as Qodo's or crashing every poll (a GitHub app's comments outlive the human accounts
-  // mentioned near them, not its own, but the shape allows for it and real feeds have shown nulls).
-  // A comment that does have an author keeps its full user object, not just the login: only the
-  // missing case is touched.
+  // `user` is null when the author's account was deleted. It reads as "unknown", so it is never taken
+  // for Qodo's and never crashes a poll. A comment with an author is kept as it is.
   type Comment = { user: { login: string } | null; updated_at: string };
   const pages = (text: string) => (JSON.parse(text) as Comment[][]).flat();
   const normalize = (list: Comment[]) => list.map((c) => (c.user ? c : { ...c, user: { login: "unknown" } }));
@@ -34,15 +29,13 @@ export function saveCommentFeeds(
   return content;
 }
 
-/** One line per check run, or "no checks" when there are none. */
 export function summarizeCi(checks: { name: string; status: string; conclusion: string | null }[]): string {
   return checks.map((c) => `${c.name}: ${c.conclusion ?? c.status}`).join(", ") || "no checks";
 }
 
 /**
- * CI is optional evidence, not Qodo's answer: a failed lookup must never keep the review record
- * from being written, so this never throws. `onError` is called (not thrown) so a caller can still
- * log why, before recording "unavailable".
+ * Never throws: CI is optional evidence, and a failed lookup must not keep the review record from being
+ * written. `onError` lets a caller log why.
  */
 export function ciOrUnavailable(
   fetchChecks: () => { name: string; status: string; conclusion: string | null }[],

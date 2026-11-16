@@ -16,10 +16,8 @@ afterEach(() => {
 function scratchTargetCopy(): string {
   const dir = mkdtempSync(join(tmpdir(), "inject-it-"));
   scratchDirs.push(dir);
-  // node_modules is copied too: the proof test imports the target's app code, which needs its real
-  // dependencies (fastify) even under --validate-only. A plain copy works on every platform and drive
-  // (hard links can't cross drives on Windows, and a link would confuse `git status`); this test never
-  // writes into it and removes the whole copy afterwards.
+  // node_modules too: the proof test imports the target's app code and its dependencies. A plain copy, because
+  // hard links can't cross drives on Windows and a link would confuse `git status`.
   cpSync(realTarget, dir, { recursive: true });
   return dir;
 }
@@ -40,18 +38,15 @@ function runInject(
   }
 }
 
-describe("inject exit codes (#8: branch derivation)", () => {
+describe("inject exit codes and branch naming", () => {
   it("exits 1 for an unknown template, before any target check", () => {
     const result = runInject(["--template", "no-such-template-xyz", "--target", root, "--validate-only"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("no-such-template-xyz");
   });
 
-  // --validate-only never derives a suffix or asks origin for the branch (#8): with `origin` pointed at a
-  // path that doesn't exist, any `git ls-remote` call would fail loudly, so a clean exit 0 here is itself
-  // the proof that no such call was made.
-  it("refuses a case id that isn't FF-NNNN before anything else (#193)", () => {
-    // A trailing newline is refused too: JavaScript's `$` never matches before one (Qodo on PR 207).
+  it("refuses a case id that isn't FF-NNNN before anything else", () => {
+    // A trailing newline is refused too: JavaScript's `$` never matches before one.
     for (const bad of ["FF-12", "../x", "ff-0002", "FF-0002\n"]) {
       const result = runInject(["--template", "idempotency-guard-bypass-v1", "--target", root, "--case", bad]);
       expect(result.status).toBe(1);
@@ -60,7 +55,7 @@ describe("inject exit codes (#8: branch derivation)", () => {
   });
 
   it.skipIf(!hasRealTarget)(
-    "refuses a detached target, and one whose HEAD isn't origin/main, without changing it (#193)",
+    "refuses a detached target, and one whose HEAD isn't origin/main, without changing it",
     () => {
       const dir = scratchTargetCopy();
       const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
@@ -107,7 +102,7 @@ describe("inject exit codes (#8: branch derivation)", () => {
   );
 
   it.skipIf(!hasRealTarget)(
-    "refuses a real run in a target without git's own guard hooks, without changing it (#242)",
+    "refuses a real run in a target without git's own guard hooks, without changing it",
     () => {
       const dir = scratchTargetCopy();
       const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
@@ -139,6 +134,7 @@ describe("inject exit codes (#8: branch derivation)", () => {
     "--validate-only exits 0 without ever asking origin about the branch",
     () => {
       const dir = scratchTargetCopy();
+      // With origin pointing nowhere, any `git ls-remote` would fail loudly, so a clean exit proves none ran.
       execFileSync("git", ["-C", dir, "remote", "set-url", "origin", "/nonexistent/origin.git"]);
       // The owner's checkout may still hold the first case's branch; the copy must not inherit it.
       try {
@@ -151,8 +147,8 @@ describe("inject exit codes (#8: branch derivation)", () => {
       const gitStatus = () =>
         execFileSync("git", ["-C", dir, "status", "--porcelain", "--branch"], { encoding: "utf8" });
       const before = gitStatus();
-      // A control whose variant passes the target's whole check, which --validate-only now runs: the seed bug's
-      // variant fails one of today's public tests, so it can't show a clean exit any more.
+      // A control whose variant passes the target's whole check, which --validate-only runs. The seed bug's
+      // variant fails one of the target's public tests, so it can't show a clean exit.
       const priv = mkdtempSync(join(tmpdir(), "inject-private-"));
       scratchDirs.push(priv);
       mkdirSync(join(priv, "templates", RENAME_CONTROL.id), { recursive: true });
@@ -169,7 +165,7 @@ describe("inject exit codes (#8: branch derivation)", () => {
   );
 });
 
-describe("a proof counts only a test that ran and failed, and --validate-only typechecks (#217)", () => {
+describe("a proof counts only a test that ran and failed, and --validate-only typechecks", () => {
   const seed = join(root, "templates", "seed", "idempotency-guard-bypass-v1");
 
   /** A scratch private folder holding one template built from the seed, with its own replace text and proof. */
@@ -233,7 +229,7 @@ describe("a proof counts only a test that ran and failed, and --validate-only ty
   );
 });
 
-describe("a base that gives the lab away is refused (#224, audit H-4)", () => {
+describe("a base that gives the lab away is refused", () => {
   it.skipIf(!hasRealTarget)(
     "refuses a target whose base commit names the lab, before changing anything",
     () => {
@@ -254,7 +250,7 @@ describe("a base that gives the lab away is refused (#224, audit H-4)", () => {
   );
 });
 
-describe("the target's drive-letter spelling doesn't change the result (#316)", () => {
+describe("the target's drive-letter spelling doesn't change the result", () => {
   // Only Windows spells a drive letter; elsewhere both spellings are one path.
   it.skipIf(process.platform !== "win32" || !hasRealTarget)(
     "--validate-only gives the same outcome for d:\\… and D:\\…",

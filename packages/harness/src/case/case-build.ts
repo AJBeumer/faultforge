@@ -19,24 +19,18 @@
  *    it too; a case whose events disagree on which commit was reviewed is refused.
  *  - `private/cases/<caseId>.overlay.json`, when there is any: prose no event or saved review holds —
  *    `detection.notes`, `collateral`, `otherReviewers`, `challenge`, `review.linkedRepositories`. The
- *    overlay itself opts a case into the legacy path by setting `legacyFindingsPath` (a raw findings
- *    file, read in Qodo's API shape and converted with `findingsFor` from `qodo-review.ts`) — a case
- *    without it must have a saved review file. This is a declaration, not a guess from what happens to
- *    exist on disk: a `review.json` backfilled for an unrelated ticket's testing doesn't make a legacy
- *    case look ordinary, or an ordinary case look legacy. The legacy path is closed (AUD-M1): only the
- *    cases in `LEGACY_CASES` (FF-0001, whose review predates both `review:wait` and the current wording
- *    of `match-rule.ts`'s criteria) may take it, the raw file must pass `findingsShapeProblem`, and its
- *    review state is read from it (`reviewState`) and checked like a saved review's. A legacy case
- *    may also set two narrow extras: `detection.matchDetailOverrides` (replaces a criterion's free-text
- *    `detail`, never its `pass`) and `findings` (per-id `severity`/`commentLines`/`summary`, which a
- *    legacy raw findings file doesn't carry). The command refuses any other field, or shape, naming it,
- *    and prints which fields it took from the overlay. With no overlay file, the record says its
- *    challenge has not run (#162).
+ *    overlay opts a case into the legacy path by setting `legacyFindingsPath` (a raw findings file in
+ *    Qodo's API shape); a case without it must have a saved review file. It is a declaration, not a guess
+ *    from what happens to be on disk, so a stray `review.json` can't make a case look legacy or ordinary.
+ *    Only the cases in `LEGACY_CASES` may take the legacy path, and their raw file is checked like a saved
+ *    review. A legacy case may also set `detection.matchDetailOverrides` (a criterion's `detail`, never its
+ *    `pass`) and per-id `findings` fields its raw file lacks. Any other field or shape is refused by name,
+ *    and the fields taken are printed. With no overlay file, the record says its challenge has not run.
  *  - for an ordinary case, the saved review (`review:wait`'s `<evidence>/reviews/<key>-pr<N>/*.review.json`,
  *    found by the reviewed commit on `review.recorded`'s PR, via `findSavedReview` from `saved-review.ts`)
  *    for `findings` and its `state`. A save for the right commit on another PR is never used.
  *
- * The record is built only from the review the owner judged, as it was judged (AUD-M1, AUD-M26): a verdict
+ * The record is built only from the review the owner judged, as it was judged: a verdict
  * `verdict` wrote carries an `inputHash` of the answer-key entry, the template and the saved review, and a
  * save, template or entry changed since then is refused. A save whose state is not "complete" admits only
  * `review_incomplete`, and a clean control must have no findings. A verdict that names the match rule's
@@ -50,11 +44,11 @@
  * finding's otherwise, folded into the schema's single `match` object (one set of criteria, not one
  * per finding) and (for a legacy review only) re-worded by `matchDetailOverrides`.
  *
- * A control (#162) reads no match terms and has no `detection`. Its record has a `change` block from the
+ * A control reads no match terms and has no `detection`. Its record has a `change` block from the
  * answer key (template, file, lines, commit) and the overlay's `notes`, which only version 2 holds, so a
  * control's record is always version 2. A bug case's record stays version 1 and keeps its bytes.
  *
- * `--save` writes the record to `private/cases/<caseId>.json`, in place of copying it by hand (AUD-M24). A
+ * `--save` writes the record to `private/cases/<caseId>.json`, in place of copying it by hand. A
  * file already there with other content is refused, never replaced. It ends by printing the reminder to run
  * `npm run ledger:anchor` (`case-save.ts`). `--write` publishes: it writes
  * `examples/<caseId>.json` and appends a `case.published` audit event (the written record's `sha256` and
@@ -105,7 +99,7 @@ const TEMPLATE_REPO = "AJBeumer/faultforge";
 
 /**
  * The cases whose review predates `review:wait`, and so may be built from a raw findings file their overlay
- * names (`legacyFindingsPath`). Closed: every later case has a saved review, and no new case may join (AUD-M1).
+ * names (`legacyFindingsPath`). Closed: every later case has a saved review, and no new case may join.
  */
 export const LEGACY_CASES: readonly string[] = ["FF-0001"];
 
@@ -151,8 +145,8 @@ export interface RunOptions {
 /**
  * True for a file `review:wait` wrote. Every save it writes carries the `reviewSeenCompleteAt` field: a
  * time when it saw the review finish, or `null` when it never did (timed out, or the head moved). A file
- * backfilled by hand, as FF-0001's was, has no such field. The value can't be the test: a save of a review
- * that never finished is a real save too, and the one an inconclusive record is built from (#192).
+ * backfilled by hand has no such field. The value can't be the test: a save of a review that never finished
+ * is a real save too, and the one an inconclusive record is built from.
  */
 function isReviewWaitSave(review: Record<string, unknown>): boolean {
   return Object.hasOwn(review, "reviewSeenCompleteAt");
@@ -162,7 +156,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  // The id names files (`cases/<id>.json`, `examples/<id>.json`): checked first, so `../x` names none (#299).
+  // The id names files (`cases/<id>.json`, `examples/<id>.json`): checked first, so `../x` names none.
   if (!caseIdOk(caseId, "case:build", error)) return 2;
   const root = privateDir(env);
   const groundTruthPath = options.groundTruthPath ?? join(root, "ground-truth.jsonl");
@@ -175,8 +169,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   let entry: LedgerEntry | undefined;
   let events: LedgerEntry[];
   try {
-    // A record is built only from an answer key and audit log whose amendments check out (#192), checked
-    // before anything is read from them: an amendment that changes a case id would hide the case itself.
+    // Amendments are checked before anything is read: an amendment that changes a case id would hide the case.
     const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
     if (ledgerIssues.length) {
       error(`case:build: the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}`);
@@ -193,7 +186,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
 
-  // The overlay holds prose no event or saved review has; a case with none to add needs no file (#162).
+  // The overlay holds prose no event or saved review has; a case with none to add needs no file.
   let overlay: Overlay = {};
   try {
     if (existsSync(overlayPath)) overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
@@ -213,7 +206,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     const reviewEvent = latestEvent(events, ["review.recorded"], "the review stage");
     const recordedPr = requireField(reviewEvent, "pr", "the review stage");
     reviewPr = prNumberOf(recordedPr);
-    // A PR that can't be read must never send the case down the legacy path (Qodo on PR 264).
+    // A PR that can't be read must never send the case down the legacy path.
     if (reviewPr === undefined)
       throw new Error(`the review stage names no readable PR (${JSON.stringify(recordedPr)})`);
     adjudication = latestEvent(events, ["case.adjudicated"], "the adjudication stage");
@@ -221,14 +214,12 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     error(`case:build: ${message(e)}`);
     return 2;
   }
-  // Only the case's own PR's save counts (AUD-M24), and it counts only if it carries the timing fields
-  // review:wait's wait loop writes: a review.json backfilled by hand (as FF-0001's was, for an unrelated
-  // ticket's testing) can't masquerade as one, and the saved review always wins over the overlay's legacy
-  // path when it genuinely exists.
+  // Only the case's own PR's save counts, and only if it carries the fields review:wait writes, so a
+  // review.json backfilled by hand can't pass as one. A real save always wins over the legacy path.
   const foundReview = findSavedReview(reviewsDir, injectionCommit, reviewPr);
   const saved =
     foundReview && isReviewWaitSave(foundReview.review as unknown as Record<string, unknown>) ? foundReview : undefined;
-  // Only a case on the closed list may take the legacy path; any other case's legacy extras are refused (AUD-M1).
+  // Only a case on the closed list may take the legacy path; any other case's legacy extras are refused.
   const isLegacy = !saved && LEGACY_CASES.includes(caseId);
 
   const overlayIssues = overlayProblems(overlay as Record<string, unknown>, isLegacy);
@@ -247,7 +238,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     return 2;
   }
 
-  // The record is built from the review the owner judged, as it was judged (AUD-M26).
+  // The record is built from the review the owner judged, as it was judged.
   if (isToolWritten(adjudication) && typeof adjudication.inputHash === "string") {
     const problem = verdictHashProblem(adjudication, events, groundTruthPath, reviewsDir, env);
     if (problem) {
@@ -255,7 +246,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       return 2;
     }
   }
-  // And the findings and state come from that same file, never another save found for the commit (Qodo on PR 264).
+  // And the findings and state come from that same file, never another save found for the commit.
   if (typeof adjudication.reviewFile === "string") {
     const judged = resolve(dirname(groundTruthPath), adjudication.reviewFile);
     if (!saved || resolve(saved.path) !== judged) {
@@ -273,7 +264,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       );
       return 2;
     }
-    // The path names `private/...`: inside private storage, whatever its folder is called (Qodo on PR 286).
+    // The path names `private/...`: inside private storage, whatever its folder is called.
     const legacyPath = resolve(root, overlay.legacyFindingsPath.replace(/^private[\\/]/, ""));
     let raw: QodoReview;
     try {
@@ -282,7 +273,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       error(`case:build: can't read ${legacyPath}: ${message(e)}`);
       return 2;
     }
-    // Read like any other review: a file that isn't a review's shape is refused, and its state is checked (AUD-M1).
+    // Read like any other review: a file that isn't a review's shape is refused, and its state is checked.
     const shape = raw !== null && typeof raw === "object" ? findingsShapeProblem(raw, injectionCommit) : "not a review";
     if (shape) {
       error(`case:build: the legacy findings file ${legacyPath} can't be used: ${shape}`);
@@ -312,8 +303,8 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const templateId = entry.templateId as string | undefined;
   let kindTerms: string[] = [];
   let templateUrl: string | undefined;
-  // A control's template declares no match terms (the schema forbids them): it is looked up only for the
-  // published template's URL (#162).
+  // A control's template declares no match terms (the schema forbids them), so it is looked up only for the
+  // published template's URL.
   if (templateId && entry.kind === "control") {
     const dir = templateDir(templateId, env);
     if (dir && isPublishedTemplate(dir)) {
@@ -351,7 +342,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const text = `${printRecord(record)}\n`;
-  // Ends with the reminder to anchor the private history (`case-save.ts`).
   if (options.save && saveCaseRecord(casesDir, caseId, text, error) === 2) return 2;
   if (!options.write) {
     log(text.trimEnd());

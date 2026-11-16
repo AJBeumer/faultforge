@@ -6,27 +6,15 @@
  *   npm run review:local -- target --isolated
  *   npm run review:local -- faultforge --timeout 15
  *
- * Qodo keeps a local review's open findings per working folder: a finding from one change can
- * reappear on an unrelated one reviewed from the same checkout later, so a rerun can look like
- * independent agreement when it only repeated the first run's finding (12 November). `--isolated`
- * avoids that: the changes are still read from the current checkout, but under a review stream named by a
- * fresh temporary worktree's path, which Qodo has never seen; the worktree is removed afterwards.
+ * Qodo keeps a local review's open findings per working folder, so a rerun from the same checkout can
+ * repeat an earlier finding and look like independent agreement. `--isolated` reads the same changes
+ * under a fresh temporary worktree's name, which Qodo has never seen.
  *
- * Before submitting anything, the working tree's split (staged, unstaged, untracked paths and
- * counts) is saved under `private/raw-artifacts/local-reviews/<request id>/split.json`, so what was
- * uncommitted at review time never has to be read back out of a session transcript (12 November).
- * `<request id>` is generated here, never taken from Qodo's answer, so a crafted response can't steer
- * a write outside that folder.
+ * Before submitting, the working tree's split is saved as `split.json`, so what was uncommitted at review
+ * time is on record. The folder is named by an id made here, never one from Qodo's answer, so a crafted
+ * response can't steer a write elsewhere. Every raw answer is saved as it arrives, failed ones included.
  *
- * Submits the review (`start-pre-pr-review`), returning at once with an operation id, then polls
- * (`get-managed-agent-operation`) at the interval Qodo itself asks for (`poll_interval_seconds`, the
- * ticket's "retry_after") and reads the result back in chunks (`get-managed-agent-result`). Every raw
- * answer is saved as it arrives, including a failed call's body and any body recovered from a dropped
- * session, never only once a call has already succeeded.
- *
- * Each finding is printed with its file, lines, category and severity, labelled "new" (in this run's
- * `finding_state.introduced`) or "carried over" (anything else), since a carried-over finding proves
- * nothing about this run's own change.
+ * Each finding is labelled "new" or "carried over": a carried-over finding proves nothing about this change.
  *
  * Exit codes: 0 completed, no open action-required finding; 1 completed, at least one open
  * action-required finding; 2 could not run (no uncommitted change, a transport failure, the operation
@@ -74,9 +62,8 @@ export function parseArgs(argv: string[]): Args | null {
 }
 
 /**
- * Removes a temporary worktree through git, so the source repository's own worktree list is updated,
- * and only then deletes its folder. If git refuses, the folder is kept and its path reported: deleting
- * it anyway would leave a registered worktree pointing at nothing. Returns whether it is fully gone.
+ * Through git first, then the folder. If git refuses, the folder is kept and reported: deleting it anyway
+ * would leave a registered worktree pointing at nothing.
  */
 export function removeWorktree(
   repoRoot: string,
@@ -98,10 +85,7 @@ export function removeWorktree(
   return true;
 }
 
-/** Builds and runs one review, returning the exit code. Never calls `process.exit` itself: a caller
- * that did, from inside this function's own `try`, would skip the `finally` cleanup below it — a real
- * bug on this command's own first run on itself, 12 November (every `--isolated` run left its
- * worktree behind). */
+/** Returns the exit code instead of calling `process.exit`, which would skip the worktree cleanup below. */
 async function main(): Promise<number> {
   const factory = loadFactory();
   const args = parseArgs(process.argv.slice(2));
@@ -115,13 +99,10 @@ async function main(): Promise<number> {
   const config = repoConfig(factory, repoKey);
   const repoRoot = resolve(ROOT, config.path);
 
-  // `--untracked-files=all` so a new directory is listed file by file, never as one `?? dir/` entry
-  // that `buildLocalDiff` would then try to diff as if it were a single file (a real gap, 12 November).
   const split = readWorkingTreeSplit(repoRoot);
   const baseSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
 
-  // Our own id, never Qodo's: an operation id from its answer must not decide where this writes (a
-  // real finding on this command's own first run on itself, 12 November).
+  // Our own id, never Qodo's: an id from its answer must not decide where this writes.
   const requestId = randomUUID();
   const dir = join(evidenceDir(factory), "local-reviews", requestId);
   mkdirSync(dir, { recursive: true });
@@ -163,8 +144,7 @@ async function main(): Promise<number> {
 `,
       );
 
-    // Written before the diff is built, and again after: a diff that cannot be built (git failing, a
-    // patch too large) still leaves a record of what the working tree held.
+    // Written before the diff is built, and again after: a diff that can't be built still leaves a record.
     writeSplit(null);
     const diffResult = buildLocalDiff(repoRoot, baseSha, split);
     writeSplit(diffResult);

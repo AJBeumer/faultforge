@@ -5,16 +5,12 @@ import { run } from "../src/case/case-build.ts";
 import { privateDir } from "../src/shared/templates.ts";
 
 const root = join(import.meta.dirname, "../../..");
-// private/ is this repo's own git-ignored evidence store (CLAUDE.md): a checkout that doesn't have
-// it — a bare clone of the public repo, or revert:check's scratch copy, which is built from git alone
-// — can't run this test at all. Skipped, not failed, so it doesn't falsely look like the PR's change
-// broke something when the real cause is that the evidence simply isn't there to check against.
-// The guard looks where `run` looks (`privateDir`, which honours FAULTFORGE_PRIVATE_DIR), so the test
-// never skips with the evidence present under an override path, or runs against one that lacks it.
+// A clone of the public repo, or revert:check's copy built from git, has no private evidence. Skip there
+// rather than fail, so a missing folder never reads as a broken change. Look where `run` looks.
 const hasPrivateEvidence = existsSync(join(privateDir(process.env), "ground-truth.jsonl"));
 
-/** FF-0001's review predates `review:wait` (#11's notes); this is the one real case to regenerate. */
-describe.skipIf(!hasPrivateEvidence)("case:build against the real FF-0001 evidence (#11)", () => {
+/** FF-0001's review was saved by hand, before `review:wait` existed, so it is the one real case to rebuild. */
+describe.skipIf(!hasPrivateEvidence)("case:build against the real FF-0001 evidence", () => {
   it("regenerates examples/FF-0001.json byte for byte", async () => {
     const lines: string[] = [];
     const code = await run("FF-0001", { log: (line) => lines.push(line), error: (line) => lines.push(line) });
