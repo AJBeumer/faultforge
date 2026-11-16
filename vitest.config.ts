@@ -47,7 +47,7 @@ export default defineConfig({
         test: {
           name: "integration",
           include: ["packages/*/test/**/*.test.ts"],
-          // Has no effect at project level: a run that finds no integration test file still exits 1.
+          // Has no effect here: Vitest honours it only at the top level, so a run with no test file exits 1.
           passWithNoTests: true,
         },
       },
