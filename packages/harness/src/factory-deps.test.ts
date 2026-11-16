@@ -88,18 +88,23 @@ import { runAgent } from "./factory-agent.ts";
 import { auditRun } from "./factory-audit.ts";
 import { RUNNER_MARKER } from "./factory-comments.ts";
 import type { FactoryConfig, RepoConfig } from "./factory-config.ts";
-import { realDeps } from "./factory-deps.ts";
+import { endsDoorRun, realDeps } from "./factory-deps.ts";
 import { commitAndPublish } from "./factory-evidence.ts";
 import { git, gitLong, npm } from "./factory-exec.ts";
 import { localSandbox } from "./factory-sandbox.ts";
 import { stopAgentProcesses } from "./factory-sandbox-setup.ts";
-import { type Candidate, setupRefusal, type Workspace } from "./factory-tick.ts";
+import { type Candidate, setupRefusal, type TickDeps, type Workspace } from "./factory-tick.ts";
 import { verifyPrWith } from "./factory-verify.ts";
 import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
+import { sendPost } from "./target-post.ts";
+import { markerFor } from "./target-post-run.ts";
 import { checkTicket } from "./ticket-ready.ts";
+
+// A test that starts an agent marks a run for the door (#347) and never reaches the tick's end, which clears it.
+afterEach(() => rmSync(markerFor(), { force: true }));
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
@@ -387,6 +392,49 @@ Picked up.`,
     expect(sandbox).not.toBe(localSandbox);
     await realDeps(FACTORY, OPTIONS, "local").runAgent(ws, "run-1", "target", 18, "/t.md", log);
     expect(vi.mocked(runAgent).mock.calls.at(-1)?.[10]).toBe(localSandbox);
+  });
+
+  it.each(["local", "ci"] as const)(
+    "marks the run for the door before a %s agent starts; the runner's own writes still go; the tick's end clears it (#347)",
+    async (mode) => {
+      const ws = workspace(join(runs, "run-1"));
+      const events: string[] = [];
+      let markedAtStart = false;
+      vi.mocked(runAgent).mockImplementationOnce(async () => {
+        markedAtStart = existsSync(markerFor());
+        return { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
+      });
+      const deps = realDeps(FACTORY, OPTIONS, mode);
+      const lock = deps.lock();
+      await deps.runAgent(ws, "run-1", "target", 18, "/t.md", (event) => events.push(event));
+      expect(markedAtStart).toBe(true);
+      expect(events).toContain("door-run");
+      // A comment from another caller is refused while the run is marked; the runner's own goes through.
+      expect(() => sendPost({ kind: "issue-comment", repo: "owner/target", number: 18, body: "x" })).toThrow(
+        "the door takes only push, pr-create, pr-edit",
+      );
+      door.calls = [];
+      deps.comment("owner/target", 18, "Done.");
+      expect(door.calls.map((c) => c.args.slice(0, 2))).toEqual([["issue", "comment"]]);
+      lock.release();
+      expect(existsSync(markerFor())).toBe(false);
+    },
+  );
+
+  it("ends the door's run before it releases the lock, and releases the lock even when ending throws", () => {
+    const ended: string[] = [];
+    const base = { lock: () => ({ acquired: true, release: () => ended.push("lock") }) } as unknown as TickDeps;
+    endsDoorRun(base, { end: () => ended.push("door") })
+      .lock()
+      .release();
+    expect(ended).toEqual(["door", "lock"]);
+    const failing = endsDoorRun(base, {
+      end: () => {
+        throw new Error("gone");
+      },
+    }).lock();
+    expect(() => failing.release()).toThrow("gone");
+    expect(ended).toEqual(["door", "lock", "lock"]);
   });
 
   it("verifies a pull request against the harness's own GitHub address, from the runs folder", () => {

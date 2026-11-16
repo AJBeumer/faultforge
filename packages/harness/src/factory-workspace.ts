@@ -124,4 +124,4 @@ export function fingerprints(
 }
 
 /** The files outside `.claude` that the guard hooks import, relative to the lab's root. */
-export const HOOK_IMPORTS = ["packages/harness/src/neutral.ts"];
+export const HOOK_IMPORTS = ["packages/harness/src/neutral.ts", "packages/harness/src/target-post-run.ts"];

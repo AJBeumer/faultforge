@@ -21,7 +21,9 @@ describe("helpers that live in one module (AUD-N1)", () => {
 
   it("hashes only through it: no other module builds a hash of its own", () => {
     const inline = filesMatching(/createHash\(/);
-    expect(inline).toEqual(["provenance.ts"]);
+    // The door's run gate (#347) hashes its runner key itself: the door imports only files the guard holds, and
+    // provenance.ts isn't one (target-post-door.test.ts).
+    expect(inline).toEqual(["provenance.ts", "target-post-run.ts"]);
   });
 
   it("builds the tool name once", () => {

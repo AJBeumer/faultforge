@@ -41,6 +41,8 @@ export default defineConfig({
           // Many unit tests build a real git repository. A shared Windows runner can take over the 5 s
           // default for one of them (a merge-commit test took 5.6 s), which is a slow runner, not a bug. Linux keeps 5 s.
           testTimeout: process.platform === "win32" ? 30_000 : 5_000,
+          // The door's run gate reads a marker of each file's own, not a real run's (vitest.setup.ts, #347).
+          setupFiles: ["./vitest.setup.ts"],
         },
       },
       {
@@ -49,6 +51,7 @@ export default defineConfig({
           include: ["packages/*/test/**/*.test.ts"],
           // The folder may be empty until the first integration test lands.
           passWithNoTests: true,
+          setupFiles: ["./vitest.setup.ts"],
         },
       },
     ],

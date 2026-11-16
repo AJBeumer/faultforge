@@ -26,9 +26,12 @@
  * the commit's author, committer and message, and every added or changed file's path and content
  * (`target-post-push.ts`). The body goes to `gh` on stdin (`--body-file -`), so what is checked is what is sent.
  *
+ * During a factory run the door sends only push, pr-create and pr-edit, unless the runner's own key comes with the
+ * post (`target-post-run.ts`, #347): the check is in `sendPost`, so it holds however the door is called.
+ *
  * Exit codes: 0 sent; 1 usage: an unknown kind or option, a missing or unreadable text file, a title that isn't one
- * line, or a repo that isn't a reviewed one; 2 refused: a check found something, or what would be sent couldn't be
- * read to check it, so nothing was sent; 3 the send failed: `gh` or `git` failed after the checks passed (check
+ * line, or a repo that isn't a reviewed one; 2 refused: a check found something, what would be sent couldn't be
+ * read to check it, or a factory run is active and the kind isn't one its agent may use, so nothing was sent; 3 the send failed: `gh` or `git` failed after the checks passed (check
  * GitHub before retrying: a write that failed may still have landed). An unexpected error, even while loading, is 2
  * too: `npm run target:post` runs `target-post-cli.ts`.
  */
@@ -40,6 +43,7 @@ import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "../../.
 import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
+import { runGateRefusal } from "./target-post-run.ts";
 
 // The door imports only the guard's own files (guard-self.ts holds them) and Node's: a module it imported that a
 // session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
@@ -91,6 +95,10 @@ export interface Deps {
   gh?: Gh;
   git?: Git;
   env?: NodeJS.ProcessEnv;
+  /** The run marker to read instead of the fixed one: for tests that simulate a run. */
+  runMarker?: string;
+  /** The run's runner key: the runner's own writes during a run (`ticket-write.ts`), never the agent's. */
+  runnerKey?: string;
 }
 
 /** Thrown when a check finds something, or what would be sent can't be read: nothing was sent (exit 2). */
@@ -202,6 +210,8 @@ export function ghCall(post: Post): { args: string[]; input?: string } {
  */
 export function sendPost(post: Post, deps: Deps = {}): string {
   const env = deps.env ?? process.env;
+  const gate = runGateRefusal(post.kind, { marker: deps.runMarker, runnerKey: deps.runnerKey });
+  if (gate) throw new Refused(refusal([gate]));
   if (post.kind === "push") {
     const git = deps.git ?? realGit;
     const checkout = post.checkout ?? "";

@@ -3,7 +3,8 @@
  * is set, which `npm run factory:tick` does for the agent it starts. Inside a run it blocks what only
  * the owner may do:
  *  - merging, closing, approving or commenting on a PR (so no reply to a review finding)
- *  - any door kind but push, pr-create and pr-edit (`npm run target:post`; factory-policy-door.ts, #347)
+ *  - any door kind but push, pr-create and pr-edit, written out (`npm run target:post`; factory-policy-door.ts,
+ *    #347): a first word only, since the door itself refuses them during a run (target-post-run.ts)
  *  - commenting on, closing or relabelling a ticket (the runner reports on the ticket, not the agent)
  *  - API writes through `gh api`, and repo, label, secret, variable and workflow changes
  *  - force pushes, deleting remote branches, and pushing to `main` or `master`

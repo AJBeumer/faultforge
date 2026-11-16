@@ -61,6 +61,8 @@ export const OWN_FILES = [
   "packages/harness/src/target-post.ts",
   "packages/harness/src/target-post-push.ts",
   "packages/harness/src/target-post-cli.ts",
+  // Its run gate: the kinds an agent may use while a factory run is active (#347).
+  "packages/harness/src/target-post-run.ts",
 ];
 
 /** Programs that write, delete or change the mode of the files they name. */

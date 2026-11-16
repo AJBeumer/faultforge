@@ -27,6 +27,13 @@ export interface TicketWriteDeps {
   door?: Gh;
   /** The reviewed repos as the guard reads them; by default from factory.json. */
   guardReviewed?: string[];
+  /**
+   * The run's runner key while a factory run is marked active (`target-post-run.ts`, #347): the door then takes a
+   * comment or label move only with it. Read at each write, since the run is marked after the writer is made.
+   */
+  runnerKey?: () => string | undefined;
+  /** The run marker to read instead of the fixed one: for tests. */
+  runMarker?: string;
 }
 
 /** A writer for tickets, routing a reviewed repo's writes through the door. `reviewed` adds the config's own list. */
@@ -38,7 +45,11 @@ export function ticketWriter(reviewed: string[], deps: TicketWriteDeps = {}): Ti
   /** Sends through the door; a failed send becomes the same error a lab ticket's gh call would throw. */
   const door = (post: Post, label: string) => {
     try {
-      sendPost(post, deps.door ? { gh: deps.door } : {});
+      sendPost(post, {
+        ...(deps.door ? { gh: deps.door } : {}),
+        ...(deps.runMarker ? { runMarker: deps.runMarker } : {}),
+        runnerKey: deps.runnerKey?.(),
+      });
     } catch (error) {
       if (error instanceof SendFailed) throw new ExternalCallError(label, error.cause ?? error);
       throw error;
