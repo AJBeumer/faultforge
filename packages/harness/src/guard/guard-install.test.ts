@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { telltales } from "../shared/neutral.ts";
+import * as paths from "../shared/paths.ts";
 import {
   CONFIG_KEY,
   guardInstall,
@@ -17,6 +18,7 @@ import {
   installHooks,
   LAB_HOOKS,
   MARKER,
+  main,
   mainCheckout,
   ORIGIN_KEY,
   PRIVATE_HOOKS,
@@ -248,6 +250,9 @@ describe("unguardedCheckouts reports the private checkout", () => {
 
 /** A linked worktree of `main`'s repo, at a fresh temp path. */
 function worktreeOf(main: { dir: string; git: (...args: string[]) => string }, branch: string): string {
+  // A commit needs an identity, and CI's runner sets no global one.
+  main.git("config", "user.email", "guard-install-test@example.com");
+  main.git("config", "user.name", "guard-install test");
   main.git("commit", "--allow-empty", "-q", "-m", "init");
   const linked = mkdtempSync(join(tmpdir(), "guard-worktree-"));
   rmSync(linked, { recursive: true, force: true });
@@ -262,6 +267,19 @@ describe("mainCheckout: the repo's main checkout, from a linked worktree", () =>
     const linked = worktreeOf(main, "a-worktree");
     expect(resolve(mainCheckout(linked) ?? "")).toBe(resolve(main.dir));
   });
+
+  it("still names the checkout itself when its git directory is stored elsewhere (--separate-git-dir) and core.worktree records it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "guard-install-"));
+    const gitDir = mkdtempSync(join(tmpdir(), "guard-install-gitdir-"));
+    execFileSync("git", ["init", "-q", "-b", "main", `--separate-git-dir=${gitDir}`, dir]);
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+    // `git init --separate-git-dir` doesn't record this on its own; a tool that relocates a git directory
+    // after the fact (as opposed to a plain `.git` folder, where the parent is simply correct) must.
+    git("config", "core.worktree", dir);
+    const linked = worktreeOf({ dir, git }, "separate-git-dir-worktree");
+    // The parent of the (separate) git directory is not the checkout; only the recorded core.worktree is.
+    expect(resolve(mainCheckout(linked) ?? "")).toBe(resolve(dir));
+  });
 });
 
 describe("guardInstall: refuses before writing anything", () => {
@@ -275,6 +293,19 @@ describe("guardInstall: refuses before writing anything", () => {
     expect(existsSync(join(main.dir, ".git", "hooks", "pre-commit"))).toBe(false);
     expect(readFileSync(join(main.dir, ".git", "config"), "utf8")).not.toContain(CONFIG_KEY);
     error.mockRestore();
+  });
+
+  it("main defers privateDir (which loads factory.json) until past an argument refusal, never calling it", () => {
+    const privateDir = vi.spyOn(paths, "privateDir").mockImplementation(() => {
+      throw new Error("factory.json is missing or invalid");
+    });
+    const error = quiet();
+    // The real ROOT is this checkout itself, not a worktree, so only the argument check can refuse here;
+    // that is enough to show privateDir is read lazily, not evaluated at main's call to guardInstall.
+    expect(main(["--bogus"])).toBe(1);
+    expect(privateDir).not.toHaveBeenCalled();
+    error.mockRestore();
+    privateDir.mockRestore();
   });
 
   it("refuses a run from a linked worktree, naming the main checkout, and installs nothing", () => {

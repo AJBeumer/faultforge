@@ -164,41 +164,49 @@ export function unguardedCheckouts(factory: FactoryConfig, root: string = ROOT, 
 }
 
 /**
- * `checkout`'s own git folder (a worktree's `.git` file names it) and its repo's main one (its `commondir`
- * file), read the same way git resolves them: a plain `.git` folder is both; a linked worktree's `.git` file
- * points elsewhere, and that folder's `commondir` file names the main checkout's.
+ * The repository's main checkout, when `checkout` is instead a linked worktree; undefined when it already is
+ * one, or git can't say. Git's own `rev-parse`, not a guess from `checkout`'s own git folder: a worktree's
+ * `--git-dir` differs from `--git-common-dir` only when it is linked, and the main checkout is `core.worktree`
+ * when the common git directory records one (it needs to, once a repository's git directory is moved out of
+ * its checkout with `git init --separate-git-dir`) or that directory's parent otherwise, as git itself falls
+ * back to for the main checkout's own, ordinary `.git` folder.
  */
-function gitFolders(checkout: string): { own: string; common: string } {
-  const dotGit = join(checkout, ".git");
-  try {
-    if (statSync(dotGit).isDirectory()) return { own: dotGit, common: dotGit };
-    const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1]?.trim() ?? "";
-    const own = isAbsolute(pointer) ? pointer : resolve(checkout, pointer);
-    const common = join(own, "commondir");
-    return { own, common: existsSync(common) ? resolve(own, readFileSync(common, "utf8").trim()) : own };
-  } catch {
-    return { own: dotGit, common: dotGit };
-  }
-}
-
-/** The repository's main checkout, when `checkout` is instead a linked worktree; undefined when it already is one. */
 export function mainCheckout(checkout: string): string | undefined {
-  const { own, common } = gitFolders(checkout);
-  return resolve(own) === resolve(common) ? undefined : dirname(common);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const abs = (path: string) => (isAbsolute(path) ? path : resolve(checkout, path));
+  let own: string;
+  let common: string;
+  try {
+    own = abs(git("rev-parse", "--git-dir"));
+    common = abs(git("rev-parse", "--git-common-dir"));
+  } catch {
+    return undefined;
+  }
+  if (own === common) return undefined;
+  let configured = "";
+  try {
+    configured = git("config", "--get", "core.worktree");
+  } catch {
+    // Not set: git takes the common git directory's parent as the main checkout.
+  }
+  return resolve(configured ? resolve(common, configured) : dirname(common));
 }
 
 /** The command: `guard-install-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export function main(argv: string[] = []): number {
-  return guardInstall(argv, ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"), privateDir());
+  return guardInstall(argv, ROOT, resolve(ROOT, ".claude", "hooks", "git-guard.ts"), privateDir);
 }
 
 /**
  * The full command against `root` and `script` instead of this process's own, so a test can run it against a
  * throwaway checkout: an unknown argument (it takes none) or a run from `root` as a linked worktree instead of
  * its repo's main checkout is refused before anything is written; otherwise every checkout `loadFactory()`
- * marks reviewed or lab, resolved from `root`, gets the hooks (`installAll`).
+ * marks reviewed or lab, resolved from `root`, gets the hooks (`installAll`). `priv`, when given, is called for
+ * the private checkout's path only once both refusals are past: it may load `factory.json` (as the real
+ * `privateDir` does), and a problem there must not turn a usage or worktree refusal into an unexpected error.
  */
-export function guardInstall(argv: string[], root: string, script: string, priv?: string): number {
+export function guardInstall(argv: string[], root: string, script: string, priv?: () => string | undefined): number {
   if (argv.length) {
     console.error(`usage: npm run guard:install   (it takes no arguments, got "${argv.join(" ")}")`);
     return 1;
@@ -208,7 +216,7 @@ export function guardInstall(argv: string[], root: string, script: string, priv?
     console.error(`[guard:install] refused: run this from the main checkout (${elsewhere}), not this worktree`);
     return 1;
   }
-  return installAll(loadFactory(), root, script, priv);
+  return installAll(loadFactory(), root, script, priv?.());
 }
 
 /**
