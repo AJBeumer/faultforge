@@ -30,14 +30,47 @@ function historyIn(text: string): string[] {
 /** Every comment in a TypeScript source: whole-line and trailing line comments, and block comments. */
 function commentsIn(source: string): string[] {
   const blocks = [...source.matchAll(/\/\*[\s\S]*?\*\//g)].map((m) => m[0]);
-  const lines = [...source.matchAll(/(?:^|\s)\/\/(.*)$/gm)].map((m) => m[1] ?? "");
+  // Not after a colon, so a URL's `https://` is not taken for a comment. No space is needed before it.
+  const lines = [...source.matchAll(/(?<!:)\/\/(.*)$/gm)].map((m) => m[1] ?? "");
   return [...blocks, ...lines];
 }
 
-/** The title of every `describe`, `it` and `test` call, including `.each`, `.skip` and `.skipIf(...)` forms. */
+/**
+ * The title of every `describe`, `it` and `test` call, including `.skip` and `.skipIf(...)` forms. For `.each`,
+ * every string in its rows too: a row's value can become part of the title through `%s` or `$name`.
+ */
 function testNamesIn(source: string): string[] {
   const calls = /\b(?:describe|it|test)(?:\.\w+(?:\([^)]*\))?)*\(\s*(["'`])((?:\\.|(?!\1)[\s\S])*)\1/g;
-  return [...source.matchAll(calls)].map((m) => m[2] ?? "");
+  const titles = [...source.matchAll(calls)].map((m) => m[2] ?? "");
+  return [...titles, ...eachRowStrings(source)];
+}
+
+/** Every string literal in the argument of a `describe.each`, `it.each` or `test.each` call. */
+function eachRowStrings(source: string): string[] {
+  const strings: string[] = [];
+  for (const m of source.matchAll(/\b(?:describe|it|test)(?:\.\w+)*\.each\(/g)) {
+    const start = (m.index ?? 0) + m[0].length;
+    const rows: string[] = [];
+    let depth = 1;
+    let end = start;
+    while (end < source.length && depth > 0) {
+      const char = source[end];
+      if (char === '"' || char === "'" || char === "`") {
+        const close = new RegExp(`^${char}(?:\\\\.|[^${char}\\\\])*${char}`).exec(source.slice(end));
+        const literal = close?.[0] ?? char;
+        rows.push(literal.slice(1, -1));
+        end += literal.length;
+        continue;
+      }
+      if ("([{".includes(char ?? "")) depth++;
+      if (")]}".includes(char ?? "")) depth--;
+      end++;
+    }
+    // The title follows the rows; the general pattern can't reach it past a bracket inside them.
+    const title = /^\(\s*(["'`])((?:\\.|(?!\1)[\s\S])*)\1/.exec(source.slice(end));
+    strings.push(...(title ? [title[2] ?? ""] : []), ...rows);
+  }
+  return strings;
 }
 
 function sources(dir: string): string[] {
@@ -70,6 +103,15 @@ describe("the history scan", () => {
     const source = 'const a = "http://x"; // why\n/** block */\nit.skipIf(x)("one", () => {});\ndescribe(`two`, f);';
     expect(commentsIn(source)).toEqual(["/** block */", " why"]);
     expect(testNamesIn(source)).toEqual(["one", "two"]);
+  });
+
+  it("reads a trailing comment with no space before it", () => {
+    expect(commentsIn("x();// why\nconst u = 'https://example.com';")).toEqual([" why"]);
+  });
+
+  it("reads the rows of an each call, since a row's value can become part of the title", () => {
+    const source = 'it.each([\n  ["a row (with a note)", { x: [1, 2] }],\n  ["another"],\n])("refuses %s", f);';
+    expect(testNamesIn(source)).toEqual(["refuses %s", "a row (with a note)", "another"]);
   });
 });
 

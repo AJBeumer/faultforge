@@ -37,12 +37,12 @@ import { answerKeyProblems, savedReviewProblems } from "./ledger-schemas.ts";
 const DIFF_HEADER = /^(diff --git|index |--- |\+\+\+ )/;
 
 /**
- * How a unified diff breaks "only appended", read one line at a time so a diff of any size is never held:
- * `removed` when a hunk removes or changes a line, `inserted` when an added line is followed by an old one,
- * in its hunk or a later hunk of the same file, so it went in before the end. Header lines carry no content.
- * One removal is not a change: a last line that had no line break ("\ No newline at end of file") shown as
- * removed and added back unchanged, which is how git shows lines appended after it. Any other removal is, as
- * is that one when the line comes back different, or doesn't.
+ * Reads a unified diff one line at a time, so a diff of any size fits, and says how it breaks "only appended".
+ * `removed`: a line was removed or changed. `inserted`: a line was added before an old one, not at the end.
+ *
+ * One removal is allowed. When lines are appended after a last line that had no line break, git shows that
+ * line as removed and added back. If it comes back exactly the same, it is not a change. If it comes back
+ * different, or not at all, it counts as `removed`, like every other removal.
  */
 export class AppendOnlyScanner {
   private inHunk = false;
