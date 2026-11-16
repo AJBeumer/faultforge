@@ -69,6 +69,24 @@ label, flagged for the owner, or closed since an earlier saved review of the sam
 It also prints the number of review rounds. Exit codes: 0 the gate is met, 1 it isn't, 2 it
 could not be decided, such as when no review of the head is saved.
 
+## Checking the threshold against known answers
+
+```
+npm run gate:replay              # every adjudicated case, for the owner
+npm run gate:replay -- --public  # only cases the decision log already names
+```
+
+Every adjudicated case has a saved review and a known answer: a planted bug, or a clean control.
+`gate:replay` applies the gate to those reviews and says what it would have decided. For a bug the
+reviewer caught, it gives the label of the finding that describes the bug, and whether the gate
+would have required the fix or called the pull request done with the bug still in it. For every
+case it counts the other findings the gate would have made the agent act on.
+
+It compares two thresholds with the same function the runner uses: the saved gate, and the saved
+gate with only its first label to fix. The match rule decides which finding describes the bug, and
+it is not changed. The command reads only. The results are in the
+[decision log](decision-log.md).
+
 ## Why it lives in `factory.json`
 
 `AGENTS.md` and `CLAUDE.md` are read by Qodo as review rules. A gate written there would change
