@@ -1,8 +1,8 @@
 /**
  * The guard's own code, in the checkout it runs from (re-grade 6, H12, H14, H18). The hooks Claude Code and git run
  * are the files in that checkout: `.claude/hooks/**`, the settings that register them (`.claude/settings.json`,
- * `.claude/settings.local.json`), the word list they import (`packages/harness/src/neutral.ts`) and the door every
- * write to a reviewed repo goes through (`packages/harness/src/target-post*.ts`, #340). An owner
+ * `.claude/settings.local.json`), the word list they import (`packages/harness/src/shared/neutral.ts`) and the door every
+ * write to a reviewed repo goes through (`packages/harness/src/door/target-post*.ts`, #340). An owner
  * session that rewrote one of them, emptied it or deleted it would switch the guard off for every later command,
  * git's commits and pushes included. So no shell command and no Write or Edit changes them there. The repo's main
  * checkout is held too when the guard runs from a linked worktree: later sessions run from there.
@@ -56,13 +56,13 @@ export const OWN_FILES = [
   ".claude/hooks/",
   ".claude/settings.json",
   ".claude/settings.local.json",
-  "packages/harness/src/neutral.ts",
+  "packages/harness/src/shared/neutral.ts",
   // The door: the guard lets `npm run target:post` through unread because these check what it sends (#340).
-  "packages/harness/src/target-post.ts",
-  "packages/harness/src/target-post-push.ts",
-  "packages/harness/src/target-post-cli.ts",
+  "packages/harness/src/door/target-post.ts",
+  "packages/harness/src/door/target-post-push.ts",
+  "packages/harness/src/door/target-post-cli.ts",
   // Its run gate: the kinds an agent may use while a factory run is active (#347).
-  "packages/harness/src/target-post-run.ts",
+  "packages/harness/src/door/target-post-run.ts",
 ];
 
 /** Programs that write, delete or change the mode of the files they name. */

@@ -1,6 +1,6 @@
 /**
  * The door rule (#340). Every write to a reviewed repository goes through one harness command,
- * `npm run target:post` (`packages/harness/src/target-post.ts`), which checks the exact text it sends. So the guard
+ * `npm run target:post` (`packages/harness/src/door/target-post.ts`), which checks the exact text it sends. So the guard
  * no longer reads what a raw write to a reviewed repository would say: it refuses the raw write and names the door.
  *
  *  - `doorCommand`: a command that is exactly `npm run target:post -- <plain words>` on one line, run from the lab's
@@ -20,11 +20,11 @@ import { type Call, calls } from "./history.ts";
 import { HTTP_CLIENT, httpSends, isSend } from "./reach.ts";
 
 /** What `package.json` must run for `target:post`: the door, and nothing else. */
-export const DOOR_SCRIPT = "node packages/harness/src/target-post-cli.ts";
+export const DOOR_SCRIPT = "node packages/harness/src/door/target-post-cli.ts";
 
 /** The refusal for a raw write to a reviewed repo. */
 export function doorReason(name: string): string {
-  return `Writes to ${name} go only through the door, which checks the exact text it sends: npm run target:post -- <kind> ... (issue-create, issue-edit, issue-comment, pr-create, pr-edit, pr-comment, pr-close, push; options in packages/harness/src/target-post.ts). Write the text to a file and pass the file. Run it on its own from the lab's checkout.`;
+  return `Writes to ${name} go only through the door, which checks the exact text it sends: npm run target:post -- <kind> ... (issue-create, issue-edit, issue-comment, pr-create, pr-edit, pr-comment, pr-close, push; options in packages/harness/src/door/target-post.ts). Write the text to a file and pass the file. Run it on its own from the lab's checkout.`;
 }
 
 /** The refusal for a write whose destination the guard can't read. */

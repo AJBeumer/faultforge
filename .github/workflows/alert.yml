@@ -1,6 +1,6 @@
 # Raises the lab's alert (#308): one open issue labelled `alert` per kind, or a comment on the open one. Called by
 # check.yml when CI on main fails, and by factory.yml when a tick ends with exit 2 or 3 or stops without reporting.
-# The text is fixed words, the workflow's name and the run's URL (packages/harness/src/alert.ts): never a log line
+# The text is fixed words, the workflow's name and the run's URL (packages/harness/src/factory/alert.ts): never a log line
 # or a private path.
 # The lab's own GITHUB_TOKEN, with issues: write, in this job only; no other secret.
 name: Alert
@@ -37,8 +37,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           sparse-checkout: |
-            packages/harness/src/alert.ts
-            packages/harness/src/github.ts
+            packages/harness/src/factory/alert.ts
+            packages/harness/src/shared/github.ts
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -50,4 +50,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KIND: ${{ inputs.kind }}
           OUTCOME: ${{ inputs.outcome }}
-        run: node packages/harness/src/alert.ts "$KIND" "$OUTCOME"
+        run: node packages/harness/src/factory/alert.ts "$KIND" "$OUTCOME"

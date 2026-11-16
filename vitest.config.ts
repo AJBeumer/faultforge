@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "vitest/config";
-import { spellingProblem } from "./packages/harness/src/drive-spelling.ts";
+import { spellingProblem } from "./packages/harness/src/shared/drive-spelling.ts";
 
 // Started from another spelling of this folder (`d:\…` for `D:\…`), every test file fails to load with an error
 // that says nothing about the code. Stop with one that says what to run instead (AUD-M25).

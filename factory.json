@@ -19,7 +19,7 @@
       "check": "npm run check",
       "tests": "(\\.test\\.ts$|/fixtures/|^packages/[^/]+/test/)",
       "checkFiles": {
-        "files": "((^|/)(biome\\.jsonc?|\\.npmrc|\\.gitignore|tsconfig[^/]*\\.json|(vite|vitest)[^/]*\\.config\\.[cm]?[jt]s|vitest\\.workspace\\.[cm]?[jt]s)$|^\\.github/workflows/check\\.yml$|^factory\\.json$|^schemas/factory\\.v1\\.json$|^packages/harness/src/(vitest-run|docs-check|docs-check-cli|docs-check-structure|drive-spelling|cli-entry|factory-config|jsonl|ledger|paths|templates)\\.ts$)",
+        "files": "((^|/)(biome\\.jsonc?|\\.npmrc|\\.gitignore|tsconfig[^/]*\\.json|(vite|vitest)[^/]*\\.config\\.[cm]?[jt]s|vitest\\.workspace\\.[cm]?[jt]s)$|^\\.github/workflows/check\\.yml$|^factory\\.json$|^schemas/factory\\.v1\\.json$|^packages/harness/src/(repo/vitest-run|docs/docs-check|docs/docs-check-structure|cli/docs-check-cli|shared/(drive-spelling|cli-entry|factory-config|jsonl|paths|templates)|ledger/ledger)\\.ts$)",
         "scripts": "(^|/)package\\.json$"
       },
       "start": null,

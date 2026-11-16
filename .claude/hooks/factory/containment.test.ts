@@ -203,12 +203,12 @@ describe("factory policy: the read tools (#284)", () => {
 
 describe("factory policy: the guardrails from the shell (#284)", () => {
   it.each([
-    "sed -i 's/TELLTALES.filter/[].filter/' packages/harness/src/neutral.ts",
+    "sed -i 's/TELLTALES.filter/[].filter/' packages/harness/src/shared/neutral.ts",
     `node -e "require('fs').writeFileSync('.claude/hooks/guard-target.ts','')"`,
     "cp x .claude/settings.json",
     "cp x .claude/settings.local.json",
     "echo '' > .claude/hooks/guard-target.ts",
-    "tee packages/harness/src/neutral.ts < x",
+    "tee packages/harness/src/shared/neutral.ts < x",
     "mv x .claude/hooks/fail-closed.ts",
     "git checkout HEAD~1 -- .claude/hooks",
   ])("denies %s", (command) => {
