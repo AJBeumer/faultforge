@@ -91,7 +91,7 @@ npm run case:build -- <FF-NNNN> --save
 - Never click **Dismiss** on a Qodo finding and never chat with Qodo on a case PR. Qodo's PR history indexing learns from both, which would bias later cases.
 - Give the owner a neutral closing comment for the PR ("Closing without merging…", describing the review's point as an ordinary code issue), in a file. They close the PR with it through the door: `npm run target:post -- pr-close --number <pr> --body-file <file>`, which checks the comment first. The door has no merge.
 - Commit and push `private/`: `Add <case>: <template id>, <verdict>`.
-- Add the result to today's entry in `docs/decision-log.md`, then commit and push FaultForge.
+- Add the result to today's entry in `docs/decision-log.md` (in the current week's file under `docs/decisions/`), then commit and push FaultForge.
 - If the template is now adjudicated and not held back for the benchmark, ask whether to copy it to `templates/seed/`.
 - Tick off related items in `private/BACKLOG.md`.
 - Last, once everything above is committed and pushed, anchor the private history (section 8).

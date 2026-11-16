@@ -2,19 +2,18 @@
 
 FaultForge plants known bugs in a small target codebase, has Qodo review them as ordinary pull requests, and scores each review against a private answer key. The integrity of every result depends on the reviewer never getting a hint. Treat the rules below as hard constraints.
 
+Each rule below is one short bullet. Where a rule needs more explanation, the bullet links to a page under `docs/rules/` that has it. The linked pages are part of these rules. The [docs start page](docs/README.md) maps everything else.
+
 ## Three repositories
 
-| Repo | Visibility | Holds | Never holds |
-|---|---|---|---|
-| `faultforge` (this one) | public | harness, adjudicated templates, docs and charter, work tickets (Issues), sanitized results | answer key, raw evidence, unreleased templates |
-| `faultforge-target` (`../faultforge-target`) | public, reviewed by Qodo | the booking API and its ordinary tests | any mention of FaultForge, planted bugs, cases, proof tests or the answer key |
-| `faultforge-private` (`./private`, git-ignored here) | private | answer key, audit events, case records, raw evidence, unreleased templates, `BACKLOG.md` for anything that would reveal them | — |
+`faultforge` (this one, public), `faultforge-target` (`../faultforge-target`, public, reviewed by Qodo) and `faultforge-private` (`./private`, private, git-ignored here). What each one holds and never holds: [docs/rules/three-repos.md](docs/rules/three-repos.md).
 
-- `private/` is its own git repository. Commit and push it after every case. It must never be added to this repo.
-- Every write to the target goes through one door: `npm run target:post -- <kind> ...` (issue-create, issue-edit, issue-comment, pr-create, pr-edit, pr-comment, pr-close, push; see `docs/target-door.md`). Write the title and body to files and pass the files. Run it on its own, from this repo's root. It checks the exact text it sends (giveaway words, private template ids, words addressed to Qodo, and for a push the branch name and every new commit's message and files), then sends it with `gh` or `git`, or exits 2 with the reason. `case:ticket`, `case:pr` and the factory runner use it too.
-- A `PreToolUse` hook (`.claude/hooks/guard-target.ts`) lets exactly that command through unread, and refuses every other write aimed at the target without reading it: `gh issue` and `gh pr` writes, any `gh` call that isn't a known read, `gh api` with a method or a field, `curl`, `wget` or `Invoke-WebRequest` sending a body, MCP tools that write, `git push` from or to the target checkout, and any write whose destination it can't read. Reads (`gh pr view`, `gh api` GET, `git fetch`, `git log`) and commits in the target checkout work as usual, but a commit there is still refused while its message, or the checkout's pending content, names the lab or the bug, and Edit and Write content in the checkout is checked the same way. The target's git hooks (installed by `npm run guard:install`) stay as a second layer. If the guard blocks something, use the door or reword it. Don't work around it. Run target-repo actions in their own command, never chained with work in this repo. The hook fails closed: if it crashes or can't read its input, it exits with the blocking code (2) and the reason, and the tool call is refused. Each hook has 15 seconds (`timeout` in `.claude/settings.json`); Claude Code treats a hook that exceeds that as a non-blocking error, so the factory runner checks before every run that both hooks answer in well under that time.
-- **Links go one way.** This repo's issues, PRs and commit messages may name target work as plain text ("target 3"), never as a link (`faultforge-target#3` or an issue/PR URL). GitHub would show "mentioned in faultforge#N" on the target's timeline, where Qodo reads it. Files such as the decision log may link to the target, because files don't create those events. The guard hook enforces this.
-- `private/` is a separate repository inside this folder, and the shell's working directory can carry over between commands. Always use `git -C <path>` for git commands, so a commit can't land in the wrong repository.
+- The target never holds any mention of FaultForge, planted bugs, cases, proof tests or the answer key. This repo never holds the answer key, raw evidence or unreleased templates.
+- `private/` is its own git repository. Commit and push it after every case. Never add it to this repo.
+- Always use `git -C <path>` for git commands, so a commit can't land in the wrong repository.
+- **Links go one way.** Name target work here as plain text ("target 3"), never as a link. [Why](docs/rules/three-repos.md).
+- Every write to the target goes through one door: `npm run target:post -- <kind> ...`, run on its own from this repo's root, with the title and body in files. [Details](docs/rules/guard.md).
+- The guard hook refuses every other write aimed at the target. If it blocks something, use the door or reword it. Don't work around it. Run target-repo actions in their own command, never chained with work in this repo. [Details](docs/rules/guard.md).
 
 ## Rules for anything the reviewer can see
 
@@ -50,14 +49,13 @@ The plan itself is public (`docs/CHARTER.md`, version 2.3), including Devil's Ad
 
 ## Tickets
 
-All FaultForge work is planned as GitHub Issues on `AJBeumer/faultforge`, grouped in milestones (one per phase of the charter roadmap).
+All FaultForge work is planned as GitHub Issues on `AJBeumer/faultforge`. The full rules: [docs/rules/tickets.md](docs/rules/tickets.md).
 
-- Every ticket states its **Result** and a **Done when** checklist that can be checked without judgement calls. Use the issue form (`.github/ISSUE_TEMPLATE/task.yml`).
-- Work one ticket at a time, in the order the owner gives. The PR says `Closes #N`, and ticks the checklist only for criteria that were actually verified.
-- Public tickets follow the decision-log rules above: they never name an unreviewed case, an unreleased template, or what a planned bug will be. Template work is described by count and defect class at most.
-- Target tickets (`AJBeumer/faultforge-target` Issues) describe ordinary development work on the booking API and must read like any project's tickets. The guard hook checks them.
-- Once ticketed cases start (#12, with its own configuration version), every case PR links a target ticket for the change it claims to make. The ticket describes the intended change, never the bug.
-- Use `/work-ticket` for ordinary tickets: one at a time, its own branch and PR, the ticket link and acceptance criteria in the PR, Qodo's review saved straight away, and every criterion checked on the running app.
+- Every ticket states its **Result** and a **Done when** checklist that can be checked without judgement calls. Use the issue form.
+- Work one ticket at a time, in the order the owner gives. The PR says `Closes #N`, and ticks only criteria that were actually verified.
+- Public tickets follow the decision-log rules above: never name an unreviewed case, an unreleased template, or what a planned bug will be.
+- Target tickets read like any project's tickets. Every case PR links a target ticket that describes the intended change, never the bug.
+- Use `/work-ticket` for ordinary tickets.
 
 ## Commands
 
@@ -76,13 +74,14 @@ Use `/daily-challenge` at the start of each hackathon day, `/work-ticket` for ea
 
 ## Code layout
 
-- A unit test sits next to the code it tests, as `<name>.test.ts` in the same folder (`packages/harness/src/`, `.claude/hooks/`). It runs with `npm test` and in `npm run check`.
-- Tests must pass on Linux (CI) and Windows (the owner's machine). Build expected paths with `resolve()` or `join()`, never compare against a bare POSIX literal such as `"/repo/x"`, and don't assume `/` separators, drive letters or hard links across drives. CI is the authority: Check runs on both, and the `protect-main` ruleset requires both jobs, so a red Windows job is a real portability bug to fix in the test or the code, never waved through because Linux is green. When only a local run disagrees with a green CI, trust CI and look for something specific to your machine.
-- A slow or end-to-end test, one that needs a checkout of the target, a network, a real process or more than a few seconds, lives under `packages/<package>/test/`. It runs with `npm run test:integration`, never in `check`. Template proof tests are neither: they run only through `npm run inject`.
-- A helper two scripts need lives in a named module (`neutral.ts`, `factory-config.ts`), never as a copy in each script.
-- A module over 400 lines is split along its seams. No module may pass 400 lines; `module-size.test.ts` checks it.
+The full rules and the reasons: [docs/rules/code-layout.md](docs/rules/code-layout.md).
+
+- A unit test sits next to the code it tests, as `<name>.test.ts` in the same folder.
+- Tests must pass on Linux (CI) and Windows. Build expected paths with `resolve()` or `join()`. A red Windows job is a real bug to fix, never waved through.
+- A slow or end-to-end test lives under `packages/<package>/test/` and runs with `npm run test:integration`, never in `check`.
+- A helper two scripts need lives in a named module, never as a copy in each script.
+- No module may pass 400 lines. Split it along its seams.
 - Every script documents its exit codes in its header comment, and each code means one thing.
-- Why colocated and not a mirrored `tests/` tree: in TypeScript with Vitest the test moves with its file, imports stay short, and a missing test is visible in the folder listing. A mirrored tree is a Java and Python convention that duplicates every path and breaks on every move. `factory.json`'s `tests` pattern names both places, so `revert:check` recognises them.
 
 ## Style
 
