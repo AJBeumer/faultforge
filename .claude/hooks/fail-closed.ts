@@ -1,5 +1,5 @@
 /**
- * The entry point Claude Code runs for each guard hook (AUD-M4):
+ * The entry point Claude Code runs for each guard hook:
  *
  *   node fail-closed.ts <hook file> [arguments]
  *
@@ -8,7 +8,7 @@
  * else is refused with exit 2: a hook that can't load (a syntax error, an import that fails or throws), a
  * crash (exit 1), a signal, a malformed answer, or a hook that runs past `BUDGET_MS`. Claude Code treats
  * exit 1 and a timed-out hook as non-blocking and runs the tool unchecked, so without this wrapper every
- * one of those failures was an allow.
+ * one of those failures would be an allow.
  *
  * It imports nothing from the project, only node's own modules, so a broken project file can't break it.
  * A relative hook file is resolved from this folder.
@@ -55,24 +55,24 @@ export function answer(name: string, outcome: Outcome): { code: 0 | 2; stdout: s
   try {
     const decision = JSON.parse(out).hookSpecificOutput;
     // Only a decision Claude Code acts on passes: any other event name or decision is ignored by Claude
-    // Code, which then runs the tool, so it is refused here (Qodo on PR 265).
+    // Code, which then runs the tool, so it is refused here.
     const valid =
       decision?.hookEventName === "PreToolUse" && ["allow", "deny", "ask"].includes(decision?.permissionDecision);
     if (valid) return { code: 0, stdout: out, stderr: "" };
   } catch {
-    // not JSON
+    // Not JSON: refused below.
   }
   return why("its answer is not a hook decision");
 }
 
 /**
  * The least a hook file holds: both hooks are several kilobytes. An emptied or truncated file would load, print
- * nothing and exit 0, which is an allow (re-grade after round 4, #285).
+ * nothing and exit 0, which is an allow.
  */
 export const MIN_HOOK_BYTES = 2000;
 
 /**
- * Why `file` can't be the hook it names, or undefined (#285): too small, no `decide` export, or no entry point
+ * Why `file` can't be the hook it names, or undefined: too small, no `decide` export, or no entry point
  * that answers when run. A file someone emptied, cut short or replaced with a one-line allow fails here, and
  * the action is refused before it runs.
  */

@@ -1,6 +1,6 @@
 /**
  * The bug templates that exist only in private storage, read at run time, and a test for text that names
- * one (AUD-H1). A template's id says what its bug is, so naming one in a public post before its case is
+ * one. A template's id says what its bug is, so naming one in a public post before its case is
  * reviewed hands the reviewer the answer. The ids are folder names under the private templates folder,
  * minus those already released to `templates/seed/`. They are never written into this repo and never
  * printed: a denial says only that a private template was named.
@@ -18,7 +18,7 @@ import { blankQuoted, gitSteps, splitSteps } from "../shell/scan.ts";
 
 /**
  * Folder names directly under `dir`, or none when it doesn't exist. A folder that exists but can't be read
- * throws: the guard then refuses, rather than treat unreadable ids as none (Qodo on PR 265).
+ * throws: the guard then refuses, rather than treat unreadable ids as none.
  */
 function folders(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -30,7 +30,7 @@ function folders(dir: string): string[] {
 /** Private storage, resolved as paths.ts does, without importing it (the hook keeps its imports small). */
 export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string {
   // A target ticket's run names the owner's private folder for this hook alone: project scripts read
-  // FAULTFORGE_PRIVATE_DIR, and must not reach it (Qodo on PR 288).
+  // FAULTFORGE_PRIVATE_DIR, and must not reach it.
   if (env.FAULTFORGE_GUARD_PRIVATE_DIR) return resolve(env.FAULTFORGE_GUARD_PRIVATE_DIR);
   if (env.FAULTFORGE_PRIVATE_DIR) return resolve(env.FAULTFORGE_PRIVATE_DIR);
   let evidence = "private/raw-artifacts";
@@ -38,14 +38,14 @@ export function privateRoot(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): string 
     const configured = JSON.parse(readFileSync(join(labRoot, "factory.json"), "utf8")).evidence;
     if (typeof configured === "string" && configured) evidence = configured;
   } catch {
-    // the default
+    // No readable factory.json: keep the default.
   }
   return dirname(resolve(labRoot, evidence));
 }
 
 /**
  * Every URL git would push to (or with `push` false, fetch from) for `remote` in `dir`: a remote may have several
- * push URLs, and git pushes to all of them (Qodo on PR 333). Empty when it has none.
+ * push URLs, and git pushes to all of them. Empty when it has none.
  */
 export function pushUrls(dir: string, remote: string, push = true): string[] {
   const r = spawnSync("git", ["-C", dir, "remote", "get-url", "--all", ...(push ? ["--push"] : []), remote], {
@@ -72,7 +72,7 @@ export function privateOrigin(root: string): string[] {
 
 /**
  * The GitHub repos a remote names when its fetch URL and every push URL agree, or none: a second push URL to
- * another repo would make that repo "the remote" too, and git pushes to all of them (Qodo on PR 333).
+ * another repo would make that repo "the remote" too, and git pushes to all of them.
  */
 export function agreedRepos(dir: string, remote: string): string[] {
   const fetched = pushUrls(dir, remote, false).flatMap(githubRepos);
@@ -100,12 +100,12 @@ export function privateTemplateIds(env: NodeJS.ProcessEnv, labRoot = LAB_ROOT): 
 export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | undefined {
   if (!ids.length) return undefined;
   const pattern = privateIdPattern(ids);
-  // Leetspeak too (#285): the text and the ids are read the same way, so `x-s3cr3t-v1` meets `x-secret-v1`.
+  // The text and the ids are read the same way, so leetspeak `x-s3cr3t-v1` meets `x-secret-v1`.
   const folded = privateIdPattern(ids.flatMap(leetReadings));
-  // Written backwards too (re-grade 6): `1v-terces-x` is `x-secret-v1` read from the end.
+  // Backwards too: `1v-terces-x` is `x-secret-v1` read from the end.
   return (text) =>
     [...new Set([text, percentDecoded(text)].flatMap((each) => [each, [...each].reverse().join("")]))].some((each) =>
-      // As written and as markdown renders it (re-grade 7): a comment, an entity or emphasis can't split an id.
+      // As written and as markdown renders it: a comment, an entity or emphasis can't split an id.
       readerViews(each).some(
         (seen) => pattern.test(seen) || leetReadings(seen).some((reading) => folded.test(reading)),
       ),
@@ -113,7 +113,7 @@ export function privateIdMatcher(ids: string[]): ((text: string) => boolean) | u
 }
 
 /**
- * The text with its percent-escapes decoded, as a URL or an API reads them (re-grade 3): `x%2Dsecret` is
+ * The text with its percent-escapes decoded, as a URL or an API reads them: `x%2Dsecret` is
  * `x-secret`. Decoded up to three times, so a doubly escaped `%252D` is read too.
  */
 export function percentDecoded(text: string): string {
@@ -125,7 +125,7 @@ export function percentDecoded(text: string): string {
 }
 
 /**
- * The whole-word pattern for `ids`, their parts joined by any separator (#299): none, or up to three marks that
+ * The whole-word pattern for `ids`, their parts joined by any separator: none, or up to three marks that
  * are not letters or digits, in any mix, so `x--secret--v1`, `x_secret.v1` and `x - secret / v1` all count.
  */
 function privateIdPattern(ids: string[]): RegExp {
@@ -148,25 +148,25 @@ export const PRIVATE_ID_REASON =
  * commit, push, tag or note runs there (its `-C`, or the folder the command has moved to), and any gh or
  * API call names, in `destinations`, only the repo the private checkout's own remote points at (by owner and
  * name, read from its git config: a repo elsewhere that merely shares the name is public as far as the guard
- * knows; Qodo on PR 265). Anything else, or anything unclear, is a public post.
+ * knows). Anything else, or anything unclear, is a public post.
  */
 export function onlyPrivateRepo(command: string, cwd: string, root: string, destinations: string[]): boolean {
-  // Only the private folder's own checkout counts: a plain folder would borrow the lab's remotes (Qodo on PR 265).
-  // Its `origin` only: another remote in it (the lab, say) is not private storage (re-grade 6).
+  // Only the private folder's own checkout counts: a plain folder would borrow the lab's remotes.
+  // Its `origin` only: another remote in it (the lab, say) is not private storage.
   const own = privateOrigin(root);
-  // Every destination named anywhere, a URL given to git included, must be the private repo (Qodo on PR 265).
+  // Every destination named anywhere, a URL given to git included, must be the private repo.
   if (destinations.some((d) => !own.includes(d.toLowerCase()))) return false;
-  // Words in a message don't run: only a tool outside quoted text needs a destination (Qodo on PR 265).
+  // Words in a message don't run: only a tool outside quoted text needs a destination.
   const tools = blankQuoted(command);
   if (/\b(?:gh|curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b/i.test(tools) && !destinations.length)
     return false;
-  // A destination the shell builds (`--repo "$X"`) can't be known here (Qodo on PR 265).
+  // A destination the shell builds (`--repo "$X"`) can't be known here.
   if (/(?:--repo|\s-R)[\s=]*["']?[$`%]|\bGH_REPO\s*=\s*["']?[$`%]/.test(command)) return false;
   // Anything that points git at another folder or repository makes the step's target unclear.
   if (/\bGIT_(?:DIR|WORK_TREE)\b|--git-dir|--work-tree/i.test(tools)) return false;
   let here = cwd;
   let wrote = false;
-  // Split only at operators outside quoted text: a `cd` inside a message moves nowhere (Qodo on PR 265).
+  // Split only at operators outside quoted text: a `cd` inside a message moves nowhere.
   for (const step of splitSteps(command)) {
     const move = /^(?:cd|pushd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?["']?([^"'\s]+)/i.exec(step);
     if (move?.[1]) {
@@ -176,7 +176,7 @@ export function onlyPrivateRepo(command: string, cwd: string, root: string, dest
     }
     if (!gitSteps(step, /\b(?:commit|push|tag|notes)\b/).length) continue;
     wrote = true;
-    // Each `-C` is resolved from the one before, as git does (Qodo on PR 265).
+    // Each `-C` is resolved from the one before, as git does.
     let dir = here;
     for (const m of step.matchAll(/\s-C\s*["']?([^"'\s]+)/g)) {
       if (/[$`%]|^~/.test(m[1] ?? "")) return false;

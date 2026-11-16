@@ -1,12 +1,12 @@
 /**
- * What may not be done to a recorded case's refs in a reviewed checkout (re-grade 6, H15). CLAUDE.md: never rewrite
+ * What may not be done to a recorded case's refs in a reviewed checkout. CLAUDE.md: never rewrite
  * the reviewed repo's history, which cases record as evidence. Refused in a reviewed checkout: `git update-ref`
  * (plumbing no ordinary work needs), and deleting, renaming or force-moving a recorded case branch
  * (`git branch -D`, `-m`, `-f`, `checkout -B`, `switch -C`).
  *
  * Merging a case PR, addressing Qodo there, and any other write to the reviewed repo are refused before this runs:
- * every write to it goes through `npm run target:post` (#340), which has no merge and refuses text that addresses
- * Qodo. So this module no longer reads gh calls or MCP tools.
+ * every write to it goes through `npm run target:post`, which has no merge and refuses text that addresses
+ * Qodo. So this module doesn't read gh calls or MCP tools.
  *
  * Case branches are the `branch` of every audit event and answer-key entry. Where private storage has no audit log,
  * nothing can be told apart: a branch change is refused. Branch names are never printed: one could be a private
@@ -67,7 +67,7 @@ function currentBranch(dir: string | undefined): string | undefined {
   return r.status === 0 ? r.stdout.trim().toLowerCase() : undefined;
 }
 
-/** Why a git call in a reviewed checkout deletes, renames or moves a case branch, or undefined (H15). */
+/** Why a git call in a reviewed checkout deletes, renames or moves a case branch, or undefined. */
 function refProblem(call: Call, records: CaseRecords | undefined): string | undefined {
   const [sub = "", ...rest] = call.args;
   if (sub === "update-ref") return UPDATE_REF;
@@ -83,7 +83,7 @@ function refProblem(call: Call, records: CaseRecords | undefined): string | unde
     return targets.some(recorded) ? BRANCH_REASON : undefined;
   }
   if (sub === "checkout" || sub === "switch") {
-    // The name may be its own word or joined on (`-Btidy`, `--force-create=tidy`; Qodo on PR 337).
+    // The name may be its own word or joined on (`-Btidy`, `--force-create=tidy`).
     for (let i = 0; i < rest.length; i++) {
       const force = /^(?:-B|-C|--force-create)(?:=?)(.*)$/.exec(rest[i] ?? "");
       if (force && recorded(force[1] || rest[i + 1])) return BRANCH_REASON;

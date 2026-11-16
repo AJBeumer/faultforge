@@ -1,6 +1,6 @@
 /**
- * The hooks' layout, checked instead of remembered (#355): modules in folders by job with a README that maps
- * them, test files named for behaviour, the harness reached through one bridge, and a line budget.
+ * The hooks' layout, checked instead of remembered: modules in folders by job with a README that maps them, test
+ * files named for behaviour, the harness reached through one bridge, and a line budget.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
@@ -11,8 +11,8 @@ const ROOT = resolve(HOOKS, "../..");
 const BRIDGE = "shared/harness-bridge.ts";
 
 /**
- * The most lines the hooks' code (tests and fixtures.ts left out) may hold: its size after #355 (7,020 before it).
- * Raising it is a reviewed change: say in the PR why the code can't be made smaller instead.
+ * The most lines the hooks' code (tests and fixtures.ts left out) may hold, so the guard stays small enough to
+ * read whole. Raising it is a reviewed change: say in the PR why the code can't be made smaller instead.
  */
 const LINE_BUDGET = 7_001;
 
@@ -32,8 +32,8 @@ const resolvedImports = (file: string) =>
     relative(HOOKS, resolve(HOOKS, dirname(file), spec)).replace(/\\/g, "/"),
   );
 
-describe("the hooks' layout (#355)", () => {
-  it("names no test file, and no describe block, after an audit round or a re-grade", () => {
+describe("the hooks' layout", () => {
+  it("names no test file, and no describe block, after an audit or a review pass", () => {
     expect(files.filter((f) => /regrade|bypass|round/i.test(posix.basename(f)))).toEqual([]);
     const cited = files
       .filter((f) => f.endsWith(".test.ts"))

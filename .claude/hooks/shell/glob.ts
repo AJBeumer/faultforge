@@ -1,12 +1,11 @@
 /**
- * Shell wildcards as the shell would expand them (Qodo on PR 310): brace lists (`{a,b}`) and the `*`, `?` and
+ * Shell wildcards as the shell would expand them: brace lists (`{a,b}`) and the `*`, `?` and
  * `[…]` patterns, matched against the folders that exist. Shared by the guard (a gist's or release's files) and
  * the factory policy (a lab run's paths): a wildcard is judged by what it names, not by its spelling.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, resolve } from "node:path";
 
-/** True when the word holds a shell wildcard or a brace list. */
 export const hasWildcard = (word: string) => /[*?[{]/.test(word);
 
 /** The most paths one word is expanded to before the caller is told it can't be listed. */
@@ -14,7 +13,7 @@ export const MAX_MATCHES = 2000;
 
 /**
  * Brace expansion: `a{b,c}d` is `abd` and `acd`, nested lists included. Undefined when it would make more than
- * `MAX_MATCHES` words: a partial list would leave the rest unchecked (Qodo on PR 312).
+ * `MAX_MATCHES` words: a partial list would leave the rest unchecked.
  */
 export function braces(word: string): string[] | undefined {
   const open = word.indexOf("{");
@@ -66,7 +65,7 @@ function segmentPattern(segment: string): RegExp {
           .slice(i + 1, end)
           .replace(/^!/, "^")
           .replace(/\\/g, "\\\\");
-        // A range out of order (`[i-1]`, often code, not a path) matches nothing, as in bash (Qodo on PR 312).
+        // A range out of order (`[i-1]`, often code, not a path) matches nothing, as in bash.
         source += validClass(body) ? `[${body}]` : "(?!)";
         i = end;
       }

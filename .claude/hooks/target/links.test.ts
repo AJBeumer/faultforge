@@ -9,7 +9,7 @@ import { askGuard, guardConfig, privateStore, REPOS, scratchFolder, tempRepo } f
 const T = REPOS.target;
 const LINK = `${T}#3`;
 const CONFIG = guardConfig(tempRepo(true).dir);
-const PRIVATE = privateStore("guard~regrade5-");
+const PRIVATE = privateStore("guard~private-");
 /** A folder that is no checkout, holding the message files the commits read. */
 const ELSEWHERE = scratchFolder("guard-elsewhere-", {
   "notes.txt": "Tidy the list\n",

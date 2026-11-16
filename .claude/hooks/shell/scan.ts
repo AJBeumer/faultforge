@@ -1,8 +1,7 @@
 /**
- * One linear pass over a shell command that finds its quoted text and heredoc bodies (AUD-M4). The guard
- * used regular expressions for this whose run time grew faster than the command: a crafted 5 KB command
- * kept the hook busy past its time limit, and Claude Code runs the tool when a hook times out. This scanner
- * visits each character a bounded number of times, and `MAX_COMMAND_CHARS` caps what any check reads.
+ * One linear pass over a shell command that finds its quoted text and heredoc bodies. Regular expressions for
+ * this can take time that grows faster than the command, and Claude Code runs the tool when a hook times out.
+ * This scanner visits each character a bounded number of times, and `MAX_COMMAND_CHARS` caps what any check reads.
  *
  * It reads bash's rules, which PowerShell mostly shares for this purpose: single quotes run to the next
  * single quote, double quotes to the next unescaped double quote, `#` at the start of a word is a comment to
@@ -135,7 +134,7 @@ export function quotedSpans(command: string): Span[] {
 }
 
 /**
- * The command with its line continuations joined, as the shell joins them before it reads words (re-grade 4):
+ * The command with its line continuations joined, as the shell joins them before it reads words:
  * a backslash followed by a new line is removed, outside single quotes, comments and heredoc bodies with a
  * quoted delimiter, where it stays as written. An escaped backslash (`\\`) before a new line is no continuation.
  */
@@ -211,7 +210,7 @@ export function splitSteps(command: string): string[] {
 /**
  * True when `then` matches after the first match of `first`, in one part of `text` cut at any of `stops`: what
  * `/first[^stops]*then/` tests, in linear time. That pattern tries every `first` and reads to the part's end from
- * each, so a command of many `git` words took time quadratic in its length (re-grade 7). The first `first` leaves
+ * each, so a command of many `git` words would take time quadratic in its length. The first `first` leaves
  * the most text after it, so it is the only one to try. `first` must not be global.
  */
 export function wordThen(text: string, first: RegExp, then: RegExp, stops = "|;&\n"): boolean {
@@ -239,7 +238,7 @@ export interface Step {
 /**
  * The parts of the text between `|`, `;`, `&` and new lines, quoting ignored, each with its offset. Tests that
  * look for two words in one part (`git` then `push`) run on these, one part at a time, so their cost stays
- * linear: the same test as one pattern over the whole text backtracks once for every `git` (AUD-M4).
+ * linear: the same test as one pattern over the whole text backtracks once for every `git`.
  */
 export function segments(text: string): Step[] {
   const parts: Step[] = [];
@@ -291,7 +290,7 @@ export function substitutions(command: string, backticks: boolean): Substitution
       i++;
       continue;
     }
-    // In PowerShell a backtick escapes the next character: `$( is literal text (Qodo on PR 266).
+    // In PowerShell a backtick escapes the next character: `$( is literal text.
     if (c === "`" && !backticks) {
       i++;
       continue;

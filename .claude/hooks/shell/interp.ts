@@ -1,15 +1,14 @@
 /**
  * Inline code in a language interpreter (`node -e`, `python -c`, `perl -e`, a heredoc or a pipe into one that
  * reads its code from stdin), shared by the guard and the factory policy: what that code is, whether it starts
- * another program or runs code it builds, and whether it makes a network call. Split out of shell/exec.ts.
+ * another program or runs code it builds, and whether it makes a network call.
  *
- * Only the code an interpreter is handed counts (Qodo on PR 310): a script's path and its arguments are not code,
+ * Only the code an interpreter is handed counts: a script's path and its arguments are not code,
  * and neither is the text of another step in the pipeline, unless that step pipes the code in.
  */
 import { decodeAnsiC, spokenWords } from "./decode.ts";
 import { programAt, programName, type Step, steps, words } from "./words.ts";
 
-/** The denial for inline interpreter code that makes a network call. */
 export const INLINE_NETWORK_REASON =
   "This command runs inline code (node -e, python -c, perl -e, ruby -e, or code fed on stdin) that makes a network call. It could post anywhere without gh, where the guard can read the text. Use gh for GitHub; only the app on localhost may be reached from code.";
 
@@ -17,7 +16,7 @@ export const INLINE_NETWORK_REASON =
 const INTERPRETERS = /^(node|nodejs|deno|bun|tsx|ts-node|python\d*(\.\d+)?|py|perl|ruby|irb|php)$/i;
 
 /**
- * Network calls from code (#243; perl and ruby added): `fetch(`, Node's `http.request` and its modules,
+ * Network calls from code: `fetch(`, Node's `http.request` and its modules,
  * Python's `urllib`, `requests`, `http.client` and `socket`, Perl's LWP, HTTP::Tiny and IO::Socket, Ruby's
  * `net/http`, `open-uri` and TCPSocket, PHP's curl and sockets, a browser-style request or socket.
  */
@@ -44,7 +43,7 @@ export const NETWORK_CODE = new RegExp(
 
 /**
  * Network calls in inline code: as `NETWORK_CODE`, and `fetch` named at all, called or not, since code can call
- * it under another name (`const f = fetch; f(url)`; Qodo on PR 310). Only for inline code: in a whole command,
+ * it under another name (`const f = fetch; f(url)`). Only for inline code: in a whole command,
  * `git fetch` is no network call from code.
  */
 const INLINE_NETWORK_CODE = new RegExp(`${String.raw`\bfetch\b`}|${NETWORK_CODE.source}`);
@@ -54,8 +53,8 @@ export const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"
 
 /**
  * True when every network call in `text` names a local URL of its own: at least one URL, none of them
- * elsewhere, and no more calls than URLs (one localhost URL beside a call whose address is built at run time
- * vouches for nothing; Qodo on PR 270).
+ * elsewhere, and no more calls than URLs: one localhost URL beside a call whose address is built at run time
+ * vouches for nothing.
  */
 export function onlyLocalCalls(text: string, calls: number): boolean {
   const hosts = [...text.matchAll(/\b(?:https?|ftp|wss?):\/\/([^/\s:'"`]+|\[[^\]]+\])/gi)].map((m) =>
@@ -65,11 +64,11 @@ export function onlyLocalCalls(text: string, calls: number): boolean {
 }
 
 /**
- * Code in a language interpreter that starts another program, or runs code it builds (re-grade 3): no hook reads
+ * Code in a language interpreter that starts another program, or runs code it builds: no hook reads
  * what that program is. One pattern per family, chosen by the interpreter's name, so a template literal in
  * `node -e` or a regex's `.exec(` isn't taken for Perl's backticks or a shell call. A global reached as a value
  * (`Reflect.get(globalThis, …)`, `Object.values(globalThis)`) and an escape in a name (`fetch`) are code
- * that names its function at run time too (Qodo on PR 310).
+ * that names its function at run time too.
  */
 const SUBPROCESS_CODE: [interpreter: RegExp, code: RegExp][] = [
   [
@@ -79,11 +78,11 @@ const SUBPROCESS_CODE: [interpreter: RegExp, code: RegExp][] = [
         String.raw`\bchild_process\b|\bworker_threads\b|["'\x60](node:)?vm["'\x60]`,
         String.raw`\b(eval|Function)\s*\(|\bnew\s+Function\b`,
         // A module named by anything but one literal: `require('child_' + 'process')`, `import(x)`, and a template
-        // literal that builds part of its name (`child_${x}`; #318). A file path (`'./' + f`) is blanked first.
+        // literal that builds part of its name (`child_${x}`). A file path (`'./' + f`) is blanked first.
         String.raw`\b(require|import|getBuiltinModule)\s*\(\s*(?!["'][^"'+]*["']\s*\)|\x60[^\x60$+]*\x60\s*\))`,
         String.raw`\b(globalThis|global|process|module|self|window)\s*\[`,
         String.raw`\bprocess\s*\.\s*(binding|_linkedBinding|dlopen)\b|\bBun\s*\.\s*(spawn\w*|\$)|\bDeno\s*\.\s*(run|Command)\b`,
-        // An escape in a name (`fetch`) is read decoded instead (`jsUnescaped`; #318).
+        // An escape in a name (`fetch`) is read decoded instead (`codeReadings`).
         String.raw`\bReflect\b|\bgetOwnPropertyDescriptors?\b|\bwith\s*\(`,
         String.raw`\b(globalThis|global|self|window)\b(?!\s*\.)`,
       ].join("|"),
@@ -150,10 +149,10 @@ function stepCode(step: Step, before: Step[], name: string): string {
       if (/^\d*(<{1,3}|>{1,2}|&>{1,2})$/.test(word)) i++;
       continue;
     }
-    // Code handed over as a flag's value (`--import data:…`) is inline code too (Qodo on PR 312).
+    // Code handed over as a flag's value (`--import data:…`) is inline code too.
     if (family.inline.test(word) || /(^|=)data:/.test(word)) return step.text;
     if (word === "-") break;
-    // A module that runs the code it is given or reads it from stdin (`-m timeit`, `-m code`; Qodo on PR 312).
+    // A module that runs the code it is given or reads it from stdin (`-m timeit`, `-m code`).
     const module = family.runs?.test(word) ? word.replace(/^-[a-zA-Z]*m/, "") || spokenWords(all[i + 1] ?? "") : "";
     if (CODE_MODULES.test(module)) break;
     if (word === "--" || family.runs?.test(word)) {
@@ -169,15 +168,14 @@ function stepCode(step: Step, before: Step[], name: string): string {
     break;
   }
   // A script that is stdin by another name (`/dev/stdin`, `/dev/fd/0`) or a path built at run time is no file
-  // to read: its code is what is fed in, as with no script at all (Qodo on PR 312).
+  // to read: its code is what is fed in, as with no script at all.
   const named = all[script !== undefined && /^--$/.test(all[script] ?? "") ? script + 1 : (script ?? -1)] ?? "";
   // A "script" that is itself an interpreter's name follows a prefix's value (`npx --package tsx tsx -e …`): that
-  // second one is the program, so the whole step is read (Qodo on PR 312, fourth review).
+  // second one is the program, so the whole step is read.
   const second = INTERPRETERS.test(programName(named));
-  // A flag can take its value as the next word without being listed (`--inspect-port 9229`), so that value may
-  // look like the script. An inline-code flag anywhere after it means the step is read whole, with what is piped
-  // into it, as with a script that reads stdin (Qodo on PRs 312 and 313). A script's own argument that only looks
-  // like such a flag gets the wider reading main had before PR 312: it can refuse more, never less.
+  // An unlisted flag can take the next word as its value (`--inspect-port 9229`), which then looks like the
+  // script. So an inline-code flag anywhere after it means the whole step is read, with what is piped into it.
+  // A script argument that only looks like such a flag is read the wider way too: it can refuse more, never less.
   const later = all
     .slice((script ?? all.length) + 1)
     .some((w) => family?.inline.test(spokenWords(w)) || /(^|=)data:/.test(spokenWords(w)));
@@ -200,7 +198,7 @@ const OPTION_VARIABLES =
 /**
  * Each interpreter the command runs, by name, with the code it runs (`stepCode`). A command that sets a
  * variable an interpreter reads its options or startup code from (`NODE_OPTIONS='--import=data:…'`) hands it
- * code outside its own words: then the whole command is that interpreter's code (Qodo on PR 312).
+ * code outside its own words: then the whole command is that interpreter's code.
  */
 function interpreterRuns(command: string, backticks: boolean): { name: string; code: string }[] {
   const options = OPTION_VARIABLES.test(command);
@@ -211,7 +209,7 @@ function interpreterRuns(command: string, backticks: boolean): { name: string; c
     else pipelines.push([step]);
   }
   // With an option variable, the code is the command up to and including the interpreter's step: a step after it
-  // can't hand it code (Qodo on PR 312, fourth review).
+  // can't hand it code.
   let from = 0;
   return pipelines.flatMap((pipeline) =>
     pipeline.flatMap((step, i) => {
@@ -235,7 +233,7 @@ function interpreterRuns(command: string, backticks: boolean): { name: string; c
 /**
  * Code's escapes decoded, as JavaScript reads them in names and strings: `t`, `\u{74}`, `\x74`, and octal
  * `\164`. Read beside the code as written, and again with the shell's `\\` taken as one backslash, so a name
- * spelled with an escape (`fetch`, `'child\x5fprocess'`) is the name it spells (#318).
+ * spelled with an escape (`fetch`, `'child\x5fprocess'`) is the name it spells.
  */
 export function codeReadings(code: string): string[] {
   const decode = (text: string) =>
@@ -252,13 +250,13 @@ export function codeReadings(code: string): string[] {
 const PATH_START = String.raw`(?:\.{1,2}\/|\/|[A-Za-z]:\/)`;
 
 /**
- * A string literal as JavaScript reads it: closed by the quote that opened it, never the other kind (Qodo on PR
- * 323). One with a backslash is not taken at all, so no escape can move where it ends.
+ * A string literal as JavaScript reads it: closed by the quote that opened it, never the other kind. One with
+ * a backslash is not taken at all, so no escape can move where it ends.
  */
 const literal = (start = "") => String.raw`(?:'${start}[^'\n\\]*'|"${start}[^"\n\\]*")`;
 
 /**
- * `require` or `import()` of a file path built from a literal path and plain names (#318): `require('./' + f)`,
+ * `require` or `import()` of a file path built from a literal path and plain names: `require('./' + f)`,
  * `require('../d/' + f + '.json')`, `` require(`./${f}`) ``. Whatever the names hold, the result starts with the
  * path, so it can't name a builtin such as child_process. A call, an operator other than `+`, or code in a
  * template's `${…}` is no plain name, so it is not taken. Paths use forward slashes: a backslash is an escape.

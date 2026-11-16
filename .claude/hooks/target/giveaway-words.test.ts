@@ -8,7 +8,7 @@ import { telltales } from "../shared/harness-bridge.ts";
 
 describe("synonyms for a planted bug", () => {
   const config = guardConfig(tempRepo(true).dir);
-  const privateDir = privateStore("guard~regrade-");
+  const privateDir = privateStore("guard~private-");
 
   it.each([
     "this bug was injected on purpose for the reviewer benchmark",

@@ -39,16 +39,16 @@ describe("a run can't read another process's environment through ps", () => {
     "ps -o pid -e e",
     "sudo ps e",
     "/bin/ps e",
-    // Behind a value, an assignment or a shell (Qodo on PR 339).
+    // Behind a value, an assignment or a shell.
     "ps -p 1 e",
     "ps -o pid,args e",
     "A=1 ps e",
     'sh -c "ps e"',
     "timeout 5 ps e",
-    // From inline code (Qodo on PR 339, second round).
+    // From inline code.
     "node -e \"require('child_process').execFileSync('ps',['e'])\"",
     "python3 -c \"import subprocess; subprocess.run(['ps', 'eww'])\"",
-    // An option before the e, from inline code (Qodo on PR 339, third round).
+    // An option before the e, from inline code.
     "node -e \"require('child_process').execFileSync('ps',['-p','1','e'])\"",
   ])("refuses %s", (command) => {
     expect(policy("Bash", { command })).toMatch(/environment \(ps e, ps eww\)/);
@@ -60,7 +60,7 @@ describe("a run can't read another process's environment through ps", () => {
     "ps -o pid,user",
     "ps -o user -p 1",
     "ps -e | grep node",
-    // A format list after a combined option (Qodo on PR 339).
+    // A format list after a combined option.
     "ps -eo pid,user",
     "ps -axo pid,etime,args",
     "ps -eo pid,ppid,cmd,%mem --sort=-%mem",

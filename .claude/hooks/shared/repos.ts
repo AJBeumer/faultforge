@@ -1,6 +1,6 @@
 /**
  * Which repositories the guard protects, and how it recognises one in a command or a path: the target,
- * always, plus every repo marked reviewed in `factory.json`. Used by guard-target.ts.
+ * always, plus every repo marked reviewed in `factory.json`.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -12,15 +12,14 @@ import { quotedSpans, substitutions } from "../shell/scan.ts";
 export interface Reviewed {
   /** owner/name on GitHub */
   github: string;
-  /** The repo name on GitHub. */
   name: string;
   /** The local checkout's folder name, from its configured path. */
   folder: string;
-  /** The local checkout, resolved from this repo's root, where pending content is read from git. */
+  /** Where pending content is read from git. */
   checkout: string;
 }
 
-/** This repository's root: the lab checkout the hooks run from. */
+/** The lab checkout the hooks run from. */
 export const LAB_ROOT = join(import.meta.dirname, "../../..");
 
 /** Always protected, whatever the config says: the config can add reviewed repos, never remove this one. */
@@ -31,14 +30,11 @@ const TARGET: Reviewed = {
   checkout: resolve(LAB_ROOT, "../faultforge-target"),
 };
 
-/** Git's global options that may stand before `-C` (`--no-pager`, `-c key=value`): skipped, so `-C` is still seen (Qodo on PR 265). */
-// `-c key=value` is told from `-C path` by its `=`: the patterns that use this ignore case, and inline
-// case modifiers need Node 23 (Qodo on PR 266).
-// Each option can match only one way (`--a` is a long option, never `-` and `-a`), so a run of them that
-// isn't followed by `-C` fails in linear time (Qodo on PR 266).
+/** Git's global options that may stand before `-C` (`--no-pager`, `-c key=value`), skipped so `-C` is still seen. */
+// `-c key=value` is told from `-C path` by its `=`, since the patterns ignore case and inline case modifiers
+// need Node 23. Each option matches only one way, so a run of them without `-C` fails in linear time.
 const GIT_OPTIONS = String.raw`(?:(?:-c\s+[^\s=]+=\S*|(?!-C)(?:--[\w-]+|-\w+)(?:=\S+)?)\s+)*`;
 
-/** A string as a literal inside a regular expression. */
 export const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
@@ -92,7 +88,7 @@ export function linkPattern(repos: Reviewed[]): RegExp | undefined {
  */
 function checkoutPattern(repo: Reviewed): RegExp {
   const folders = [repo.folder, repo.name].map(esc).join("|");
-  // `GIT_DIR=` and `GIT_WORK_TREE=` (or PowerShell's `$env:GIT_DIR =`) point git at a checkout too (AUD-M3).
+  // `GIT_DIR=` and `GIT_WORK_TREE=` (or PowerShell's `$env:GIT_DIR =`) point git at a checkout too.
   const into = `(?:\\b(?:cd|pushd|Set-Location|sl)\\s+(?:-(?:Literal)?Path\\s+)?|\\bgit\\s+${GIT_OPTIONS}-C\\s*|\\bgit\\s+${GIT_OPTIONS}--(?:work-tree|git-dir)[=\\s]\\s*|(?:\\$env:|\\b)GIT_(?:DIR|WORK_TREE)\\s*=\\s*)`;
   return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
 }
@@ -122,7 +118,7 @@ export interface Checkout {
 export function checkoutAt(path: string): Checkout | undefined {
   let dir = resolve(path);
   for (;;) {
-    // A bare clone keeps its config at its own top, beside HEAD and objects (Qodo on PR 265).
+    // A bare clone keeps its config at its own top, beside HEAD and objects.
     const bare = ["config", "HEAD", "objects"].every((name) => existsSync(join(dir, name)));
     if (bare) return { root: dir, remotes: remotesOf(dir) };
     const gitDir = basename(dir) === ".git" && existsSync(join(dir, "config")) ? dir : join(dir, ".git");
@@ -148,7 +144,7 @@ function remotesOf(dotGit: string): string[] {
       if (existsSync(common)) gitDir = resolve(gitDir, readFileSync(common, "utf8").trim());
     }
     const config = readFileSync(join(gitDir, "config"), "utf8");
-    // A URL rewrite or an included file changes what the remote really is: ask git then (Qodo on PR 265).
+    // A URL rewrite or an included file changes what the remote really is, so ask git then.
     if (/insteadof|^\s*\[include/im.test(config) || globalRewrites()) return gitRemotes(gitDir);
     return [...config.matchAll(/^\s*(?:push)?url\s*=\s*(.+?)\s*$/gim)].flatMap((m) => githubRepos(m[1] ?? ""));
   } catch {
@@ -156,7 +152,7 @@ function remotesOf(dotGit: string): string[] {
   }
 }
 
-/** True when the user's own git config rewrites URLs or includes other files; read once per process. */
+/** Whether the user's own git config rewrites URLs or includes other files; read once per process. */
 let rewrites: boolean | undefined;
 function globalRewrites(): boolean {
   if (rewrites === undefined) {
@@ -176,12 +172,10 @@ function gitRemotes(gitDir: string): string[] {
 }
 
 /**
- * A GitHub URL in any spelling git or gh takes (re-grade 4): a scheme or none (`https`, `http`, `ssh`, `git`), a
- * user (`git@`), a host of `github.com` or one under it (`www.`, `ssh.`), a port (`:443`), then the repo after
- * `/` or the scp-style `:`, with or without `.git` and a closing slash, in any case. Groups: owner, name.
+ * A GitHub URL in any spelling git or gh takes: with or without a scheme, user (`git@`), subdomain or port,
+ * then the repo after `/` or the scp-style `:`, with or without `.git`, in any case. Groups: owner, name.
  * A port is only read as one when an `owner/name` follows it; otherwise `:1234/x` is the scp form's owner.
- * The host must be the URL's host: at the start of a word, after a scheme's `//`, or after a user's `@`, never
- * inside another host's path (`gitlab.com/github.com/o/n`; Qodo on PR 322).
+ * The host must be the URL's own host, never inside another host's path (`gitlab.com/github.com/o/n`).
  */
 export const GITHUB_URL = String.raw`(?<=^|[\s"'=<(@]|\/\/)(?:[\w-]+\.)*github\.com(?::\d+(?=\/[\w.-]+\/))?[\/:]+([\w.-]+)\/([\w.-]+?)(?:\.git)?(?=[\/"'\s?#)]|$)`;
 
@@ -213,16 +207,15 @@ function real(path: string): string {
 
 /** True when `path` is `folder` or inside it, compared case-blind on Windows. */
 export function within(path: string, folder: string): boolean {
-  // Through symlinks and junctions to where the path really is, so a link can't lead out (Qodo on PR 265).
+  // Follow symlinks and junctions, so a link can't lead out.
   const fold = (p: string) => (process.platform === "win32" ? real(p).toLowerCase() : real(p));
   const rel = relative(fold(folder), fold(path));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**
- * The reviewed repo whose checkout holds `path`: by folder name, as before, or by a remote that points at
- * the repo on GitHub, so a second clone in a folder with another name is guarded too (AUD-M3). A checkout
- * found by its remote carries its own folder as `checkout`, so its pending content is read from there.
+ * The reviewed repo whose checkout holds `path`, by folder name or by a remote that points at the repo, so a
+ * second clone in a folder with another name is guarded too. Such a clone carries its own folder as `checkout`.
  */
 export function locate(path: string, reviewed: Reviewed[]): Reviewed | undefined {
   const named = reviewed.find((r) => inCheckout(path, r) || within(path, r.checkout));
@@ -248,7 +241,7 @@ export function moveCount(command: string): number {
 
 /**
  * True when a move's path can't be read before the shell runs: built from a variable, a substitution or cmd's
- * `%NAME%`, or `-`, the previous folder. Single-quoted text is literal to the shell, `$` and all (Qodo on PR 322).
+ * `%NAME%`, or `-`, the previous folder. Single-quoted text is literal to the shell, `$` and all.
  */
 function unreadablePath(path: string, singleQuoted: boolean): boolean {
   if (path === "-") return true;
@@ -264,17 +257,14 @@ export interface Navigation {
 /**
  * The folders a command moves into or points git at, in order, each resolved from the folder the one
  * before left it in: `cd`, `pushd`, `Set-Location`, `git -C`, `--work-tree`, `--git-dir`, `GIT_DIR=` and
- * `GIT_WORK_TREE=`. An unquoted wildcard path is expanded against the folders that exist, as the shell does
- * (re-grade 4). A path built from a variable or a substitution can't be resolved here: it is left out, and
- * `unreadable` says one was seen. At most `MAX_MOVES` folders are read in all; a wildcard that names more is
- * unreadable too, so the guard never walks up from each of thousands of matches (Qodo on PR 322).
+ * `GIT_WORK_TREE=`. An unquoted wildcard is expanded against the folders that exist, as the shell does. A path
+ * built from a variable or a substitution can't be resolved: it is left out and `unreadable` is set. A wildcard
+ * naming more than `MAX_MOVES` folders is unreadable too, so the guard never walks up from thousands of matches.
  */
 export function navigation(command: string, cwd: string, acts: (index: number) => boolean = () => true): Navigation {
   const targets: string[] = [];
   let unreadable = false;
-  // The folders an unquoted path names from `from`: its wildcard matches, or the path itself.
   const expand = (path: string, from: string, quoted: boolean): string[] => {
-    // The home folder is written ~ (Qodo on PR 265).
     const full = path.startsWith("~") ? join(homedir(), path.slice(1)) : resolve(from, path);
     if (quoted || !hasWildcard(path)) return [full];
     const found = globMatches(full, from);
@@ -295,7 +285,7 @@ export function navigation(command: string, cwd: string, acts: (index: number) =
     const resolved = expand(path, here, m[3] === undefined);
     targets.push(...resolved);
     if (/^(?:cd|pushd|Set-Location|sl)\b/i.test(m[0])) here = resolved[0] ?? here;
-    // Each further `-C` of the same git call is resolved from the one before, as git does (Qodo on PR 265).
+    // Each further `-C` of the same git call is resolved from the one before, as git does.
     if (/^git\s/i.test(m[0]) && resolved.length) {
       let dir = resolved[0] ?? here;
       const option = /\s+-C\s*(?:"([^"]+)"|'([^']+)'|([^\s"';&|<>()]+))/y;
@@ -324,19 +314,16 @@ export function navigationTargets(command: string, cwd: string): string[] {
 
 /**
  * True when the command moves into a folder the guard can't read before it runs (`cd "$DIR"`, `git -C $(…)`,
- * a wildcard with too many matches): a write after it may land in any reviewed checkout (re-grade 4). Only
- * where the shell acts on it: a move written in a message, a single-quoted string or a comment is text, so it
- * can't widen a write to every reviewed repo (Qodo on PR 322).
+ * a wildcard with too many matches): a write after it may land in any reviewed checkout. A move written in a
+ * message, a single-quoted string or a comment is only text, so it can't widen a write to every reviewed repo.
  */
 export function unreadableMove(command: string, cwd: string, depth = 0): boolean {
-  // A move counts unless its first word sits in quoted text, a heredoc body or a comment that runs nothing. The
-  // spans are read from the command as written, never after posted values are cut out of it: a cut can shift a
-  // quote and hide a real move (Qodo on PR 322, second review). Text that runs a substitution still counts.
+  // Spans are read from the command as written: cutting posted values out first can shift a quote and hide a
+  // real move. Text that runs a substitution still counts.
   const text = new Array<boolean>(command.length).fill(false);
   for (const span of quotedSpans(command)) if (!span.runs) text.fill(true, span.start, span.end);
   if (navigation(command, cwd, (index) => !text[index]).unreadable) return true;
-  // Quotes inside a substitution belong to its own command, not the string around it: each command a
-  // substitution runs is read again on its own (Qodo on PR 322, third review).
+  // Quotes inside a substitution belong to its own command, so each one is read again on its own.
   return depth < 3 && substitutions(command, true).some((s) => unreadableMove(s.inner, cwd, depth + 1));
 }
 
@@ -360,12 +347,12 @@ export function stripReviewedNames(reviewed: Reviewed[], text: string): string {
   const identifies = new RegExp(repoWords.join("|"), "i");
   const owners = [...new Set(reviewed.map((r) => (r.github.split("/")[0] ?? "").toLowerCase()))].map(esc);
   // `owner/name` for a known owner and a repo name, as a whole token or after `=` or an API path's `repos/`.
-  // A ref (`HEAD:faultforge/x`, `refs/heads/faultforge/x`, `fix/faultforge`) is none of these (re-grade 3).
+  // A ref (`HEAD:faultforge/x`, `refs/heads/faultforge/x`, `fix/faultforge`) is none of these.
   const repoId = new RegExp(
     `(^|=|\\brepos/)(?:${owners.join("|")})/(?:${repoWords.join("|")})(?=$|[/#]|\\.git\\b)`,
     "gi",
   );
-  // Whole tokens first, then the slash test: one pattern for both backtracks on every long token (AUD-M4).
+  // Whole tokens first, then the slash test: one pattern for both backtracks on every long token.
   return text.replace(/[^\s"'`]+/g, (token) => {
     if (!/[/\\]/.test(token) || !identifies.test(token)) return token;
     return isPath(token) ? " " : token.replace(repoId, "$1 ");

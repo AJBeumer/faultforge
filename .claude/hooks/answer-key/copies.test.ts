@@ -1,5 +1,5 @@
 /**
- * Copies of private storage (#335; re-grade 6, Q21): the answer key, the audit log and a still-private template's
+ * Copies of private storage: the answer key, the audit log and a still-private template's
  * files are never copied out of private storage, written into another file, or committed in the lab. The lab's
  * pre-commit and commit-msg hooks refuse them too, whoever runs git. Compared by hash, never printed. The private
  * folder and its contents are made up for the test.
@@ -67,7 +67,7 @@ describe("private content is told by hash", () => {
   });
 });
 
-describe("no copy of private storage leaves it (Q21)", () => {
+describe("no copy of private storage leaves it", () => {
   it.each([
     "cp private/ground-truth.jsonl docs/ && git add docs && git commit -m docs",
     "cp private/audit-events.jsonl docs/log.jsonl",
@@ -78,7 +78,7 @@ describe("no copy of private storage leaves it (Q21)", () => {
     "cat private/ground-truth.jsonl > docs/key.jsonl",
     "cat private/ground-truth.jsonl | tee docs/key.jsonl",
     "grep FF private/audit-events.jsonl | sort > docs/x.txt",
-    // An input redirect, dd, and a path the guard can't read that names the private folder (Qodo on PR 337).
+    // An input redirect, dd, and a path the guard can't read that names the private folder.
     "dd if=private/ground-truth.jsonl of=docs/key.jsonl",
     "tee docs/key.jsonl < private/ground-truth.jsonl",
     'cp "$FAULTFORGE_PRIVATE_DIR/ground-truth.jsonl" docs/key.jsonl',
@@ -111,7 +111,7 @@ describe("no copy of private storage leaves it (Q21)", () => {
   });
 });
 
-describe("a lab commit can't carry a copy (Q21)", () => {
+describe("a lab commit can't carry a copy", () => {
   it("refuses a git commit while a copy is staged, or would be by -a or a chained add", () => {
     writeFileSync(join(LAB.dir, "docs", "key.jsonl"), `${KEY_LINE}\n`);
     expect(bash("git add docs && git commit -m docs")).toMatch(/copies the answer key/);
@@ -170,7 +170,7 @@ describe("a lab commit can't carry a copy (Q21)", () => {
   });
 });
 
-describe("commits and pushes carry no copy either (Qodo on PR 337)", () => {
+describe("commits and pushes carry no copy either", () => {
   /** The update line git hands a pre-push hook for `main`. */
   const update = (repo: typeof LAB) =>
     `refs/heads/main ${repo.git("rev-parse", "HEAD").trim()} refs/heads/main ${repo.git("rev-parse", "origin/main").trim()}\n`;

@@ -1,4 +1,4 @@
-/** Shell wildcards and brace lists, expanded against made-up folders under the temp folder (Qodo on PR 310). */
+/** Shell wildcards and brace lists, expanded against made-up folders under the temp folder. */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ describe("braces", () => {
     expect(braces("plain")).toEqual(["plain"]);
   });
 
-  it("says when a list has more words than it expands, never a partial list (Qodo on PR 312)", () => {
+  it("says when a list has more words than it expands, never a partial list", () => {
     expect(braces(`{docs,private}${"{,}".repeat(11)}`)).toBeUndefined();
     expect(globMatches(`{docs,private}/a.md${"{,}".repeat(11)}`, ROOT)).toBeUndefined();
   });
@@ -39,7 +39,7 @@ describe("globMatches", () => {
     expect(globMatches(word, ROOT)?.sort()).toEqual(expected);
   });
 
-  it("reads a bracket with a range out of order as no match, never an error (Qodo on PR 312)", () => {
+  it("reads a bracket with a range out of order as no match, never an error", () => {
     expect(globMatches("a[i-1]", ROOT)).toEqual([]);
     expect(globMatches("[z-a]*", ROOT)).toEqual([]);
   });

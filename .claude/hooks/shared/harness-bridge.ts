@@ -1,5 +1,5 @@
 /**
- * The one way the hooks reach into the harness (#355). Every hook module that needs harness code imports it from
+ * The one way the hooks reach into the harness. Every hook module that needs harness code imports it from
  * here, never from `packages/harness` itself, so this file is the whole list of what the guard runs from outside
  * `.claude`. Those files run before every tool call, so each is also one of the guard's own files
  * (`self/own-files.ts`) and fingerprinted before a factory run (`HOOK_IMPORTS` in the harness's

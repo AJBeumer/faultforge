@@ -3,7 +3,7 @@
  * runs in, followed through `cd`, `pushd` and `Set-Location`, with quotes and escapes removed as the shell joins a
  * word (`".claude"/hooks`), Git Bash's drive spelling read (`/d/x` is `D:\x` on Windows), wildcards and brace lists
  * expanded against what exists, and the files its redirects read and write apart. Shared by the checks on the
- * guard's own files (self/own-files.ts) and on copies out of private storage (answer-key/copies.ts), re-grade 6. Words
+ * guard's own files (self/own-files.ts) and on copies out of private storage (answer-key/copies.ts). Words
  * in a commit message or a post body are posted text, not paths, and are left out.
  */
 
@@ -122,7 +122,7 @@ export function copyEnds(step: PathStep): { sources: string[]; destination: stri
   return { sources: [...new Set(named.slice(0, -1).flat())], destination: named.at(-1) ?? [] };
 }
 
-/** The most distinct paths one step may name and still be read: each costs a look at the file system (AUD-M4). */
+/** The most distinct paths one step may name and still be read: each costs a look at the file system. */
 export const MAX_PATHS = 256;
 export const TOO_MANY_PATHS = `This command names more than ${MAX_PATHS} files in one step, more than the guard reads. Split it.`;
 

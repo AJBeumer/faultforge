@@ -1,5 +1,5 @@
 /**
- * A lab ticket's run is kept out of the private checkouts however a command spells them (Qodo on PR 310): through
+ * A lab ticket's run is kept out of the private checkouts however a command spells them: through
  * a variable that holds one (`${FAULTFORGE_PRIVATE_CHECKOUTS%%:*}`), and through a wildcard before the folder's
  * name (`priv*` followed by a folder, a bare star followed by `templates`, `cd priv?te`). Folders are made up under
  * the temp folder.
@@ -49,7 +49,7 @@ function bash(command: string, cwd = LAB): string | undefined {
   return decision.kind === "deny" ? decision.reason : undefined;
 }
 
-describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 310)", () => {
+describe("a variable that holds a private checkout doesn't hide it", () => {
   it.each([
     `cd "\${FAULTFORGE_PRIVATE_CHECKOUTS%%${delimiter}*}" && cat README.md`,
     `cat "\${FAULTFORGE_PRIVATE_CHECKOUTS%%${delimiter}*}/README.md"`,
@@ -71,17 +71,17 @@ describe("a variable that holds a private checkout doesn't hide it (Qodo on PR 3
     'cat "$FAULTFORGE_RUN_ROOT/lab/docs/notes.md"',
     "cd $FAULTFORGE_RUN_ROOT/lab/packages && ls",
     'echo "$FAULTFORGE_TICKET_NUMBER"',
-    // The run's own files, though the runs folder they sit in is a checkout (Qodo on PR 312).
+    // The run's own files, though the runs folder they sit in is a checkout.
     `node -e "console.log(process.env.FAULTFORGE_TICKET_FILE)"`,
     'cat "$FAULTFORGE_TICKET_FILE"',
-    // Single-quoted text is not expanded by the shell (Qodo on PR 312).
+    // Single-quoted text is not expanded by the shell.
     "echo '$FAULTFORGE_RUN_ROOT/lab/private'",
   ])("allows %s", (command) => {
     expect(bash(command)).toBeUndefined();
   });
 });
 
-describe("a bracket that is no valid character class (Qodo on PR 312)", () => {
+describe("a bracket that is no valid character class", () => {
   it.each([`node -e "const a = [1, 2]; const i = 1; console.log(a[i-1])"`, "awk '{print a[NR-1]}' docs/notes.md"])(
     "is judged, not a hook failure: %s",
     (command) => {
@@ -90,7 +90,7 @@ describe("a bracket that is no valid character class (Qodo on PR 312)", () => {
   );
 });
 
-describe("a wildcard before the private folder's name doesn't hide it (Qodo on PR 310)", () => {
+describe("a wildcard before the private folder's name doesn't hide it", () => {
   it.each([
     "cat priv*/cases/FF-9001.json",
     "cat priv*/templates/x-secret-v1/template.json",
@@ -102,7 +102,7 @@ describe("a wildcard before the private folder's name doesn't hide it (Qodo on P
     "cd p[r]ivate && ls",
     "cat {private,docs}/README.md",
     "ls priv*",
-    // A brace list past the most the policy expands still names the private worktree (Qodo on PR 312).
+    // A brace list past the most the policy expands still names the private worktree.
     `cat {docs,private}/README.md${"{,}".repeat(11)}`,
   ])("refuses %s", (command) => {
     expect(bash(command)).toBeDefined();

@@ -1,5 +1,5 @@
 /**
- * The git-level guard can't be switched off (N-B, self/git-hooks.ts): in a reviewed checkout, the lab or the
+ * The git-level guard can't be switched off (self/git-hooks.ts): in a reviewed checkout, the lab or the
  * private checkout, no command and no file tool changes the guard's git settings or a `.git` folder's hooks and
  * config, however the path is spelled. Reading them stays allowed. Repos are made up under the temp folder.
  */

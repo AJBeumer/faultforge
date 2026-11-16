@@ -1,11 +1,11 @@
 /**
- * Where git history and whole repos may go (re-grade 6). Split from guard-target.ts, which may not pass 400 lines.
- *  - The private repo stays private (N-A): no repo's visibility is changed to public here (`gh repo edit
+ * Where git history and whole repos may go.
+ *  - The private repo stays private: no repo's visibility is changed to public here (`gh repo edit
  *    --visibility public`, an API write of `private=false` or `visibility=public`), no repo is made from the
  *    private checkout (`gh repo create --source`), and its history goes only to its own `origin`: no push from it
  *    to another remote or URL, no change to its remotes or the settings that pick where a push goes, and no clone,
  *    fetch or pull of it into another checkout, from which it could be pushed anywhere.
- *  - A reviewed repo gets history only from its own checkout (N-C): a push whose remote is a reviewed repo, by
+ *  - A reviewed repo gets history only from its own checkout: a push whose remote is a reviewed repo, by
  *    URL, local path or remote name, from any other folder (the lab, say) would send that folder's history there.
  *    No issue is transferred into a reviewed repo either, by `gh issue transfer` or GraphQL's `transferIssue`.
  * Each command is read step by step, with the folder each git or gh step runs in followed through `cd` and
@@ -144,7 +144,7 @@ const PUBLIC_FIELD = /\bprivate\s*[=:]\s*(?:false|0)\b|\bvisibility\s*[=:]\s*(?:
 const PUBLISH =
   "The private repo stays private: no repo is made public from here, and the private history goes only to its own origin. The owner changes visibility by hand.";
 
-/** Why the command could publish the private repo or its history, or undefined (N-A). */
+/** Why the command could publish the private repo or its history, or undefined. */
 function privateProblem(call: Call, root: string): string | undefined {
   const [sub = "", verb = ""] = call.args;
   if (call.program === "gh" && sub === "repo" && verb === "edit") {
@@ -163,7 +163,7 @@ function privateProblem(call: Call, root: string): string | undefined {
   const own = privateOrigin(root);
   if (sub === "push" && inPrivate) {
     const remote = pushRemote(call.args) ?? "origin";
-    // Origin goes where it fetches from; a second push URL elsewhere would send the history there too (Qodo on PR 333).
+    // Origin goes where it fetches from; a second push URL elsewhere would send the history there too.
     if (remote === "origin") return call.dir && originSplits(call.dir) ? PUBLISH : undefined;
     if (!call.dir || unreadable(remote)) return PUBLISH;
     // Each push URL must be the private repo's own: git pushes to every one of them.
@@ -184,7 +184,7 @@ function privateProblem(call: Call, root: string): string | undefined {
     const reaches = (w: string) =>
       githubRepos(w).some((repo) => own.includes(repo)) ||
       within(resolve(call.dir ?? "", w.replace(/^file:\/\//i, "")), root);
-    // A remote's name is read as the URL it fetches from (`git fetch private`; Qodo on PR 333).
+    // A remote's name is read as the URL it fetches from (`git fetch private`).
     if (
       named.some((w) =>
         remoteUrls(call.dir ?? "", w, false)
@@ -197,11 +197,11 @@ function privateProblem(call: Call, root: string): string | undefined {
   return undefined;
 }
 
-/** Why the command could send history or an issue into a reviewed repo from elsewhere, or undefined (N-C). */
+/** Why the command could send history or an issue into a reviewed repo from elsewhere, or undefined. */
 function reviewedProblem(ctx: Context, call: Call): string | undefined {
   const [sub = "", verb = ""] = call.args;
   if (call.program === "gh" && sub === "issue" && verb === "transfer") {
-    // `owner/name` must be the reviewed repo itself; a bare name may be under any owner (Qodo on PR 333).
+    // `owner/name` must be the reviewed repo itself; a bare name may be under any owner.
     const destination = (positionals(call.args, 2, /^(-R|--repo)$/)[1] ?? "").toLowerCase();
     const reviewed = (r: Reviewed) =>
       destination.includes("/") ? destination === r.github.toLowerCase() : destination === r.name.toLowerCase();
@@ -216,7 +216,7 @@ function reviewedProblem(ctx: Context, call: Call): string | undefined {
   }
   if (unreadable(remote)) return undefined;
   const dir = call.dir;
-  // Any one of a remote's push URLs is enough: git pushes to all of them (Qodo on PR 333).
+  // Any one of a remote's push URLs is enough: git pushes to all of them.
   for (const url of remoteUrls(dir, remote)) {
     const target = reviewedAt(url, dir, ctx.reviewed);
     if (target && !ownCheckout(dir, target)) return fromElsewhere(target);

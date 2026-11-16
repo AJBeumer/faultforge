@@ -28,7 +28,7 @@ describe("isEntry: a hook knows when it is the file being run", () => {
   });
 });
 
-describe("hookAnswer: a payload that can't be read is the hook's own failure (Qodo on PR 131)", () => {
+describe("hookAnswer: a payload that can't be read is the hook's own failure", () => {
   const failed = (error: unknown): Decision => ({ kind: "error", message: `hook failed: ${String(error)}` });
 
   it("passes what was read to the decision", () => {

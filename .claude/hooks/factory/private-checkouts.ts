@@ -1,7 +1,6 @@
 /**
- * The factory policy's rules about the private repo (AUD-H2, #284, #299): which of its files no run reads, and
- * which checkouts of it a run's tools must stay out of. Split from factory/paths.ts, which may not pass
- * 400 lines.
+ * The factory policy's rules about the private repo: which of its files no run reads, and which checkouts of it
+ * a run's tools must stay out of.
  *
  * Every run, a lab ticket's included, is kept out of the private checkouts the runner names in
  * `FAULTFORGE_PRIVATE_CHECKOUTS`: the owner's `<lab>/private`, the runs folder (other runs' worktrees), and in a
@@ -51,7 +50,6 @@ export const globBase = (pattern: string) => pattern.split(/[*?[{]/)[0]?.replace
 /** The path a shell word names: itself, or with a wildcard the fixed folder it starts from (`.` when none). */
 const fixedPart = (word: string) => (/[*?[{]/.test(word) ? globBase(word) || "." : word);
 
-/** The private checkouts named in the run's environment. */
 export function privateCheckouts(env: NodeJS.ProcessEnv): string[] {
   return (env[PRIVATE_CHECKOUTS_ENV] ?? "")
     .split(delimiter)
@@ -111,11 +109,11 @@ function pathViolation(path: string, env: NodeJS.ProcessEnv, holderOk: boolean):
   const hit = nested.find((c) => inside(path, c) || inside(path, real(c)));
   if (hit) return evidenceRead(path, inside(path, hit) ? hit : real(hit)) ? undefined : REASON;
   // Each folder in both spellings, as named and through links (Windows' short names, a junction): a path the read
-  // tools resolved through links must still meet its own folder (seen on the Windows CI runner).
+  // tools resolved through links must still meet its own folder (as on the Windows CI runner).
   const holds = (c: string) => inside(c, path) || inside(real(c), path);
   if (own && (inside(path, own) || inside(path, real(own))))
     return !holderOk && nested.some(holds) ? HOLDER_REASON : undefined;
-  // In a checkout, or a folder that holds one (a search from a parent reads it too; Qodo on PR 288).
+  // In a checkout, or a folder that holds one: a search from a parent reads it too.
   if (outer.some((c) => inside(path, c) || inside(path, real(c)) || holds(c))) return REASON;
   return undefined;
 }
@@ -192,7 +190,7 @@ function recursiveTargets(step: string): string[] {
 
 /**
  * The folders a command may run its steps in: where it starts, and each folder a `cd` takes it to. A wildcard
- * target is every folder it matches (Qodo on PR 310: `cd priv?te`), or the folder it starts from when there are
+ * target is every folder it matches (`cd priv?te`), or the folder it starts from when there are
  * too many to list.
  */
 function folders(command: string, cwd: string): string[] {
@@ -211,12 +209,12 @@ const VARIABLE_REASON =
   "a run names its folders as written, not through a variable that holds a private checkout or the folder above one";
 
 /**
- * The command with each variable the shell would expand put in from the run's environment (Qodo on PR 310), so a
+ * The command with each variable the shell would expand put in from the run's environment, so a
  * path spelled `$FAULTFORGE_RUN_ROOT/lab/private` is judged as the folder it is. A variable can't be expanded
  * here when it is edited on the way (`${NAME%%:*}`) or named through another (`${!name}`): when that variable
  * holds a private checkout or a folder above one, the command is refused, and so is one that reads a variable
  * naming a checkout any other way (`printenv NAME`, `process.env.NAME`). The run's own folder is set aside, as
- * the path rules set it aside: its ticket file sits in the runs folder, a checkout (Qodo on PR 312), but its own
+ * the path rules set it aside: its ticket file sits in the runs folder, a checkout, but its own
  * private worktree still counts.
  */
 function expandVariables(command: string, env: NodeJS.ProcessEnv) {
@@ -242,7 +240,7 @@ function expandVariables(command: string, env: NodeJS.ProcessEnv) {
       .replace(/\$env:([A-Za-z_]\w*)|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/gi, (_all, a, b, c) =>
         slashed(env[a ?? b ?? c]),
       );
-  // Single-quoted text is the shell's literal text: no variable in it is expanded (Qodo on PR 312).
+  // Single-quoted text is the shell's literal text: no variable in it is expanded.
   let text = "";
   let at = 0;
   for (const span of quotedSpans(command).filter((s) => s.kind === "single")) {
@@ -279,7 +277,7 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv,
   };
   if (readings.some((r) => PRIVATE_NAMES.test(r) || named(r))) return REASON;
   const start = cwd ?? own ?? ".";
-  // Paths as the shell would resolve them (Qodo on PR 288), from every folder the command may be in: one that
+  // Paths as the shell would resolve them, from every folder the command may be in: one that
   // climbs out of the run's folder with `..`, or whose fixed start (before a wildcard) is in a private checkout.
   const dirs = folders(expanded.text, start);
   // A command run from inside the private worktree, or that moves into it, reads it, whatever it names.
@@ -295,7 +293,7 @@ export function privateCommandViolation(command: string, env: NodeJS.ProcessEnv,
       if (own && /(^|[/\\])\.\.([/\\]|$)/.test(word) && !inside(base, own))
         return "a run stays in its own folder: no `..` out of it";
       // A wildcard is judged by the folder it starts from (`private/temp*` by `private/`), and by every path it
-      // matches: `priv*/cases` starts from the run's own folder but names its private worktree (Qodo on PR 310).
+      // matches: `priv*/cases` starts from the run's own folder but names its private worktree.
       const reason = pathViolation(base, env, true);
       if (reason) return reason;
       if (!wild) continue;

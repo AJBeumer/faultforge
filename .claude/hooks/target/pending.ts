@@ -1,7 +1,6 @@
 /**
  * The pending-content check of the Claude Code guard: before any `git commit` or `git push`, wherever it
- * runs, what every reviewed checkout would send is read from git (target/content.ts). Split out of
- * guard-target.ts to keep it under the size limit.
+ * runs, what every reviewed checkout would send is read from git (target/content.ts).
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -29,7 +28,7 @@ export function pendingProblem(reviewed: Reviewed[], command: string, touched: R
     if (!moment) continue;
     for (const repo of checkouts) {
       if (!existsSync(resolve(repo.checkout, ".git"))) {
-        // Only a checkout the command itself aims at must exist: a second clone stands on its own (Qodo on PR 265).
+        // Only a checkout the command itself aims at must exist: a second clone stands on its own.
         if (touched.some((r) => resolve(r.checkout) === resolve(repo.checkout))) {
           return `The guard can't find ${repo.name}'s checkout at ${repo.checkout} (from factory.json), so it can't check what this ${moment} would carry. Fix the path before committing or pushing there.`;
         }

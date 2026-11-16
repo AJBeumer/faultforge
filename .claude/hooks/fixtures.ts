@@ -87,7 +87,7 @@ export const REPOS = {
   private: "AJBeumer/faultforge-private",
 };
 
-/** The deny reason of the door rule (#340): every write to a reviewed repo goes through npm run target:post. */
+/** The deny reason of the door rule: every write to a reviewed repo goes through npm run target:post. */
 export const DOOR = /go only through the door/;
 
 /**
@@ -169,11 +169,11 @@ export function canSymlink(): boolean {
 }
 
 /**
- * How much slower `run` gets when its input grows `factor` times (AUD-M4, re-grade 7): the best of several timed
- * runs at each size, after a warm-up, so a busy machine slows both sizes alike and a pause in one run doesn't
- * count. Linear code grows at most `factor` times (less, with fixed costs such as a git call); quadratic code
- * about factor² times. So a bound between them (`LINEAR_BOUND`) holds on a slow machine as on a fast one, and
- * fails when the code turns quadratic. No wall-clock limit: a loaded machine made those fail at random.
+ * How much slower `run` gets when its input grows `factor` times: the best of several timed runs at each size,
+ * after a warm-up, so a busy machine slows both sizes alike and a pause in one run doesn't count. Linear code
+ * grows at most `factor` times (less, with fixed costs such as a git call); quadratic code about factor² times.
+ * So a bound between them (`LINEAR_BOUND`) holds on a slow machine as on a fast one, and fails when the code
+ * turns quadratic. There is no wall-clock limit: on a loaded machine one would fail at random.
  */
 export function growth(run: (scale: number) => void, factor = GROWTH_FACTOR): number {
   const best = (scale: number, times: number) => {

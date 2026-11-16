@@ -15,7 +15,7 @@ const door = (kind: string) => `npm run target:post -- ${kind} --repo Owner/app 
 const allowed: readonly string[] = AGENT_DOOR_KINDS;
 const others = COMMAND_KINDS.filter((kind) => !allowed.includes(kind));
 
-describe("factory policy: the door kinds a run's agent may use, as a first layer (#347)", () => {
+describe("factory policy: the door kinds a run's agent may use, as a first layer", () => {
   it("reads the door's own list: push, pr-create and pr-edit", () => {
     expect(AGENT_DOOR_KINDS).toBe(DOOR_LIST);
     expect([...AGENT_DOOR_KINDS]).toEqual(["push", "pr-create", "pr-edit"]);
@@ -40,7 +40,7 @@ describe("factory policy: the door kinds a run's agent may use, as a first layer
     expect(doorKindViolation(command)).toBeDefined();
   });
 
-  it("reads a `;` inside a quoted file name as part of the name (Qodo on PR 349)", () => {
+  it("reads a `;` inside a quoted file name as part of the name", () => {
     const quoted = "'title; npm run target:post -- pr-close'";
     expect(
       doorKindViolation(`npm run target:post -- pr-create --head tidy --title-file ${quoted} --body-file b.md`),
@@ -51,7 +51,7 @@ describe("factory policy: the door kinds a run's agent may use, as a first layer
     "npm run target:post -- push --repo Owner/app --branch tidy",
     "npm run target:post -- pr-create --repo Owner/app --head tidy --title-file t.md --body-file b.md",
     "npm run target:post -- pr-edit --repo Owner/app --number 3 --body-file b.md",
-    // Qodo on PR 349: a branch may carry any name, a kind's included.
+    // A branch may carry any name, a kind's included.
     "npm run target:post -- push --repo Owner/app --branch pr-comment",
   ])("lets %s through during a run", (command) => {
     expect(decide(bash(command), RUN_ENV)).toEqual({ kind: "allow" });
@@ -62,7 +62,7 @@ describe("factory policy: the door kinds a run's agent may use, as a first layer
   });
 
   it.each([
-    // Qodo on PR 349: commands that read, search or test are not door calls.
+    // Commands that read, search or test are not door calls.
     "cat packages/harness/src/door/target-post.ts README",
     "grep sendPost packages/harness/src/door/target-post.ts",
     "grep -R pr-close packages/harness/src",
