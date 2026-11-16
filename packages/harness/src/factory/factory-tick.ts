@@ -232,7 +232,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
     if (ws.hooks) log("hooks-checked", hooksEvent(ws.hooks));
 
     const workspace = ws;
-    const run = { deps, ws: workspace, pick, owner, runId: id, log };
+    const run = { deps, ws: workspace, pick, owner, runId: id, log, reviewed };
     // Questions first: a ticket with a choice left open goes back to the owner before anything is built.
     const asked = await clarifyTicket(run);
     const finish = asked ?? checkRun(run, await runOnTicket(run), options.minutes);

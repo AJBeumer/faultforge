@@ -13,8 +13,10 @@
  * down before the run. A complete ticket is right when it gets no question. The record goes to
  * `<evidence>/clarify-measure/`.
  *
- * Exit codes: 0 the measurement ran and its record was saved, whatever the result; 2 it could not run (no
- * ticket set, a set that can't be read, or an unexpected error, even while loading: `npm run
+ * It runs on the owner's machine only. In CI it refuses: its agent would start without the factory's sandbox.
+ *
+ * Exit codes: 0 the measurement ran and its record was saved, whatever the result; 2 it could not run (in
+ * CI, no ticket set, a set that can't be read, or an unexpected error, even while loading: `npm run
  * clarify:measure` runs `clarify-measure-cli.ts`).
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -132,10 +134,25 @@ export function measureReport(lines: MeasureLine[]): string[] {
   return out;
 }
 
+/**
+ * Why the measurement won't run here, or undefined. It starts its agent without the network sandbox a
+ * factory run in CI has, so it refuses to run in CI at all: it is for the owner's machine.
+ */
+export function measureRefusal(env: Record<string, string | undefined>): string | undefined {
+  return env.CI || env.GITHUB_ACTIONS
+    ? "this runs on the owner's machine only: in CI its agent would start without the factory's sandbox"
+    : undefined;
+}
+
 /** The command: `clarify-measure-cli.ts` runs it, so an unexpected error, even while loading, is exit 2. */
 export async function main(argv: string[]): Promise<number> {
   if (argv.length) {
     console.error("usage: npm run clarify:measure");
+    return 2;
+  }
+  const where = measureRefusal(process.env);
+  if (where) {
+    console.error(`clarify:measure: ${where}`);
     return 2;
   }
   const priv = privateDir();

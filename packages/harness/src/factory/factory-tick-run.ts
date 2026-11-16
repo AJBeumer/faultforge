@@ -16,6 +16,7 @@ import {
   parseAgentResult,
   prNumber,
   RunnerStop,
+  safeText,
   settle,
 } from "./factory-settle.ts";
 import type { Logger, TickDeps, Workspace } from "./factory-tick-deps.ts";
@@ -30,6 +31,8 @@ export interface ClaimedRun {
   owner: string;
   runId: string;
   log: Logger;
+  /** True for a ticket in a reviewed repository, where a comment may not give the lab away. */
+  reviewed?: boolean;
 }
 
 /** What the agent did, and when, for `checkRun`. */
@@ -79,12 +82,23 @@ export async function clarifyTicket(run: ClaimedRun): Promise<Finish | null> {
   }
   if (outcome.kind === "questions") {
     const count = outcome.questions.length;
+    const comment = questionsComment(outcome.questions, LABELS.ready);
+    // On a reviewed repository a comment with a giveaway word is replaced whole by a fixed sentence. The
+    // owner would then be asked to answer questions nobody can see, so the ticket needs help instead.
+    if (run.reviewed && safeText(comment, true) !== comment) {
+      log("clarified", { result: "questions that can't be posted on this ticket", questions: count, ...cost });
+      return {
+        label: LABELS.help,
+        reason: "the questions about this ticket hold a word that can't be posted here; they are in the run's files",
+        pr: null,
+      };
+    }
     log("clarified", { result: "questions for the owner", questions: count, ...cost });
     return {
       label: LABELS.answer,
       reason: `${count} question${count === 1 ? "" : "s"} for the owner before building`,
       pr: null,
-      comment: questionsComment(outcome.questions, LABELS.ready),
+      comment,
     };
   }
   log("clarified", { result: "could not check", reason: outcome.reason, ...cost });

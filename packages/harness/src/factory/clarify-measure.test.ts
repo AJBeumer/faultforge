@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type MeasureTicket,
   measureLine,
+  measureRefusal,
   measureReport,
   summariseMeasure,
   ticketSetProblems,
@@ -94,5 +95,14 @@ describe("ticketSetProblems", () => {
     expect(ticketSetProblems([{ ...GAP, gapTerms: ["", 3] }])).toEqual([
       "ticket codes-gap: its gap terms must be a list of words",
     ]);
+  });
+});
+
+describe("measureRefusal", () => {
+  it("refuses to run in CI, where its agent would start without the factory's sandbox, and runs elsewhere", () => {
+    expect(measureRefusal({ CI: "true" })).toMatch(/owner's machine only/);
+    expect(measureRefusal({ GITHUB_ACTIONS: "true" })).toMatch(/owner's machine only/);
+    expect(measureRefusal({})).toBeUndefined();
+    expect(measureRefusal({ CI: "" })).toBeUndefined();
   });
 });

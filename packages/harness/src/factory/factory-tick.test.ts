@@ -1906,3 +1906,50 @@ describe("tick: questions before the build", () => {
     expect(f.calls[0]).toContain(`+${LABELS.working}`);
   });
 });
+
+describe("tick: questions that can't reach the owner", () => {
+  const question = { question: "Which status code should a full room get?", options: ["409", "422"], recommended: 1 };
+  const asks = (questions: (typeof question)[]): Partial<TickDeps> => ({
+    clarify: async () => ({ outcome: { kind: "questions", questions }, costUsd: 0.4, turns: 6 }),
+  });
+
+  it("needs help, and doesn't wait for an answer, when the questions couldn't be posted", async () => {
+    const ticket = { "owner/lab#5": { title: "Tool", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    let posts = 0;
+    const f = fake(ticket, {
+      ...asks([question]),
+      comment: () => {
+        // The claim goes through; the questions don't.
+        if (++posts > 1) throw new Error("GitHub said 502");
+      },
+    });
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls).toContain(`relabel owner/lab#5 -${LABELS.answer} +${LABELS.help}`);
+    expect(f.events.find((e) => e.event === "finished")).toMatchObject({
+      label: LABELS.help,
+      reason: expect.stringMatching(/couldn't be posted/),
+    });
+    expect(f.calls).not.toContain("agent");
+  });
+
+  it("needs help on a reviewed ticket when a question holds a word that would be replaced by a stub", async () => {
+    const ticket = { "owner/target#18": { title: "Filter", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    const leaky = { ...question, question: "Is this the planted bug FaultForge is looking for?" };
+    const f = fake(ticket, asks([leaky]));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-help");
+    expect(f.calls.some((call) => call.includes(`+${LABELS.answer}`))).toBe(false);
+    const posted = f.comments.map((c) => c.body).join("\n");
+    expect(posted).not.toMatch(/planted|FaultForge/i);
+    expect(posted).not.toContain(QUESTIONS_MARKER);
+    expect(f.events.find((e) => e.event === "clarified")).toMatchObject({
+      result: "questions that can't be posted on this ticket",
+    });
+  });
+
+  it("posts the same question on a lab ticket, where naming the lab gives nothing away", async () => {
+    const ticket = { "owner/lab#5": { title: "Tool", events: [labelled("owner", "2026-11-09T08:00:00Z")] } };
+    const f = fake(ticket, asks([{ ...question, question: "Should the FaultForge report name the case?" }]));
+    expect(await tick(FACTORY, f.deps, OPTIONS)).toBe("needs-answer");
+    expect(f.comments.at(-1)?.body).toContain(QUESTIONS_MARKER);
+  });
+});

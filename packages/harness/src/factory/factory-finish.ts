@@ -81,6 +81,18 @@ export function finishRun(c: FinishContext): Finish["label"] {
     );
   } catch (error) {
     log("error", { message: `couldn't report on the ticket: ${message(error)}` });
+    // A ticket that waits for an answer must show the questions. Without them it would wait for ever, with
+    // no label a tick picks up: it needs help instead, and says so by its label.
+    if (label === LABELS.answer) {
+      reason = `${finish.reason}, but the questions couldn't be posted on the ticket`;
+      try {
+        c.relabel([LABELS.answer], [LABELS.help]);
+        label = LABELS.help;
+        c.labelled(label);
+      } catch (inner) {
+        log("error", { message: `couldn't relabel the ticket after the failed post: ${message(inner)}` });
+      }
+    }
   }
   log("finished", { label, reason, pr: finish.pr });
   c.finished();

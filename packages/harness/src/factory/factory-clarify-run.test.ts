@@ -1,24 +1,38 @@
+import { delimiter } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ANSWER_MARKER } from "./factory-clarify.ts";
 import {
+  type AgentProcess,
   CLARIFY_BUDGET_USD,
+  CLARIFY_DENIED_TOOLS,
   CLARIFY_TOOLS,
   clarifyArgs,
   clarifyDeny,
   clarifyEnv,
   clarifyResult,
+  waitForAgent,
 } from "./factory-clarify-run.ts";
 
 describe("the clarify agent's confinement", () => {
-  it("may read and nothing else: no shell, no edit, no network tool", () => {
+  it("may read and nothing else", () => {
     expect(CLARIFY_TOOLS).toEqual(["Read", "Glob", "Grep"]);
   });
 
-  it("starts headless, never asks, loads no MCP server and caps the cost", () => {
+  it("denies every other tool by name, since the workspace's own settings allow some shell commands", () => {
+    for (const tool of ["Bash", "PowerShell", "Edit", "Write", "WebFetch", "WebSearch", "Task", "Skill"]) {
+      expect(CLARIFY_DENIED_TOOLS).toContain(tool);
+      // In the settings file too: a deny rule there wins over an allow rule of the project's settings.
+      expect(clarifyDeny([])).toContain(tool);
+    }
+    expect(CLARIFY_DENIED_TOOLS.filter((tool) => CLARIFY_TOOLS.includes(tool))).toEqual([]);
+  });
+
+  it("starts headless, never asks, names the denied tools, loads no MCP server and caps the cost", () => {
     const args = clarifyArgs("the prompt", "/r/settings.json", "/r/mcp.json");
     expect(args.slice(0, 2)).toEqual(["-p", "the prompt"]);
     expect(args[args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read Glob Grep");
+    expect(args[args.indexOf("--disallowedTools") + 1]).toBe(CLARIFY_DENIED_TOOLS.join(" "));
     expect(args[args.indexOf("--max-budget-usd") + 1]).toBe(String(CLARIFY_BUDGET_USD));
     expect(args[args.indexOf("--settings") + 1]).toBe("/r/settings.json");
     expect(args).toContain("--strict-mcp-config");
@@ -45,15 +59,21 @@ describe("the clarify agent's confinement", () => {
     expect(env.FAULTFORGE_FACTORY_RUN).toBe("run-1");
     expect(env.FAULTFORGE_RUN_ROOT).toBe("/runs/run-1");
     expect(env.CLAUDE_CODE_GLOB_NO_IGNORE).toBe("false");
+    expect(env.FAULTFORGE_PRIVATE_CHECKOUTS).toBeUndefined();
   });
 
-  it("denies the run's private worktree to every tool it has, in both spellings of the drive", () => {
-    const deny = clarifyDeny({ private: "D:\\runs\\r\\lab\\private" });
+  it("is told the private checkouts its policy hook keeps it out of, as the builder is", () => {
+    const env = clarifyEnv({ PATH: "/bin" }, "run-1", "/runs/run-1", ["/lab/private", "/runs"]);
+    expect(env.FAULTFORGE_PRIVATE_CHECKOUTS).toBe(["/lab/private", "/runs"].join(delimiter));
+  });
+
+  it("denies its three tools on every private folder it is given, in both spellings of a drive", () => {
+    const deny = clarifyDeny(["D:\\runs\\r\\lab\\private", "", "/lab/private", "/lab/private"]);
     expect(deny).toContain("Read(//d/runs/r/lab/private/**)");
     expect(deny).toContain("Grep(//D/runs/r/lab/private/**)");
-    expect(deny).toHaveLength(6);
-    expect(clarifyDeny({ private: "/runs/r/lab/private" })).toContain("Glob(//runs/r/lab/private/**)");
-    expect(clarifyDeny({ private: "" })).toEqual([]);
+    expect(deny).toContain("Glob(//lab/private/**)");
+    // Two spellings of one folder and one of the other, three tools each, and nothing for the empty name.
+    expect(deny.filter((rule) => rule.includes("("))).toHaveLength(9);
   });
 });
 
@@ -80,7 +100,91 @@ describe("clarifyResult", () => {
     expect(clarifyResult("not json", 0, false).outcome.kind).toBe("failed");
   });
 
+  it("is a failure, not a crash, for output that is JSON but no object", () => {
+    for (const out of ["null", "7", '"text"', "[]", "true"]) {
+      expect(clarifyResult(out, 0, false).outcome).toMatchObject({ kind: "failed", reason: /no readable result/ });
+    }
+  });
+
   it("is a failure when the agent's reply has no answer line", () => {
     expect(clarifyResult(envelope("Looks fine."), 0, false).outcome).toMatchObject({ kind: "failed" });
+  });
+});
+
+describe("waitForAgent", () => {
+  /** A process a test drives by hand: it closes, errors or prints only when told to. */
+  function process_() {
+    const listeners: Record<string, ((value: never) => void)[]> = {};
+    const on = (event: string, listener: (value: never) => void) => {
+      listeners[event] = [...(listeners[event] ?? []), listener];
+    };
+    const child: AgentProcess = {
+      pid: 4242,
+      stdout: { on: (event, listener) => on(`out:${event}`, listener as never) },
+      stderr: { on: () => {} },
+      on: ((event: string, listener: (value: never) => void) => on(event, listener)) as AgentProcess["on"],
+    };
+    const emit = (event: string, value?: unknown) => {
+      for (const listener of listeners[event] ?? []) listener(value as never);
+    };
+    return { child, emit };
+  }
+
+  it("answers with the output and exit code when the agent closes", async () => {
+    const { child, emit } = process_();
+    const waiting = waitForAgent(
+      child,
+      60_000,
+      () => {},
+      () => {},
+    );
+    emit("out:data", Buffer.from("half "));
+    emit("out:data", Buffer.from("answer"));
+    emit("close", 0);
+    expect(await waiting).toEqual({ stdout: "half answer", exitCode: 0, timedOut: false });
+  });
+
+  it("answers at its time limit even when the agent never closes and the kill throws", async () => {
+    const { child } = process_();
+    const errors: string[] = [];
+    const killed: number[] = [];
+    const result = await waitForAgent(
+      child,
+      20,
+      (pid) => {
+        killed.push(pid);
+        throw new Error("no such process");
+      },
+      (message) => errors.push(message),
+    );
+    expect(result).toEqual({ stdout: "", exitCode: null, timedOut: true });
+    // The kill is asked for after the answer, so it can't hold the answer back.
+    await new Promise((done) => setImmediate(done));
+    expect(killed).toEqual([4242]);
+    expect(errors.join(" ")).toMatch(/couldn't end the clarify agent/);
+  });
+
+  it("answers once: a close after the time limit changes nothing", async () => {
+    const { child, emit } = process_();
+    const result = await waitForAgent(
+      child,
+      10,
+      () => {},
+      () => {},
+    );
+    emit("close", 0);
+    expect(result.timedOut).toBe(true);
+  });
+
+  it("answers as not run when the agent can't be started", async () => {
+    const { child, emit } = process_();
+    const waiting = waitForAgent(
+      child,
+      60_000,
+      () => {},
+      () => {},
+    );
+    emit("error");
+    expect(await waiting).toEqual({ stdout: "", exitCode: null, timedOut: false });
   });
 });
