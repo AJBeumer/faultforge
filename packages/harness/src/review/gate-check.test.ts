@@ -1,19 +1,19 @@
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { dirname } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { type GateCheckDeps, run } from "./gate-check.ts";
-import { savedReviewDir, savedReviewPath } from "./saved-review.ts";
+import { savedReviewPath, waitSaveDir } from "./saved-review.ts";
 
 const HEAD = "c".repeat(40);
 const OLD = "d".repeat(40);
-const ENV = { FAULTFORGE_PRIVATE_DIR: join("scratch", "private") };
 
 /** Runs the command against saved reviews held in memory, keyed by the path the command would read. */
 function check(argv: string[], saved: Record<string, unknown>, head: string | Error = HEAD) {
   const out: string[] = [];
   const errors: string[] = [];
+  const dir = waitSaveDir("faultforge", 12);
   const files = new Map(
     Object.entries(saved).map(([sha, record]) => [
-      savedReviewPath(savedReviewDir("faultforge", 12, ENV), sha),
+      savedReviewPath(dir, sha),
       typeof record === "string" ? record : JSON.stringify(record),
     ]),
   );
@@ -23,15 +23,27 @@ function check(argv: string[], saved: Record<string, unknown>, head: string | Er
       return head;
     },
     read: (path) => files.get(path),
+    readAll: (folder) => [...files].filter(([path]) => dirname(path) === folder).map(([, text]) => text),
     out: (line) => out.push(line),
     error: (line) => errors.push(line),
   };
-  return { code: run(argv, deps, ENV), out: out.join("\n"), errors: errors.join("\n") };
+  return { code: run(argv, deps), out: out.join("\n"), errors: errors.join("\n") };
 }
 
-const complete = (openFindings: unknown[], headSha = HEAD) => ({ headSha, state: "complete", openFindings });
+const complete = (openFindings: unknown[], headSha = HEAD, extra: object = {}) => ({
+  headSha,
+  state: "complete",
+  openFindings,
+  ...extra,
+});
 
 describe("gate:check", () => {
+  const savedEnv = process.env.FAULTFORGE_PRIVATE_DIR;
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.FAULTFORGE_PRIVATE_DIR;
+    else process.env.FAULTFORGE_PRIVATE_DIR = savedEnv;
+  });
+
   it("exits 0 and lists the flagged findings when only informational ones are open", () => {
     const result = check(["faultforge", "12"], {
       [HEAD]: complete([{ severity: "informational", title: "A name could be clearer" }]),
@@ -54,6 +66,45 @@ describe("gate:check", () => {
     const result = check(["faultforge", "12"], { [HEAD]: complete([{ severity: "urgent", title: "?" }]) });
     expect(result.code).toBe(1);
     expect(result.out).toMatch(/label the gate doesn't know \(urgent\)/);
+  });
+
+  it("lists as closed a finding an earlier save of the pull request held and the head's review no longer has open", () => {
+    const fixed = { id: "f1", severity: "remediation_recommended", title: "Unread page" };
+    const low = { id: "f2", severity: "informational", title: "A name" };
+    const result = check(["faultforge", "12"], {
+      [OLD]: { ...complete([fixed, low], OLD), findings: [fixed, low] },
+      [HEAD]: { ...complete([low]), findings: [] },
+    });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(
+      "Closed since an earlier review of this pull request:\n  - [remediation_recommended (Medium)] Unread page",
+    );
+    expect(result.out).not.toMatch(/Closed since[\s\S]*A name/);
+  });
+
+  it("says none are closed when the head's review is the only save, and passes over a save it can't read", () => {
+    const result = check(["faultforge", "12"], { [HEAD]: complete([]), [OLD]: "{not json" });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("Closed since an earlier review of this pull request: none");
+  });
+
+  it("holds a save that records its rounds to the gate's limit, and still judges one that doesn't", () => {
+    const over = check(["faultforge", "12"], { [HEAD]: complete([], HEAD, { reviewRounds: 4 }) });
+    expect(over.code).toBe(1);
+    expect(over.out).toContain("4 review rounds have run on the pull request, more than the gate's 3");
+    const old = check(["faultforge", "12"], { [HEAD]: complete([]) });
+    expect(old.code).toBe(0);
+    expect(old.out).toContain("Review rounds: not recorded in this save");
+  });
+
+  it("looks where review:wait saves, whatever FAULTFORGE_PRIVATE_DIR says", () => {
+    const before = waitSaveDir("faultforge", 12);
+    process.env.FAULTFORGE_PRIVATE_DIR = "/somewhere/else";
+    expect(waitSaveDir("faultforge", 12)).toBe(before);
+    // The save is keyed by the folder computed before the variable was set: the command still finds it.
+    const result = check(["faultforge", "12"], { [HEAD]: complete([]) });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(savedReviewPath(before, HEAD));
   });
 
   it("exits 2, never 0, when only an older commit's review is saved", () => {

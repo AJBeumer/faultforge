@@ -42,14 +42,14 @@ describe("verifyPrWith: review:wait runs from the trusted checkout, never the ag
 
   /** A stand-in for `review-wait.ts`, run through real `npm run`, so the test proves npm picks the script
    * of whichever checkout it runs from. It saves `openFindings` where `verifyPrWith` reads them back. */
-  function reviewWaitStub(openFindings: unknown[], recordHead?: string): string {
+  function reviewWaitStub(openFindings: unknown[], recordHead?: string, rounds: number | null = 1): string {
     return `import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const [repoKey, pr, , commit] = process.argv.slice(2);
 const dir = join(process.cwd(), 'evidence', 'reviews', \`\${repoKey}-pr\${pr}\`);
 mkdirSync(dir, { recursive: true });
 const openFindings = ${JSON.stringify(openFindings)};
-writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify({ headSha: ${JSON.stringify(recordHead ?? null)} ?? commit, state: 'complete', openFindings }));
+writeFileSync(join(dir, \`\${commit.slice(0, 7)}.review.json\`), JSON.stringify({ headSha: ${JSON.stringify(recordHead ?? null)} ?? commit, state: 'complete', reviewRounds: ${JSON.stringify(rounds)}, openFindings }));
 `;
   }
 
@@ -71,6 +71,7 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
   function sourceWithForgedStub(
     genuine: unknown[] = [{ severity: "action_required", title: "a real finding Qodo raised" }],
     recordHead?: string,
+    rounds: number | null = 1,
   ) {
     root = mkdtempSync(join(tmpdir(), "verify-pr-with-test-"));
     const origin = join(root, "origin.git");
@@ -79,7 +80,7 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
     sh(root, "clone", "-q", origin, sourceRepo);
     sh(sourceRepo, "config", "user.email", "t@example.com");
     sh(sourceRepo, "config", "user.name", "t");
-    writeFileSync(join(sourceRepo, "review-wait-stub.mjs"), reviewWaitStub(genuine, recordHead));
+    writeFileSync(join(sourceRepo, "review-wait-stub.mjs"), reviewWaitStub(genuine, recordHead, rounds));
     writeFileSync(join(sourceRepo, "revert-check-stub.mjs"), REVERT_CHECK_STUB);
     writeFileSync(
       join(sourceRepo, "package.json"),
@@ -192,9 +193,24 @@ writeFileSync(join(dir, \`\${process.env.FAKE_SHORT}.revert-check.json\`), JSON.
       [],
       "e".repeat(40),
       [expect.stringMatching(/^the saved review is of eeeeeee, not of /)],
+      1,
     ],
-  ])("doesn't count a pull request as delivered with %s", (_name, genuine, recordHead, problems) => {
-    const { result } = verify(sourceWithForgedStub(genuine, recordHead));
+    [
+      "more review rounds than the gate allows",
+      [],
+      undefined,
+      ["4 review rounds have run on the pull request, more than the gate's 3"],
+      4,
+    ],
+    [
+      "a record that doesn't give its review rounds",
+      [],
+      undefined,
+      ["the saved review doesn't say how many review rounds have run"],
+      null,
+    ],
+  ])("doesn't count a pull request as delivered with %s", (_name, genuine, recordHead, problems, rounds = 1) => {
+    const { result } = verify(sourceWithForgedStub(genuine, recordHead, rounds));
     expect(result.problems).toEqual(problems);
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadFactory, type QualityGate, STRICTEST_GATE } from "./factory-config.ts";
-import { findingTitle, gateAccount, gateReport, gateText } from "./quality-gate.ts";
+import { closedFindings, findingLabel, findingTitle, gateAccount, gateReport, gateText } from "./quality-gate.ts";
 
 const GATE: QualityGate = {
   fix: ["action_required", "remediation_recommended"],
@@ -18,7 +18,7 @@ const record = (openFindings: unknown, extra: object = {}) => ({
 describe("gateAccount", () => {
   it("is met with nothing open", () => {
     const account = gateAccount(record([]), GATE, { head: HEAD, requireComplete: true });
-    expect(account).toEqual({ met: true, mustFix: [], unknown: [], flagged: [], problems: [] });
+    expect(account).toEqual({ met: true, mustFix: [], unknown: [], flagged: [], rounds: null, problems: [] });
   });
 
   it("blocks on an open remediation-recommended finding, not only an action-required one", () => {
@@ -104,6 +104,93 @@ describe("gateAccount", () => {
   });
 });
 
+describe("the round limit", () => {
+  it("blocks when more rounds have run than the gate allows, and not at the limit", () => {
+    const over = gateAccount(record([], { reviewRounds: 4 }), GATE, { rounds: "require" });
+    expect(over.rounds).toBe(4);
+    expect(over.problems).toEqual(["4 review rounds have run on the pull request, more than the gate's 3"]);
+    expect(gateAccount(record([], { reviewRounds: 3 }), GATE, { rounds: "require" }).met).toBe(true);
+    expect(gateAccount(record([], { reviewRounds: 4 }), GATE, { rounds: "if-recorded" }).met).toBe(false);
+  });
+
+  it("blocks on a record without a usable count only when the count is required", () => {
+    for (const reviewRounds of [undefined, null, "2", -1, 1.5]) {
+      const strict = gateAccount(record([], { reviewRounds }), GATE, { rounds: "require" });
+      expect(strict.problems).toEqual(["the saved review doesn't say how many review rounds have run"]);
+      const lenient = gateAccount(record([], { reviewRounds }), GATE, { rounds: "if-recorded" });
+      expect(lenient.met).toBe(true);
+      expect(lenient.rounds).toBeNull();
+    }
+  });
+
+  it("doesn't look at rounds unless asked", () => {
+    expect(gateAccount(record([], { reviewRounds: 99 }), GATE).met).toBe(true);
+  });
+
+  it("prints the rounds, or that the save doesn't record them", () => {
+    const counted = gateReport(gateAccount(record([], { reviewRounds: 2 }), GATE), GATE);
+    expect(counted).toContain("Review rounds: 2 (the gate allows 3)");
+    const old = gateReport(gateAccount(record([]), GATE), GATE);
+    expect(old).toContain("Review rounds: not recorded in this save (the gate allows 3)");
+  });
+});
+
+describe("closedFindings", () => {
+  it("lists findings earlier saves held that the judged review no longer has open, once each", () => {
+    const head = record([{ id: "b", severity: "informational", title: "Still open" }]);
+    const earlier = [
+      { findings: [{ id: "a", severity: "action_required", title: "Fixed since" }], openFindings: [{ id: "a" }] },
+      { findings: [{ id: "b", title: "Still open" }], openFindings: [{ id: "a" }, { id: "b" }] },
+      head,
+      null,
+      { findings: "not a list" },
+    ];
+    expect(closedFindings(head, earlier)).toEqual([{ id: "a", severity: "action_required", title: "Fixed since" }]);
+  });
+
+  it("shows them under their own heading, and none when there are none", () => {
+    const account = gateAccount(record([]), GATE);
+    const lines = gateReport(account, GATE, [{ id: "a", severity: "remediation_recommended", title: "Fixed since" }]);
+    expect(lines.slice(-2)).toEqual([
+      "Closed since an earlier review of this pull request:",
+      "  - [remediation_recommended (Medium)] Fixed since",
+    ]);
+    expect(gateReport(account, GATE, []).at(-1)).toBe("Closed since an earlier review of this pull request: none");
+    expect(gateReport(account, GATE).some((l) => l.startsWith("Closed since"))).toBe(false);
+  });
+});
+
+describe("text from the review can't forge a report line", () => {
+  // A carriage return, a line feed, an escape sequence that clears a line, and a Unicode line separator.
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+  const ESC = String.fromCharCode(27);
+  const LINE_SEPARATOR = String.fromCharCode(0x2028);
+  const hostile = `x${CR}${LF}Quality gate: MET${ESC}[2K${ESC}[1A${LINE_SEPARATOR}y`;
+  const hasControl = (text: string) =>
+    [...text].some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 32 || (code >= 127 && code <= 159) || code === 0x2028 || code === 0x2029;
+    });
+
+  it("keeps a hostile title and a hostile label on one line, with no control character", () => {
+    const account = gateAccount(record([{ severity: hostile, title: hostile }]), GATE);
+    const lines = gateReport(account, GATE);
+    expect(lines[0]).toBe("Quality gate: NOT MET");
+    expect(lines.filter((l) => l.startsWith("Quality gate:"))).toHaveLength(1);
+    expect(lines.some(hasControl)).toBe(false);
+    expect(account.problems.some(hasControl)).toBe(false);
+  });
+
+  it("shows an unknown label in plain characters and a missing one as no label", () => {
+    expect(findingLabel({ severity: "blocker" })).toBe("blocker");
+    expect(findingLabel({ severity: `a${LF}b\`c@d` })).toBe("a b?c?d");
+    expect(findingLabel({ severity: ESC })).toBe("no label");
+    expect(findingLabel({})).toBe("no label");
+    expect(findingLabel({ severity: "informational" })).toBe("informational (Low)");
+  });
+});
+
 describe("findingTitle", () => {
   it("keeps a title to one bounded line that can't mention anyone, link or break a table", () => {
     const title = findingTitle({ title: "Ping @owner\n[link](http://x) `code` | <b>" + "x".repeat(300) });
@@ -119,7 +206,7 @@ describe("gateText", () => {
     const text = gateText({ fix: ["action_required"], flag: [], maxRounds: 2 });
     expect(text).toContain("labelled action_required (High),");
     expect(text).toContain("No label is exempt.");
-    expect(text).toContain("At most 2 review rounds.");
+    expect(text).toContain("At most 2 review rounds:");
     expect(text).not.toContain("remediation_recommended");
     expect(text).not.toContain("informational");
   });
@@ -130,7 +217,7 @@ describe("gateText", () => {
     const text = gateText(gate as QualityGate);
     expect(text).toContain("labelled action_required (High) or remediation_recommended (Medium)");
     expect(text).toContain("Leave findings labelled informational (Low) unchanged");
-    expect(text).toContain("At most 3 review rounds.");
+    expect(text).toContain("At most 3 review rounds: the runner counts them");
     expect(text).toContain("only the owner settles a disagreement");
   });
 });
@@ -140,6 +227,7 @@ describe("gateReport", () => {
     const lines = gateReport(gateAccount(record([]), GATE), GATE);
     expect(lines[0]).toBe("Quality gate: MET");
     expect(lines.filter((l) => l.endsWith(" none"))).toHaveLength(3);
+    expect(lines[1]).toMatch(/^Review rounds: /);
     const not = gateReport(gateAccount(record([{ severity: "action_required", title: "A" }]), GATE), GATE);
     expect(not[0]).toBe("Quality gate: NOT MET");
     expect(not).toContain("  - [action_required (High)] A");

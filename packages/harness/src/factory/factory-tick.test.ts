@@ -42,6 +42,7 @@ import { provenanceProblems, ticketChangeProblems } from "./ticket-snapshot.ts";
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
+  gate: { fix: ["action_required", "remediation_recommended"], flag: ["informational"], maxRounds: 2 },
   repos: {
     lab: {
       github: "owner/lab",
@@ -435,6 +436,9 @@ describe("tick: stop paths", () => {
       "cleanup",
     ]);
     expect(f.comments[0]?.body).toMatch(/Picked up by scheduled agent run `20261109-093001-target-18`/);
+    // The round limit on the ticket and in the log is the gate's, not a number of its own.
+    expect(f.comments[0]?.body).toContain("Limits: 120 minutes, 2 review rounds.");
+    expect(f.events.find((e) => e.event === "claimed")).toMatchObject({ limits: { reviewRounds: 2 } });
     expect(f.comments[1]?.body).toMatch(/ready for the owner to merge[\s\S]*pull\/19/);
     expect(f.events.map((e) => e.event)).toEqual([
       "picked",

@@ -245,8 +245,12 @@ export function verifyPrWith(
       const record = readJsonRecord(reviewRecordFile) as GateRecord | null;
       if (!record) problems.push("review:wait's record for the head commit couldn't be read");
       // The file is named by the commit's first seven characters; the record's own `headSha` must agree in
-      // full, so a record of another commit under that name is never judged as this one's.
-      else problems.push(...gateAccount(record, gateOf(factory), { head: pushed, requireComplete: true }).problems);
+      // full, so a record of another commit under that name is never judged as this one's. The rounds are
+      // Qodo's own count, saved by review:wait in the trusted checkout, never the agent's.
+      else
+        problems.push(
+          ...gateAccount(record, gateOf(factory), { head: pushed, requireComplete: true, rounds: "require" }).problems,
+        );
     }
 
     // The PR's own new or changed tests must fail without its change. The runner checks this itself

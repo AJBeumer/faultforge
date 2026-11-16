@@ -41,7 +41,9 @@ The type of a finding (bug, rule violation, requirement gap) does not change the
 - A High or Medium finding is open, or a finding has a label the gate doesn't know.
 - The saved review is of an older commit than the pull request's head.
 - The review didn't finish, or Qodo skipped it.
-- Three review rounds have passed, or a round closed nothing that had to be fixed.
+- More review rounds have run than the gate's `maxRounds`. The runner takes the number from Qodo's own
+  record of the pull request, never from the agent.
+- A round closed nothing that had to be fixed. The agent stops itself here; the runner does not check it.
 
 ## Who decides
 
@@ -49,7 +51,7 @@ The runner, not the agent. After the agent reports, the runner reads Qodo's revi
 request's head from a fresh checkout of `main` and applies the gate itself
 (`packages/harness/src/shared/quality-gate.ts`). The agent's report can't change the answer, and a
 pull request can't edit the gate that judges it: `factory.json` is one of the files a run may not
-change.
+change unless the owner allowed it on the ticket.
 
 The agent's instructions are written from the same data, so the gate the agent reads is the gate
 the runner applies.
@@ -61,8 +63,9 @@ npm run review:wait -- faultforge 380 --commit <sha>
 npm run gate:check -- faultforge 380
 ```
 
-`gate:check` reads the saved review and prints every open finding under one of three headings:
-must fix, unknown label, flagged for the owner. Exit codes: 0 the gate is met, 1 it isn't, 2 it
+`gate:check` reads the saved review and prints every finding under a heading: must fix, unknown
+label, flagged for the owner, or closed since an earlier saved review of the same pull request.
+It also prints the number of review rounds. Exit codes: 0 the gate is met, 1 it isn't, 2 it
 could not be decided, such as when no review of the head is saved.
 
 ## Why it lives in `factory.json`
