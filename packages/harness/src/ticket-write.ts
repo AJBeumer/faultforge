@@ -7,7 +7,7 @@
  * the target, whatever `factory.json` says) and the caller's (the factory config's repos marked reviewed). So a
  * config that forgot to mark a repo can't send raw text to the target.
  */
-import { reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
+import { reviewedRepos } from "../../../.claude/hooks/shared/repos.ts";
 import { ExternalCallError, gh as labGh } from "./github.ts";
 import { type Gh, type Post, SendFailed, sendPost } from "./target-post.ts";
 

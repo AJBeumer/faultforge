@@ -39,13 +39,17 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "../../../.claude/hooks/guard-private.ts";
-import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
+import {
+  PRIVATE_ID_REASON,
+  privateIdMatcher,
+  privateTemplateIds,
+} from "../../../.claude/hooks/answer-key/private-ids.ts";
+import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/shared/repos.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
 import { gateMarker, runGateRefusal } from "./target-post-run.ts";
 
-// The door imports only the guard's own files (guard-self.ts holds them) and Node's: a module it imported that a
+// The door imports only the guard's own files (the hooks' self/own-files.ts holds them) and Node's: a module it imported that a
 // session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
 // guard does, from factory.json with the target always among them, and runs with node, not a package's runner.
 

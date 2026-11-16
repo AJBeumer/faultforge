@@ -12,14 +12,16 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(import.meta.dirname, "../../..");
 const SOURCES = [join(ROOT, "packages/harness/src"), join(ROOT, ".claude/hooks")];
 // hook-io answers Claude Code's hook protocol for every hook; each hook's own header says what its codes mean.
-const LIBRARIES = new Set(["hook-io.ts"]);
+const LIBRARIES = new Set(["shared/hook-io.ts"]);
 
 /** The file's first doc comment, wherever it starts: its header. */
 const header = (text: string) => text.match(/\/\*\*[\s\S]*?\*\//)?.[0] ?? "";
 
 function scripts(): { file: string; text: string }[] {
   return SOURCES.flatMap((dir) =>
-    readdirSync(dir)
+    // Every folder below, too: the hooks sit in folders by job (#355).
+    (readdirSync(dir, { recursive: true }) as string[])
+      .map((f) => f.replace(/\\/g, "/"))
       .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !LIBRARIES.has(f))
       .map((f) => ({ file: f, text: readFileSync(join(dir, f), "utf8") })),
   ).filter(({ text }) => /process\.exit\(|process\.exitCode =/.test(text));

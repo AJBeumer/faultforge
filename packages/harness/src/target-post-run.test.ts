@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Reviewed } from "../../../.claude/hooks/guard-repos.ts";
+import type { Reviewed } from "../../../.claude/hooks/shared/repos.ts";
 import { COMMAND_KINDS, type Gh, KINDS, main, type Post, Refused, sendPost } from "./target-post.ts";
 import {
   AGENT_DOOR_KINDS,

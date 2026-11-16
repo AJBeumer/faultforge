@@ -1,5 +1,5 @@
 /**
- * The guard's decisions that depend on what git holds in a reviewed checkout (guard-content.ts, through the
+ * The guard's decisions that depend on what git holds in a reviewed checkout (target/content.ts, through the
  * hook). Every test builds its own temporary repository, so these are the slow tests of the hook: they are in
  * their own file to run on their own worker, next to the text-only decisions in guard-target.test.ts (#121).
  */

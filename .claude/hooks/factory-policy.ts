@@ -3,7 +3,7 @@
  * is set, which `npm run factory:tick` does for the agent it starts. Inside a run it blocks what only
  * the owner may do:
  *  - merging, closing, approving or commenting on a PR (so no reply to a review finding)
- *  - any door kind but push, pr-create and pr-edit, written out (`npm run target:post`; factory-policy-door.ts,
+ *  - any door kind but push, pr-create and pr-edit, written out (`npm run target:post`; factory/door-kinds.ts,
  *    #347): a first word only, since the door itself refuses them during a run (target-post-run.ts)
  *  - commenting on, closing or relabelling a ticket (the runner reports on the ticket, not the agent)
  *  - API writes through `gh api`, and repo, label, secret, variable and workflow changes
@@ -18,17 +18,17 @@
  *    `ssh`) or by code (`fetch(`, `http.request`)
  *  - aliases (`gh alias set`, `git config alias.*`), the private repo by name or by numeric repository id
  *  - shell writes to the guardrails (`.claude/`, `neutral.ts`), and running a script this run wrote (#284)
- *  - changing package.json's check script or a script it runs, by any tool (factory-policy-check.ts, re-grade 7)
+ *  - changing package.json's check script or a script it runs, by any tool (factory/check-script.ts, re-grade 7)
  *  - reading stored git credentials, or another process's environment through `ps e` (re-grade 7)
  *  - switching off git's own guard hooks anywhere, the lab included: `--no-verify`, `core.hooksPath`, the guard's
  *    settings, or a file in a `.git` folder (re-grade 6)
- *  - reading the owner's secrets in the home folder (factory-policy-home.ts, re-grade 6)
+ *  - reading the owner's secrets in the home folder (factory/home.ts, re-grade 6)
  *  - text built at run time run as shell code: `… | base64 -d | bash`, `bash -c "$(…)"`, `eval`, `$(…)` as
- *    the command (shell-exec.ts, #299)
+ *    the command (shell/exec.ts, #299)
  *  - reading `/proc`, the answer key, the audit log and the templates with any tool, and in a target ticket's
  *    run the private checkouts the runner names in `FAULTFORGE_PRIVATE_CHECKOUTS` (#284; a lab ticket's too, #299)
  *
- * Every rule reads the command as written and in normalised spellings (shell-decode.ts): `g''h`, `\gh`,
+ * Every rule reads the command as written and in normalised spellings (shell/decode.ts): `g''h`, `\gh`,
  * `${x}`, ANSI-C strings, and a program's punctuation read as spaces.
  *
  * It runs next to the guard hook, which still keeps the reviewed repos free of hints. Patterns read the
@@ -42,26 +42,21 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { checkScriptViolation } from "./factory-policy-check.ts";
-import { commandViolations, readings } from "./factory-policy-commands.ts";
-import { doorKindViolation } from "./factory-policy-door.ts";
-import { HOME_SECRET_REASON, homeSecretCommand } from "./factory-policy-home.ts";
-import {
-  guardrailWriteViolation,
-  privateCommandViolation,
-  readViolation,
-  scriptViolation,
-} from "./factory-policy-paths.ts";
-import { gitFolderEdit, guardSwitchOff } from "./guard-hooks.ts";
-import { skipsGitGuard } from "./guard-reach.ts";
-import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
-import { builtCodeProblem } from "./shell-exec.ts";
-import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
+import { checkScriptViolation } from "./factory/check-script.ts";
+import { commandViolations, readings } from "./factory/commands.ts";
+import { doorKindViolation } from "./factory/door-kinds.ts";
+import { HOME_SECRET_REASON, homeSecretCommand } from "./factory/home.ts";
+import { guardrailWriteViolation, privateCommandViolation, readViolation, scriptViolation } from "./factory/paths.ts";
+import { gitFolderEdit, guardSwitchOff } from "./self/git-hooks.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./shared/hook-io.ts";
+import { builtCodeProblem } from "./shell/exec.ts";
+import { MAX_COMMAND_CHARS } from "./shell/scan.ts";
+import { skipsGitGuard } from "./target/reach.ts";
 
 /** The tools that only read files; Claude Code's settings route them to this hook too (#284). */
 const READ_TOOLS = ["Read", "Grep", "Glob", "NotebookRead"];
 
-export { commandViolations } from "./factory-policy-commands.ts";
+export { commandViolations } from "./factory/commands.ts";
 
 /**
  * A shell's own ways of putting a command in the background: a single `&` (not `&&`, not a `>&` or `|&`

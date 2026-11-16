@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Reviewed } from "../../../.claude/hooks/guard-repos.ts";
+import type { Reviewed } from "../../../.claude/hooks/shared/repos.ts";
 import { type Gh, main } from "./target-post.ts";
 import type { Git } from "./target-post-push.ts";
 

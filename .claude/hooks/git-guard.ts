@@ -12,7 +12,7 @@
  * PR, because links go one way, and a private template's id (re-grade 6). The lab's pre-push also refuses a remote
  * that is a reviewed repo, by URL or local path: the lab's history never goes there (re-grade 6). Its pre-commit and
  * commit-msg refuse a copy of the answer key, the audit log or a private template, compared by hash
- * (guard-answer-key.ts; re-grade 6, Q21), and the pre-commit a private template's id in a staged file.
+ * (answer-key/copies.ts; re-grade 6, Q21), and the pre-commit a private template's id in a staged file.
  *
  *   node git-guard.ts lab-pre-commit <checkout>                  the staged files and their names
  *   node git-guard.ts lab-commit-msg <checkout> <message file>   the commit message
@@ -23,7 +23,7 @@
  *
  *   node git-guard.ts private-pre-push <checkout> <remote> <url>
  *
- * The checks are the Claude Code guard's own (guard-content.ts), read from git at the moment the content
+ * The checks are the Claude Code guard's own (target/content.ts), read from git at the moment the content
  * would travel. A push must also keep the reviewed repo's history (re-grade 3): it may not delete a ref, and
  * each ref it updates must move forward from what the remote holds (`git merge-base --is-ancestor`). Git gives
  * the hook both commits for every ref, so this holds however the push was started: a script, a subprocess, a
@@ -37,7 +37,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { labIndex, lazyCopyTest } from "./guard-answer-key.ts";
+import { labIndex, lazyCopyTest } from "./answer-key/copies.ts";
+import { privateIdMatcher, privateTemplateIds } from "./answer-key/private-ids.ts";
+import { firstLine, isEntry } from "./shared/hook-io.ts";
+import { githubRepos, linkPattern, locate, reviewedRepos } from "./shared/repos.ts";
 import {
   copyReasons,
   DEFAULT_BUDGET_MS,
@@ -51,10 +54,7 @@ import {
   withDeadline,
   withPrivateCopies,
   withPrivateNames,
-} from "./guard-content.ts";
-import { privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
-import { githubRepos, linkPattern, locate, reviewedRepos } from "./guard-repos.ts";
-import { firstLine, isEntry } from "./hook-io.ts";
+} from "./target/content.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
 export function check(stage: string, checkout: string, arg?: string, stdin = "", url?: string): Pending | undefined {
