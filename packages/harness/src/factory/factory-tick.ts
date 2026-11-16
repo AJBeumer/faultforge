@@ -15,7 +15,10 @@
  *  6. Fresh worktrees of every repo from `origin/main`, laid out like the owner's folders, so the owner's
  *     working trees are never touched. Only a lab ticket's run also gets a private worktree on its own branch;
  *     a target ticket's run gets none.
- *  7. Run `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
+ *  7. Ask first: a read-only agent says which questions a builder would have to guess at
+ *     (`factory-clarify.ts`). With questions, they go to the owner in one comment, the ticket gets
+ *     `needs-owner-answer`, and nothing is built. A ticket is asked once. With none, run
+ *     `claude -p "/factory <repo> <N>"` there, with a dollar budget, a time limit, deny rules, and
  *     the factory policy hook switched on.
  *  8. Don't take the agent's word: check the PR is open in the ticket's repo, its checks passed, Qodo's
  *     review of its head commit is complete, and `main` didn't move during the run.
@@ -34,8 +37,9 @@
  * `factory-tick-failure.ts` (a tick that throws) and `factory-tick-setup.ts` (the command's own checks). This
  * module runs the steps in order.
  *
- * Exit codes: 0 the tick ended and its ticket, if any, doesn't need the owner (a run delivered `agent-done`,
- * or nothing to take: busy, idle, or a ticket refused, each logged); 1 the ticket it took now carries
+ * Exit codes: 0 the tick ended and nothing went wrong (a run delivered `agent-done`, or the runner asked the
+ * owner its questions, needs-answer, and the ticket carries `needs-owner-answer`, or nothing to take: busy,
+ * idle, or a ticket refused, each logged); 1 the ticket it took now carries
  * `agent-needs-help`: a run stopped, or the ticket isn't ready; 2 the command line or the environment was
  * wrong (a bad option, no token, a token file that can't be read, a config that doesn't load), so no tick
  * ran; 3 the tick itself failed (an error in the runner, before or after it picked a ticket; a claimed ticket
@@ -67,7 +71,7 @@ import {
 import type { Logger, TickDeps, TickOptions, Workspace } from "./factory-tick-deps.ts";
 import { failTick } from "./factory-tick-failure.ts";
 import { admissionRefusal, readyCandidates } from "./factory-tick-pick.ts";
-import { checkRun, runOnTicket } from "./factory-tick-run.ts";
+import { checkRun, clarifyTicket, runOnTicket } from "./factory-tick-run.ts";
 import { positiveOption, setupRefusal, tokenFrom } from "./factory-tick-setup.ts";
 import type { RunMode } from "./factory-workspace.ts";
 
@@ -197,7 +201,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     claimed = pick;
     // An earlier run's result label goes too: a ticket carries one state at a time.
-    relabel([LABELS.ready, LABELS.help, LABELS.done], [LABELS.working]);
+    relabel([LABELS.ready, LABELS.help, LABELS.done, LABELS.answer], [LABELS.working]);
     // The claim says which way of running took it, so the other's recovery leaves it alone.
     const mark = deps.mode ? `\n\n${claimMarker(deps.mode)}` : "";
     // The same limit the agent is told and the runner enforces: the quality gate's.
@@ -229,7 +233,9 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
 
     const workspace = ws;
     const run = { deps, ws: workspace, pick, owner, runId: id, log };
-    const finish = checkRun(run, await runOnTicket(run), options.minutes);
+    // Questions first: a ticket with a choice left open goes back to the owner before anything is built.
+    const asked = await clarifyTicket(run);
+    const finish = asked ?? checkRun(run, await runOnTicket(run), options.minutes);
     const label = finishRun({
       factory,
       deps,
@@ -247,7 +253,7 @@ export async function tick(factory: FactoryConfig, deps: TickDeps, options: Tick
         finishedLogged = true;
       },
     });
-    return label === LABELS.done ? "done" : "needs-help";
+    return label === LABELS.done ? "done" : label === LABELS.answer ? "needs-answer" : "needs-help";
   } catch (error) {
     return failTick(error, { factory, deps, log, runId, claimed, ws, finalLabel, finishedLogged, copied, logSaved });
   } finally {

@@ -38,7 +38,7 @@ const message = (error: unknown): string =>
   error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
 
 /** Saves, labels, reports and copies the log, in that order. Returns the ticket's final label. */
-export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.help {
+export function finishRun(c: FinishContext): Finish["label"] {
   const { deps, runId, ws, finish, log } = c;
   let saved: ReturnType<TickDeps["saveEvidence"]> | null = null;
   try {
@@ -48,7 +48,7 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
     // the comment below can be on a public ticket.
     log("error", { message: `couldn't save the run's evidence: ${message(error)}` });
   }
-  let label: typeof LABELS.done | typeof LABELS.help = finish.label;
+  let label: Finish["label"] = finish.label;
   let reason = finish.reason;
   let note = "";
   if (saved?.blocked.length) {
@@ -71,9 +71,13 @@ export function finishRun(c: FinishContext): typeof LABELS.done | typeof LABELS.
   const prLine = finish.pr ? `\n\nPull request: ${finish.pr}` : "";
   try {
     c.say(
-      label === LABELS.done
-        ? `Agent run \`${runId}\` finished: ${reason}.${prLine}`
-        : `Agent run \`${runId}\` stopped and needs help: ${reason}.${prLine}${note}`,
+      // The questions go out only under their own label: if the evidence couldn't be saved, the ticket needs
+      // help and gets the usual report instead.
+      label === LABELS.answer && finish.comment
+        ? finish.comment
+        : label === LABELS.done
+          ? `Agent run \`${runId}\` finished: ${reason}.${prLine}`
+          : `Agent run \`${runId}\` stopped and needs help: ${reason}.${prLine}${note}`,
     );
   } catch (error) {
     log("error", { message: `couldn't report on the ticket: ${message(error)}` });

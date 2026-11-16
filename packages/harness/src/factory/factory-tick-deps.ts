@@ -8,6 +8,7 @@
 import type { Difference } from "../qodo/qodo-check.ts";
 import type { AgentRun } from "./factory-agent.ts";
 import type { CheckFilesReading } from "./factory-check-files.ts";
+import type { ClarifyRun } from "./factory-clarify.ts";
 import type { EvidencePush } from "./factory-evidence.ts";
 import type { HooksReport } from "./factory-hooks.ts";
 import type { RelabelProblems } from "./factory-relabel.ts";
@@ -69,6 +70,11 @@ export interface TickDeps {
   qodoCheck(runId: string): Promise<QodoCheckOutcome>;
   /** `repoKey` is the ticket's repo: a target ticket's run gets no private worktree. */
   workspace(runId: string, repoKey: string): Workspace;
+  /**
+   * Asks a read-only agent, in the run's workspace, which questions a builder would have to guess at in the
+   * ticket (`factory-clarify.ts`). Left out, the step is skipped and the build starts as before.
+   */
+  clarify?(ws: Workspace, runId: string, repoKey: string, ticketText: string, log: Logger): Promise<ClarifyRun>;
   runAgent(
     ws: Workspace,
     runId: string,

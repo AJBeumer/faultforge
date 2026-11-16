@@ -12,8 +12,10 @@ hooks, and settles what it left: a PR with Qodo's review and evidence, or a clea
 - GitHub: `factory-comments.ts`, `factory-relabel.ts`, `ticket-snapshot.ts`, `factory-review-broker.ts`,
   `factory-door-run.ts`, `factory-check-files.ts`, `factory-exec.ts`.
 - `revert-check.ts` with `revert-run.ts`: the revert checks. `alert.ts`: the lab's alert issues.
+- Questions before a build: `factory-clarify.ts` (what is asked, the answer's check, the comment),
+  `factory-clarify-run.ts` (the read-only agent), `clarify-measure.ts` (the step against an answer key).
 
-Entry points: `npm run factory:tick`, `factory:timeline`, `factory:recover` (in `cli/`); `factory:keep`
+Entry points: `npm run factory:tick`, `factory:timeline`, `factory:recover`, `clarify:measure` (in `cli/`); `factory:keep`
 (`factory-keep.ts`), `factory:sandbox` (`factory-sandbox-setup.ts`), `revert:check` (`revert-check.ts`).
 
 Uses: `shared`, `qodo`, `review`, `door`, `guard`, `tickets`, `rules`.

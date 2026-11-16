@@ -36,6 +36,19 @@ const LEGACY_OPENINGS = [
   "Stopped before any work started: the reviewer's configuration",
 ];
 
+/**
+ * Marks the runner's comment that asks the owner questions before a build. It is the one runner comment the
+ * builder may read, and only once the owner has replied to it: the reply makes no sense without it.
+ */
+export const QUESTIONS_MARKER = "<!-- scheduled-run questions -->";
+
+/** True when a comment is the runner's questions to the owner: the runner's mark, then the questions mark. */
+export function isQuestionsComment(body: string | null | undefined): boolean {
+  if (!isRunnerComment(body)) return false;
+  const lines = (body ?? "").trimStart().split(/\r?\n/);
+  return lines[1]?.trim() === QUESTIONS_MARKER;
+}
+
 /** Ends the claim comment: which way of running the factory (Actions or the owner's PC) claimed the ticket. */
 export function claimMarker(mode: RunMode): string {
   return `<!-- scheduled-run claim mode=${mode} -->`;

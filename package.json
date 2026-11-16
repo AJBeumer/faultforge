@@ -12,6 +12,7 @@
     "gate:check": "tsx packages/harness/src/cli/gate-check-cli.ts",
     "gate:replay": "tsx packages/harness/src/cli/gate-replay-cli.ts",
     "gate:trial": "tsx packages/harness/src/cli/gate-trial-cli.ts",
+    "clarify:measure": "tsx packages/harness/src/cli/clarify-measure-cli.ts",
     "factory:tick": "tsx packages/harness/src/cli/factory-tick-cli.ts",
     "factory:timeline": "tsx packages/harness/src/cli/factory-timeline-cli.ts",
     "factory:keep": "tsx packages/harness/src/factory/factory-keep.ts",
