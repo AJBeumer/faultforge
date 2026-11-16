@@ -33,6 +33,11 @@ export interface TrialFinding extends GateFinding {
 export interface TrialReview {
   /** False when the reviewer skipped, covered only part of the change, or didn't report a complete list. */
   complete: boolean;
+  /**
+   * Whether the reviewer said its finding inventory was complete. Recorded with every round, and never the
+   * reason a loop stops: on a full review with no earlier checkpoint Qodo reports it as incomplete.
+   */
+  inventoryComplete: boolean;
   /** The findings still open after this review. */
   open: TrialFinding[];
   /** Where the raw answer was saved. */
@@ -62,6 +67,8 @@ export interface TrialRound {
   evidence: string;
   findings: { id: string; label: string; title: string; file: string | null }[];
   gateMet: boolean;
+  /** What the reviewer said about its own finding inventory in this round. */
+  inventoryComplete: boolean;
   problems: string[];
   decisions: BuilderDecision[];
   /** Disputes whose evidence test was missing or didn't pass: they count as open findings, nothing more. */
@@ -119,6 +126,7 @@ export async function runLoop(gate: QualityGate, deps: LoopDeps): Promise<TrialO
         file: typeof f.file === "string" ? f.file : null,
       })),
       gateMet: review.complete && account.met,
+      inventoryComplete: review.inventoryComplete,
       problems: account.problems,
       decisions: [],
       disputesWithoutProof: [],

@@ -117,6 +117,19 @@ A builder that thinks a finding is wrong must hand in a test that would fail if 
 true. If that test passes, the trial stops as "the owner must decide". Without such a test, the
 finding just counts as still open.
 
+Two limits are part of every trial's record:
+
+- **The reviewer's own inventory.** Qodo's local review says whether its list of findings is
+  complete. On a full review with no earlier checkpoint it says "incomplete", and it did so on every
+  local review of 16 November. A trial records that for each round and still treats the round's
+  list as the findings to act on. A trial result is therefore about the findings Qodo returned.
+- **The builder is confined by its tool rules, not by the operating system.** It has no network
+  tool, and the lab's folders and private storage are denied to its file tools. But a test it writes
+  runs as the person running the trial. So after the loop the builder's added lines are read for an
+  absolute path, a climb out of the repository, a reach for the environment or another process, or
+  a word that names the lab. A trial with any of those is recorded as inconclusive. That catches
+  what is written plainly, not a path built at run time.
+
 Only a case the decision log already names can be tried. A trial is not a case: it adds nothing to
 the answer key or to a case record, and its results are never pooled with benchmark results.
 Nothing is written to the reviewed repository, and no finding is dismissed or answered.

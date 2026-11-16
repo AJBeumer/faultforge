@@ -130,7 +130,10 @@ describe("runTrial", () => {
   });
 
   /** A fake world: scripted reviews, a builder that says "fixed", and a proof that passes once the builder ran. */
-  function world(reviews: TrialReview[], options: { fixWorks?: boolean; breaksOther?: boolean } = {}) {
+  function world(
+    reviews: TrialReview[],
+    options: { fixWorks?: boolean; breaksOther?: boolean; changeProblems?: string[] } = {},
+  ) {
     const steps: string[] = [];
     const prompts: string[] = [];
     let saved: TrialRecord | undefined;
@@ -159,6 +162,7 @@ describe("runTrial", () => {
         return mustFix.map((f) => ({ id: f.id, decision: "fixed" }));
       },
       evidencePasses: async () => false,
+      changeProblems: () => options.changeProblems ?? [],
       publicTests: async () => "pass",
       save: (record) => {
         saved = record;
@@ -167,7 +171,12 @@ describe("runTrial", () => {
     };
     return { io, steps, prompts, saved: () => saved };
   }
-  const review = (open: TrialFinding[]): TrialReview => ({ complete: true, open, evidence: "saved" });
+  const review = (open: TrialFinding[], inventoryComplete = true): TrialReview => ({
+    complete: true,
+    inventoryComplete,
+    open,
+    evidence: "saved",
+  });
 
   it("runs the proofs before and after the loop, and saves a record that says the defect is gone", async () => {
     const w = world([review([finding("m", "remediation_recommended")]), review([])]);
@@ -187,6 +196,24 @@ describe("runTrial", () => {
       ],
     });
     expect(w.saved()).toBe(record);
+  });
+
+  it("claims nothing when the builder's changes point outside the repository, whatever the proofs say", async () => {
+    const w = world([review([finding("m", "remediation_recommended")]), review([])], {
+      changeProblems: ["an added line holds an absolute path"],
+    });
+    const record = await runTrial(facts, "saved", SAVED, w.io);
+    expect(record.status).toBe("done");
+    expect(record.result).toBe("inconclusive");
+    expect(record.changeProblems).toEqual(["an added line holds an absolute path"]);
+    expect(record.note).toMatch(/point outside the repository/);
+  });
+
+  it("records whether the reviewer reported its finding inventory complete in every round", async () => {
+    const partial = world([review([finding("m", "remediation_recommended")], false), review([])]);
+    expect((await runTrial(facts, "saved", SAVED, partial.io)).inventoryReportedComplete).toBe(false);
+    const whole = world([review([])]);
+    expect((await runTrial(facts, "saved", SAVED, whole.io)).inventoryReportedComplete).toBe(true);
   });
 
   it("records an escape: the gate is met at once and the proof still fails", async () => {

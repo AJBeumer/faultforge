@@ -33,7 +33,12 @@ const finding = (id: string, severity: string | null): TrialFinding => ({
   lines: [1, 2],
   description: "It breaks.",
 });
-const review = (open: TrialFinding[], complete = true): TrialReview => ({ complete, open, evidence: "saved" });
+const review = (open: TrialFinding[], complete = true): TrialReview => ({
+  complete,
+  inventoryComplete: true,
+  open,
+  evidence: "saved",
+});
 
 /** A loop over scripted reviews; the builder answers "fixed" for everything unless told otherwise. */
 function scripted(reviews: TrialReview[], decide?: (mustFix: TrialFinding[]) => BuilderDecision[], passes = false) {
@@ -81,6 +86,13 @@ describe("runLoop", () => {
     const outcome = await runLoop(GATE, scripted([review([], false)]).deps);
     expect(outcome.status).toBe("not done: the review was incomplete");
     expect(outcome.rounds[0]?.gateMet).toBe(false);
+  });
+
+  it("records what the reviewer said about its inventory in each round, and doesn't stop for it", async () => {
+    const first = { ...review([finding("m", "remediation_recommended")]), inventoryComplete: false };
+    const outcome = await runLoop(GATE, scripted([first, review([])]).deps);
+    expect(outcome.status).toBe("done");
+    expect(outcome.rounds.map((r) => r.inventoryComplete)).toEqual([false, true]);
   });
 
   it("stops when a round closed nothing that had to be fixed", async () => {

@@ -70,8 +70,9 @@ describe("a gate trial's scratch copy", () => {
         complete: true,
         open: [{ id: "f1", severity: "remediation_recommended", title: "The limit was widened", file: "limit.js" }],
         evidence: "review-1",
+        inventoryComplete: true,
       },
-      { complete: true, open: [], evidence: "review-2" },
+      { complete: true, inventoryComplete: true, open: [], evidence: "review-2" },
     ];
     const io: TrialIo = {
       prepare: async () => {
@@ -90,6 +91,7 @@ describe("a gate trial's scratch copy", () => {
         return mustFix.map((f) => ({ id: f.id, decision: "fixed" as const }));
       },
       evidencePasses: async () => false,
+      changeProblems: () => [],
       publicTests: async () => "pass",
       save: (record) => {
         saved = record;

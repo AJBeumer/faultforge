@@ -146,6 +146,8 @@ export interface TrialIo {
   evidencePasses: (testFile: string) => Promise<boolean>;
   /** The repository's own tests, after the loop. */
   publicTests: () => Promise<Outcome>;
+  /** What in the builder's changes points outside the repository; empty when nothing does. */
+  changeProblems: () => string[];
   save: (record: TrialRecord) => void;
   log: (line: string) => void;
 }
@@ -161,6 +163,10 @@ export interface TrialRecord {
   rounds: TrialRound[];
   proofs: ProofResult[];
   publicTestsAfter: Outcome;
+  /** False when any round's review did not report its finding inventory as complete. */
+  inventoryReportedComplete: boolean;
+  /** Why the builder's changes make this trial uncountable; empty when they don't. */
+  changeProblems: string[];
   result: TrialResult;
   damage: string[];
   note: string;
@@ -212,7 +218,17 @@ export async function runTrial(
     after: after[i] ?? "not_run",
   }));
   const publicTestsAfter = await io.publicTests();
-  const verdict = judge(outcome.status, results, facts.control);
+  const judged = judge(outcome.status, results, facts.control);
+  // A builder whose changes point outside the repository may have seen what it must not: nothing is claimed.
+  const changeProblems = io.changeProblems();
+  const verdict = changeProblems.length
+    ? {
+        ...judged,
+        result: "inconclusive" as const,
+        note: `the builder's changes point outside the repository: ${changeProblems.join("; ")}`,
+      }
+    : judged;
+  const inventoryReportedComplete = outcome.rounds.every((r) => r.inventoryComplete);
   const record: TrialRecord = {
     caseId: facts.caseId,
     kind: facts.control ? "control" : "bug",
@@ -224,6 +240,8 @@ export async function runTrial(
     rounds: outcome.rounds,
     proofs: results,
     publicTestsAfter,
+    inventoryReportedComplete,
+    changeProblems,
     result: verdict.result,
     damage: verdict.damage,
     note: verdict.note,
@@ -234,6 +252,9 @@ export async function runTrial(
   if (verdict.damage.length) io.log(`  damage: ${verdict.damage.join(", ")}`);
   if (verdict.note) io.log(`  ${verdict.note}`);
   io.log(`  the repository's own tests after the loop: ${publicTestsAfter}`);
+  if (!inventoryReportedComplete) {
+    io.log("  the reviewer did not report its finding inventory as complete in every round");
+  }
   return record;
 }
 

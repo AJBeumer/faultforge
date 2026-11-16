@@ -30,7 +30,9 @@ import { TOOL } from "../shared/provenance.ts";
 import type { Outcome } from "../shared/run-outcome.ts";
 import { templateDir } from "../shared/templates.ts";
 import { publicCaseIds } from "./gate-replay.ts";
-import { evidencePathProblem, parseDecisions, type TrialFinding, type TrialReview } from "./gate-trial.ts";
+import { evidencePathProblem, parseDecisions, type TrialReview } from "./gate-trial.ts";
+import { addedSince, builderArgs, builderDeny, changeProblems, plainEnv } from "./gate-trial-builder.ts";
+import { isErrorAnswer, REVIEW_ATTEMPTS, readLocalReview } from "./gate-trial-review.ts";
 import { gateNamed, type TrialArgs, type TrialCase, type TrialIo, trialCase } from "./gate-trial-run.ts";
 
 /** Pure: true for an argument made only of letters, digits and `. _ / @ : = -`, which no shell reads as syntax. */
@@ -61,7 +63,13 @@ function sh(
     shell,
     windowsHide: true,
   });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  // `started` is false when the command could not be started at all, which is not an answer of any kind.
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    started: !(result.error && result.status === null && !result.signal),
+  };
 }
 
 function must(what: string, result: ReturnType<typeof sh>): string {
@@ -76,7 +84,7 @@ export const NO_PUSH = "no-push://disabled";
 
 /**
  * A scratch copy of `checkout` at `commit`: fetch address `fetchUrl`, push address disabled. With `install`,
- * its dependencies are installed too.
+ * its dependencies are installed too, without running any install script.
  */
 export function makeScratch(
   parent: string,
@@ -90,7 +98,16 @@ export function makeScratch(
   must("git remote set-url", sh("git", ["remote", "set-url", "origin", fetchUrl], app));
   must("git remote set-url --push", sh("git", ["remote", "set-url", "--push", "origin", NO_PUSH], app));
   must("git checkout", sh("git", ["checkout", "--quiet", "--detach", commit], app));
-  if (install) must("npm ci", sh("npm", ["ci", "--no-audit", "--no-fund"], app));
+  // No install script runs, and no variable of this project reaches the install: the commit under trial and
+  // its dependencies get nothing but the files.
+  if (install) {
+    must(
+      "npm ci",
+      sh("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], app, 10 * 60_000, {
+        env: plainEnv(process.env),
+      }),
+    );
+  }
   return app;
 }
 
@@ -105,125 +122,6 @@ function claudeBinary(): string {
   if (process.env.FAULTFORGE_CLAUDE) return process.env.FAULTFORGE_CLAUDE;
   const exe = join(process.env.APPDATA ?? "", "npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe");
   return process.platform === "win32" && existsSync(exe) ? exe : "claude";
-}
-
-/** The ids in one `finding_state` list, whether it holds ids or whole findings. */
-function idsIn(list: unknown): string[] {
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((entry) => (typeof entry === "string" ? entry : (entry as { id?: unknown } | null)?.id))
-    .filter((id): id is string => typeof id === "string");
-}
-
-/**
- * Pure: the CLI's `qodo review --json` answer as the loop reads it. Complete only when the answer is a
- * result (not an error), its findings can all be read, and it says its coverage of the change was complete.
- * A finding the answer lists as resolved or dismissed is not open.
- */
-export function readLocalReview(stdout: string, evidence: string): TrialReview {
-  const none: TrialReview = { complete: false, open: [], evidence };
-  let payload: Record<string, unknown>;
-  try {
-    // The CLI can end its output with a `trace <hex>` line.
-    payload = JSON.parse(stdout.replace(/\r?\n\s*trace [0-9a-f]+\s*$/i, ""));
-  } catch {
-    return none;
-  }
-  if (!payload || typeof payload !== "object" || payload.error || !Array.isArray(payload.findings)) return none;
-  const state = (payload.finding_state ?? {}) as Record<string, unknown>;
-  const closed = new Set([...idsIn(state.resolved), ...idsIn(state.dismissed)]);
-  const open: TrialFinding[] = [];
-  for (const entry of payload.findings as unknown[]) {
-    if (!entry || typeof entry !== "object" || typeof (entry as { id?: unknown }).id !== "string") return none;
-    const f = entry as Record<string, unknown>;
-    if (closed.has(f.id as string)) continue;
-    const at = (f.location ?? f.diff_reference ?? {}) as Record<string, unknown>;
-    const lines =
-      Number.isInteger(at.start_line) && Number.isInteger(at.end_line)
-        ? ([at.start_line, at.end_line] as [number, number])
-        : null;
-    open.push({
-      id: f.id as string,
-      severity: typeof f.action_level === "string" ? f.action_level : null,
-      title: typeof f.title === "string" ? f.title : null,
-      category: typeof f.category === "string" ? f.category : null,
-      file: typeof at.file_path === "string" ? at.file_path : null,
-      lines,
-      description: typeof f.description === "string" ? f.description : null,
-    });
-  }
-  const meta = (payload.meta ?? {}) as { coverage?: { complete?: unknown }; skipped_files?: unknown };
-  const skipped = Array.isArray(meta.skipped_files) ? meta.skipped_files.length : 0;
-  return { complete: meta.coverage?.complete === true && skipped === 0, open, evidence };
-}
-
-/** How many times one round's review is asked for when the reviewer answers with an error. */
-export const REVIEW_ATTEMPTS = 3;
-
-/**
- * Pure: true when the CLI's output is an error and not a review, or isn't JSON at all. Only then is the
- * review asked for again: a review that came back incomplete is a result, and stays one.
- */
-export function isErrorAnswer(stdout: string): boolean {
-  try {
-    const payload = JSON.parse(stdout.replace(/\r?\n\s*trace [0-9a-f]+\s*$/i, ""));
-    return !payload || typeof payload !== "object" || Boolean((payload as { error?: unknown }).error);
-  } catch {
-    return true;
-  }
-}
-
-/** The tools the builder may use: files in its folder, and the repository's own checks. No network, no git writes. */
-export const BUILDER_TOOLS: readonly string[] = [
-  "Read",
-  "Edit",
-  "Write",
-  "Glob",
-  "Grep",
-  "Bash(npm test:*)",
-  "Bash(npm run check:*)",
-  "Bash(npm run format:*)",
-  "Bash(npm run test:*)",
-  "Bash(npx vitest:*)",
-  "Bash(git diff:*)",
-  "Bash(git status:*)",
-];
-
-/** The builder's command line: only `BUILDER_TOOLS`, no MCP server, no project or user settings, a capped budget. */
-export function builderArgs(settingsFile: string, mcpConfigFile: string, budgetUsd: number): string[] {
-  return [
-    "-p",
-    "--output-format",
-    "json",
-    "--permission-mode",
-    "dontAsk",
-    "--allowedTools",
-    BUILDER_TOOLS.join(","),
-    "--max-budget-usd",
-    String(budgetUsd),
-    "--settings",
-    settingsFile,
-    "--mcp-config",
-    mcpConfigFile,
-    "--strict-mcp-config",
-  ];
-}
-
-/** Deny rules for the builder: the folder that holds the lab's checkouts, in both spellings of its drive. */
-export function builderDeny(labRoot: string): string[] {
-  // By the text of the path, not this machine's own rules, so it reads the same on every system.
-  const root = labRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  const parent = root.slice(0, root.lastIndexOf("/"));
-  const drive = /^([a-zA-Z]):\/(.*)$/.exec(parent);
-  const spellings = drive
-    ? [`//${(drive[1] as string).toLowerCase()}/${drive[2]}`, `//${(drive[1] as string).toUpperCase()}/${drive[2]}`]
-    : [`/${parent}`];
-  return spellings.flatMap((p) => ["Read", "Edit", "Write", "Grep", "Glob"].map((tool) => `${tool}(${p}/**)`));
-}
-
-/** The environment the builder runs in: no variable of this project, of Qodo or of GitHub. */
-export function builderEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([name]) => !/^(FAULTFORGE_|QODO_|GH_|GITHUB_)/i.test(name)));
 }
 
 export interface RealTrial {
@@ -276,16 +174,22 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
     ...own.map((proof) => ({ proof, own: true })),
     ...others.map((proof) => ({ proof, own: false })),
   ];
-  const diff = () => sh("git", ["diff"], app).stdout;
+  // New files count as changes too: they are marked as to be added, with nothing staged, so the diff shows them.
+  const diff = () => {
+    sh("git", ["add", "--intent-to-add", "--all"], app);
+    return sh("git", ["diff"], app).stdout;
+  };
 
+  let started = "";
   const io: TrialIo = {
     prepare: async () => {
       log(`Scratch copy at ${facts.targetCommit.slice(0, 7)} in ${parent}`);
       makeScratch(parent, resolve(ROOT, target.path), `https://github.com/${target.github}.git`, facts.targetCommit);
       applyMutation(app, template);
       if (template.testChange) applyTestChange(app, template.testChange);
-      writeFileSync(join(recordDir, "change.diff"), diff());
-      writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: builderDeny(ROOT) } }, null, 2));
+      started = diff();
+      writeFileSync(join(recordDir, "change.diff"), started);
+      writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: builderDeny(ROOT, priv) } }, null, 2));
       writeFileSync(mcpConfigFile, JSON.stringify({ mcpServers: {} }));
     },
     proofs: () => proofs.map(({ proof, own: isOwn }) => ({ invariantId: proof.invariantId, own: isOwn })),
@@ -298,7 +202,8 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
     review: async (round) => {
       // The reviewer's service sometimes ends a review with an error and no result. That says nothing about
       // the gate, so the same review is asked for again, at most three times; every answer is kept.
-      let review: TrialReview = { complete: false, open: [], evidence: "" };
+      let review: TrialReview = { complete: false, inventoryComplete: false, open: [], evidence: "" };
+      let answered = false;
       for (let attempt = 1; attempt <= REVIEW_ATTEMPTS; attempt++) {
         const result = sh(
           qodoBinary(),
@@ -320,17 +225,22 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
         const evidence = join(recordDir, `${name}.json`);
         writeFileSync(evidence, result.stdout);
         writeFileSync(join(recordDir, `${name}.stderr.txt`), result.stderr);
+        // A reviewer that could not be started is no review at all: the trial could not run.
+        if (!result.started) throw new Error(`the reviewer could not be started (${qodoBinary()})`);
         review = readLocalReview(result.stdout, evidence);
-        if (!isErrorAnswer(result.stdout)) break;
+        answered = !isErrorAnswer(result.stdout);
+        if (answered) break;
         log(`  the reviewer answered with an error (attempt ${attempt} of ${REVIEW_ATTEMPTS})`);
       }
+      // Still an error after every attempt: there is no review to judge, so no trial is saved.
+      if (!answered) throw new Error(`the reviewer answered with an error ${REVIEW_ATTEMPTS} times in round ${round}`);
       return review;
     },
     build: async (round, prompt, mustFix) => {
       writeFileSync(join(recordDir, `builder-${round}.prompt.txt`), prompt);
       const result = sh(claudeBinary(), builderArgs(settingsFile, mcpConfigFile, 4), app, 25 * 60_000, {
         input: prompt,
-        env: builderEnv(process.env),
+        env: plainEnv(process.env),
       });
       writeFileSync(join(recordDir, `builder-${round}.json`), result.stdout);
       writeFileSync(join(recordDir, `builder-${round}.stderr.txt`), result.stderr);
@@ -358,6 +268,8 @@ export function realTrial(args: TrialArgs): RealTrial | { refusal: string; code:
       writeFileSync(join(recordDir, "change-final.diff"), diff());
       return result.status === 0 ? "pass" : "fail";
     },
+    // Read from the changes as they are at the end, new files included, against the change the trial began with.
+    changeProblems: () => changeProblems(addedSince(started, diff())),
     save: (record) =>
       writeFileSync(
         join(recordDir, "trial.json"),
