@@ -45,11 +45,19 @@ describe("the harness's layout (#356)", () => {
 
   it("points every npm script at a file that exists", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    const named = Object.values(pkg.scripts).flatMap((command) =>
-      [...command.matchAll(/\bpackages\/harness\/[\w/.-]+\.ts\b/g)].map((m) => m[0]),
-    );
-    expect(named.length).toBeGreaterThan(20);
-    expect(named.filter((path) => !existsSync(join(ROOT, path)))).toEqual([]);
+    const problems: string[] = [];
+    for (const [name, command] of Object.entries(pkg.scripts)) {
+      // Each step that runs a file with tsx or node, and the file it runs, whatever folder it is in.
+      for (const step of command.split(/&&|\|\||;/)) {
+        const runner = /^\s*(?:tsx|node)\s+(\S+)/.exec(step);
+        if (!runner) continue;
+        const file = runner[1] ?? "";
+        if (!/\.[cm]?[jt]s$/.test(file)) problems.push(`${name}: runs ${file}, which is no script file`);
+        else if (!existsSync(join(ROOT, file))) problems.push(`${name}: ${file} doesn't exist`);
+      }
+    }
+    expect(Object.values(pkg.scripts).filter((c) => /^\s*(?:tsx|node)\s/.test(c)).length).toBeGreaterThan(20);
+    expect(problems).toEqual([]);
   });
 
   it("gives each area a README under 40 lines that names the areas its code uses", () => {
