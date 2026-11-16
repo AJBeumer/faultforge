@@ -137,49 +137,104 @@ export interface AgentProcess {
   pid?: number;
   stdout: { on(event: "data", listener: (chunk: Buffer) => void): unknown } | null;
   stderr: { on(event: "data", listener: (chunk: Buffer) => void): unknown } | null;
-  on(event: "error", listener: () => void): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
   on(event: "close", listener: (code: number | null) => void): unknown;
+}
+
+/** The most of the agent's output that is kept, per stream. Its answer is a few kilobytes. */
+export const CLARIFY_OUTPUT_LIMIT = 4 * 1024 * 1024;
+
+/** How the wait for the agent ended. */
+export interface AgentEnd {
+  stdout: string;
+  /** What the agent printed as errors, kept for the run's private files. */
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  /** True when a stream passed `CLARIFY_OUTPUT_LIMIT`: the output is cut, so it is no answer. */
+  overflowed: boolean;
 }
 
 /**
  * Waits for the agent, at most `limitMs`. At the limit it answers at once, as timed out, and only then asks
  * for the process to be ended: a kill that fails or hangs, or a process that never closes, can't hold the tick.
- * Answers once, whichever comes first.
+ * Answers once, whichever comes first, and keeps nothing that arrives afterwards. Each stream is kept up to
+ * `outputLimit` bytes: past that the agent is ended and the wait answers as overflowed.
  */
 export function waitForAgent(
   child: AgentProcess,
   limitMs: number,
   kill: (pid: number) => void,
   onError: (message: string) => void,
-): Promise<{ stdout: string; exitCode: number | null; timedOut: boolean }> {
+  outputLimit = CLARIFY_OUTPUT_LIMIT,
+): Promise<AgentEnd> {
   return new Promise((done) => {
-    let stdout = "";
+    const kept = { stdout: "", stderr: "" };
+    let bytes = { stdout: 0, stderr: 0 };
     let answered = false;
-    const answer = (exitCode: number | null, timedOut: boolean) => {
-      if (answered) return;
-      answered = true;
-      clearTimeout(timer);
-      done({ stdout, exitCode, timedOut });
-    };
-    const timer = setTimeout(() => {
-      answer(null, true);
-      // After the answer, and off this turn of the event loop: ending a process tree can itself take time.
+    let overflowed = false;
+    const endProcess = (why: string) => {
+      // Off this turn of the event loop: ending a process tree can itself take time.
       setImmediate(() => {
         try {
           if (child.pid) kill(child.pid);
         } catch (error) {
-          onError(`couldn't end the clarify agent at its time limit: ${(error as Error).message}`);
+          onError(`couldn't end the clarify agent ${why}: ${(error as Error).message}`);
         }
       });
+    };
+    const answer = (exitCode: number | null, timedOut: boolean) => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timer);
+      done({ ...kept, exitCode, timedOut, overflowed });
+    };
+    const timer = setTimeout(() => {
+      answer(null, true);
+      endProcess("at its time limit");
     }, limitMs);
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    const keep = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+      // Nothing is kept after the answer: a process that outlives its kill can't fill the runner's memory.
+      if (answered || overflowed) return;
+      bytes = { ...bytes, [stream]: bytes[stream] + chunk.length };
+      if (bytes[stream] > outputLimit) {
+        overflowed = true;
+        answer(null, false);
+        endProcess("after too much output");
+        return;
+      }
+      kept[stream] += chunk.toString("utf8");
+    };
+    child.stdout?.on("data", keep("stdout"));
+    child.stderr?.on("data", keep("stderr"));
+    child.on("error", (error) => {
+      // Why it couldn't start goes to the run log: without it the failure can't be told from any other.
+      onError(`the clarify agent could not be started: ${error?.message ?? "unknown error"}`);
+      answer(null, false);
     });
-    // Drained and dropped: it can hold anything the agent printed, and the answer is on stdout.
-    child.stderr?.on("data", () => {});
-    child.on("error", () => answer(null, false));
     child.on("close", (code) => answer(code, false));
   });
+}
+
+/**
+ * The step's result from how the agent ended. Its output and its error output are saved first, with `save`
+ * (as `clarify.json` and `clarify.stderr.txt`): an answer with no record of what the agent said is not
+ * acted on, so a failed save is a failed check, whatever the agent answered.
+ */
+export function clarifyFromEnd(
+  ended: AgentEnd,
+  save: (name: string, text: string) => void,
+  onError: (message: string) => void,
+): ClarifyRun {
+  try {
+    save("clarify.json", ended.stdout);
+    save("clarify.stderr.txt", ended.stderr);
+  } catch (error) {
+    onError(`couldn't save the clarify agent's output: ${(error as Error).message}`);
+    return failed("the agent's output couldn't be saved, so its answer is not used");
+  }
+  if (ended.overflowed) return failed("the agent printed more than the step keeps, so its answer was cut");
+  return clarifyResult(ended.stdout, ended.exitCode, ended.timedOut);
 }
 
 /**
@@ -225,12 +280,11 @@ export async function runClarify(
       launch.kill ?? ((pid: number) => killTree(pid)),
       (message) => log("error", { message }),
     );
-    try {
-      writeFileSync(join(runs, `${runId}.clarify.json`), ended.stdout);
-    } catch (error) {
-      log("error", { message: `couldn't save the clarify agent's output: ${(error as Error).message}` });
-    }
-    return clarifyResult(ended.stdout, ended.exitCode, ended.timedOut);
+    return clarifyFromEnd(
+      ended,
+      (name, text) => writeFileSync(join(runs, `${runId}.${name}`), text),
+      (message) => log("error", { message }),
+    );
   } finally {
     await launch.close();
   }

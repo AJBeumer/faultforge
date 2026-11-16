@@ -9,6 +9,7 @@ import {
   clarifyArgs,
   clarifyDeny,
   clarifyEnv,
+  clarifyFromEnd,
   clarifyResult,
   waitForAgent,
 } from "./factory-clarify-run.ts";
@@ -121,7 +122,7 @@ describe("waitForAgent", () => {
     const child: AgentProcess = {
       pid: 4242,
       stdout: { on: (event, listener) => on(`out:${event}`, listener as never) },
-      stderr: { on: () => {} },
+      stderr: { on: (event, listener) => on(`err:${event}`, listener as never) },
       on: ((event: string, listener: (value: never) => void) => on(event, listener)) as AgentProcess["on"],
     };
     const emit = (event: string, value?: unknown) => {
@@ -129,19 +130,23 @@ describe("waitForAgent", () => {
     };
     return { child, emit };
   }
+  const nothing = () => {};
+  const tick = () => new Promise((done) => setImmediate(done));
 
-  it("answers with the output and exit code when the agent closes", async () => {
+  it("answers with the output, the error output and the exit code when the agent closes", async () => {
     const { child, emit } = process_();
-    const waiting = waitForAgent(
-      child,
-      60_000,
-      () => {},
-      () => {},
-    );
+    const waiting = waitForAgent(child, 60_000, nothing, nothing);
     emit("out:data", Buffer.from("half "));
+    emit("err:data", Buffer.from("a warning"));
     emit("out:data", Buffer.from("answer"));
     emit("close", 0);
-    expect(await waiting).toEqual({ stdout: "half answer", exitCode: 0, timedOut: false });
+    expect(await waiting).toEqual({
+      stdout: "half answer",
+      stderr: "a warning",
+      exitCode: 0,
+      timedOut: false,
+      overflowed: false,
+    });
   });
 
   it("answers at its time limit even when the agent never closes and the kill throws", async () => {
@@ -157,34 +162,92 @@ describe("waitForAgent", () => {
       },
       (message) => errors.push(message),
     );
-    expect(result).toEqual({ stdout: "", exitCode: null, timedOut: true });
+    expect(result).toMatchObject({ stdout: "", exitCode: null, timedOut: true });
     // The kill is asked for after the answer, so it can't hold the answer back.
-    await new Promise((done) => setImmediate(done));
+    await tick();
     expect(killed).toEqual([4242]);
-    expect(errors.join(" ")).toMatch(/couldn't end the clarify agent/);
+    expect(errors.join(" ")).toMatch(/couldn't end the clarify agent at its time limit/);
   });
 
-  it("answers once: a close after the time limit changes nothing", async () => {
+  it("answers once, and keeps nothing that arrives after the answer", async () => {
     const { child, emit } = process_();
-    const result = await waitForAgent(
-      child,
-      10,
-      () => {},
-      () => {},
-    );
+    const result = await waitForAgent(child, 10, nothing, nothing);
+    emit("out:data", Buffer.from("late output from a process that outlived its kill"));
     emit("close", 0);
     expect(result.timedOut).toBe(true);
+    expect(result.stdout).toBe("");
   });
 
-  it("answers as not run when the agent can't be started", async () => {
+  it("ends an agent that prints more than it keeps, and answers as overflowed", async () => {
     const { child, emit } = process_();
-    const waiting = waitForAgent(
-      child,
-      60_000,
-      () => {},
+    const killed: number[] = [];
+    const waiting = waitForAgent(child, 60_000, (pid) => killed.push(pid), nothing, 10);
+    emit("out:data", Buffer.from("12345"));
+    emit("out:data", Buffer.from("6789012345"));
+    emit("out:data", Buffer.from("more"));
+    const result = await waiting;
+    expect(result).toMatchObject({ stdout: "12345", overflowed: true, timedOut: false, exitCode: null });
+    await tick();
+    expect(killed).toEqual([4242]);
+  });
+
+  it("says why the agent couldn't be started, and answers as not run", async () => {
+    const { child, emit } = process_();
+    const errors: string[] = [];
+    const waiting = waitForAgent(child, 60_000, nothing, (message) => errors.push(message));
+    emit("error", new Error("spawn claude ENOENT"));
+    expect(await waiting).toMatchObject({ stdout: "", exitCode: null, timedOut: false });
+    expect(errors).toEqual(["the clarify agent could not be started: spawn claude ENOENT"]);
+  });
+});
+
+describe("clarifyFromEnd", () => {
+  const fine = JSON.stringify({ result: `${ANSWER_MARKER}{"questions":[]}`, total_cost_usd: 0.4, num_turns: 6 });
+  const ended = (extra: object = {}) => ({
+    stdout: fine,
+    stderr: "a warning",
+    exitCode: 0,
+    timedOut: false,
+    overflowed: false,
+    ...extra,
+  });
+
+  it("saves the agent's output and its error output before it reads the answer", () => {
+    const saved: Record<string, string> = {};
+    const run = clarifyFromEnd(
+      ended(),
+      (name, text) => {
+        saved[name] = text;
+      },
       () => {},
     );
-    emit("error");
-    expect(await waiting).toEqual({ stdout: "", exitCode: null, timedOut: false });
+    expect(run.outcome).toEqual({ kind: "none" });
+    expect(saved).toEqual({ "clarify.json": fine, "clarify.stderr.txt": "a warning" });
+  });
+
+  it("doesn't act on an answer it couldn't save: the check failed, whatever the agent said", () => {
+    const errors: string[] = [];
+    const run = clarifyFromEnd(
+      ended(),
+      () => {
+        throw new Error("disk full");
+      },
+      (message) => errors.push(message),
+    );
+    expect(run.outcome).toMatchObject({ kind: "failed", reason: /couldn't be saved/ });
+    expect(errors.join(" ")).toMatch(/disk full/);
+  });
+
+  it("is a failed check when the output was cut, even if what is left reads as an answer", () => {
+    expect(
+      clarifyFromEnd(
+        ended({ overflowed: true }),
+        () => {},
+        () => {},
+      ).outcome,
+    ).toMatchObject({
+      kind: "failed",
+      reason: /was cut/,
+    });
   });
 });
