@@ -24,7 +24,7 @@ function lab(message: string) {
 
 const update = (local: string, remote: string, ref = "refs/heads/main") => `refs/heads/x ${local} ${ref} ${remote}\n`;
 
-describe("the lab's commit-msg hook refuses target links (re-grade 5)", () => {
+describe("the lab's commit-msg hook refuses target links", () => {
   it.each([
     `Tidy\n\nRefs: ${T}#3\n`,
     `Tidy\n\nSee https://github.com/${T}/issues/3\n`,
@@ -45,7 +45,7 @@ describe("the lab's commit-msg hook refuses target links (re-grade 5)", () => {
   });
 });
 
-describe("the lab's pre-push hook refuses target links in the commits it sends (re-grade 5)", () => {
+describe("the lab's pre-push hook refuses target links in the commits it sends", () => {
   it("refuses a pushed commit whose message links a target PR", () => {
     const { dir, base, head } = lab(`Tidy\n\nRefs ${T}#3`);
     expect(check("lab-pre-push", dir, "origin", update(head, base))?.reasons).toEqual([LINK_REASON]);
@@ -97,7 +97,7 @@ describe("the lab's pre-push asks the remote what it has (Qodo on PR 329)", () =
   });
 });
 
-describe("the lab's history never goes to a reviewed repo (re-grade 6)", () => {
+describe("the lab's history never goes to a reviewed repo", () => {
   it.each([`https://github.com/${T}.git`, `git@github.com:${T}.git`, `ssh://git@ssh.github.com:443/${T}`])(
     "refuses a push to %s",
     (url) => {
@@ -120,7 +120,7 @@ describe("the lab's history never goes to a reviewed repo (re-grade 6)", () => {
   });
 });
 
-describe("a lab commit may not name a private template (re-grade 6)", () => {
+describe("a lab commit may not name a private template", () => {
   const priv = mkdtempSync(join(tmpdir(), "git-guard-private6-"));
   mkdirSync(join(priv, "templates", "x-secret-v1"), { recursive: true });
   afterEach(() => vi.unstubAllEnvs());
@@ -151,7 +151,7 @@ describe("a lab commit may not name a private template (re-grade 6)", () => {
   });
 });
 
-describe("the private checkout's history goes only to its recorded origin (re-grade 6)", () => {
+describe("the private checkout's history goes only to its recorded origin", () => {
   const ORIGIN = "https://github.com/AJBeumer/x-private.git";
   function priv(recorded = true) {
     const repo = tempRepo();

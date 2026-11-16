@@ -49,7 +49,7 @@ const own = (...parts: string[]) => join(OWN.dir, ...parts);
 
 afterEach(() => rmSync(UNLOCK, { force: true }));
 
-describe("the guard's own files can't be changed in its checkout (re-grade 6)", () => {
+describe("the guard's own files can't be changed in its checkout", () => {
   it.each([
     ["Write", { file_path: own(".claude", "hooks", "git-guard.ts"), content: "process.exit(0)" }],
     ["Write", { file_path: own(".claude", "hooks", "new-hook.ts"), content: "export {};" }],
@@ -204,7 +204,7 @@ describe("the guard's own files can't be changed in its checkout (re-grade 6)", 
   });
 });
 
-describe("a long command of paths stays fast (AUD-M4)", () => {
+describe("a long command of paths stays fast", () => {
   // At `k` quarters of the old wall-clock test's 6 KB; `growth` compares k = 1 with k = 8 (re-grade 7).
   it.each([
     ["rm words", (k: number) => `rm ${"docs/a ".repeat(225 * k)}`],
@@ -216,7 +216,7 @@ describe("a long command of paths stays fast (AUD-M4)", () => {
   });
 });
 
-describe("many distinct paths (AUD-M4)", () => {
+describe("many distinct paths", () => {
   const many = (n: number) => Array.from({ length: n }, (_v, i) => `docs/file-${i}.md`).join(" ");
 
   it.each(["rm", "cp"])("reads a %s of up to 256 distinct paths in time linear in their number", (program) => {

@@ -37,7 +37,7 @@ function privateCheckout(): string {
 }
 const at = (dir: string) => dir.replace(/\\/g, "/");
 
-describe("private template ids in posts (AUD-H1)", () => {
+describe("private template ids in posts", () => {
   it.each([
     ["a lab PR body", 'gh pr create --title "Tidy" --body "Demo with x-secret-v1"', LAB],
     ["a lab issue comment", "gh issue comment 5 --body 'see X_SECRET_V1 for details'", LAB],

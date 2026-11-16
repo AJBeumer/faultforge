@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { answer, hookFileProblem, MIN_HOOK_BYTES, run } from "./fail-closed.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
 
-describe("the hook fails closed outside decide() (AUD-M4)", () => {
+describe("the hook fails closed outside decide()", () => {
   const CONFIG = guardConfig(tempRepo(true).dir);
   const WRAPPER = join(import.meta.dirname, "fail-closed.ts");
   const scratch = mkdtempSync(join(tmpdir(), "guard-broken-"));
@@ -74,7 +74,7 @@ describe("the wrapper passes on only an answer Claude Code acts on", () => {
   });
 });
 
-describe("the fail-closed wrapper refuses a hook file that can't be the hook (AUD-M4)", () => {
+describe("the fail-closed wrapper refuses a hook file that can't be the hook", () => {
   const scratch = mkdtempSync(join(tmpdir(), "guard-hookfile-"));
   const file = (name: string, text: string) => {
     const path = join(scratch, name);

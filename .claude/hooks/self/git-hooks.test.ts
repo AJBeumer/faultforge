@@ -18,7 +18,7 @@ const ask = (tool: string, input: object, cwd: string) =>
   askGuard(tool, input, cwd, { config: CONFIG, privateDir: PRIVATE, outsideRun: true });
 const bash = (command: string, cwd = ELSEWHERE) => ask("Bash", { command }, cwd);
 
-describe("the git-level guard can't be switched off (N-B)", () => {
+describe("the git-level guard can't be switched off", () => {
   const places = [
     ["a reviewed checkout", TARGET_REPO.dir],
     ["the lab", LAB.dir],

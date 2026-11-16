@@ -14,7 +14,7 @@ const verdict = (tool: string, input: object, cwd = LAB) =>
   askGuard(tool, input, cwd, { config: CONFIG, privateDir: PRIVATE });
 const bash = (command: string, cwd?: string) => verdict("Bash", { command }, cwd);
 
-describe("the bypass spellings the audit found (AUD-M3)", () => {
+describe("every spelling of a write to a reviewed repo is that write", () => {
   it.each([
     ["gh api -fbody=", 'gh api repos/AJBeumer/faultforge-target/issues/3/comments -fbody="the planted bug"'],
     [

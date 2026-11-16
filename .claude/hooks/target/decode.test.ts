@@ -53,7 +53,7 @@ describe("a lab post is read as strictly as a post to a reviewed repo while priv
   });
 });
 
-describe("ANSI-C strings and variables before the word and link checks (AUD-M3)", () => {
+describe("ANSI-C strings and variables before the word and link checks", () => {
   it("decodes $'…' before the link check, from the lab", () => {
     expect(verdict(String.raw`gh issue create --title x --body $'${T}\x233'`, LAB, NO_PRIVATE)).toMatch(
       /link to the target/,
@@ -119,7 +119,7 @@ describe("ANSI-C strings and variables before the word and link checks (AUD-M3)"
   });
 });
 
-describe("aliases, default repos and repository ids (AUD-M3)", () => {
+describe("aliases, default repos and repository ids", () => {
   let before: RepositoryResolver | undefined;
   afterEach(() => {
     if (before) setRepositoryResolver(before);
@@ -159,7 +159,7 @@ describe("aliases, default repos and repository ids (AUD-M3)", () => {
   });
 });
 
-describe("leetspeak (AUD-M3)", () => {
+describe("leetspeak", () => {
   it("folds digits and signs into letters, beside the text as written", () => {
     expect(leetReadings("pl@nt3d $abotage 1edger")).toEqual(["planted sabotage iedger", "planted sabotage ledger"]);
     expect(telltales("pl4nt3d bug")).toContain("says planted");
@@ -178,7 +178,7 @@ describe("leetspeak (AUD-M3)", () => {
   });
 });
 
-describe("markup that renders as nothing can't split a word or an id (re-grade 7)", () => {
+describe("markup that renders as nothing can't split a word or an id", () => {
   it.each([
     ["an HTML comment", "x-sec<!-- -->ret-v1"],
     ["an entity", "x-s&#101;cret-v1"],

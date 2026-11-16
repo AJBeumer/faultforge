@@ -41,7 +41,7 @@ describe("a backslash-newline is joined as the shell joins it", () => {
   });
 });
 
-describe("a crafted command can't outrun the hook (AUD-M4)", () => {
+describe("a crafted command can't outrun the hook", () => {
   const config = guardConfig(tempRepo(true).dir);
   const privateDir = privateStore("guard~private-", ["idempotency-guard-bypass-v1"]);
   const bash = (command: string) => askGuard("Bash", { command }, "D:\\Projects\\FaultForge", { config, privateDir });

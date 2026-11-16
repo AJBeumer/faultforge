@@ -553,7 +553,7 @@ describe("factory policy: the whole environment and network calls from code (#24
   });
 });
 
-describe("factory policy: decides in linear time (AUD-M4, lead's follow-up to PR 265)", () => {
+describe("factory policy: decides in linear time", () => {
   // Each command at `k` quarters of 6 KB: the old wall-clock test's size is k = 4.
   const crafted: Record<string, (k: number) => string> = {
     "git then push, over and over": (k) => "git push x ".repeat(150 * k),
@@ -635,7 +635,7 @@ describe("factory policy: quoted separators, extra calls, Python imports (Qodo o
   });
 });
 
-describe("factory policy: other spellings of the program and of the environment (Qodo on PR 270, round 2)", () => {
+describe("factory policy: other spellings of the program and of the environment (Qodo on PR 270)", () => {
   it.each([
     "/usr/bin/git push --force origin x",
     "\\git push --force origin x",
@@ -657,7 +657,7 @@ describe("factory policy: other spellings of the program and of the environment 
   });
 });
 
-describe("factory policy: compact flags, other env programs, /proc, JS clients (Qodo on PR 270, round 3)", () => {
+describe("factory policy: compact flags, other env programs, /proc, JS clients (Qodo on PR 270)", () => {
   it.each([
     "gh api repos/o/r/pulls/1/reviews -fbody=hi -fevent=COMMENT",
     "/usr/bin/env",

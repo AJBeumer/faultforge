@@ -35,7 +35,7 @@ const ELSEWHERE = scratchFolder("guard-elsewhere6-", { "vis.json": '{"private": 
 const bash = (command: string, cwd = ELSEWHERE) =>
   askGuard("Bash", { command }, cwd, { config: CONFIG, privateDir: PRIVATE, outsideRun: true });
 
-describe("the private repo stays private (N-A)", () => {
+describe("the private repo stays private", () => {
   it.each([
     `gh repo edit ${P} --visibility public --accept-visibility-change-consequences`,
     "gh repo edit --visibility=internal",
@@ -138,7 +138,7 @@ describe("the private repo stays private (N-A)", () => {
   });
 });
 
-describe("lab history never goes into a reviewed repo (N-C)", () => {
+describe("lab history never goes into a reviewed repo", () => {
   it.each([
     [`git push https://github.com/${T}.git main:refs/heads/tidy`, LAB.dir],
     [`git push git@github.com:${T}.git HEAD:refs/heads/tidy`, LAB.dir],

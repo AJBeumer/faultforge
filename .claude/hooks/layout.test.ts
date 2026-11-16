@@ -33,8 +33,15 @@ const resolvedImports = (file: string) =>
   );
 
 describe("the hooks' layout (#355)", () => {
-  it("names no test file after an audit round or a re-grade", () => {
+  it("names no test file, and no describe block, after an audit round or a re-grade", () => {
     expect(files.filter((f) => /regrade|bypass|round/i.test(posix.basename(f)))).toEqual([]);
+    const cited = files
+      .filter((f) => f.endsWith(".test.ts"))
+      .flatMap((f) =>
+        [...readFileSync(join(HOOKS, f), "utf8").matchAll(/^describe\("([^"]*)"/gm)].map((m) => `${f}: ${m[1]}`),
+      )
+      .filter((line) => /\bAUD-[A-Z]\d|\(N-[A-C]\)|re-?grade|\bround \d/i.test(line.split(": ").slice(1).join(": ")));
+    expect(cited).toEqual([]);
   });
 
   it("keeps only the entry points, their tests and the fixtures at the top; everything else sits in a folder", () => {

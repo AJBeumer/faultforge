@@ -195,7 +195,7 @@ const verdict = (tool: string, input: object, cwd = LAB_DIR, extra: NodeJS.Proce
   askGuard(tool, input, cwd, CLONE_ASKING, extra);
 const inClone = (command: string, cwd?: string, extra?: NodeJS.ProcessEnv) => verdict("Bash", { command }, cwd, extra);
 
-describe("a second clone of a reviewed repo is recognised by its remote (AUD-M3)", () => {
+describe("a second clone of a reviewed repo is recognised by its remote", () => {
   const clone = tempRepo();
   clone.git("remote", "add", "origin", "https://github.com/AJBeumer/faultforge-target.git");
   const dir = clone.dir;

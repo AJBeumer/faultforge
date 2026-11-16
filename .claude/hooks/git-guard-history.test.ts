@@ -34,7 +34,7 @@ function diverged() {
 
 const line = (local: string, remote: string, ref = "refs/heads/main") => `refs/heads/main ${local} ${ref} ${remote}\n`;
 
-describe("a push to a reviewed repo keeps its history (re-grade 3)", () => {
+describe("a push to a reviewed repo keeps its history", () => {
   it("refuses a non-fast-forward update, and names no ref", () => {
     const { dir, pushed, rewritten } = diverged();
     const found = check("pre-push", dir, "origin", line(rewritten, pushed, "refs/heads/x-secret-v1"));

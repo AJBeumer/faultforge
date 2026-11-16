@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GROWTH_FACTOR, growth, LINEAR_BOUND } from "./fixtures.ts";
 
-describe("growth tells linear code from quadratic code without a wall clock (re-grade 7)", () => {
+describe("growth tells linear code from quadratic code without a wall clock", () => {
   let sink = 0;
   const linear = (scale: number) => {
     for (let i = 0; i < 200_000 * scale; i++) sink += i & 7;
