@@ -40,3 +40,4 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 ## [Week 3 (16 to 22 November)](decisions/week-3.md)
 
 - [16 November: Qodo configuration v11, web search off](decisions/week-3.md#16-november-qodo-configuration-v11-web-search-off)
+- [16 November: a layout a person can work in, and Qodo configuration v12](decisions/week-3.md#16-november-a-layout-a-person-can-work-in-and-qodo-configuration-v12)
