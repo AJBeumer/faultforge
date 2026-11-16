@@ -9,11 +9,11 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { otherDriveSpelling } from "../src/drive-spelling.ts";
+import { otherDriveSpelling } from "../src/shared/drive-spelling.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const other = otherDriveSpelling(root);
-const testFile = "packages/harness/src/drive-spelling.test.ts";
+const testFile = "packages/harness/src/shared/drive-spelling.test.ts";
 
 // Colour off, and any colour codes stripped anyway: CI forces colour, which splits "Tests  5 passed" with codes.
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
@@ -33,7 +33,13 @@ describe.runIf(process.platform === "win32" && other)("both drive spellings", ()
   it.each(spellings)(
     "the launcher passes from %s",
     (cwd) => {
-      const result = run(cwd, [join(root, "packages/harness/src/vitest-run.ts"), "run", "--project", "unit", testFile]);
+      const result = run(cwd, [
+        join(root, "packages/harness/src/repo/vitest-run.ts"),
+        "run",
+        "--project",
+        "unit",
+        testFile,
+      ]);
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toMatch(/Tests\s+\d+ passed/);
       // A cold Vitest start on a Windows runner can take longer than the 5 s default (Qodo on PR 260).
@@ -64,7 +70,7 @@ describe("the launcher's exit codes", () => {
   it("exits 2, not a test failure's 1, when it can't start Vitest", () => {
     const empty = mkdtempSync(join(tmpdir(), "vitest-run-"));
     try {
-      const result = run(empty, [join(root, "packages/harness/src/vitest-run.ts"), "run"]);
+      const result = run(empty, [join(root, "packages/harness/src/repo/vitest-run.ts"), "run"]);
       expect(result.status).toBe(2);
       expect(result.stderr).toContain("could not start Vitest");
     } finally {

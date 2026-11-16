@@ -33,7 +33,7 @@ function fixture(body: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "cli-entry-"));
   dirs.push(dir);
   writeFileSync(join(dir, "package.json"), '{"type":"module"}');
-  copyFileSync(join(SRC, "cli-entry.ts"), join(dir, "cli-entry.ts"));
+  copyFileSync(join(SRC, "shared", "cli-entry.ts"), join(dir, "cli-entry.ts"));
   writeFileSync(
     join(dir, "x-cli.ts"),
     [
@@ -92,10 +92,10 @@ describe("entries on cli-entry.ts, in a real process (AUD-N3)", () => {
   });
 
   it("reach the moved scripts' bodies, which keep their usage codes", () => {
-    const timeline = tsx(join(SRC, "factory-timeline-cli.ts"));
+    const timeline = tsx(join(SRC, "cli", "factory-timeline-cli.ts"));
     expect(timeline.err).toContain("usage: npm run factory:timeline");
     expect(timeline.code).toBe(2);
-    const tick = tsx(join(SRC, "factory-tick-cli.ts"), ["--minutes", "soon"]);
+    const tick = tsx(join(SRC, "cli", "factory-tick-cli.ts"), ["--minutes", "soon"]);
     expect(tick.err).toContain("--minutes must be a positive number");
     expect(tick.code).toBe(2);
   });

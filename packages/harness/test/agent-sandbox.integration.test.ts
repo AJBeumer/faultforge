@@ -14,9 +14,14 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agentEnv } from "../src/factory-agent-env.ts";
-import { loadFactory } from "../src/factory-config.ts";
-import { allowList, type EgressProxy, proxyEnv, sandboxedCommand, startEgressProxy } from "../src/factory-sandbox.ts";
+import { agentEnv } from "../src/factory/factory-agent-env.ts";
+import {
+  allowList,
+  type EgressProxy,
+  proxyEnv,
+  sandboxedCommand,
+  startEgressProxy,
+} from "../src/factory/factory-sandbox.ts";
 import {
   nodePrefix,
   othersEnter,
@@ -30,7 +35,8 @@ import {
   setupPlan,
   stopAgentProcesses,
   teardownPlan,
-} from "../src/factory-sandbox-setup.ts";
+} from "../src/factory/factory-sandbox-setup.ts";
+import { loadFactory } from "../src/shared/factory-config.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const linux = process.platform === "linux";

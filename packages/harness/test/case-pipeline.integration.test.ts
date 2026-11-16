@@ -10,12 +10,12 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { run as buildCase } from "../src/case-build.ts";
-import { validateCaseRecord } from "../src/case-record.ts";
-import { run as reviewCase } from "../src/case-review.ts";
-import { installHooks } from "../src/guard-install.ts";
-import { readLedger } from "../src/ledger.ts";
-import { run as verdict } from "../src/verdict.ts";
+import { run as buildCase } from "../src/case/case-build.ts";
+import { validateCaseRecord } from "../src/case/case-record.ts";
+import { run as reviewCase } from "../src/case/case-review.ts";
+import { installHooks } from "../src/guard/guard-install.ts";
+import { readLedger } from "../src/ledger/ledger.ts";
+import { run as verdict } from "../src/verdict/verdict.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const realTarget = resolve(root, "../faultforge-target");
@@ -86,7 +86,7 @@ function world() {
 
 function inject(w: ReturnType<typeof world>, template: string, caseId: string): string {
   const tsx = join(root, "node_modules", "tsx", "dist", "cli.mjs");
-  const script = join(root, "packages", "harness", "src", "inject.ts");
+  const script = join(root, "packages", "harness", "src", "cli", "inject.ts");
   try {
     execFileSync(process.execPath, [tsx, script, "--template", template, "--target", w.target, "--case", caseId], {
       cwd: root,
@@ -290,7 +290,7 @@ function validateOnly(w: ReturnType<typeof world>, template: Record<string, unkn
   mkdirSync(join(w.priv, "templates", String(template.id)), { recursive: true });
   writeFileSync(join(w.priv, "templates", String(template.id), "template.json"), JSON.stringify(template));
   const tsx = join(root, "node_modules", "tsx", "dist", "cli.mjs");
-  const script = join(root, "packages", "harness", "src", "inject.ts");
+  const script = join(root, "packages", "harness", "src", "cli", "inject.ts");
   const args = [tsx, script, "--template", String(template.id), "--target", w.target, "--validate-only"];
   try {
     execFileSync(process.execPath, args, {

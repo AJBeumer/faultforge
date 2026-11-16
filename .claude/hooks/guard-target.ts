@@ -2,7 +2,7 @@
  * Claude Code PreToolUse hook. Keeps the reviewed repositories free of hints for the reviewer.
  *
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. Every write to one goes through
- * one door, `npm run target:post` (`packages/harness/src/target-post.ts`), which checks the exact text it sends
+ * one door, `npm run target:post` (`packages/harness/src/door/target-post.ts`), which checks the exact text it sends
  * (#340). So for each reviewed repo this hook:
  *  - lets a command that is exactly `npm run target:post -- …` through, without reading it (target/door.ts);
  *  - refuses every other command that sends to it: a push, a gh call that isn't a known read, a gh or raw API

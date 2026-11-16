@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { run } from "../src/case-build.ts";
-import { privateDir } from "../src/templates.ts";
+import { run } from "../src/case/case-build.ts";
+import { privateDir } from "../src/shared/templates.ts";
 
 const root = join(import.meta.dirname, "../../..");
 // private/ is this repo's own git-ignored evidence store (CLAUDE.md): a checkout that doesn't have

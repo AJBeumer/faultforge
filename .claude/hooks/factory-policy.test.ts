@@ -483,7 +483,7 @@ describe("factory policy: review:wait runs in the foreground (#129)", () => {
   });
 
   it("sees the wait by its file as well as by its npm script (Qodo on PR 132)", () => {
-    expect(backgroundViolation("npx tsx packages/harness/src/review-wait.ts faultforge 128", true)).toMatch(
+    expect(backgroundViolation("npx tsx packages/harness/src/cli/review-wait.ts faultforge 128", true)).toMatch(
       /in the foreground/,
     );
     expect(backgroundViolation("node review-wait.ts &", false)).toMatch(/in the foreground/);

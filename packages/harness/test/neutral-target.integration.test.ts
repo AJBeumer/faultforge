@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { telltales } from "../src/neutral.ts";
+import { telltales } from "../src/shared/neutral.ts";
 
 const TARGET = join(import.meta.dirname, "../../../../faultforge-target");
 const git = (...args: string[]) =>

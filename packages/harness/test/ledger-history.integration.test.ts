@@ -8,8 +8,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { eachGitLine } from "../src/git-stream.ts";
-import { appendOnlyProblems } from "../src/ledger-check.ts";
+import { appendOnlyProblems } from "../src/ledger/ledger-check.ts";
+import { eachGitLine } from "../src/shared/git-stream.ts";
 
 const dirs: string[] = [];
 afterAll(() => {

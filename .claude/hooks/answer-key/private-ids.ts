@@ -6,7 +6,7 @@
  * printed: a denial says only that a private template was named.
  *
  * The private folder is `FAULTFORGE_PRIVATE_DIR` when set, else the parent of `factory.json`'s evidence
- * folder (`private/` by default), as `packages/harness/src/paths.ts` resolves it. Where there is no private
+ * folder (`private/` by default), as `packages/harness/src/shared/paths.ts` resolves it. Where there is no private
  * folder (public CI, a fresh clone) there is nothing to protect, so the check is skipped.
  */
 import { spawnSync } from "node:child_process";

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COMMAND_KINDS } from "../../../packages/harness/src/target-post.ts";
-import { AGENT_DOOR_KINDS as DOOR_LIST } from "../../../packages/harness/src/target-post-run.ts";
+import { COMMAND_KINDS } from "../../../packages/harness/src/door/target-post.ts";
+import { AGENT_DOOR_KINDS as DOOR_LIST } from "../../../packages/harness/src/door/target-post-run.ts";
 import { decide } from "../factory-policy.ts";
 import { GROWTH_FACTOR, growth, LINEAR_BOUND } from "../fixtures.ts";
 import { AGENT_DOOR_KINDS, doorKindViolation } from "./door-kinds.ts";
@@ -63,8 +63,8 @@ describe("factory policy: the door kinds a run's agent may use, as a first layer
 
   it.each([
     // Qodo on PR 349: commands that read, search or test are not door calls.
-    "cat packages/harness/src/target-post.ts README",
-    "grep sendPost packages/harness/src/target-post.ts",
+    "cat packages/harness/src/door/target-post.ts README",
+    "grep sendPost packages/harness/src/door/target-post.ts",
     "grep -R pr-close packages/harness/src",
     "grep -rn 'npm' packages/*.json",
     "npx vitest run packages/harness/src/target-post.test.ts -t 'import(x)'",

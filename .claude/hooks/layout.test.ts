@@ -80,7 +80,7 @@ describe("the hooks' layout (#355)", () => {
     expect(bridged.length).toBeGreaterThan(0);
     const header = readFileSync(join(HOOKS, BRIDGE), "utf8").split("*/")[0] ?? "";
     for (const path of bridged) {
-      expect(path).toMatch(/^\.\.\/\.\.\/packages\/harness\/src\/[\w-]+\.ts$/);
+      expect(path).toMatch(/^\.\.\/\.\.\/packages\/harness\/src\/[\w-]+\/[\w-]+\.ts$/);
       expect(header).toContain(posix.basename(path));
     }
   });

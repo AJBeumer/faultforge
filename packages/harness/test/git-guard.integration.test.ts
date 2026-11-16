@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CONFIG_KEY, installHooks } from "../src/guard-install.ts";
+import { CONFIG_KEY, installHooks } from "../src/guard/guard-install.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const SCRIPT = join(root, ".claude", "hooks", "git-guard.ts");

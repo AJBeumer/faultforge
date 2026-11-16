@@ -21,7 +21,7 @@ const PATHSPECS = [
   ".claude/hooks",
   ".claude/settings.json",
   ".claude/settings.local.json",
-  "packages/harness/src/neutral.ts",
+  "packages/harness/src/shared/neutral.ts",
 ];
 
 /** Git commands that put a commit's files in place. */

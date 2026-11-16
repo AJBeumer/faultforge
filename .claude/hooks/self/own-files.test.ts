@@ -17,10 +17,10 @@ const CONFIG = guardConfig(TARGET.dir);
 /** The checkout the guard runs from, with its own files in place: HEAD changed the guard, HEAD~1 had the old one. */
 const OWN = tempRepo(true);
 mkdirSync(join(OWN.dir, ".claude", "hooks"), { recursive: true });
-mkdirSync(join(OWN.dir, "packages", "harness", "src"), { recursive: true });
+mkdirSync(join(OWN.dir, "packages", "harness", "src", "shared"), { recursive: true });
 writeFileSync(join(OWN.dir, ".claude", "hooks", "git-guard.ts"), "export const old = 1;\n");
 writeFileSync(join(OWN.dir, ".claude", "settings.json"), "{}\n");
-writeFileSync(join(OWN.dir, "packages", "harness", "src", "neutral.ts"), "export {};\n");
+writeFileSync(join(OWN.dir, "packages", "harness", "src", "shared", "neutral.ts"), "export {};\n");
 OWN.git("add", ".");
 OWN.git("commit", "-q", "-m", "Old guard");
 writeFileSync(join(OWN.dir, ".claude", "hooks", "git-guard.ts"), "export const current = 2;\n");
@@ -54,7 +54,10 @@ describe("the guard's own files can't be changed in its checkout", () => {
     ["Write", { file_path: own(".claude", "hooks", "git-guard.ts"), content: "process.exit(0)" }],
     ["Write", { file_path: own(".claude", "hooks", "new-hook.ts"), content: "export {};" }],
     ["Edit", { file_path: own(".claude", "settings.json"), old_string: "{}", new_string: '{"hooks":{}}' }],
-    ["Edit", { file_path: own("packages", "harness", "src", "neutral.ts"), old_string: "x", new_string: "y" }],
+    [
+      "Edit",
+      { file_path: own("packages", "harness", "src", "shared", "neutral.ts"), old_string: "x", new_string: "y" },
+    ],
     ["Write", { file_path: own(".claude", "settings.local.json"), content: '{"disableAllHooks":true}' }],
   ])("refuses %s of a guard file (H12)", (tool, input) => {
     expect(ask(tool, input, OWN.dir)).toMatch(/guard's own files/);
@@ -65,16 +68,16 @@ describe("the guard's own files can't be changed in its checkout", () => {
     "rm -rf .claude",
     "rm -r .claude/h*",
     "echo 'process.exit(0)' > .claude/hooks/git-guard.ts",
-    "printf x >> packages/harness/src/neutral.ts",
+    "printf x >> packages/harness/src/shared/neutral.ts",
     "cat /dev/null | tee .claude/settings.json",
-    "sed -i 's/a/b/' packages/harness/src/neutral.ts",
+    "sed -i 's/a/b/' packages/harness/src/shared/neutral.ts",
     "mv .claude/hooks/git-guard.ts /tmp/x",
     "cp /dev/null .claude/hooks/git-guard.ts",
     "cp -r ../other/.claude .",
     "cd .claude/hooks && rm git-guard.ts",
     "truncate -s 0 .claude/hooks/{git-guard,guard-target}.ts",
     "git checkout HEAD~3 -- .claude/hooks",
-    "git restore --source=HEAD~1 packages/harness/src/neutral.ts",
+    "git restore --source=HEAD~1 packages/harness/src/shared/neutral.ts",
     `node -e "require('fs').writeFileSync('.claude/hooks/git-guard.ts', '')"`,
     "F=.claude/hooks/git-guard.ts; rm $F",
     // Quotes the shell joins, escapes it drops, and git's own options (Qodo on PR 337).
@@ -153,7 +156,7 @@ describe("the guard's own files can't be changed in its checkout", () => {
     for (const command of [
       "cat .claude/hooks/git-guard.ts",
       "ls .claude/hooks",
-      "grep -n x packages/harness/src/neutral.ts",
+      "grep -n x packages/harness/src/shared/neutral.ts",
       "cp .claude/hooks/git-guard.ts /tmp/copy.ts",
       "git status",
       "git checkout main",

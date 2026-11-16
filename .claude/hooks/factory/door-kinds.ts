@@ -3,7 +3,7 @@
  * (`npm run target:post`, #340) writes to the reviewed repository; during a run the agent needs only to push its
  * branch, open its PR and change it.
  *
- * The guarantee is not here: it is in the door itself (`packages/harness/src/target-post-run.ts`), which refuses
+ * The guarantee is not here: it is in the door itself (`packages/harness/src/door/target-post-run.ts`), which refuses
  * every other kind while a run is marked active, however it is called. Reading a command's text can't see every
  * way to call the door (Qodo on PR 349 found several), so this rule only catches the plain spelling, a package
  * manager running `target:post` with a kind written out after it, and tells the agent before it tries. Anything

@@ -30,7 +30,7 @@ function runInject(
   env: NodeJS.ProcessEnv = process.env,
 ): { status: number | null; stdout: string; stderr: string } {
   const tsx = join(root, "node_modules", "tsx", "dist", "cli.mjs");
-  const script = join(root, "packages", "harness", "src", "inject.ts");
+  const script = join(root, "packages", "harness", "src", "cli", "inject.ts");
   try {
     const stdout = execFileSync(process.execPath, [tsx, script, ...args], { cwd: root, encoding: "utf8", env });
     return { status: 0, stdout, stderr: "" };
