@@ -316,7 +316,7 @@ export function readings(raw: string): string[] {
 }
 
 /** The command with each backslash or backtick before a newline read both ways: glued, and as a space. */
-export function continued(raw: string): string[] {
+function continued(raw: string): string[] {
   const continuation = /[\\`]\r?\n/g;
   return [raw.replace(continuation, ""), raw.replace(continuation, " ")];
 }

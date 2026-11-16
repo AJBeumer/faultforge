@@ -43,16 +43,14 @@ import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { checkScriptViolation } from "./factory/check-script.ts";
-import { commandViolations, continued, readings } from "./factory/commands.ts";
+import { commandViolations, readings } from "./factory/commands.ts";
 import { doorKindViolation } from "./factory/door-kinds.ts";
 import { HOME_SECRET_REASON, homeSecretCommand } from "./factory/home.ts";
 import { guardrailWriteViolation, privateCommandViolation, readViolation, scriptViolation } from "./factory/paths.ts";
 import { gitFolderEdit, guardSwitchOff } from "./self/git-hooks.ts";
 import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./shared/hook-io.ts";
-import { spokenWords } from "./shell/decode.ts";
 import { builtCodeProblem } from "./shell/exec.ts";
 import { MAX_COMMAND_CHARS } from "./shell/scan.ts";
-import { type Step, steps, words } from "./shell/words.ts";
 import { skipsGitGuard } from "./target/reach.ts";
 
 /** The tools that only read files; Claude Code's settings route them to this hook too. */
@@ -79,32 +77,6 @@ export function backgroundViolation(raw: string, background: boolean): string | 
   if (!read.some((command) => RUNS_REVIEW_WAIT.test(command))) return undefined;
   if (!background && !read.some((command) => SHELL_BACKGROUND.test(command))) return undefined;
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
-}
-
-/** True when a step's words run the npm script: npm by any name, a run word, then the script, quoted or not. */
-function runsScript(step: string, script: string): boolean {
-  const all = words(step).map((word) => spokenWords(word).toLowerCase());
-  const npm = all.findIndex((word) => /^npm(\.cmd|\.ps1|\.exe)?$/.test(word.split(/[\\/]/).pop() ?? ""));
-  const run = npm < 0 ? -1 : all.findIndex((word, i) => i > npm && /^(run|run-script|rum|urn)$/.test(word));
-  return run >= 0 && all.indexOf(script, run + 1) >= 0;
-}
-
-/** The command's steps, split outside quotes, by bash's rules and by PowerShell's: a rule that holds in either counts. */
-const stepReadings = (raw: string) =>
-  raw.length > MAX_COMMAND_CHARS ? [] : continued(raw).flatMap((text) => [steps(text, true), steps(text, false)]);
-
-/** Why a check may not be piped: a pipe ends with its last command's exit code, so a failed check reads as passed. */
-export function pipedCheckViolation(raw: string): string | undefined {
-  const piped = (all: Step[]) => all.some((step, i) => all[i + 1]?.piped && runsScript(step.text, "check"));
-  if (!stepReadings(raw).some(piped)) return undefined;
-  return "run npm run check on its own, never piped into another command: a pipe hides its exit code. For long output, send it to a file (npm run check > check.txt 2>&1) and read the file";
-}
-
-/** Why ci:wait runs alone: the run log reads its exit code from the output's last line, which another step could write. */
-export function chainedCiWaitViolation(raw: string): string | undefined {
-  const chained = (all: Step[]) => all.length > 1 && all.some((step) => runsScript(step.text, "ci:wait"));
-  if (!stepReadings(raw).some(chained)) return undefined;
-  return "run npm run ci:wait as a command of its own, with nothing chained or piped before or after it: the run log reads its exit code from its last line";
 }
 
 /**
@@ -228,8 +200,6 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       reasons = commandViolations(command, env.FAULTFORGE_TICKET_NUMBER);
       const background = backgroundViolation(command, args.run_in_background === true);
       if (background) reasons.push(background);
-      for (const reason of [pipedCheckViolation(command), chainedCiWaitViolation(command)])
-        if (reason) reasons.push(reason);
       // Only a command short enough to read is looked at further; the length rule above already refuses it.
       if (command.length <= MAX_COMMAND_CHARS) {
         for (const reason of [

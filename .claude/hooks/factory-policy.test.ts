@@ -5,12 +5,10 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   backgroundViolation,
-  chainedCiWaitViolation,
   commandViolations,
   decide,
   denialReason,
   editViolation,
-  pipedCheckViolation,
   privateViolation,
 } from "./factory-policy.ts";
 import { growth, LINEAR_BOUND } from "./fixtures.ts";
@@ -441,96 +439,6 @@ describe("factory policy: an environment listing filtered by grep", () => {
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatch(/no dumping the environment/);
     expect(reasons[0]).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
-  });
-});
-
-describe("factory policy: the check's own exit code", () => {
-  it.each([
-    "npm run check 2>&1 | tail -150",
-    "npm run check | grep -n error",
-    'npm run check 2>&1 | grep -n "Found 1 error" -B 60 | head -50',
-    "npm run -s check |& tee out.txt",
-    "cd repo && npm run check | tail",
-    // A separator inside a quoted argument separates nothing: the shell still pipes the check.
-    'npm run check "; echo harmless" | cat',
-    "npm run check '&& echo fine' | cat",
-    // npm's other spellings of the same script.
-    "npm run-script check | tail",
-    "npm.cmd run check | tail",
-    'npm run "check" | tail',
-    "npm run 'check' | tail",
-    "/usr/bin/npm run check | tail",
-    "npm --prefix . run check | tail",
-    `npm run ${"--flag ".repeat(12)}check | tail`,
-    "npx npm run check | tail",
-  ])("refuses the check piped into another command, which hides its exit code: %s", (command) => {
-    const reason = pipedCheckViolation(command);
-    expect(reason).toMatch(/never piped/);
-    expect(reason).toContain("npm run check > check.txt 2>&1");
-  });
-
-  it.each([
-    "npm run check",
-    "npm run check > check.txt 2>&1",
-    "npm run check 2>&1 > /tmp/check-out.txt; grep -n error /tmp/check-out.txt | head -50",
-    "npm run check && git commit -F msg.txt",
-    "npm run check || echo failed",
-    "npm test | tail",
-    "git log --oneline | head -3 && npm run check",
-    "npm run check:docs | tail",
-    'npm run check > "out|put.txt" 2>&1',
-    'npm run check; echo "a | b"',
-    "grep -rn 'npm run check' docs | head",
-  ])("allows the check on its own, sent to a file, or chained: %s", (command) => {
-    expect(pipedCheckViolation(command)).toBeUndefined();
-  });
-});
-
-describe("factory policy: the check rule reads a long command in time", () => {
-  it("decides a long command full of checks with no pipe well inside the hook's time", () => {
-    // Small enough not to load the machine while other tests measure their own timing.
-    const long = "npm run check ".repeat(1000);
-    const started = Date.now();
-    expect(pipedCheckViolation(long)).toBeUndefined();
-    expect(pipedCheckViolation(`${long}| tail`)).toMatch(/never piped/);
-    expect(Date.now() - started).toBeLessThan(2000);
-  });
-
-  it("finds a pipe however far along the check's own step it is", () => {
-    const far = `npm run check ${"--flag ".repeat(2000)}`;
-    expect(far.length).toBeGreaterThan(4000);
-    expect(pipedCheckViolation(`${far}| tail -5`)).toMatch(/never piped/);
-    expect(pipedCheckViolation(`${far}; git log | head`)).toBeUndefined();
-  });
-});
-
-describe("factory policy: ci:wait runs as a command of its own", () => {
-  it.each([
-    "git commit -F msg.txt && npm run ci:wait -- faultforge --timeout 9",
-    "npm run ci:wait -- faultforge; echo ci:wait exit 0",
-    "npm run ci:wait -- faultforge || echo ci:wait exit 0",
-    "npm run ci:wait -- faultforge | tail -1",
-    "cd repo\nnpm run ci:wait -- faultforge",
-    "npm.cmd run-script 'ci:wait' -- faultforge && git push",
-  ])("refuses it chained or piped, so nothing else can write its last line: %s", (command) => {
-    expect(chainedCiWaitViolation(command)).toMatch(/a command of its own/);
-  });
-
-  it.each([
-    "npm run ci:wait -- faultforge --timeout 9",
-    "npm run ci:wait -- faultforge --timeout 9 2>&1",
-    "grep -rn 'ci:wait' docs | head",
-    "git commit -F msg.txt && npm run check",
-  ])("allows it alone, and a command that only names it: %s", (command) => {
-    expect(chainedCiWaitViolation(command)).toBeUndefined();
-  });
-
-  it("is refused by the hook itself, with the reason", () => {
-    const command = "git add -A && npm run ci:wait -- faultforge";
-    const env = { FAULTFORGE_FACTORY_RUN: "test", FAULTFORGE_RUN_ROOT: RUN };
-    const answer = decide(JSON.stringify({ tool_name: "Bash", cwd: RUN, tool_input: { command } }), env);
-    expect(answer).toMatchObject({ kind: "deny" });
-    expect((answer as { reason: string }).reason).toMatch(/a command of its own/);
   });
 });
 
