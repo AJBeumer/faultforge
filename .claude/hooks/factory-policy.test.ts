@@ -9,6 +9,7 @@ import {
   decide,
   denialReason,
   editViolation,
+  pipedCheckViolation,
   privateViolation,
 } from "./factory-policy.ts";
 import { growth, LINEAR_BOUND } from "./fixtures.ts";
@@ -439,6 +440,33 @@ describe("factory policy: an environment listing filtered by grep", () => {
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatch(/no dumping the environment/);
     expect(reasons[0]).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
+  });
+});
+
+describe("factory policy: the check's own exit code", () => {
+  it.each([
+    "npm run check 2>&1 | tail -150",
+    "npm run check | grep -n error",
+    'npm run check 2>&1 | grep -n "Found 1 error" -B 60 | head -50',
+    "npm run -s check |& tee out.txt",
+    "cd repo && npm run check | tail",
+  ])("refuses the check piped into another command, which hides its exit code: %s", (command) => {
+    const reason = pipedCheckViolation(command);
+    expect(reason).toMatch(/never piped/);
+    expect(reason).toContain("npm run check > check.txt 2>&1");
+  });
+
+  it.each([
+    "npm run check",
+    "npm run check > check.txt 2>&1",
+    "npm run check 2>&1 > /tmp/check-out.txt; grep -n error /tmp/check-out.txt | head -50",
+    "npm run check && git commit -F msg.txt",
+    "npm run check || echo failed",
+    "npm test | tail",
+    "git log --oneline | head -3 && npm run check",
+    "npm run check:docs | tail",
+  ])("allows the check on its own, sent to a file, or chained: %s", (command) => {
+    expect(pipedCheckViolation(command)).toBeUndefined();
   });
 });
 

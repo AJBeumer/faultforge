@@ -31,7 +31,8 @@ In an unattended factory run (`FAULTFORGE_FACTORY_RUN` is set), the runner has a
 
 - Start from an up-to-date `main`. One branch per ticket, named after the change (`cancel-booking`), never after the ticket number.
 - Write a test for every criterion, plus at least one failure case.
-- `<check>` must pass before committing, and CI runs it again on the PR.
+- `<check>` must pass before committing, and CI runs it again on the PR. Run it on its own, never piped into another command: a pipe hides its exit code.
+- **For a `lab` repo, get both operating systems green before the PR sees a commit:** commit, then `npm run ci:wait -- <key>`. It pushes the commit to a scratch branch with no PR, waits for the Linux and Windows checks, prints each job and deletes the branch. Exit 0: push to the PR's branch. Exit 1: a job failed; fix it and run it again. Exit 2: it couldn't tell. Qodo reviews pull requests only, so this costs no review round, and a push to a PR does. Do it before the first push and before every later one. A `reviewed` repo is written through the door only, so `ci:wait` refuses there.
 - In a `reviewed` repo, editing `AGENTS.md` or `INVARIANTS.md` changes Qodo's rules: that's a new configuration version. Record it in the decision log and snapshot it.
 
 ## 3. Open the PR

@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
 import { type FactoryConfig, gateOf, type QualityGate, repoConfig, STRICTEST_GATE } from "../shared/factory-config.ts";
 import { gateText } from "../shared/quality-gate.ts";
+import { ciWaitInstruction } from "./factory-agent-checks.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
@@ -66,6 +67,7 @@ export function agentInstructions(
     `The ticket's text, as the runner checked it, is in ${ticketFile}. Read the ticket from that file only: never with gh issue view, gh api or npm run ticket:ready, which read it live. Don't move the ticket on the project board: the runner tracks it.`,
     'Everything you need from the environment is written here. Don\'t list it (env, printenv and set are blocked); one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine.',
     "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
+    ciWaitInstruction(repoKey, privateWorktree),
     "Run review:wait in the foreground, with the Bash tool's longest timeout (600000 ms) and --timeout 9, and run it again while it exits 1, up to the round's time. Never start it in the background and never schedule a wakeup: ending your turn ends the run, and nobody wakes you. Report FACTORY_RESULT before you stop, whatever happened.",
     writeInstructions(runRoot, privateWorktree, github),
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
@@ -174,6 +176,7 @@ const DENY = [
 export function agentStep(command: string): string | null {
   if (/\bgh\s+pr\s+create\b|\btarget:post\s+--\s+pr-create\b/.test(command)) return "pr-opened";
   if (/\breview:wait\b/.test(command)) return "review-wait";
+  if (/\bci:wait\b/.test(command)) return "ci-wait";
   if (/\bgit\b[^\n]*\bpush\b|\btarget:post\s+--\s+push\b/.test(command)) return "push";
   if (/\bnpm\s+run\s+check\b/.test(command)) return "check";
   if (/\bticket:ready\b/.test(command)) return "ticket-ready";

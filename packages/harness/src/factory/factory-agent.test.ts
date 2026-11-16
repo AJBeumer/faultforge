@@ -14,6 +14,7 @@ import {
   killTree,
   prUrlFromToolResult,
 } from "./factory-agent.ts";
+import { ciWaitInstruction } from "./factory-agent-checks.ts";
 
 describe("agentInstructions", () => {
   it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
@@ -46,6 +47,27 @@ describe("agentInstructions", () => {
     const text = agentInstructions("/runs/r", "faultforge", 107, "/runs/r/ticket.md");
     expect(text).toContain("Don't list it (env, printenv and set are blocked)");
     expect(text).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
+  });
+
+  it("tells a lab ticket's agent to get both operating systems green before every push to the pull request", () => {
+    const text = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md", true);
+    expect(text).toContain(ciWaitInstruction("faultforge", true));
+    expect(text).toContain("npm run ci:wait -- faultforge");
+    expect(text).toContain("the first one too");
+    expect(text).toContain("costs no review round");
+    expect(text).toContain("never piped into another command");
+  });
+
+  it("tells a reviewed repository's agent not to run ci:wait, which pushes nothing there", () => {
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false, "Owner/app");
+    expect(text).toContain(ciWaitInstruction("target", false));
+    expect(text).toContain("don't run ci:wait here");
+    expect(text).not.toContain("npm run ci:wait -- target");
+  });
+
+  it("names a ci:wait call as its own step in the run log, never as a push or a check", () => {
+    expect(agentStep("npm run ci:wait -- faultforge")).toBe("ci-wait");
+    expect(agentStep("git commit -F msg.txt && npm run ci:wait -- faultforge --timeout 30")).toBe("ci-wait");
   });
 
   it("says to wait for Qodo in the foreground and never to end the turn early, which would end the run", () => {

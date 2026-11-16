@@ -79,6 +79,15 @@ export function backgroundViolation(raw: string, background: boolean): string | 
   return "run review:wait in the foreground (timeout 600000, --timeout 9, again while it exits 1): a background task dies with your turn, and in a run that is the end of the run";
 }
 
+/** `npm run check` with a lone `|` later in the same step (before `;`, a new line, `&&` or `||`). */
+const PIPED_CHECK = /\bnpm(?:\s+-\S+)*\s+run(?:\s+-\S+)*\s+check(?![\w:-])(?:(?!;|\n|&&)[^|])*\|(?!\|)/;
+
+/** Why a check may not be piped: a pipe ends with its last command's exit code, so a failed check reads as passed. */
+export function pipedCheckViolation(raw: string): string | undefined {
+  if (!readings(raw).some((command) => PIPED_CHECK.test(command))) return undefined;
+  return "run npm run check on its own, never piped into another command: a pipe hides its exit code. For long output, send it to a file (npm run check > check.txt 2>&1) and read the file";
+}
+
 /**
  * Where a path really lands on disk: the nearest existing folder is resolved through symlinks and
  * junctions, and the rest is appended. A link inside the run can't smuggle an edit outside it.
@@ -200,6 +209,8 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       reasons = commandViolations(command, env.FAULTFORGE_TICKET_NUMBER);
       const background = backgroundViolation(command, args.run_in_background === true);
       if (background) reasons.push(background);
+      const piped = pipedCheckViolation(command);
+      if (piped) reasons.push(piped);
       // Only a command short enough to read is looked at further; the length rule above already refuses it.
       if (command.length <= MAX_COMMAND_CHARS) {
         for (const reason of [
