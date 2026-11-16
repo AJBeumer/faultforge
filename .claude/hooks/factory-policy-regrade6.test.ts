@@ -7,8 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { homeSecretCommand, homeSecretPath } from "./factory/home.ts";
 import { decide, editViolation, gitGuardViolation } from "./factory-policy.ts";
-import { homeSecretCommand, homeSecretPath } from "./factory-policy-home.ts";
 
 /** A run's own folder, under the temp folder like a real run's scratch, with the lab inside it. */
 const RUN = mkdtempSync(join(tmpdir(), "policy-run6-"));

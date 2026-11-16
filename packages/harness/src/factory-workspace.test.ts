@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "./factory-config.ts";
 import { fingerprints, HOOK_IMPORTS, samePath, teardown, worktreeFor } from "./factory-workspace.ts";
@@ -122,9 +122,15 @@ describe("fingerprints: what the agent must not change", () => {
   it("lists every file outside .claude the hooks import", () => {
     const hooks = join(LAB_ROOT, ".claude", "hooks");
     const imported = new Set<string>();
-    for (const file of readdirSync(hooks).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
-      for (const m of readFileSync(join(hooks, file), "utf8").matchAll(/from "(\.\.\/\.\.\/[^"]+)"/g))
-        imported.add(relative(LAB_ROOT, resolve(hooks, m[1] ?? "")).replace(/\\/g, "/"));
+    // Every folder below, too: the hooks sit in folders by job (#355).
+    const files = (readdirSync(hooks, { recursive: true }) as string[]).filter(
+      (f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
+    );
+    for (const file of files) {
+      for (const m of readFileSync(join(hooks, file), "utf8").matchAll(/from "((?:\.\.\/)+[^"]+)"/g)) {
+        const path = relative(LAB_ROOT, resolve(hooks, dirname(file), m[1] ?? "")).replace(/\\/g, "/");
+        if (!path.startsWith(".claude/")) imported.add(path);
+      }
     }
     expect([...imported].sort()).toEqual([...HOOK_IMPORTS].sort());
   });

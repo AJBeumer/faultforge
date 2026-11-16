@@ -37,7 +37,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { labIndex, lazyCopyTest } from "./guard-answer-key.ts";
+import { labIndex, lazyCopyTest } from "./answer-key/copies.ts";
+import { privateIdMatcher, privateTemplateIds } from "./answer-key/private-ids.ts";
+import { firstLine, isEntry } from "./shared/hook-io.ts";
+import { githubRepos, linkPattern, locate, reviewedRepos } from "./shared/repos.ts";
 import {
   copyReasons,
   DEFAULT_BUDGET_MS,
@@ -51,10 +54,7 @@ import {
   withDeadline,
   withPrivateCopies,
   withPrivateNames,
-} from "./guard-content.ts";
-import { privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
-import { githubRepos, linkPattern, locate, reviewedRepos } from "./guard-repos.ts";
-import { firstLine, isEntry } from "./hook-io.ts";
+} from "./target/content.ts";
 
 /** What one hook call found: the reasons and where, or nothing when the content reads as ordinary. */
 export function check(stage: string, checkout: string, arg?: string, stdin = "", url?: string): Pending | undefined {

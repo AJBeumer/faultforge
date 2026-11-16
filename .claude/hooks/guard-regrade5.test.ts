@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { guardConfig, tempRepo } from "./fixtures.ts";
 import { decide } from "./guard-target.ts";
-import { scriptFiles } from "./shell-exec.ts";
+import { scriptFiles } from "./shell/exec.ts";
 
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);

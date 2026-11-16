@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Reviewed } from "../../../.claude/hooks/guard-repos.ts";
+import type { Reviewed } from "../../../.claude/hooks/shared/repos.ts";
 import { type Gh, main, type Post, SendFailed, sendPost } from "./target-post.ts";
 
 const DIR = mkdtempSync(join(tmpdir(), "target-post-label-"));

@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { githubRepo, navigationTargets, unreadableMove } from "./guard-repos.ts";
 import { decide } from "./guard-target.ts";
-import { joinContinuations } from "./shell-scan.ts";
+import { githubRepo, navigationTargets, unreadableMove } from "./shared/repos.ts";
+import { joinContinuations } from "./shell/scan.ts";
 
 const TARGET_REPO = tempRepo(true);
 const CONFIG = guardConfig(TARGET_REPO.dir);

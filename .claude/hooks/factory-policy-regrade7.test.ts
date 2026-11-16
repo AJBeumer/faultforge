@@ -6,8 +6,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CHECK_SCRIPT_EDIT, checkScriptNames, checkScriptViolation } from "./factory/check-script.ts";
 import { decide } from "./factory-policy.ts";
-import { CHECK_SCRIPT_EDIT, checkScriptNames, checkScriptViolation } from "./factory-policy-check.ts";
 
 const RUN = mkdtempSync(join(tmpdir(), "policy-run7-"));
 const LAB = join(RUN, "faultforge");

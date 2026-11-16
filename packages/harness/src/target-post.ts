@@ -39,8 +39,12 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "../../../.claude/hooks/guard-private.ts";
-import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
+import {
+  PRIVATE_ID_REASON,
+  privateIdMatcher,
+  privateTemplateIds,
+} from "../../../.claude/hooks/answer-key/private-ids.ts";
+import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/shared/repos.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
 import { gateMarker, runGateRefusal } from "./target-post-run.ts";

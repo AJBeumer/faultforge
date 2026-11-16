@@ -11,7 +11,7 @@ import { answer, run } from "./fail-closed.ts";
 import { growth, guardConfig, LINEAR_BOUND, tempRepo } from "./fixtures.ts";
 import { check } from "./git-guard.ts";
 import { decide } from "./guard-target.ts";
-import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
+import { MAX_COMMAND_CHARS } from "./shell/scan.ts";
 
 const HOOKS = import.meta.dirname;
 const LAB = "D:\\Projects\\FaultForge";

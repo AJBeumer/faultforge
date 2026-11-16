@@ -33,19 +33,12 @@
  */
 
 import { telltales } from "../../packages/harness/src/neutral.ts";
-import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./guard-answer-key.ts";
-import { caseActionProblem } from "./guard-cases.ts";
-import { DEFAULT_BUDGET_MS, withDeadline, withPrivateCopies, withPrivateNames } from "./guard-content.ts";
-import { doorCommand, doorReason, sendsRaw, UNKNOWN_DESTINATION, webToUnknown } from "./guard-door.ts";
-import { aliasProblem, shellReading, UnknownRepository, unreadableDestination } from "./guard-expand.ts";
-import { BuiltText, scriptProblem, Unreadable } from "./guard-files.ts";
-import { calls, historyProblem } from "./guard-history.ts";
-import { guardSwitchOff } from "./guard-hooks.ts";
-import { pendingProblem } from "./guard-pending.ts";
-import { outsidePostedText } from "./guard-posted.ts";
-import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "./guard-private.ts";
-import { checkPrivateFiles, checkPrivateIds, postedPieces } from "./guard-private-posts.ts";
-import { explicitDestinations, graphqlMutation, isWrite, skipsGitGuard, urlDestinations } from "./guard-reach.ts";
+import { copyOutProblem, labCommitProblem, lazyCopyTest } from "./answer-key/copies.ts";
+import { checkPrivateFiles, checkPrivateIds, postedPieces } from "./answer-key/posts.ts";
+import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "./answer-key/private-ids.ts";
+import { guardSwitchOff } from "./self/git-hooks.ts";
+import { selfShellProblem } from "./self/own-files.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./shared/hook-io.ts";
 import {
   entersCheckout,
   locate,
@@ -55,8 +48,18 @@ import {
   type Reviewed,
   reviewedRepos,
   unreadableMove,
-} from "./guard-repos.ts";
-import { selfShellProblem } from "./guard-self.ts";
+} from "./shared/repos.ts";
+import { builtCodeProblem, inlineNetworkProblem, interpreterPipelines } from "./shell/exec.ts";
+import { outsidePostedText } from "./shell/posted.ts";
+import { blankQuoted, joinContinuations, joinedWords, MAX_COMMAND_CHARS } from "./shell/scan.ts";
+import { caseActionProblem } from "./target/cases.ts";
+import { DEFAULT_BUDGET_MS, withDeadline, withPrivateCopies, withPrivateNames } from "./target/content.ts";
+import { doorCommand, doorReason, sendsRaw, UNKNOWN_DESTINATION, webToUnknown } from "./target/door.ts";
+import { aliasProblem, shellReading, UnknownRepository, unreadableDestination } from "./target/expand.ts";
+import { calls, historyProblem } from "./target/history.ts";
+import { pendingProblem } from "./target/pending.ts";
+import { BuiltText, scriptProblem, Unreadable } from "./target/posted-files.ts";
+import { explicitDestinations, graphqlMutation, isWrite, skipsGitGuard, urlDestinations } from "./target/reach.ts";
 import {
   type Context,
   checkFileEdit,
@@ -65,10 +68,7 @@ import {
   Denied,
   deny,
   type ToolInput,
-} from "./guard-tools.ts";
-import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
-import { builtCodeProblem, inlineNetworkProblem, interpreterPipelines } from "./shell-exec.ts";
-import { blankQuoted, joinContinuations, joinedWords, MAX_COMMAND_CHARS } from "./shell-scan.ts";
+} from "./target/tools.ts";
 
 /**
  * The decision's time budget. `FAULTFORGE_GUARD_BUDGET_MS` may shorten it, for tests, never lengthen it past the

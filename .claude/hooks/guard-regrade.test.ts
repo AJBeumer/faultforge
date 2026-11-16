@@ -9,9 +9,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { telltales } from "../../packages/harness/src/neutral.ts";
 import { guardConfig, tempRepo } from "./fixtures.ts";
-import { reviewedRepos, stripReviewedNames } from "./guard-repos.ts";
 import { decide } from "./guard-target.ts";
-import { builtCodeProblem } from "./shell-exec.ts";
+import { reviewedRepos, stripReviewedNames } from "./shared/repos.ts";
+import { builtCodeProblem } from "./shell/exec.ts";
 
 const LAB = "D:\\Projects\\FaultForge";
 const TARGET = "D:\\Projects\\faultforge-target";

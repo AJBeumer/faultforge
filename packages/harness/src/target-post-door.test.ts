@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { OWN_FILES } from "../../../.claude/hooks/guard-self.ts";
+import { OWN_FILES } from "../../../.claude/hooks/self/own-files.ts";
 
 const SRC = import.meta.dirname;
 

@@ -42,26 +42,21 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { checkScriptViolation } from "./factory-policy-check.ts";
-import { commandViolations, readings } from "./factory-policy-commands.ts";
-import { doorKindViolation } from "./factory-policy-door.ts";
-import { HOME_SECRET_REASON, homeSecretCommand } from "./factory-policy-home.ts";
-import {
-  guardrailWriteViolation,
-  privateCommandViolation,
-  readViolation,
-  scriptViolation,
-} from "./factory-policy-paths.ts";
-import { gitFolderEdit, guardSwitchOff } from "./guard-hooks.ts";
-import { skipsGitGuard } from "./guard-reach.ts";
-import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./hook-io.ts";
-import { builtCodeProblem } from "./shell-exec.ts";
-import { MAX_COMMAND_CHARS } from "./shell-scan.ts";
+import { checkScriptViolation } from "./factory/check-script.ts";
+import { commandViolations, readings } from "./factory/commands.ts";
+import { doorKindViolation } from "./factory/door-kinds.ts";
+import { HOME_SECRET_REASON, homeSecretCommand } from "./factory/home.ts";
+import { guardrailWriteViolation, privateCommandViolation, readViolation, scriptViolation } from "./factory/paths.ts";
+import { gitFolderEdit, guardSwitchOff } from "./self/git-hooks.ts";
+import { ALLOW, type Decision, firstLine, hookAnswer, isEntry, readStdin, respond } from "./shared/hook-io.ts";
+import { builtCodeProblem } from "./shell/exec.ts";
+import { MAX_COMMAND_CHARS } from "./shell/scan.ts";
+import { skipsGitGuard } from "./target/reach.ts";
 
 /** The tools that only read files; Claude Code's settings route them to this hook too (#284). */
 const READ_TOOLS = ["Read", "Grep", "Glob", "NotebookRead"];
 
-export { commandViolations } from "./factory-policy-commands.ts";
+export { commandViolations } from "./factory/commands.ts";
 
 /**
  * A shell's own ways of putting a command in the background: a single `&` (not `&&`, not a `>&` or `|&`
