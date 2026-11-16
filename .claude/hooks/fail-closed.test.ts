@@ -1,7 +1,7 @@
 /**
- * The fail-closed wrapper Claude Code runs for each hook (AUD-M4): it passes on only a clean answer, and refuses
- * a hook that can't load, crashes, runs past its budget, answers in a way Claude Code would ignore, or is no
- * longer the hook it names. Broken hooks are written to the temp folder.
+ * The fail-closed wrapper Claude Code runs for each hook: it passes on only a clean answer, and refuses a hook
+ * that can't load, crashes, runs past its budget, answers in a way Claude Code would ignore, or isn't the hook
+ * it names. Broken hooks are written to the temp folder.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";

@@ -1,11 +1,11 @@
 /**
- * The door kinds an unattended run's agent may use (#347), as a first, early word from the policy hook. The door
- * (`npm run target:post`, #340) writes to the reviewed repository; during a run the agent needs only to push its
+ * The door kinds an unattended run's agent may use, as a first, early word from the policy hook. The door
+ * (`npm run target:post`) writes to the reviewed repository; during a run the agent needs only to push its
  * branch, open its PR and change it.
  *
  * The guarantee is not here: it is in the door itself (`packages/harness/src/door/target-post-run.ts`), which refuses
  * every other kind while a run is marked active, however it is called. Reading a command's text can't see every
- * way to call the door (Qodo on PR 349 found several), so this rule only catches the plain spelling, a package
+ * way to call the door, so this rule only catches the plain spelling, a package
  * manager running `target:post` with a kind written out after it, and tells the agent before it tries. Anything
  * else is left to the door.
  */
@@ -24,9 +24,8 @@ const ALLOWED: readonly string[] = AGENT_DOOR_KINDS;
 
 /** Why a command may not run in a run because of the door kind it names, or undefined. */
 export function doorKindViolation(command: string): string | undefined {
-  // Split where the shell splits, so a `;` inside a quoted file name is part of that name (Qodo on PR 349).
+  // Split where the shell splits, so a `;` inside a quoted file name is part of that name.
   for (const { text } of steps(command, true)) {
-    // The step's words, quotes removed, after any `NAME=value` it sets first.
     const all = words(text).map(joinedWords);
     const run = all.slice(
       Math.max(

@@ -1,5 +1,5 @@
 /**
- * The command as the shell would read it before it posts anything (#285, AUD-M3): ANSI-C strings decoded, the
+ * The command as the shell would read it before it posts anything: ANSI-C strings decoded, the
  * variables the command itself sets expanded, percent-encoded API routes decoded, and a repository given by
  * its numeric id named. The guard judges this reading beside the command as written; text it still can't
  * read (a variable the command doesn't set) is refused where it would be posted.
@@ -15,7 +15,7 @@ export const VARIABLE = /\$\{?[A-Za-z_]\w*/;
 
 /** A statement that only sets variables to plain text: `A=x`, `export A="x" B='y'`. */
 // A bare value with a backslash is not taken: the shell removes it, and the value it holds is another word
-// (`M=pla\nted` holds `planted`; Qodo on PR 291), so the variable stays unreadable.
+// (`M=pla\nted` holds `planted`), so the variable stays unreadable.
 const ASSIGNS_ONLY =
   /^\s*(?:(?:export|local|declare|readonly)\s+)?(?:[A-Za-z_]\w*=(?:"[^"$`\\]*"|'[^']*'|[^\s;&|$`'"()<>\\]*)\s*)+$/;
 const ASSIGNMENT = /([A-Za-z_]\w*)=(?:"([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>\\]*))/g;
@@ -23,7 +23,7 @@ const ASSIGNMENT = /([A-Za-z_]\w*)=(?:"([^"$`\\]*)"|'([^']*)'|([^\s;&|$`'"()<>\\
 const POWERSHELL_ASSIGN = /^\s*\$(?:env:)?([A-Za-z_]\w*)\s*=\s*(?:"([^"$`]*)"|'([^']*)')\s*$/i;
 
 /**
- * The variables the command sets to plain text, replaced where the shell would use them (Qodo on PR 291): a
+ * The variables the command sets to plain text, replaced where the shell would use them: a
  * statement of its own (`NAME=value`, `export NAME=value`, PowerShell's `$NAME = 'value'`) sets a value for
  * the statements after it, never before; a prefix (`NAME=value cmd`) doesn't change how `cmd`'s words expand,
  * and `NAME=value` inside an argument sets nothing. A value that is itself built (`$`, a backtick) is not
@@ -33,7 +33,7 @@ export function expandVariables(command: string): string {
   const quoted = quotedMask(command);
   const assigned = new Map<string, string>();
   // A variable changed in a way this reading doesn't follow (`M+=x`, `read M`, an assignment that may not run:
-  // `false && M=x`, `M=x | true`, `M=x &`) is never taken: its uses stay unreadable (Qodo on PR 291).
+  // `false && M=x`, `M=x | true`, `M=x &`) is never taken: its uses stay unreadable.
   const untaken = new Set<string>();
   for (const m of command.matchAll(/\b([A-Za-z_]\w*)\+=|\bread\s+(?:-\w+\s+)*([A-Za-z_]\w*)/g))
     untaken.add(m[1] ?? m[2] ?? "");
@@ -116,12 +116,12 @@ export function setRepositoryResolver(next: RepositoryResolver): RepositoryResol
 export class UnknownRepository extends Error {}
 
 /**
- * `repositories/<id>` routes rewritten as `repos/<owner>/<name>` (#285): an id hides which repo a write goes
+ * `repositories/<id>` routes rewritten as `repos/<owner>/<name>`: an id hides which repo a write goes
  * to, so the guard asks GitHub. An id it can't resolve, in time or at all, throws: it can't be proven not to
  * be a reviewed repo, so the write is refused.
  */
 export function nameRepositories(command: string, timeoutMs = 4000): string {
-  // Only a route the command acts on: an id in a posted message is words (Qodo on PR 291).
+  // Only a route the command acts on: an id in a posted message is words.
   const outside = outsidePostedText(command);
   const ids = [...new Set([...outside.matchAll(/\brepositories\/(\d+)/gi)].map((m) => m[1] ?? ""))];
   let text = command;
@@ -138,19 +138,19 @@ export function nameRepositories(command: string, timeoutMs = 4000): string {
 }
 
 /**
- * The command as the shell would read it: line continuations joined (re-grade 4), ANSI-C decoded, its own
+ * The command as the shell would read it: line continuations joined, ANSI-C decoded, its own
  * variables expanded, routes decoded, and (for a write) repository ids named. Equal to the command when none of
  * those apply.
  */
 export function shellReading(command: string, timeoutMs?: number): string {
   const read = decodeRoutes(expandVariables(decodeAnsiC(joinContinuations(command))));
-  // A write in either reading: `-X $M` with `M=PUT` is one only once expanded (Qodo on PR 291).
+  // A write in either reading: `-X $M` with `M=PUT` is one only once expanded.
   return isWrite(command) || isWrite(read) ? nameRepositories(read, timeoutMs) : read;
 }
 
 /** Why the command may not run because it hides a later post behind an alias, or undefined. */
 export function aliasProblem(command: string): string | undefined {
-  // Also a gh whose subcommand is a variable or a substitution: it could be `alias` (Qodo on PR 291).
+  // Also a gh whose subcommand is a variable or a substitution: it could be `alias`.
   if (/\bgh\s+alias\s+(set|import)\b/i.test(joinedWords(command)) || /\bgh\s+["']?(\$|`)/.test(command))
     return "gh aliases hide what a later command posts, and where, from the guard. Run the full command instead.";
   return undefined;
@@ -158,12 +158,12 @@ export function aliasProblem(command: string): string | undefined {
 
 /**
  * True when a posted value still holds a variable the command doesn't set: its text can't be read. The whole
- * shell word counts, every quoted part of it (`'safe '"$MSG"`; Qodo on PR 291), but not single-quoted text,
+ * shell word counts, every quoted part of it (`'safe '"$MSG"`), but not single-quoted text,
  * an escaped `\$`, or a variable inside a substitution, which builtText reads or refuses.
  */
 export function unreadablePost(command: string): boolean {
   return postedRanges(command).some(([start, end]) => {
-    // Single-quoted parts as the shell reads them: an apostrophe inside double quotes is a letter (Qodo on PR 291).
+    // Single-quoted parts as the shell reads them: an apostrophe inside double quotes is a letter.
     const word = command.slice(start, end);
     let text = "";
     let at = 0;

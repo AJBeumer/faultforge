@@ -1,6 +1,5 @@
 /**
- * The guard's checks for file edits, MCP tools and links, and the deny they end with. Split from
- * guard-target.ts, which may not pass 400 lines (CLAUDE.md, module size rule).
+ * The guard's checks for file edits, MCP tools and links, and the deny they end with.
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -49,10 +48,10 @@ export function deny(reason: string): never {
 
 export function checkFileEdit(ctx: Context, args: ToolInput) {
   const path = resolve(ctx.cwd, String(args.file_path ?? args.notebook_path ?? ""));
-  // A git folder's hooks and config decide what git runs: no edit there could keep the git-level guard (re-grade 6).
+  // A git folder's hooks and config decide what git runs, so an edit there could switch the git-level guard off.
   const gitFolder = gitFolderEdit(path);
   if (gitFolder) deny(gitFolder);
-  // Nor the guard's own files in the checkout it runs from (re-grade 6: H12).
+  // Nor the guard's own files in the checkout it runs from.
   const self = selfFileEdit(path, ctx.env);
   if (self) deny(self);
   const text = [
@@ -63,11 +62,11 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
   ]
     .filter(Boolean)
     .join("\n");
-  // Nor a copy of the answer key, the audit log or a private template outside private storage (Q21).
+  // Nor a copy of the answer key, the audit log or a private template outside private storage.
   const copy = copyOutEdit(path, text, ctx.env);
   if (copy) deny(copy);
-  // A private id belongs only in private storage, or in a folder no git checkout holds (a temp or scratch folder;
-  // #318): a file in any checkout could be committed and pushed under a clean message (Qodo on PR 265).
+  // A private id belongs only in private storage, or in a folder no git checkout holds (a temp or scratch folder):
+  // a file in any checkout could be committed and pushed under a clean message.
   if (ctx.names?.(text) && !within(path, privateRoot(ctx.env)) && !outsideEveryCheckout(ctx, path)) {
     deny(PRIVATE_ID_REASON);
   }
@@ -83,9 +82,9 @@ export function checkFileEdit(ctx: Context, args: ToolInput) {
 
 /**
  * True when no git checkout holds the file, as written or where its folder really is (through a link), and it
- * names neither the lab's folder nor a reviewed checkout's (#318). A path written inside private storage whose
- * real place is elsewhere is a link out of private storage: never taken (Qodo on PR 265). Nor is a path whose
- * file or a folder on the way to it is a link that leads nowhere yet, whose place can't be read (Qodo on PR 323).
+ * names neither the lab's folder nor a reviewed checkout's. A path written inside private storage whose
+ * real place is elsewhere is a link out of private storage: never taken. Nor is a path whose file or a folder
+ * on the way to it is a link that leads nowhere yet, whose place can't be read.
  */
 function outsideEveryCheckout(ctx: Context, path: string): boolean {
   const priv = resolve(privateRoot(ctx.env));
@@ -117,13 +116,13 @@ function outsideEveryCheckout(ctx: Context, path: string): boolean {
 }
 
 /**
- * An MCP tool (one outside Bash and the file tools) is judged by its input as a whole (AUD-N9): no MCP
+ * An MCP tool (one outside Bash and the file tools) is judged by its input as a whole: no MCP
  * input may name a private template, and one that names a reviewed repo may only read it. Writes to a reviewed
- * repo go through the door (#340); the guard doesn't read what an MCP write would say.
+ * repo go through the door; the guard doesn't read what an MCP write would say.
  */
 export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
   // The input's own text, every string value on its own line: JSON escapes would hide a word after a line
-  // break (`\nplanted`) from the word checks (Qodo on PR 265).
+  // break (`\nplanted`) from the word checks.
   const text = stringsIn(args).join("\n");
   if (ctx.names?.(text)) deny(PRIVATE_ID_REASON);
   const repo = ctx.reviewed.find((r) => new RegExp(`${esc(r.github)}|\\b${esc(r.name)}\\b`, "i").test(text));
@@ -135,7 +134,7 @@ export function checkOtherTool(ctx: Context, tool: string, args: ToolInput) {
  * one of `repos`' issues or PRs. A link would show on that repo's timeline, where its reviewer reads it.
  */
 export function checkLinks(ctx: Context, command: string, repos: Reviewed[]) {
-  // `--fill` in any form posts commit text the guard can't check (AUD-N9): read where the shell reads flags.
+  // `--fill` in any form posts commit text the guard can't check: read where the shell reads flags.
   if (wordThen(joinedWords(outsidePostedText(command)), /\bgh\s+pr\s+create\b/, /\s--fill(-first|-verbose)?\b/)) {
     deny("gh pr create --fill posts commit text the guard can't check. Pass --title and --body instead.");
   }

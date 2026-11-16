@@ -1,5 +1,5 @@
 /**
- * The git-level guard keeps a reviewed repo's history (re-grade 3): a pre-push that deletes a ref, or moves one
+ * The git-level guard keeps a reviewed repo's history: a pre-push that deletes a ref, or moves one
  * to a commit that doesn't contain what the remote holds, is refused, whatever started the push.
  */
 import { writeFileSync } from "node:fs";

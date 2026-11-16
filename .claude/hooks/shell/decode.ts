@@ -1,5 +1,5 @@
 /**
- * Spellings the shell reads as something else (re-grade after round 4): a word split by empty quotes (`g''h`),
+ * Spellings the shell reads as something else: a word split by empty quotes (`g''h`),
  * an escaped letter (`\gh`), an empty `${x}` between two halves, and ANSI-C quoting (`$'pla\x6eted'`). The
  * hooks' rules look for words, so they read the command these ways too, beside the text as written. Both
  * hooks use these; neither trusts one reading alone.

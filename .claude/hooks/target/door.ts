@@ -1,7 +1,7 @@
 /**
- * The door rule (#340). Every write to a reviewed repository goes through one harness command,
+ * The door rule. Every write to a reviewed repository goes through one harness command,
  * `npm run target:post` (`packages/harness/src/door/target-post.ts`), which checks the exact text it sends. So the guard
- * no longer reads what a raw write to a reviewed repository would say: it refuses the raw write and names the door.
+ * doesn't read what a raw write to a reviewed repository would say: it refuses the raw write and names the door.
  *
  *  - `doorCommand`: a command that is exactly `npm run target:post -- <plain words>` on one line, run from the lab's
  *    own checkout whose `package.json` still runs the door and nothing before or after it, passes without its text
@@ -48,8 +48,8 @@ const same = (a: string, b: string) => {
  * expansion, redirect, line break or second command), run from `root`, the lab checkout the guard runs from, whose
  * `package.json` runs `DOOR_SCRIPT` for it with no `pre` or `post` script around it, and whose `.npmrc` sets no
  * shell, node option or script setting that could run something else. npm puts every `node_modules/.bin` from the
- * root up ahead of `PATH`, so a `node` in one of them would run instead of Node itself: none may be there (Qodo on
- * PR 344). Anything else is judged like any other command.
+ * root up ahead of `PATH`, so a `node` in one of them would run instead of Node itself: none may be there.
+ * Anything else is judged like any other command.
  */
 export function doorCommand(command: string, cwd: string, root = LAB_ROOT): boolean {
   if (!DOOR.test(command.trim()) || !same(cwd, root)) return false;

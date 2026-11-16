@@ -2,8 +2,8 @@
  * Claude Code PreToolUse hook. Keeps the reviewed repositories free of hints for the reviewer.
  *
  * The reviewed repos are the ones with `"guard": "reviewed"` in `factory.json`. Every write to one goes through
- * one door, `npm run target:post` (`packages/harness/src/door/target-post.ts`), which checks the exact text it sends
- * (#340). So for each reviewed repo this hook:
+ * one door, `npm run target:post` (`packages/harness/src/door/target-post.ts`), which checks the exact text it sends.
+ * So for each reviewed repo this hook:
  *  - lets a command that is exactly `npm run target:post -- …` through, without reading it (target/door.ts);
  *  - refuses every other command that sends to it: a push, a gh call that isn't a known read, a gh or raw API
  *    write, or a write whose destination it can't read. It doesn't read what such a write would say;
@@ -72,7 +72,7 @@ import {
 
 /**
  * The decision's time budget. `FAULTFORGE_GUARD_BUDGET_MS` may shorten it, for tests, never lengthen it past the
- * default, which keeps clear of the hook's 15 s (Qodo on PR 233).
+ * default, which keeps clear of the hook's 15 s.
  */
 export function guardBudget(env: NodeJS.ProcessEnv): number {
   const asked = Number(env.FAULTFORGE_GUARD_BUDGET_MS);
@@ -96,9 +96,8 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
     names = privateIdMatcher(privateTemplateIds(env));
     const reviewed = reviewedRepos(env.FAULTFORGE_CONFIG);
     const ctx: Context = { cwd, reviewed, env, names, backticks: tool !== "PowerShell" };
-    // One deadline for the whole decision, every scan in it included (audit N-4).
-    // Pending content may not carry a private id either (Qodo on PR 265).
-    // Nor a copy of the answer key, the audit log or a private template (re-grade 6, Q21).
+    // One deadline for the whole decision, so many small scans can't add up past the hook's timeout.
+    // Pending content may carry neither a private id nor a copy of private storage.
     withDeadline(guardBudget(env), () =>
       withPrivateNames(names, () =>
         withPrivateCopies(lazyCopyTest(env), () => {
@@ -120,7 +119,7 @@ export function decide(stdin: string, env: NodeJS.ProcessEnv = process.env): Dec
       error instanceof BuiltText ||
       error instanceof UnknownRepository
     ) {
-      // A reason that quotes a file or branch name could repeat a private id: it never does (Qodo on PR 265).
+      // A reason that quotes a file or branch name could repeat a private id, so such a reason is replaced.
       return { kind: "deny", reason: names?.(error.message) ? PRIVATE_ID_REASON : error.message };
     }
     return failed(error);
@@ -145,38 +144,38 @@ function isChained(command: string): boolean {
 }
 
 /**
- * A shell command, judged as written and as the shell would read it (#285): ANSI-C strings decoded, the
+ * A shell command, judged as written and as the shell would read it: ANSI-C strings decoded, the
  * command's own variables expanded, repository ids named. Both must pass. Only the shell's reading is
  * `readable`: a variable left in it is one the command doesn't set.
  */
 function checkShell(ctx: Context, command: string) {
-  // The door checks what it sends itself (#340): exactly `npm run target:post -- …`, from the lab, passes unread.
+  // The door checks what it sends itself: exactly `npm run target:post -- …`, from the lab, passes unread.
   if (doorCommand(command, ctx.cwd)) return;
   const alias = aliasProblem(command);
   if (alias) deny(alias);
-  // Code no rule can read before it runs, wherever the command runs (#299): built text run as a shell, and
+  // Code no rule can read before it runs, wherever the command runs: built text run as a shell, and
   // inline interpreter code that reaches the network, which can post without gh.
-  // Both as written and with its line continuations joined, as the shell runs it (re-grade 4).
+  // Both as written and with its line continuations joined, as the shell runs it.
   const joined = joinContinuations(command);
   const codes = joined === command ? [command] : [command, joined];
   for (const code of codes) {
     const unread = builtCodeProblem(code, ctx.backticks) ?? inlineNetworkProblem(code, ctx.backticks);
     if (unread) deny(unread);
   }
-  // A private id in inline code is checked too: the code could post it any way it likes (#299). Only the code
+  // A private id in inline code is checked too: the code could post it any way it likes. Only the code
   // an interpreter is handed: a script's path and arguments are the owner's local work (`npx tsx x.ts --template
-  // <id>`), and a post that names the id is refused where it is posted (Qodo on PR 310).
+  // <id>`), and a post that names the id is refused where it is posted.
   const names = ctx.names;
   const inline = codes.flatMap((code) => interpreterPipelines(code, ctx.backticks));
   if (names && inline.some((code) => names(code) || names(joinedWords(code)))) deny(PRIVATE_ID_REASON);
-  // A script file can write without gh too: refused where it could reach a reviewed repo (re-grade 5, #340).
+  // A script file can write without gh too: refused where it could reach a reviewed repo.
   const script = scriptProblem(ctx.cwd, joined, ctx.reviewed, Boolean(ctx.env.FAULTFORGE_FACTORY_RUN), ctx.backticks);
   if (script) deny(script);
   if (command.length > MAX_COMMAND_CHARS) return checkCommand(ctx, command, true);
   const read = shellReading(command);
   const readAlias = aliasProblem(read);
   if (readAlias) deny(readAlias);
-  // A default repo set here sends later posts to a reviewed repo without naming it (#285).
+  // A default repo set here sends later posts to a reviewed repo without naming it.
   if (/\bgh\s+repo\s+set-default\b/.test(joinedWords(read))) {
     const here = locate(ctx.cwd, ctx.reviewed);
     const named = ctx.reviewed.find(
@@ -191,12 +190,9 @@ function checkShell(ctx: Context, command: string) {
 /** Every reviewed repo the command reaches, and how it reaches them. */
 function reach(ctx: Context, command: string, writes: boolean) {
   const { cwd, reviewed } = ctx;
-  // A destination named anywhere in the text, a GitHub URL outside its posted text, or a move into a
-  // checkout, found by folder name or by remote. The folder the command runs in counts unless the command
-  // really names another destination (say, a post from there to another repo, judged by where it goes).
-  // "Really" means outside its posted text: `-R` or `--repo` inside a message names nothing. Both readings
-  // are used, the strict one for what is touched, so text that confuses one can't hide a repo from both
-  // (Qodo on PR 208). A GraphQL mutation can reach any repo.
+  // The folder the command runs in counts unless the command really names another destination, outside its
+  // posted text: `-R` or `--repo` inside a message names nothing. Both readings are used, the strict one for what
+  // is touched, so text that confuses one can't hide a repo from both. A GraphQL mutation can reach any repo.
   const outside = outsidePostedText(command);
   const urls = urlDestinations(outside);
   const destinations = [...explicitDestinations(command), ...urls];
@@ -206,7 +202,7 @@ function reach(ctx: Context, command: string, writes: boolean) {
   const enters = (r: Reviewed) => entersCheckout(command, r) || entered.some((e) => e.github === r.github);
   const isHere = (r: Reviewed) => here?.github === r.github;
   const mutation = writes && graphqlMutation(command);
-  // A write after a move the guard can't read (`cd "$DIR"`, `git -C $(…)`) may land in any of them (re-grade 4).
+  // A write after a move the guard can't read (`cd "$DIR"`, `git -C $(…)`) may land in any of them.
   const anywhere = writes && unreadableMove(command, cwd);
   const touched = reviewed
     .filter(
@@ -233,17 +229,17 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
   }
   const sends = sendsRaw(command, ctx.cwd, ctx.backticks);
   const writes = sends || isWrite(command);
-  // A write whose repo the guard can't read may be aimed at a reviewed repo: refused, as it can't tell (#340).
+  // A write whose repo the guard can't read may be aimed at a reviewed repo: refused, as it can't tell.
   if (writes && readable && (unreadableDestination(command) || webToUnknown(command, ctx.cwd, ctx.backticks))) {
     deny(UNKNOWN_DESTINATION);
   }
   // Whether or not the command reads as a write: a gist or a release found as the shell reads its words is one,
-  // however it is spelled (`g\h gist create`; Qodo on PR 310).
+  // however it is spelled (`g\h gist create`).
   checkPrivateFiles(ctx, command);
-  // Wherever it runs: the git-level guard stays on, the private repo private, and lab history out (re-grade 6).
+  // Wherever it runs: the git-level guard stays on, the private repo private, and lab history out.
   const moved = guardSwitchOff(command, ctx.backticks, ctx.cwd) ?? historyProblem(ctx, command);
   if (moved) deny(moved);
-  // The guard's own files stay as they are, and private storage stays in it (re-grade 6: H12 to H18, Q21).
+  // The guard's own files stay as they are, and private storage stays in it.
   const own =
     selfShellProblem(command, ctx.cwd, ctx.env, ctx.backticks) ??
     copyOutProblem(command, ctx.cwd, ctx.env, ctx.backticks) ??
@@ -273,7 +269,7 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     return;
   }
 
-  // The door rule (#340): nothing is sent to a reviewed repo but through `npm run target:post`.
+  // The door rule: nothing is sent to a reviewed repo but through `npm run target:post`.
   if (sends) deny(doorReason(repo.name));
   // What stays local to its checkout: git's own guard hooks run, and recorded case branches stay in place.
   if (skipsGitGuard(command)) {
@@ -284,8 +280,8 @@ function checkCommand(ctx: Context, command: string, readable: boolean) {
     if (action) deny(action);
   }
   // Links still go one way: a commit's message may link only to the repo whose checkout its git calls all run in,
-  // wherever the command starts (`git -C <other checkout>`; Qodo on PR 344). One that only names a reviewed repo in
-  // its text (a fake `--repo`) is a lab commit, judged as one (Qodo, 77c1f44).
+  // wherever the command starts (`git -C <other checkout>`). One that only names a reviewed repo in its text (a
+  // fake `--repo`) is a lab commit, judged as one.
   if (writes) {
     const homes = new Set(
       calls(command, ctx.cwd, ctx.backticks)

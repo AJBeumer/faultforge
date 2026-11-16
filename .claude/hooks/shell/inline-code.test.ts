@@ -1,5 +1,5 @@
 /**
- * What counts as an interpreter's inline code (Qodo on PR 310): the code it is handed (`-e`, `-c`, a heredoc, a
+ * What counts as an interpreter's inline code: the code it is handed (`-e`, `-c`, a heredoc, a
  * pipe into one that reads its code from stdin), never a script's path or its arguments, and never another
  * step's text. A network call stays a network call when its function is aliased first. The private id is made up.
  */
@@ -36,7 +36,7 @@ function policy(command: string): string | undefined {
   return decision.kind === "deny" ? decision.reason : undefined;
 }
 
-describe("an aliased network call is still a network call (Qodo on PR 310)", () => {
+describe("an aliased network call is still a network call", () => {
   it.each([
     `node -e "const f = fetch; f('https://example.com')"`,
     `node -e "const {fetch: f} = globalThis; f('https://example.com')"`,
@@ -55,11 +55,11 @@ describe("an aliased network call is still a network call (Qodo on PR 310)", () 
     "python3 /dev/stdin <<'EOF'\nimport urllib.request\nEOF",
     "node /dev/stdin <<EOF\nfetch('https://example.com')\nEOF",
     "echo \"fetch('https://example.com')\" | node /dev/fd/0",
-    // A later inline flag doesn't drop the code piped in (Qodo on PR 313).
+    // A later inline flag doesn't drop the code piped in.
     "echo \"fetch('https://example.com')\" | node /dev/stdin -e 1",
     "NODE_OPTIONS='--import=data:text/javascript,fetch(\"https://example.com\")' node x.mjs",
     'python3 -m timeit "import urllib.request"',
-  ])("refuses network code fed as a file from stdin: %s (Qodo on PR 312)", (command) => {
+  ])("refuses network code fed as a file from stdin: %s", (command) => {
     expect(guard(command)).toBe(INLINE_NETWORK_REASON);
   });
 
@@ -73,13 +73,13 @@ describe("an aliased network call is still a network call (Qodo on PR 310)", () 
   });
 });
 
-describe("a script's path and arguments, and other steps, are not inline code (Qodo on PR 310)", () => {
+describe("a script's path and arguments, and other steps, are not inline code", () => {
   it.each([
     "python -m pytest tests/test_subprocess.py",
     "python3 -m pytest -k ctypes tests",
     "npx tsx packages/harness/src/x.ts | grep 'eval('",
     "node scripts/build.js --mode subprocess",
-    // A later step is not the code an option variable hands Python (Qodo on PR 312, fourth review).
+    // A later step is not the code an option variable hands Python.
     "PYTHONPATH=src python3 -m pytest tests; grep 'subprocess' README.md",
   ])("the guard allows %s, and the factory policy doesn't take it for built code", (command) => {
     expect(guard(command)).toBeUndefined();
@@ -100,15 +100,15 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
     `node --require ./x.js -e "require('child_process')"`,
     "perl -e 'system(\"ls\")'",
     "ruby -e 'system(\"ls\")'",
-    // Code from stdin or a substitution named as the script (Qodo on PR 312).
+    // Code from stdin or a substitution named as the script.
     "python3 <(echo 'import subprocess')",
-    // A module that runs code it is given, and code handed over in an option (Qodo on PR 312).
+    // A module that runs code it is given, and code handed over in an option.
     'python3 -m timeit "import subprocess"',
     "echo 'import subprocess' | python3 -m code",
-    // An interpreter named after a prefix's value runs its own inline code (Qodo on PR 312, fourth review).
+    // An interpreter named after a prefix's value runs its own inline code.
     `npx --package tsx tsx -e "require('child_process').execSync('ls')"`,
     `npx -p tsx tsx -e "require('child_process')"`,
-    // A flag whose value is a separate word, then inline code (Qodo on PR 312, fifth review).
+    // A flag whose value is a separate word, then inline code.
     `node --disable-warning ExperimentalWarning -e "require('child_process')"`,
     `node --inspect-port 9229 -e "require('child_process')"`,
     `python3 --check-hash-based-pycs never -c "import subprocess"`,
@@ -122,7 +122,7 @@ describe("a script's path and arguments, and other steps, are not inline code (Q
   });
 });
 
-describe("a private template id as a script's argument (Qodo on PR 310)", () => {
+describe("a private template id as a script's argument", () => {
   it.each([
     "npx tsx packages/harness/src/x.ts --template x-secret-v1",
     `node scripts/x.mjs ${PRIVATE_SLASHED}/templates/x-secret-v1/template.json`,

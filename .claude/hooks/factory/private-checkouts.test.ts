@@ -1,6 +1,6 @@
 /**
- * A lab ticket's run is kept out of the private repo too (#299, second re-grade after round 4): the answer key,
- * the audit log, held-out files and unreleased templates, by every tool and shell spelling the re-grade tried.
+ * A lab ticket's run is kept out of the private repo too: the answer key, the audit log, held-out files and
+ * unreleased templates, by every tool and shell spelling below.
  * Its own private worktree sits inside the run's folder; the agent may read back only the evidence its own
  * tools saved there. Folders are made up under the temp folder.
  */
@@ -46,7 +46,7 @@ function verdict(tool: string, input: object, cwd = LAB, extra: Record<string, s
 }
 const bash = (command: string, cwd = LAB) => verdict("Bash", { command }, cwd);
 
-describe("a lab ticket's run doesn't read the private repo (#299)", () => {
+describe("a lab ticket's run doesn't read the private repo", () => {
   it.each([
     "cd private && cat ground-truth.jsonl",
     "cd private; cat ground*",
@@ -97,7 +97,7 @@ describe("a lab ticket's run doesn't read the private repo (#299)", () => {
   });
 });
 
-describe("a lab ticket's run still does its work (#299)", () => {
+describe("a lab ticket's run still does its work", () => {
   it.each([
     "npm test",
     "npm run check",
@@ -138,7 +138,7 @@ describe("a lab ticket's run still does its work (#299)", () => {
   });
 });
 
-describe("a run folder named through a link still meets itself (#299, the Windows runner's short temp names)", () => {
+describe("a run folder named through a link still meets itself, as with Windows' short temp names", () => {
   it("allows Grep from the checkout and refuses its private worktree when the run root is a link", () => {
     const linked = join(BASE, "linked-runs");
     try {

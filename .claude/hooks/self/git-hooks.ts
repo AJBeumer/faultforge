@@ -1,5 +1,5 @@
 /**
- * The git-level guard can't be switched off (re-grade 6, N-B). Git runs the guard's hooks for every commit and
+ * The git-level guard can't be switched off. Git runs the guard's hooks for every commit and
  * push, whoever starts them, so long as the hooks are in place and their setting names the guard: a command that
  * changes either would leave every later commit and push unchecked. Refused in any checkout, from the shell or
  * the file tools:
@@ -9,7 +9,6 @@
  *    name it (`.g*`), reached through a link, or after a move into one (`cd .git; rm hooks/x`); and by Write or Edit.
  * Reading them stays allowed: `git config --get`, `cat`, `ls`, `grep`. Words in a commit message or a post body
  * are words, not settings. A step that runs a substitution never counts as a read: the substitution may write.
- * Split from guard-target.ts, which may not pass 400 lines.
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -31,13 +30,12 @@ const GIT_FOLDER = /(?:^|[\s"'=/\\;&|(<>])\.git(?![\w.-])|--git-(?:path|common-d
 const READERS =
   /^(cat|ls|dir|head|tail|type|get-content|gc|get-childitem|gci|get-item|gi|stat|file|wc|grep|egrep|fgrep|rg|findstr|select-string|sls|less|more|echo|printf|write-output|test|\[|diff|cmp|sha1sum|sha256sum|md5sum|test-path|cd|pushd|popd|set-location|sl|pwd|true|find)$/;
 
-/** Git commands that only read. */
 const GIT_READS =
   /^(log|show|status|diff|grep|rev-parse|ls-files|ls-tree|cat-file|describe|blame|shortlog|help|version|var)$/;
 
 /**
  * True when a `git config` call only reads: a `--get…`, `--list` or `-l` option anywhere, or the newer `get` and
- * `list` subcommands as its first word. A bare `get` later on is a value (`core.hooksPath get`; Qodo on PR 333).
+ * `list` subcommands as its first word. A bare `get` later on is a value (`core.hooksPath get`).
  */
 export function configReads(args: string[]): boolean {
   return /^(get|list)$/.test(args[0] ?? "") || args.some((w) => /^(--get(-all|-regexp|-urlmatch)?|--list|-l)$/.test(w));
@@ -64,7 +62,6 @@ function stepReads(text: string, backticks: boolean): boolean {
   return GIT_READS.test(sub);
 }
 
-/** True when every step of the command only reads. */
 export function onlyReads(command: string, backticks: boolean): boolean {
   return steps(command, backticks).every((step) => stepReads(step.text, backticks));
 }
@@ -102,7 +99,7 @@ function linkIntoGit(path: string): boolean {
 function wildcardGit(word: string, backticks: boolean): boolean {
   if (!hasWildcard(word)) return false;
   return word.split(/[/\\]+/).some((segment) => {
-    // Bash's wildcards skip names that start with a dot unless the pattern starts with one (Qodo on PR 333);
+    // Bash's wildcards skip names that start with a dot unless the pattern starts with one;
     // PowerShell's don't (`[.]git`).
     if (!hasWildcard(segment) || (backticks && !/^[.{]/.test(segment))) return false;
     const pattern = segment
@@ -137,7 +134,7 @@ export function guardSwitchOff(command: string, backticks = true, cwd?: string):
     if (name === "git") continue;
     const paths = rest.map((w) => w.replace(/^\d*[<>]+/, "")).filter((w) => w && !w.startsWith("-"));
     const linked = cwd !== undefined && paths.some((w) => !/[$`%]/.test(w) && linkIntoGit(resolve(cwd, w)));
-    // A wildcard is read as the shell joins its quoted parts: `.g''*` is `.g*` (Qodo on PR 333).
+    // A wildcard is read as the shell joins its quoted parts: `.g''*` is `.g*`.
     const globbed = paths.some((w) => wildcardGit(w.replace(/["'`]/g, ""), backticks));
     if (inside || folder || linked || globbed) return SWITCH_OFF;
   }
@@ -147,7 +144,7 @@ export function guardSwitchOff(command: string, backticks = true, cwd?: string):
 const SWITCH_OFF =
   "This would change what git runs on a commit or push (the guard's hooks, review-guard.*, core.hooksPath, a URL rewrite, or a file in a .git folder), which would switch off the git-level guard. Only `npm run guard:install` sets these; read them with git config --get, cat or ls.";
 
-/** Why a file edit is refused because it changes a file in a git folder (re-grade 6), or undefined. */
+/** Why a file edit is refused because it changes a file in a git folder, or undefined. */
 export function gitFolderEdit(path: string): string | undefined {
   if (!inGitFolder(path)) return undefined;
   return "This edit would change a file in a .git folder (its hooks or config decide what git runs), which could switch off the git-level guard. Only `npm run guard:install` writes there.";

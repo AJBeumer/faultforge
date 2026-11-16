@@ -17,12 +17,10 @@ export type Decision =
 
 export const ALLOW: Decision = { kind: "allow" };
 
-/** The whole payload Claude Code writes to the hook's stdin. */
 export function readStdin(): string {
   return readFileSync(0, "utf8");
 }
 
-/** The first line of an error's message, for a one-line reason. */
 export function firstLine(error: unknown): string {
   return error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
 }
@@ -52,8 +50,8 @@ export function respond(decision: Decision): void {
 
 /**
  * A hook's answer for one payload: what `read` returns goes to `decide`, and a read that fails is the hook's
- * own failure, reported through `failed` as a blocking error rather than a crash. A crash (exit 1) is a
- * non-blocking error to Claude Code, which then runs the tool unchecked (Qodo on PR 131).
+ * own failure, reported through `failed` as a blocking error. A crash (exit 1) is a non-blocking error to
+ * Claude Code, which would then run the tool unchecked.
  */
 export function hookAnswer(
   read: () => string,

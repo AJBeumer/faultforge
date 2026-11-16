@@ -1,5 +1,5 @@
 /**
- * Private template ids stay out of every public post (AUD-H1): in any spelling, in any message source, in a
+ * Private template ids stay out of every public post: in any spelling, in any message source, in a
  * reviewed checkout's files and in git's own hooks; and private storage is told by its checkout and its origin,
  * never by a name a command could fake. The ids and folders are made up.
  */
@@ -181,7 +181,7 @@ describe("private storage is told by its checkout and its origin, never by a nam
     execFileSync("git", ["-C", priv, "remote", "add", "origin", "https://github.com/AJBeumer/faultforge-private.git"]);
     const command =
       'GH_REPO=AJBeumer/faultforge-private gh issue create --repo "$PUBLIC" --title x --body "x-secret-v1"';
-    // Refused either way: the repo is a variable the command doesn't set (#285), or the id is private.
+    // Refused either way: the repo is a variable the command doesn't set, or the id is private.
     expect(bash(command, LAB, { FAULTFORGE_PRIVATE_DIR: priv })).toMatch(/still private|shell variable/);
   });
 

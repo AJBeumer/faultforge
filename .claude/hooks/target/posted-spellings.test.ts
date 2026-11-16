@@ -1,6 +1,6 @@
 /**
- * The guard reads text as the shell would post it (#285): the re-grade after round 4 got these spellings
- * through. Each is a payload the hook gets, judged by its decision.
+ * The guard reads text as the shell would post it, whatever the spelling. Each test is a payload the hook gets,
+ * judged by its decision.
  */
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,21 +70,21 @@ describe("ANSI-C strings and variables before the word and link checks", () => {
     expect(expandVariables('A=x; B="y"; echo "$A$B ${A}"')).toBe('A=x; B="y"; echo "xy x"');
   });
 
-  it("expands as the shell does: in order, from statements of their own only (Qodo on PR 291)", () => {
+  it("expands as the shell does: in order, from statements of their own only", () => {
     expect(expandVariables("echo $A; A=x; echo $A")).toBe("echo $A; A=x; echo x");
     expect(expandVariables("FLAG=--force; FLAG=-u git push $FLAG")).toBe("FLAG=--force; FLAG=-u git push --force");
     expect(expandVariables("gh pr comment 3 -b 'R=safe $R'")).toBe("gh pr comment 3 -b 'R=safe $R'");
   });
 
-  it("posts a literal heredoc from the lab while private templates exist, and still finds an id in it (Qodo on PR 291)", () => {
+  it("posts a literal heredoc from the lab while private templates exist, and still finds an id in it", () => {
     const body = (text: string) => `gh pr create --title Tidy --body "$(cat <<'EOF'\n${text}\nEOF\n)"`;
     expect(verdict(body("Small cleanup."))).toBeUndefined();
     expect(verdict(body("Demo with x-secret-v1."))).toMatch(/still private/);
-    // The heredoc ends at its first delimiter line: a program after it runs, and is refused (Qodo on PR 291).
+    // The heredoc ends at its first delimiter line: a program after it runs, and is refused.
     expect(verdict(body("hi\nEOF\nprintf 'x-sec\\x72et-v1'"))).toBeDefined();
   });
 
-  it("closes the third round's spellings (Qodo on PR 291)", () => {
+  it("leaves unread a variable changed in ways it doesn't follow, and catches a redefined cat or echo", () => {
     // A value changed in a way the reading doesn't follow is never taken.
     expect(verdict(`M=pla; M+=nted; gh issue comment 3 --repo ${T} -b "$M"`, LAB, NO_PRIVATE)).toBeDefined();
     expect(expandVariables('M=pla; M+=nted; echo "$M"')).toBe('M=pla; M+=nted; echo "$M"');
@@ -146,7 +146,7 @@ describe("aliases, default repos and repository ids", () => {
     expect(verdict(post("222"), LAB, NO_PRIVATE)).toBeUndefined();
     expect(verdict(post("333"), LAB, NO_PRIVATE)).toMatch(/couldn't tell which repo/);
     expect(asked).toEqual(["111", "222", "333"]);
-    // A write only once its method is expanded; an id in a message is words (Qodo on PR 291).
+    // A write only once its method is expanded; an id in a message is words.
     expect(
       verdict('M=PUT; gh api repositories/111/pulls/1/merge -X $M -f commit_title="planted"', LAB, NO_PRIVATE),
     ).toBeDefined();
@@ -200,7 +200,7 @@ describe("markup that renders as nothing can't split a word or an id", () => {
   });
 });
 
-describe("a private id split by a line break (Qodo on PR 339)", () => {
+describe("a private id split by a line break", () => {
   it("reads <br> as the new line it shows", () => {
     const names = privateIdMatcher(["x-secret-v1"]);
     expect(names?.("demo x-secret<br>v1")).toBe(true);

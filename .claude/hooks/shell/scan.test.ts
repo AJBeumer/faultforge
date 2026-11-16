@@ -46,7 +46,7 @@ describe("a crafted command can't outrun the hook", () => {
   const privateDir = privateStore("guard~private-", ["idempotency-guard-bypass-v1"]);
   const bash = (command: string) => askGuard("Bash", { command }, "D:\\Projects\\FaultForge", { config, privateDir });
   const post = 'gh pr create --repo AJBeumer/faultforge-target --title Tidy --body "planted bug" ';
-  // At `k` quarters of the old wall-clock test's 6 KB; `growth` compares k = 1 with k = 8 (re-grade 7).
+  // Each command is about 1.5 KB times `k`; `growth` compares k = 1 with k = 8.
   it.each([
     ["heredoc openers in a comment", (k: number) => `${post}# ${"<<A ".repeat(113 * k)}${"\n".repeat(1125 * k)}`],
     ["heredoc openers in the open", (k: number) => `${post}${"<<A ".repeat(200 * k)}\n${"x\n".repeat(375 * k)}`],

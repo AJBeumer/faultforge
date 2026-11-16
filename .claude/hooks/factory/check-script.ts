@@ -1,10 +1,9 @@
 /**
- * The factory policy's rule for `package.json` edits (re-grade 7): a run may change a package.json, but not the
+ * The factory policy's rule for `package.json` edits: a run may change a package.json, but not the
  * check script (`scripts.check`) or any script the check runs (`npm run <name>`, `npm test`), followed from the
  * check through each script it names. Changed, `check` could pass trivially (`"check": "true"`) and the run would
  * look verified. The edit is applied to the file as it is now, the way the Edit and Write tools would, and the
- * scripts are compared before and after. A result that isn't JSON is refused: the rule can't read it. Split from
- * factory-policy.ts, which may not pass 400 lines.
+ * scripts are compared before and after. A result that isn't JSON is refused: the rule can't read it.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -26,7 +25,7 @@ function scriptsOf(text: string): Scripts | undefined {
  * The names of `check` and every script it runs: `npm run <name>` with or without flags on either side of `run`
  * (`npm -s run lint`, `npm run -s lint`), `npm test` and `npm t`, yarn's, pnpm's and bun's shorthand
  * (`yarn lint`), and `node --run lint`. A script a package manager runs comes with its `pre` and `post` script,
- * which npm runs around it; `node --run` runs neither (Qodo on PR 339). A word that names no script (`npm ci`)
+ * which npm runs around it; `node --run` runs neither. A word that names no script (`npm ci`)
  * adds a name nothing holds, which is harmless.
  */
 export function checkScriptNames(scripts: Scripts): Set<string> {
@@ -44,7 +43,7 @@ export function checkScriptNames(scripts: Scripts): Set<string> {
     if (typeof body !== "string") continue;
     for (const m of body.matchAll(runs)) {
       const [, manager, run, script, byNode] = m;
-      // `npm t` and `npm tst` are npm's (and pnpm's) names for test; `npm run t` runs a script named t (Qodo on PR 339).
+      // `npm t` and `npm tst` are npm's (and pnpm's) names for test; `npm run t` runs a script named t.
       const alias = /^p?npm$/.test(manager ?? "") && !run && (script === "t" || script === "tst");
       todo.push([alias ? "test" : (script ?? byNode ?? ""), manager !== undefined]);
     }

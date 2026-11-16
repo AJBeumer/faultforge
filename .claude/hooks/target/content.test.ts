@@ -5,7 +5,7 @@ import { canSymlink, tempRepo } from "../fixtures.ts";
 import { pendingCommit, pendingIndex, pendingPush, Uninspectable, withDeadline } from "./content.ts";
 
 describe("pendingCommit: what a commit would take", () => {
-  it("reads a file that was staged and then deleted from the working tree (Qodo, round 3)", () => {
+  it("reads a file that was staged and then deleted from the working tree", () => {
     const { dir, git } = tempRepo();
     writeFileSync(join(dir, "notes.md"), "The planted bug\n");
     git("add", "notes.md");
@@ -13,7 +13,7 @@ describe("pendingCommit: what a commit would take", () => {
     expect(pendingCommit(dir, false).reasons).toContain("says planted");
   });
 
-  it.skipIf(!canSymlink())("reads a symlink's target text, which is what git commits (Qodo, round 3)", () => {
+  it.skipIf(!canSymlink())("reads a symlink's target text, which is what git commits", () => {
     const { dir } = tempRepo();
     symlinkSync("planted-target", join(dir, "link"));
     expect(pendingCommit(dir, false).reasons).toContain("says planted");
@@ -27,7 +27,7 @@ describe("pendingCommit: what a commit would take", () => {
 });
 
 describe("pendingPush: what a push would take", () => {
-  it("scans a merge commit's own changes, made while resolving (Qodo, round 3)", () => {
+  it("scans a merge commit's own changes, made while resolving", () => {
     const { dir, git } = tempRepo(true);
     git("checkout", "-q", "-b", "feature");
     writeFileSync(join(dir, "feature.md"), "fine\n");
@@ -43,7 +43,7 @@ describe("pendingPush: what a push would take", () => {
     expect(pending.where).toMatch(/2 commits/);
   });
 
-  it("gives up, as a failure to inspect, when the scan would outlast its budget (Qodo, round 3)", () => {
+  it("gives up, as a failure to inspect, when the scan would outlast its budget", () => {
     const { dir, git } = tempRepo(true);
     writeFileSync(join(dir, "a.md"), "fine\n");
     git("add", "a.md");
@@ -66,8 +66,8 @@ describe("pendingPush: what a push would take", () => {
   });
 });
 
-describe("pendingIndex: what the next commit records (#191)", () => {
-  it("reads a staged submodule entry by its name only, not as file content (Qodo on PR 213)", () => {
+describe("pendingIndex: what the next commit records", () => {
+  it("reads a staged submodule entry by its name only, not as file content", () => {
     const { git } = tempRepo();
     // A gitlink to a commit this repository doesn't have: reading it as a file would fail.
     git("update-index", "--add", "--cacheinfo", `160000,${"a".repeat(40)},vendor/lib`);
@@ -78,18 +78,18 @@ describe("pendingIndex: what the next commit records (#191)", () => {
   });
 });
 
-describe("withDeadline (audit N-4)", () => {
+describe("withDeadline: one deadline for a whole decision", () => {
   it("makes every scan inside it share one deadline, and a spent one a failure to inspect", () => {
     const { dir } = tempRepo();
     expect(() => withDeadline(-1, () => pendingCommit(dir, false))).toThrow(Uninspectable);
     expect(() => withDeadline(-1, () => pendingPush(dir))).toThrow(/ran out/);
     expect(withDeadline(8000, () => pendingCommit(dir, false)).reasons).toEqual([]);
-    // Outside any deadline, as before.
+    // Outside any deadline.
     expect(pendingCommit(dir, false).reasons).toEqual([]);
   });
 });
 
-describe("withDeadline: a decision that finished late (Qodo on PR 233)", () => {
+describe("withDeadline: a decision that finished late", () => {
   it("refuses work that ran past the deadline even when no git call came after it", () => {
     const slow = () => {
       const until = Date.now() + 30;

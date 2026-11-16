@@ -1,7 +1,7 @@
 /**
- * Recorded cases in a reviewed repo (#335; re-grade 6, Q27 to Q29, H15): the repo itself stays, and a case branch is
- * never deleted, renamed or moved in the reviewed checkout. Merges and words to Qodo are refused by the door rule
- * (guard-door.test.ts). The records are a temporary private folder with made-up cases.
+ * Recorded cases in a reviewed repo: the repo itself stays, and a case branch is never deleted, renamed or moved in
+ * the reviewed checkout. Merges and words to Qodo are refused by the door rule (door.test.ts). The records are a
+ * temporary private folder with made-up cases.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +57,7 @@ describe("case records", () => {
   });
 });
 
-describe("the reviewed repo itself stays (Q27 to Q29)", () => {
+describe("the reviewed repo itself stays", () => {
   it.each([`gh repo rename tidy -R ${T}`, `gh repo delete ${T} --yes`, `gh api -X DELETE repos/${T}`])(
     "refuses %s",
     (command) => {
@@ -66,7 +66,7 @@ describe("the reviewed repo itself stays (Q27 to Q29)", () => {
   );
 });
 
-describe("a case branch stays in the reviewed checkout (H15)", () => {
+describe("a case branch stays in the reviewed checkout", () => {
   it.each([
     "git update-ref -d refs/heads/main",
     "git update-ref refs/heads/tidy-totals HEAD~1",
@@ -76,7 +76,7 @@ describe("a case branch stays in the reviewed checkout (H15)", () => {
     "git branch -f tidy-totals HEAD~1",
     "git checkout -B fix-rounding",
     "git switch -C tidy-totals origin/main",
-    // The name joined on to the flag (Qodo on PR 337).
+    // The name joined on to the flag.
     "git checkout -Btidy-totals",
     "git switch -Cfix-rounding",
     "git switch --force-create=tidy-totals",

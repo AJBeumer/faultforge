@@ -1,8 +1,7 @@
 /**
  * How the hooks split a shell command the way the shell does: its simple commands (steps) at pipes and
  * separators outside quotes, substitutions and heredoc bodies; each step's words; and the program a step runs,
- * past assignments and words that run the next word (`sudo`, `env`, `npx`). Split out of shell/exec.ts, which
- * may not pass 400 lines (Qodo on PR 310 needed the steps for inline code too).
+ * past assignments and words that run the next word (`sudo`, `env`, `npx`).
  */
 import { spokenWords } from "./decode.ts";
 import { quotedSpans } from "./scan.ts";

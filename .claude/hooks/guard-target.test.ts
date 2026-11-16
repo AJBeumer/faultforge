@@ -1,6 +1,6 @@
 /**
  * The guard's decisions as read from the command text and the payload. The decisions that read a reviewed
- * checkout's pending content from git fixtures are in guard-target.pending.test.ts (#121).
+ * checkout's pending content from git fixtures are in guard-target-git-content.test.ts.
  */
 import { spawnSync } from "node:child_process";
 import { closeSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
@@ -18,7 +18,7 @@ const TARGET = "D:\\Projects\\faultforge-target";
 // an origin so nothing in it counts as unpushed, which keeps the push scan to one git call per test.
 const TARGET_FIXTURE = tempRepo(true).dir;
 const DEFAULT_CONFIG = guardConfig(TARGET_FIXTURE);
-/** The door rule (#340): every write to a reviewed repo goes through npm run target:post. */
+/** The door rule: every write to a reviewed repo goes through npm run target:post. */
 const DOOR = /go only through the door/;
 
 /** The deny reason for one tool call, or undefined if allowed; see guardDecision. */
@@ -26,7 +26,7 @@ const decide = (tool: string, toolInput: object, cwd = HARNESS, config = DEFAULT
   guardDecision(tool, toolInput, cwd, config);
 
 const bash = (command: string, cwd?: string) => decide("Bash", { command }, cwd);
-/** A push to a reviewed repo from another folder: refused before its flags are read (re-grade 6). */
+/** A push to a reviewed repo from another folder: refused before its flags are read. */
 const ELSEWHERE_PUSH = /Force pushes|only from its own checkout/;
 
 describe("guard-target hook", () => {
@@ -78,7 +78,7 @@ describe("guard-target hook", () => {
       ).toBeUndefined();
     });
 
-    it("a command in this repo whose file edit happens to contain a target URL (Day 3 false positive)", () => {
+    it("a command in this repo whose file edit happens to contain a target URL", () => {
       expect(
         bash(
           "cd /d/Projects/FaultForge && node -e 'readme(\"https://github.com/AJBeumer/faultforge-target/pull/1\")' && " +
@@ -156,7 +156,7 @@ describe("guard-target hook", () => {
       );
     });
 
-    it("refuses a posted file too large to read within the hook's time (Qodo on PR 233)", () => {
+    it("refuses a posted file too large to read within the hook's time", () => {
       const file = join(mkdtempSync(join(tmpdir(), "big-body-")), "body.md");
       writeFileSync(file, "ordinary text\n".repeat(80_000)); // over 1 MiB
       expect(bash(`gh issue create --repo AJBeumer/faultforge --title "x" --body-file "${file}"`)).toMatch(
@@ -247,7 +247,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(decide("Bash", { command }, TARGET)).toMatch(/link to the target/);
   });
 
-  it("still blocks a target force push chained after a command for this repo (Qodo, 2e15454)", () => {
+  it("still blocks a target force push chained after a command for this repo", () => {
     const command =
       "gh issue list --repo AJBeumer/faultforge; git push --force https://github.com/AJBeumer/faultforge-target.git main";
     expect(bash(command)).toMatch(/Force pushes|separate commands|only from its own checkout/);
@@ -259,7 +259,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     expect(bash(command)).toMatch(/Force pushes|separate commands/);
   });
 
-  it("blocks a chained command that writes across repos, from the target checkout (Qodo, 77c1f44)", () => {
+  it("blocks a chained command that writes across repos, from the target checkout", () => {
     expect(bash("gh issue list --repo AJBeumer/faultforge; git push --force origin main", TARGET)).toMatch(
       /separate commands/,
     );
@@ -268,19 +268,19 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
     );
   });
 
-  it("checks a lab commit whose message fakes a target --repo (Qodo, 77c1f44)", () => {
+  it("checks a lab commit whose message fakes a target --repo", () => {
     expect(bash('git commit -m "Note --repo AJBeumer/faultforge-target see faultforge-target#6"')).toMatch(
       /link to the target/,
     );
   });
 
-  it("treats a single & as a second command (Qodo, ae9c1de)", () => {
+  it("treats a single & as a second command", () => {
     const command =
       'gh issue create --repo AJBeumer/faultforge --title "x" --body "a" & gh issue create --repo AJBeumer/faultforge-target --title "y" --body "b"';
     expect(bash(command)).toMatch(/separate commands/);
   });
 
-  it("sees commands hidden in a quoted $(...) (Qodo, ae9c1de)", () => {
+  it("sees commands hidden in a quoted $(...)", () => {
     const command =
       'echo "$(gh issue create --repo AJBeumer/faultforge --title x --body a; gh issue create --repo AJBeumer/faultforge-target --title y --body b)"';
     expect(bash(command)).toMatch(/separate commands/);
@@ -303,7 +303,7 @@ describe("guard-target hook reads the reviewed repos from factory.json", () => {
   });
 });
 
-describe("guard-target hook fails closed (#104)", () => {
+describe("guard-target hook fails closed", () => {
   /** The decision for raw payload text, with the fixture config. */
   const rawDecision = (stdin: string) => guardDecide(stdin, { ...process.env, FAULTFORGE_CONFIG: DEFAULT_CONFIG });
 
@@ -332,7 +332,7 @@ describe("guard-target hook fails closed (#104)", () => {
     );
   });
 
-  it("lets a message mention a file flag as words: only a real flag names a file (Qodo on PR 115)", () => {
+  it("lets a message mention a file flag as words: only a real flag names a file", () => {
     expect(bash('git commit -m "Document --body-file usage"')).toBeUndefined();
     expect(bash('git commit -m "Document the --body-file usage"', TARGET)).toBeUndefined();
     expect(
@@ -342,13 +342,13 @@ describe("guard-target hook fails closed (#104)", () => {
     ).toBeUndefined();
   });
 
-  it("still allows and denies as before once the input is well-formed", () => {
+  it("allows and denies as usual once the input is well-formed", () => {
     expect(bash("npm run check")).toBeUndefined();
     expect(bash("git push origin main", TARGET)).toMatch(DOOR);
   });
 });
 
-describe("guard-target hook sees every way into the reviewed repo (#105)", () => {
+describe("guard-target hook sees every way into the reviewed repo", () => {
   const powershell = (command: string, cwd = HARNESS) => decide("PowerShell", { command }, cwd);
 
   describe("ways of moving into the checkout", () => {
@@ -368,12 +368,12 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
       expect(bash("pushd ../faultforge-target && git push --force origin main")).toMatch(DOOR);
     });
 
-    it("sees the checkout when a shell operator follows it with no space (a gap the Set-Location case found)", () => {
+    it("sees the checkout when a shell operator follows it with no space", () => {
       expect(bash("cd ../faultforge-target;git push origin main")).toMatch(DOOR);
       expect(bash("cd ../faultforge-target&&git push origin main")).toMatch(DOOR);
     });
 
-    it("reads a move quoted in a lab commit's message as words, not as a move (Qodo on PR 120)", () => {
+    it("reads a move quoted in a lab commit's message as words, not as a move", () => {
       const quoted = "git commit -m 'Set-Location /d/Projects/faultforge-target; see faultforge-target#6'";
       expect(bash(quoted)).toMatch(/link to the target/);
       expect(
@@ -383,7 +383,7 @@ describe("guard-target hook sees every way into the reviewed repo (#105)", () =>
   });
 });
 
-describe("guard-target hook keeps links one-way from a lab merge (#190)", () => {
+describe("guard-target hook keeps links one-way from a lab merge", () => {
   it("refuses a merge of a lab PR whose body links the target, as it refuses a new PR's", () => {
     expect(bash('gh pr merge 9 --squash --body "see https://github.com/AJBeumer/faultforge-target/pull/3"')).toMatch(
       /link to the target/,
@@ -440,7 +440,7 @@ describe("guard-target hook as a process (node <file>), the way Claude Code runs
     expect(stderr.split("\n")).toHaveLength(1);
   });
 
-  it("as a process: a stdin it can't read is a blocking error too, not a crash (Qodo on PR 131)", () => {
+  it("as a process: a stdin it can't read is a blocking error too, not a crash", () => {
     const folder = openSync(tmpdir(), "r"); // reading a folder fails with EISDIR
     const result = spawnSync(process.execPath, [HOOK], {
       stdio: [folder, "pipe", "pipe"],
@@ -454,7 +454,7 @@ describe("guard-target hook as a process (node <file>), the way Claude Code runs
   });
 });
 
-describe("guardBudget (Qodo on PR 233)", () => {
+describe("the guard's time budget", () => {
   it("may shorten the decision's budget, never lengthen it past the default", () => {
     expect(guardBudget({})).toBe(8000);
     expect(guardBudget({ FAULTFORGE_GUARD_BUDGET_MS: "60000" })).toBe(8000);

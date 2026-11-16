@@ -1,5 +1,5 @@
 /**
- * The door rule (#340): every write to a reviewed repo goes through `npm run target:post`, and the guard refuses
+ * The door rule: every write to a reviewed repo goes through `npm run target:post`, and the guard refuses
  * every other one without reading what it would say. Reads, and local work in the reviewed checkout, still pass.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -20,7 +20,7 @@ const UNKNOWN = /can't read from the command[\s\S]*npm run target:post/;
 const bash = (command: string, cwd = LAB) => guardDecision("Bash", { command }, cwd, CONFIG);
 const pwsh = (command: string, cwd = LAB) => guardDecision("PowerShell", { command }, cwd, CONFIG);
 
-describe("the door rule (#340)", () => {
+describe("the door rule", () => {
   describe("refuses every raw write aimed at the reviewed repo, whatever it says", () => {
     it.each([
       "gh issue create --repo AJBeumer/faultforge-target --title Tidy --body ok",
@@ -181,13 +181,13 @@ describe("the door rule (#340)", () => {
     expect(mcpReads("mcp__github__list_issues")).toBe(true);
     expect(mcpReads("mcp__github__create_pull_request")).toBe(false);
     expect(mcpReads("mcp__github__push_files")).toBe(false);
-    // The verb may come last (Qodo on PR 344).
+    // The verb may come last.
     expect(mcpReads("mcp__github__issue_read")).toBe(true);
     expect(mcpReads("mcp__github__issue_write")).toBe(false);
   });
 });
 
-describe("what Qodo found in the review of PR 344", () => {
+describe("the door's exact form, HTTP writes and reads, and where a commit runs", () => {
   const LAB_CWD = LAB_ROOT;
 
   it("takes no second line after the door: a line break ends the door's form", () => {
@@ -259,7 +259,7 @@ describe("what Qodo found in the review of PR 344", () => {
   });
 });
 
-describe("what Qodo found in the second review of PR 344", () => {
+describe("whole-body uploads, abbreviated parameters, and a node of the checkout's own", () => {
   const api = "https://api.github.com/repos/AJBeumer/faultforge-target/issues";
 
   it("refuses httpie sending a file as the whole body", () => {

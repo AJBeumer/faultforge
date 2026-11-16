@@ -1,5 +1,5 @@
 /**
- * The guard's own files in the checkout it runs from (#335; re-grade 6, H12, H14, H18): no shell command and no
+ * The guard's own files in the checkout it runs from: no shell command and no
  * Write or Edit changes them there, unless the owner has made the unlock file by hand. A worktree or another clone,
  * where a normal PR is made, stays free. The checkout under test is a temporary one, named to the guard with
  * FAULTFORGE_GUARD_ROOT; the real one is never touched.
@@ -80,7 +80,7 @@ describe("the guard's own files can't be changed in its checkout", () => {
     "git restore --source=HEAD~1 packages/harness/src/shared/neutral.ts",
     `node -e "require('fs').writeFileSync('.claude/hooks/git-guard.ts', '')"`,
     "F=.claude/hooks/git-guard.ts; rm $F",
-    // Quotes the shell joins, escapes it drops, and git's own options (Qodo on PR 337).
+    // Quotes the shell joins, escapes it drops, and git's own options.
     'rm ".claude"/hooks/git-guard.ts',
     "rm .clau\\de/hooks/git-guard.ts",
     "git -C .claude checkout HEAD~1 -- hooks",
@@ -107,7 +107,7 @@ describe("the guard's own files can't be changed in its checkout", () => {
     if (drive) expect(bash(`rm /${drive[1]?.toLowerCase()}${drive[2]}`, ELSEWHERE)).toMatch(/guard's own files/);
   });
 
-  it("refuses git commands that put another version of them in place (Qodo on PR 337)", () => {
+  it("refuses git commands that put another version of them in place", () => {
     for (const command of [
       "git reset --hard HEAD~1",
       "git checkout HEAD~1",
@@ -147,7 +147,7 @@ describe("the guard's own files can't be changed in its checkout", () => {
     }
   });
 
-  it("allows ordinary text that only mentions the unlock (Qodo on PR 337)", () => {
+  it("allows ordinary text that only mentions the unlock", () => {
     expect(bash('echo "guard unlock" > notes.txt')).toBeUndefined();
     expect(bash('git commit -m "Document the guard-unlock file"')).toBeUndefined();
   });
@@ -208,7 +208,7 @@ describe("the guard's own files can't be changed in its checkout", () => {
 });
 
 describe("a long command of paths stays fast", () => {
-  // At `k` quarters of the old wall-clock test's 6 KB; `growth` compares k = 1 with k = 8 (re-grade 7).
+  // Each command is about 1.5 KB times `k`; `growth` compares k = 1 with k = 8.
   it.each([
     ["rm words", (k: number) => `rm ${"docs/a ".repeat(225 * k)}`],
     ["copy words", (k: number) => `cp ${"docs/a ".repeat(225 * k)} docs/b`],
@@ -224,7 +224,7 @@ describe("many distinct paths", () => {
 
   it.each(["rm", "cp"])("reads a %s of up to 256 distinct paths in time linear in their number", (program) => {
     expect(bash(`${program} ${many(250)} docs/`)).toBeUndefined();
-    // 30 paths, then 240: both under the 256 the guard reads (re-grade 7).
+    // 30 paths, then 240: both under the 256 the guard reads.
     expect(growth((k) => bash(`${program} ${many(30 * k)} docs/`))).toBeLessThan(LINEAR_BOUND);
   });
 

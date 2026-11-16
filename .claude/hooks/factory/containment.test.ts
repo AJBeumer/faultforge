@@ -7,10 +7,7 @@ import { commandViolations, decide, editViolation } from "../factory-policy.ts";
 import { codeAsWords, decodeAnsiC, spokenWords } from "../shell/decode.ts";
 import { scriptsRun } from "./paths.ts";
 
-/**
- * The re-grade after round 4 found these still allowed inside an unattended run (#284). Each is a payload the
- * hook gets, judged by its decision.
- */
+/** Ways out of an unattended run's limits. Each is a payload the hook gets, judged by its decision. */
 const RUN = resolve("/runs/20261114-0000-target-5");
 const runEnv = (extra: Record<string, string> = {}) => ({
   FAULTFORGE_FACTORY_RUN: "r",
@@ -38,7 +35,7 @@ describe("shell-decode: the words a command runs", () => {
   });
 });
 
-describe("factory policy: normalised spellings of a command (#284)", () => {
+describe("factory policy: normalised spellings of a command", () => {
   it.each([
     "g''h pr merge 1",
     "gh p''r merge 1",
@@ -67,7 +64,7 @@ describe("factory policy: normalised spellings of a command (#284)", () => {
   });
 });
 
-describe("factory policy: the environment through any interpreter (#284)", () => {
+describe("factory policy: the environment through any interpreter", () => {
   it.each([
     `node -e "console.log(process['en'+'v'])"`,
     `node -e "const e=globalThis.process; console.log(JSON.stringify(e[String.fromCharCode(101,110,118)]))"`,
@@ -103,7 +100,7 @@ describe("factory policy: the environment through any interpreter (#284)", () =>
     expect(commandViolations("NODE_ENV=test npm run check")).toEqual([]);
   });
 
-  it("doesn't take a file name or a read-only git command for an env read or a write (Qodo on PR 288)", () => {
+  it("doesn't take a file name or a read-only git command for an env read or a write", () => {
     expect(commandViolations("node scripts/process-data.mjs")).toEqual([]);
     expect(commandViolations(`node -e "console.log(globalThis.process)"`)).not.toEqual([]);
     expect(bash("git diff $(git merge-base origin/main HEAD) --stat").kind).toBe("allow");
@@ -114,7 +111,7 @@ describe("factory policy: the environment through any interpreter (#284)", () =>
   });
 });
 
-describe("factory policy: the read tools (#284)", () => {
+describe("factory policy: the read tools", () => {
   it.each(["/proc/self/environ", "/proc/1234/environ", "/proc/self/mem"])("denies reading %s", (path) => {
     expect(ask("Read", { file_path: path }).kind).toBe("deny");
     expect(ask("Grep", { pattern: "TOKEN", path }).kind).toBe("deny");
@@ -154,13 +151,13 @@ describe("factory policy: the read tools (#284)", () => {
     expect(bash("git -C private add raw-artifacts/reviews").kind).toBe("allow");
   });
 
-  it("denies /proc however it is spelled or linked (Qodo on PR 288)", () => {
+  it("denies /proc however it is spelled or linked", () => {
     for (const path of ["/proc/./self/environ", "/proc//self/environ"])
       expect(ask("Read", { file_path: path }).kind).toBe("deny");
     expect(bash("ln -s /proc p").kind).toBe("deny");
   });
 
-  it("denies a search from a folder that holds a private checkout, and a glob into one (Qodo on PR 288)", () => {
+  it("denies a search from a folder that holds a private checkout, and a glob into one", () => {
     const owner = resolve("/owner/FaultForge");
     const runs = resolve("/runs");
     const target = runEnv({ FAULTFORGE_PRIVATE_CHECKOUTS: [join(owner, "private"), runs].join(delimiter) });
@@ -174,7 +171,7 @@ describe("factory policy: the read tools (#284)", () => {
     expect(bash(`cat ${join(RUN, "ticket.md").replace(/\\/g, "/")}`, RUN, target).kind).toBe("allow");
   });
 
-  it("denies shell paths that climb out of the run or glob into a checkout, in a target ticket's run (Qodo on PR 288)", () => {
+  it("denies shell paths that climb out of the run or glob into a checkout, in a target ticket's run", () => {
     const owner = resolve("/owner/FaultForge");
     const target = runEnv({ FAULTFORGE_PRIVATE_CHECKOUTS: join(owner, "private") });
     const lab = join(RUN, "FaultForge");
@@ -201,7 +198,7 @@ describe("factory policy: the read tools (#284)", () => {
   });
 });
 
-describe("factory policy: the guardrails from the shell (#284)", () => {
+describe("factory policy: the guardrails from the shell", () => {
   it.each([
     "sed -i 's/TELLTALES.filter/[].filter/' packages/harness/src/shared/neutral.ts",
     `node -e "require('fs').writeFileSync('.claude/hooks/guard-target.ts','')"`,
@@ -220,11 +217,11 @@ describe("factory policy: the guardrails from the shell (#284)", () => {
     "cd .claude&& echo x > hooks/guard.ts",
     `cp x "$(printf '\\056claude')/settings.json"`,
     'cp x "$DIR/settings.json"',
-  ])("denies %s, a write it can't tell is clear of them (Qodo on PR 288)", (command) => {
+  ])("denies %s, a write it can't tell is clear of them", (command) => {
     expect(bash(command).kind).toBe("deny");
   });
 
-  it("denies a write from inside a .claude folder, where the Bash tool stayed after a cd (Qodo on PR 288)", () => {
+  it("denies a write from inside a .claude folder, where the Bash tool stayed after a cd", () => {
     expect(bash("echo x > factory-policy.ts", join(RUN, "FaultForge", ".claude", "hooks")).kind).toBe("deny");
   });
 
@@ -246,7 +243,7 @@ describe("factory policy: the guardrails from the shell (#284)", () => {
   });
 });
 
-describe("factory policy: a script this run wrote may not run (#284)", () => {
+describe("factory policy: a script this run wrote may not run", () => {
   let repo: string;
   let env: ReturnType<typeof runEnv>;
   const gitIn = (dir: string, ...args: string[]) =>
@@ -266,7 +263,7 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     writeFileSync(join(repo, "newmod.py"), "import os\n");
     mkdirSync(join(repo, "scripts"), { recursive: true });
     writeFileSync(join(repo, "scripts", "do.mjs"), "x\n");
-    // Changed after the base, and committed: still not the project's own code (Qodo on PR 288).
+    // Changed after the base, and committed: still not the project's own code.
     writeFileSync(join(repo, "src", "tool.ts"), "console.log(process.env)\n");
     writeFileSync(join(repo, "src", "added.ts"), "x\n");
     gitIn(repo, "add", ".");
@@ -295,7 +292,7 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     ". ./scratch.js",
     "node < scratch.js",
     "python3 -m newmod",
-    // Package runners, find, and a folder the text can't follow (Qodo on PR 288).
+    // Package runners, find, and a folder the text can't follow.
     "npm exec node scratch.js",
     "npm exec -- tsx scratch.js",
     "pnpm dlx tsx scratch.js",
@@ -313,7 +310,7 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
     for (const command of [
       "npx tsx src/server.ts",
       "node src/server.ts",
-      // A flag's value is not the script (Qodo on PR 288).
+      // A flag's value is not the script.
       "python3 -W ignore src/server.ts",
       "node --env-file .env src/server.ts",
       "node --version",
@@ -323,7 +320,7 @@ describe("factory policy: a script this run wrote may not run (#284)", () => {
       expect(bash(command, repo, env).kind).toBe("allow");
   });
 
-  it("doesn't take a scratch repo's own commit, or a moved ref, as the run's base (Qodo on PR 288)", () => {
+  it("doesn't take a scratch repo's own commit, or a moved ref, as the run's base", () => {
     const scratch = mkdtempSync(join(tmpdir(), "ff-scratch-"));
     try {
       execFileSync("git", ["init", "-q", "-b", "main", scratch]);

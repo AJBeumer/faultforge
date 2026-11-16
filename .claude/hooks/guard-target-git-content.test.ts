@@ -1,7 +1,7 @@
 /**
  * The guard's decisions that depend on what git holds in a reviewed checkout (target/content.ts, through the
  * hook). Every test builds its own temporary repository, so these are the slow tests of the hook: they are in
- * their own file to run on their own worker, next to the text-only decisions in guard-target.test.ts (#121).
+ * their own file to run on their own worker, next to the text-only decisions in guard-target.test.ts.
  */
 import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,7 +28,7 @@ describe("content about to travel, read from git whatever the command text says"
     });
     return { dir, git, config };
   }
-  // A raw push inside a reviewed checkout is refused by the door rule before its content is read (#340), so the
+  // A raw push inside a reviewed checkout is refused by the door rule before its content is read, so the
   // pushes below run from elsewhere: there every reviewed checkout's unpushed content is still read from git.
 
   it("refuses a commit anywhere while a reviewed checkout holds a staged telltale, however it got there", () => {
@@ -60,7 +60,7 @@ describe("content about to travel, read from git whatever the command text says"
     expect(decide("Bash", { command: "npm run check" }, dir, config)).toBeUndefined();
   });
 
-  it("refuses a push while a local branch or tag not on the remote is named with a telltale (#190)", () => {
+  it("refuses a push while a local branch or tag not on the remote is named with a telltale", () => {
     const { git, config } = reviewedRepo(true);
     git("switch", "-q", "-c", "planted-bug-7");
     expect(decide("Bash", { command: "git push -u origin HEAD" }, HARNESS, config)).toMatch(
@@ -71,12 +71,12 @@ describe("content about to travel, read from git whatever the command text says"
     git("tag", "ff-0002");
     expect(decide("Bash", { command: "git push --tags" }, HARNESS, config)).toMatch(/case id/);
     // A tag is read even when a branch of the same name is on the remote, and once it is published too:
-    // without asking the remote the guard can't tell, and a giveaway tag shouldn't stay (Qodo on PR 208).
+    // without asking the remote the guard can't tell, and a giveaway tag shouldn't stay.
     git("push", "-q", "origin", "main:refs/heads/ff-0002");
     git("fetch", "-q", "origin");
     expect(decide("Bash", { command: "git push origin main" }, HARNESS, config)).toMatch(/case id/);
     git("tag", "-d", "ff-0002");
-    // A branch is read even when one remote already has it: a push can send it to another (Qodo on PR 208).
+    // A branch is read even when one remote already has it: a push can send it to another.
     git("branch", "ff-0003");
     git("push", "-q", "origin", "ff-0003");
     git("fetch", "-q", "origin");
@@ -101,11 +101,11 @@ describe("content about to travel, read from git whatever the command text says"
 
   it("denies when git can't answer for a reviewed checkout, rather than guessing", () => {
     const { dir, config } = reviewedRepo();
-    writeFileSync(join(dir, ".git", "HEAD"), "not a ref\n"); // git can no longer read the repository
+    writeFileSync(join(dir, ".git", "HEAD"), "not a ref\n"); // git can't read the repository
     expect(decide("Bash", { command: "git push" }, HARNESS, config)).toMatch(/can't inspect other-app/);
   });
 
-  describe("what Qodo found in round 2 (PR 120)", () => {
+  describe("whole files, every unpushed commit, and every way a file gets staged", () => {
     it("reads whole file contents, so a line starting with ++ and a binary file are both checked", () => {
       const { dir, git, config } = reviewedRepo();
       writeFileSync(join(dir, "a.md"), "++ the planted bug\n");
@@ -182,7 +182,7 @@ describe("content about to travel, read from git whatever the command text says"
     });
   });
 
-  describe("what Qodo found in round 3 (PR 120), through the hook", () => {
+  describe("merge resolutions and files staged then deleted, through the hook", () => {
     it("refuses a push whose merge commit introduced a telltale while resolving", () => {
       const { dir, git, config } = reviewedRepo(true);
       git("checkout", "-q", "-b", "feature");
@@ -207,7 +207,7 @@ describe("content about to travel, read from git whatever the command text says"
   });
 });
 
-describe("one deadline for the whole decision (audit N-4)", () => {
+describe("one deadline for the whole decision", () => {
   it("denies a commit whose scans can't finish within the decision's one deadline", async () => {
     const { decide: guardDecide } = await import("./guard-target.ts");
     const { dir, git } = tempRepo();
