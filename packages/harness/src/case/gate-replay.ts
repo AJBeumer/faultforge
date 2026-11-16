@@ -242,6 +242,9 @@ export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.Pr
   }
   const latestVerdict = new Map<string, unknown>();
   for (const [caseId, events] of verdicts) {
+    // Under a public list, a case outside it is not looked at, so nothing about it can be printed, not even
+    // in an error.
+    if (only && !only.has(caseId)) continue;
     for (const e of events) {
       if (typeof e.at !== "string" || Number.isNaN(Date.parse(e.at))) {
         throw new Error(`${caseId}: a verdict in the audit log has no readable time`);

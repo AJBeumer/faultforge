@@ -297,6 +297,14 @@ describe("loadCases", () => {
     }
   });
 
+  it("with a public list, never names a case outside it, even when that case's verdict can't be read", () => {
+    const priv = storage();
+    appendVerdict(priv, "unreadable", "FF-9001", "not a time");
+    const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv });
+    expect(cases.map((c) => c.caseId)).toEqual(["FF-9002"]);
+    expect(skipped.join("\n")).not.toContain("FF-9001");
+  });
+
   it("with a public list, says nothing at all about a case outside it", () => {
     const priv = storage();
     const { cases, skipped } = loadCases(priv, new Set(["FF-9002"]), { FAULTFORGE_PRIVATE_DIR: priv });
