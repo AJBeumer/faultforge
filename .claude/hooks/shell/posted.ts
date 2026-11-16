@@ -102,6 +102,14 @@ export function outsidePostedText(command: string): string {
   return outside.replace(postedFlagValue(), " ");
 }
 
+/**
+ * The command with only its posted flag values taken out. Heredoc bodies stay: a shell can run one
+ * (`bash <<'EOF'`), so a move or an unreadable repo in it still counts.
+ */
+export function withoutPostedValues(command: string): string {
+  return command.replace(postedFlagValue(), " ");
+}
+
 /** Where each posted flag value sits in the command, quotes included: `[start, end)`. */
 export function postedRanges(command: string): [number, number][] {
   const pattern = new RegExp(postedFlagValue().source, "dg");

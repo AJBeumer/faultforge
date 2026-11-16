@@ -6,7 +6,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { decodeAnsiC } from "../shell/decode.ts";
-import { outsidePostedText, postedRanges } from "../shell/posted.ts";
+import { outsidePostedText, postedRanges, withoutPostedValues } from "../shell/posted.ts";
 import { joinContinuations, joinedWords, quotedMask, quotedSpans } from "../shell/scan.ts";
 import { isWrite } from "./reach.ts";
 
@@ -176,7 +176,21 @@ export function unreadablePost(command: string): boolean {
   });
 }
 
-/** True when the repo a write goes to is a variable the command doesn't set: where it goes can't be read. */
+/**
+ * True when the repo a write goes to holds, in whole or in part, a variable the command doesn't set or a brace
+ * list the shell turns into several words (`-R o/tar$X`, `repos/o/$N/issues`, `github.com/o/{a,b}`): where it
+ * goes can't be read. Read word by word without posted flag values: a message names no repo, and a pattern run over the
+ * whole command could take time quadratic in its length.
+ */
 export function unreadableDestination(command: string): boolean {
-  return /(?:--repo|(?<=\s)-R)[\s=]*["']?\$|\bGH_REPO\s*=\s*["']?\$/.test(command);
+  const built = /\$|\{[^\s}]*,/;
+  const inRoute = /(?:\brepos\/|github\.com[/:]+)(?:[^\s/$]*\/)?[^\s/$]*(?:\$|\{[^\s}]*,)/;
+  const words = withoutPostedValues(command).split(/[\s;&|]+/);
+  return words.some((word, i) => {
+    const before = words[i - 1] ?? "";
+    const takesValue =
+      /^(?:--repo|-R|\S*GH_REPO=?)$/.test(before) || (before === "=" && /GH_REPO$/.test(words[i - 2] ?? ""));
+    const value = takesValue ? word : (/^(?:--repo=|-R=?|\S*GH_REPO=)(.+)$/.exec(word)?.[1] ?? "");
+    return built.test(value) || inRoute.test(word);
+  });
 }

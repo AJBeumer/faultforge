@@ -6,8 +6,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { decodeAnsiC, shellWords } from "../shell/decode.ts";
 import { globMatches, hasWildcard } from "../shell/glob.ts";
-import { quotedSpans, substitutions } from "../shell/scan.ts";
+import { withoutPostedValues } from "../shell/posted.ts";
+import { joinedWords, quotedSpans, substitutions } from "../shell/scan.ts";
 
 export interface Reviewed {
   /** owner/name on GitHub */
@@ -93,9 +95,14 @@ function checkoutPattern(repo: Reviewed): RegExp {
   return new RegExp(`${into}["']?[^\\s"']*(^|[/\\\\])?(${folders})(?=[/\\\\"'\\s;&|)]|$)`, "i");
 }
 
-/** True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. */
+/**
+ * True when the command moves into the repo's checkout anywhere in its text, quoted or not: fails closed. Outside
+ * posted flag values it is also read as the shell joins its words (`faultforge-tar''get`); inside a message,
+ * joining would turn words like `c''d` into a move.
+ */
 export function entersCheckout(command: string, repo: Reviewed): boolean {
-  return checkoutPattern(repo).test(command);
+  const pattern = checkoutPattern(repo);
+  return pattern.test(command) || pattern.test(shellWords(withoutPostedValues(command)));
 }
 
 /** True when a local path is inside the repo's checkout folder (whole folder names only). */
@@ -307,9 +314,15 @@ export function navigation(command: string, cwd: string, acts: (index: number) =
   return { targets, unreadable };
 }
 
-/** The folders a command moves into or points git at; see `navigation`. */
+/**
+ * The folders a command moves into or points git at (see `navigation`), read as written and as the shell joins
+ * each word outside posted flag values: `cd faultforge-tar''get` goes into `faultforge-target`. The joined reading keeps
+ * backslashes, which Windows paths need, and also drops them, as bash does outside quotes.
+ */
 export function navigationTargets(command: string, cwd: string): string[] {
-  return navigation(command, cwd).targets;
+  const outside = withoutPostedValues(command);
+  const readings = new Set([command, joinedWords(decodeAnsiC(outside)), shellWords(outside)]);
+  return [...new Set([...readings].flatMap((text) => navigation(text, cwd).targets))];
 }
 
 /**
