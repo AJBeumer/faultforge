@@ -13,7 +13,7 @@ import {
   privateUrl,
 } from "./factory-private.ts";
 
-describe("guardPrivateDir: a target run's guard still knows the template ids (AUD-H1, Qodo on PR 288)", () => {
+describe("guardPrivateDir: a target run's guard still knows the template ids", () => {
   it("names the owner's private folder for a target ticket when it holds templates, never for a lab ticket", () => {
     const factory = {
       repos: { lab: { guard: "lab" }, target: { guard: "reviewed" } },
@@ -32,7 +32,7 @@ const FACTORY = {
   },
 } as unknown as FactoryConfig;
 
-describe("factory-private: a target ticket's run and the private repo (AUD-H2, #284)", () => {
+describe("factory-private: a target ticket's run and the private repo", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "ff-private-"));
@@ -44,7 +44,7 @@ describe("factory-private: a target ticket's run and the private repo (AUD-H2, #
     expect(isReviewedTicket(FACTORY, "lab")).toBe(false);
   });
 
-  it("names the private checkouts every agent is kept out of, a lab ticket's own private worktree included (#299)", () => {
+  it("names the private checkouts every agent is kept out of, a lab ticket's own private worktree included", () => {
     const runs = join(dir, "runs");
     const paths = privateCheckoutsFor(runs, { FAULTFORGE_PRIVATE_DIR: join(dir, "elsewhere") });
     expect(paths).toEqual([join(LAB_ROOT, "private"), runs, join(dir, "elsewhere")]);

@@ -1,7 +1,7 @@
 /**
  * The harness's own source files, for the tests that read them as text (the door, the one writer, the shared
- * helpers, gh calls, drive spellings). The modules sit in area folders (#356), so a test that once listed one flat
- * folder lists them all here, and finds a module by its file name wherever its area is.
+ * helpers, gh calls, drive spellings). The modules sit in area folders, so a test finds a module here by its
+ * file name, wherever its area is.
  */
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";

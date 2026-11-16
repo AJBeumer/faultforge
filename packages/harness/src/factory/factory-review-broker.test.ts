@@ -6,7 +6,7 @@ import { askRunner, cleanArgs, MAX_REQUEST_BYTES, reviewBroker, serveReviewReque
 
 const tmp = () => mkdtempSync(join(tmpdir(), "ff-broker-"));
 
-describe("the review broker: review:wait without the Qodo key in the agent (AUD-H2, #243)", () => {
+describe("the review broker: review:wait without the Qodo key in the agent", () => {
   it("the agent's request is answered by the runner with review:wait's own output and exit code", async () => {
     const dir = tmp();
     const ran: string[][] = [];
@@ -126,7 +126,7 @@ describe("the review broker: review:wait without the Qodo key in the agent (AUD-
   });
 });
 
-describe("the review broker: nothing the agent sends can stall or stop the runner (Qodo on PR 270)", () => {
+describe("the review broker: nothing the agent sends can stall or stop the runner", () => {
   const root = () => mkdtempSync(join(tmpdir(), "ff-broker2-"));
   const broker = (dir: string, run: (argv: string[], cwd: string) => Promise<{ exitCode: number; output: string }>) => {
     const b = reviewBroker({
@@ -148,7 +148,7 @@ describe("the review broker: nothing the agent sends can stall or stop the runne
     return b;
   };
 
-  it("refuses a wait longer than a round, such as 1e308 minutes", () => {
+  it("refuses a wait longer than one review's, such as 1e308 minutes", () => {
     expect(cleanArgs(["target", "9", "--timeout", "1e308"])).toBeNull();
     expect(cleanArgs(["target", "9", "--timeout", "31"])).toBeNull();
     expect(cleanArgs(["target", "9", "--timeout", "9"])).not.toBeNull();
@@ -170,7 +170,7 @@ describe("the review broker: nothing the agent sends can stall or stop the runne
     ).resolves.toBeDefined();
   });
 
-  it("a zero exit with no saved review is no success: the round would have no evidence", async () => {
+  it("a zero exit with no saved review is no success: the review would have no evidence", async () => {
     const dir = root();
     const b = broker(dir, async () => ({ exitCode: 0, output: "complete\n" }));
     writeFileSync(join(b.dir, "x.request.json"), JSON.stringify({ argv: ["target", "9"] }));
@@ -199,7 +199,7 @@ describe("the review broker: nothing the agent sends can stall or stop the runne
   });
 });
 
-describe("the review broker: one request at a time, small requests, no links (Qodo on PR 270, round 2)", () => {
+describe("the review broker: one request at a time, small requests, no links", () => {
   const make = (run: (argv: string[], cwd: string) => Promise<{ exitCode: number; output: string }>) => {
     const dir = mkdtempSync(join(tmpdir(), "ff-broker3-"));
     const b = reviewBroker({
@@ -272,7 +272,7 @@ describe("the review broker: one request at a time, small requests, no links (Qo
   });
 });
 
-describe("the review broker: only the run's own repo, only regular files (Qodo on PR 270, round 3)", () => {
+describe("the review broker: only the run's own repo, only regular files", () => {
   const make = () => {
     const dir = mkdtempSync(join(tmpdir(), "ff-broker4-"));
     let runs = 0;

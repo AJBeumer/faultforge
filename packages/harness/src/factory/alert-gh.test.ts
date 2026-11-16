@@ -1,5 +1,5 @@
 /**
- * The alert's GitHub calls go through the shared `gh` wrapper (Qodo on PR 310): each has a time limit, a read that
+ * The alert's GitHub calls go through the shared `gh` wrapper: each has a time limit, a read that
  * fails transiently is tried again, and a write is called once. gh itself is stubbed.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ const transient = () => {
   throw Object.assign(new Error("gh failed"), { stderr: "HTTP 502: Bad Gateway" });
 };
 
-describe("the alert's gh calls (Qodo on PR 310)", () => {
+describe("the alert's gh calls", () => {
   beforeEach(() => {
     vi.mocked(execFileSync).mockReset();
     readRetry.pause = () => {};

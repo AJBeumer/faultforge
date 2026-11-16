@@ -24,7 +24,7 @@ function repo(): string {
   return dir;
 }
 
-describe("the git hooks and config of a checkout the agent could write (#335)", () => {
+describe("the git hooks and config of a checkout the agent could write", () => {
   it("changes when a hook is added or changed, or the config changes", () => {
     const dir = repo();
     const first = gitControlPrint(dir);
@@ -40,20 +40,17 @@ describe("the git hooks and config of a checkout the agent could write (#335)", 
   });
 
   // Windows keeps no executable bit; git there runs a hook by its name alone.
-  it.skipIf(process.platform === "win32")(
-    "changes when a hook that was off is made executable (Qodo on PR 336)",
-    () => {
-      const dir = repo();
-      const hook = join(dir, ".git", "hooks", "pre-commit");
-      writeFileSync(hook, "#!/bin/sh\necho hi\n");
-      chmodSync(hook, 0o644);
-      const off = gitControlPrint(dir);
-      chmodSync(hook, 0o755);
-      expect(gitControlPrint(dir)).not.toBe(off);
-    },
-  );
+  it.skipIf(process.platform === "win32")("changes when a hook that was off is made executable", () => {
+    const dir = repo();
+    const hook = join(dir, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\necho hi\n");
+    chmodSync(hook, 0o644);
+    const off = gitControlPrint(dir);
+    chmodSync(hook, 0o755);
+    expect(gitControlPrint(dir)).not.toBe(off);
+  });
 
-  it("changes when a file the config includes changes, however deep (Qodo on PR 336)", () => {
+  it("changes when a file the config includes changes, however deep", () => {
     const dir = repo();
     const outside = mkdtempSync(join(tmpdir(), "git-control-inc-"));
     writeFileSync(join(outside, "a.cfg"), `[include]\n\tpath = b.cfg\n`);

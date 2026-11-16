@@ -20,7 +20,7 @@ const factory = loadFactory(join(LAB, "factory.json"));
 const labConfig = factory.repos.faultforge?.checkFiles;
 const targetConfig = factory.repos.target?.checkFiles;
 
-describe("factory.json names the files that decide the check (#341)", () => {
+describe("factory.json names the files that decide the check", () => {
   it("has a checkFiles setting for every repo, and the schema requires it", () => {
     for (const repo of Object.values(factory.repos)) expect(repo.checkFiles).toBeDefined();
     const raw = JSON.parse(readFileSync(join(LAB, "factory.json"), "utf8"));
@@ -60,7 +60,7 @@ describe("factory.json names the files that decide the check (#341)", () => {
   });
 });
 
-describe("the lab's list keeps up with the check's own code (Qodo on PR 342)", () => {
+describe("the lab's list keeps up with the check's own code", () => {
   /** Relative `.ts` imports of `file`, static or dynamic, as repo-relative paths. */
   const imports = (file: string) =>
     [...readFileSync(join(LAB, file), "utf8").matchAll(/(?:from |import\()"(\.{1,2}\/[^"]+\.ts)"/g)].map((m) =>
@@ -279,7 +279,7 @@ describe("readCheckFiles: the runner's own diff between the base and the PR's he
     expect(read(5)).toMatchObject({ changed: [] });
   });
 
-  it("fails closed when a manifest is there but can't be read, never treating it as unchanged (Qodo on PR 342)", () => {
+  it("fails closed when a manifest is there but can't be read, never treating it as unchanged", () => {
     // Bigger than the output buffer of a git call, on both sides, with a changed script.
     const big = (check: string) => JSON.stringify({ ...PACKAGE, scripts: { check }, padding: "x".repeat(1_200_000) });
     sh(work, "checkout", "-q", "--detach", base);

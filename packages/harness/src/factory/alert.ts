@@ -1,5 +1,5 @@
 /**
- * Raises the lab's alert (#308): when CI on main fails, or a factory run ends with exit 2 or 3 or stops without
+ * Raises the lab's alert: when CI on main fails, or a factory run ends with exit 2 or 3 or stops without
  * reporting, one open issue labelled `alert` per kind says so. A later alert of the same kind comments on that
  * issue instead of opening another, so a run of failures is one issue, not a flood. Run by
  * `.github/workflows/alert.yml` with the lab's own GITHUB_TOKEN (issues: write, that job only), by plain node, from
@@ -21,7 +21,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gh as runGh } from "../shared/github.ts";
 
-/** The label every alert issue carries. */
 export const LABEL = "alert";
 
 interface Kind {
@@ -70,7 +69,6 @@ export function alertText(kind: string, outcome: string, env: NodeJS.ProcessEnv)
   return { title: known.title, body: [`Workflow: ${workflow}`, `Run: ${url}`, `Outcome: ${said}`].join("\n") };
 }
 
-/** The issue calls an alert needs. */
 export interface Issues {
   /** Open issues labelled `alert`: number and title. */
   openAlerts(): { number: number; title: string }[];
@@ -96,7 +94,7 @@ export function raise(alert: Alert, issues: Issues): { action: "commented" | "op
 }
 
 /**
- * `Issues` through the gh CLI, for one repo, by the shared wrapper (Qodo on PR 310): every call has its time
+ * `Issues` through the gh CLI, for one repo, by the shared wrapper: every call has its time
  * limit, and a read that fails transiently is tried again, so a flaky moment does not swallow the alert.
  */
 export function ghIssues(repo: string, gh: (args: string[]) => string = (args) => runGh(...args)): Issues {

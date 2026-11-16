@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * `CLAUDE.md`'s module size rule: no module over 400 lines; one that grows past it is split along its seams
- * into named modules. The last exception, `factory-tick.ts`, was split (#109, AUD-N2), so there is none.
+ * into named modules. There are no exceptions.
  */
 const ROOT = join(import.meta.dirname, "../../../..");
 const LIMIT = 400;
@@ -20,7 +20,7 @@ function lineCount(path: string): number {
   return readFileSync(join(ROOT, path), "utf8").split("\n").length - 1;
 }
 
-describe("the module size rule (#199, #109)", () => {
+describe("the module size rule", () => {
   it("finds the modules it checks", () => {
     expect(sourceModules()).toContain("packages/harness/src/factory/factory-tick.ts");
   });

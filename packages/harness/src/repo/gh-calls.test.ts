@@ -5,11 +5,10 @@ import { SRC, sourceFiles } from "./sources.ts";
 
 /**
  * `gh repos/o/r/pulls` is not a command: `gh` prints its help text and exits non-zero. The REST endpoints
- * go through `gh api <path>`, and a refactor once dropped the `api` at one call site (#168). That call runs
- * only after an agent finishes, and no unit test reached it with real arguments, so this test reads the
- * sources instead: a REST path written as a string as the first argument of `gh(...)` or `ghJson(...)` fails
- * the build. That is the form that failed. A path held in a variable, or a call outside `packages/harness/src`,
- * is not caught: `ghApiJson` is the way to call an endpoint, and this test only backs that rule up.
+ * go through `gh api <path>`. Some such calls run only after an agent finishes, where no unit test reaches
+ * them, so this test reads the sources: a REST path written as a string as the first argument of `gh(...)` or
+ * `ghJson(...)` fails the build. A path held in a variable, or a call outside `packages/harness/src`, is not
+ * caught: `ghApiJson` is the way to call an endpoint, and this test only backs that rule up.
  */
 
 // gh( or ghJson( or ghJson<T>(, then a string whose text starts like a REST path.

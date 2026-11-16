@@ -1,7 +1,6 @@
 /**
- * Refuses public text that names a case before its verdict, or names a held-out case at all (#224, audit
- * M-24). The decision log's rules 1 and 2, checked instead of remembered: on 12 November a configuration
- * entry named an upcoming case while it was under review.
+ * Refuses public text that names a case before its verdict, or names a held-out case at all: the decision
+ * log's rules 1 and 2, checked instead of remembered, since an entry can easily name a case still under review.
  *
  *   npm run docs:check
  *
@@ -12,8 +11,8 @@
  * long as it isn't above the highest case there: such an id names a case before it exists, and only the
  * fixture ids (`FF-0099`, `FF-9000` to `FF-9999`) may do that.
  * Without private storage (CI) there is nothing to check against, so it says so and passes.
- * First, everywhere and CI included, it holds every Markdown file to the rules in `docs-check-structure.ts`
- * (#354): no page over 150 lines, every relative link resolves, and `docs/README.md` links every doc.
+ * First, everywhere and CI included, it holds every Markdown file to the rules in `docs-check-structure.ts`:
+ * no page over 150 lines, every relative link resolves, and `docs/README.md` links every doc.
  *
  * Exit codes: 0 nothing found, or no private storage to check against; 1 the docs fail a check (a Markdown
  * rule, or a public file names a case or template it may not), listed on stdout; 2 a file could not be read,
@@ -30,7 +29,7 @@ import { type MarkdownFile, markdownFiles, markdownProblems } from "./docs-check
 export interface DocsFacts {
   /** Case ids with a `case.adjudicated` event. */
   adjudicated: Set<string>;
-  /** Each case's template ids: every answer-key entry for it, so a duplicate can't hide one (Qodo on PR 232). */
+  /** Each case's template ids: every answer-key entry for it, so a duplicate can't hide one. */
   caseTemplates: Map<string, string[]>;
   /** Template ids in private storage, unreleased. */
   privateTemplates: string[];
@@ -69,7 +68,7 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
     // Any spelling the shared word list calls a case id (ff-0024, FF0024, FF 0024), as the answer key writes it.
     const matches = [...text.matchAll(/\bff([\s_-]?)(\d{3,})\b/gi)];
     const ids = matches.map((m) => `FF-${(m[2] as string).padStart(4, "0")}`);
-    // Any spelling but a colour or a hex number: `#ff5733` and `0xff5733` are not cases (Qodo on PR 264).
+    // Any spelling but a colour or a hex number: `#ff5733` and `0xff5733` are not cases.
     const separated = new Set(
       matches
         .filter((m) => !/[#x]$/i.test(text.slice(Math.max(0, (m.index ?? 0) - 1), m.index ?? 0)))
@@ -77,7 +76,7 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
     );
     for (const id of new Set(ids)) {
       // An id the answer key doesn't hold is an example or a fixture, unless it is above every case there:
-      // then it names a case that hasn't been planted yet, ahead of time (#244), unless it is a fixture id.
+      // then it names a case that hasn't been planted yet, unless it is a fixture id.
       if (!facts.caseTemplates.has(id)) {
         if (separated.has(id) && caseNumber(id) > highest && !isFixtureId(id)) {
           problems.push(`${path}: names ${id}, above the highest case in the answer key`);
@@ -99,7 +98,7 @@ export function docsProblems(files: { path: string; text: string }[], facts: Doc
 
 /**
  * README.md and every text file under docs/, relative to `root`: each file's working copy, and its staged copy
- * when that differs, since a commit records the index, not the working tree (Qodo on PR 232).
+ * when that differs, since a commit records the index, not the working tree.
  */
 export function publicFiles(root: string): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
@@ -165,7 +164,7 @@ export function main(): number {
   let structure: string[];
   try {
     markdown = markdownFiles(ROOT);
-    // The Markdown rules need no private storage, so they hold in CI too (#354), on the working tree and the index.
+    // The Markdown rules need no private storage, so they hold in CI too, on the working tree and the index.
     structure = markdownProblems(ROOT);
     facts = docsFacts(privateDir());
     files = publicFiles(ROOT);

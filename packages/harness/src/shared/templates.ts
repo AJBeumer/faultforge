@@ -61,7 +61,7 @@ export function templateProblems(template: unknown): string[] {
   });
 }
 
-/** True when `dir` is inside `templates/seed` itself, not a folder whose name only starts the same (Qodo on PR 222). */
+/** True when `dir` is inside `templates/seed` itself, not a folder whose name only starts the same. */
 export function isPublishedTemplate(dir: string): boolean {
   const inside = relative(resolve(ROOT, "templates", "seed"), resolve(dir));
   return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);

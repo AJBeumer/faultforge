@@ -78,7 +78,7 @@ describe("the verdict", () => {
     expect(verdict(files, run(["broken"]), run(["broken"]))).toMatchObject({ exit: 2 });
   });
 
-  it("can't judge (2) tests that only fail to load without the change: that shows an import, not a test (#217)", () => {
+  it("can't judge (2) tests that only fail to load without the change: that shows an import, not a test", () => {
     const loadOnly: TestRun = { ran: true, failed: [], loadFailed: ["/x/b.test.ts: SyntaxError"], passed: 0 };
     const outcome = verdict(files, run([]), loadOnly);
     expect(outcome.exit).toBe(2);
@@ -89,7 +89,7 @@ describe("the verdict", () => {
     const both: TestRun = { ran: true, failed: ["filters by status"], loadFailed: ["/x/b.test.ts: E"], passed: 0 };
     const outcome = verdict(files, run([]), both);
     expect(outcome).toMatchObject({ exit: 0, failedWithoutChange: ["filters by status"] });
-    // The record keeps the names, not just a count (Qodo on PR 219).
+    // The record keeps the names, not just a count.
     expect(outcome.message).toContain("/x/b.test.ts: E");
   });
 
@@ -179,7 +179,7 @@ describe("revertCheck on a real git repository", () => {
     expect(seen[1]).toMatchObject({ list: "export const filter = 'all';\n", added: false });
   });
 
-  it("in a sandbox, gives each run a copy of its own, with its own packages, shared before its tests (#335)", () => {
+  it("in a sandbox, gives each run a copy of its own, with its own packages, shared before its tests", () => {
     const { repo, base, head } = repoWithPr("test\n");
     const steps: string[] = [];
     const copies: string[] = [];
@@ -202,7 +202,7 @@ describe("revertCheck on a real git repository", () => {
     const run = (dir: string) => {
       steps.push("tests");
       const result = runTests(dir);
-      // What a test does to its own copy (here: deletes it) never reaches the next run's (Qodo on PR 336).
+      // What a test does to its own copy (here: deletes it) never reaches the next run's.
       rmSync(join(dir, "src"), { recursive: true, force: true });
       return result;
     };
@@ -216,7 +216,7 @@ describe("revertCheck on a real git repository", () => {
     expect(existsSync(join(repo, "node_modules", "pkg", "index.js"))).toBe(true);
   });
 
-  it("stops after the first run when a test file fails to load even with the change (Qodo on PR 219)", () => {
+  it("stops after the first run when a test file fails to load even with the change", () => {
     const { repo, base, head } = repoWithPr("test\n");
     let runs = 0;
     const loadsBadly = (): TestRun => {
@@ -230,8 +230,8 @@ describe("revertCheck on a real git repository", () => {
   });
 
   it("checks the base version out the same way as the head, line endings included", () => {
-    // First run on Windows: the head came out with CRLF and the restored base with LF, a difference
-    // that isn't the PR's change. Both now go through git's checkout.
+    // On Windows a hand-restored base could get LF while the head gets CRLF, a difference that isn't the
+    // PR's change, so both go through git's checkout.
     const { repo, base, head } = repoWithPr("test\n");
     sh(repo, "config", "core.autocrlf", "true");
     revertCheck({ repo, base, head, tests: TESTS, runTests, temp: root });
@@ -278,7 +278,7 @@ describe("revertCheck on a real git repository", () => {
     expect(outcome.exit).toBe(1);
   });
 
-  it("puts back a code file whose name git would quote (Qodo on PR 100)", () => {
+  it("puts back a code file whose name git would quote", () => {
     const { repo, base } = repoWithPr("test\n");
     sh(repo, "config", "core.quotePath", "true");
     // Only these files: the helper's stand-in node_modules and work in progress stay uncommitted.
@@ -319,7 +319,7 @@ describe("revertCheck on a real git repository", () => {
   });
 });
 
-describe("review findings on PR 100", () => {
+describe("quoted names, dependency changes and the test runner's report", () => {
   it("reads git's -z output, so a name git would quote stays as it is", () => {
     // Without -z, git prints "src/caf\303\251.ts" in quotes; -z keeps the real name.
     expect(parseNameStatus("M\0src/café.ts\0A\0test/a b.test.ts\0")).toEqual([
@@ -368,7 +368,7 @@ describe("review findings on PR 100", () => {
   });
 });
 
-describe("a package.json change that isn't a dependency change (#130)", () => {
+describe("a package.json change that isn't a dependency change", () => {
   const manifest = (extra: object) =>
     JSON.stringify({ name: "x", version: "1.0.0", scripts: { check: "tsc" }, ...extra });
   const texts = (base: string | null, head: string | null) => () => ({ base, head });
@@ -411,7 +411,7 @@ describe("a package.json change that isn't a dependency change (#130)", () => {
     expect(dependencySectionsChanged(manifest({}), "[]")).toEqual([...DEPENDENCY_SECTIONS]);
   });
 
-  it("counts every field that decides what gets installed, not only the four dependency maps (PR 138 review)", () => {
+  it("counts every field that decides what gets installed, not only the four dependency maps", () => {
     const base = manifest({ dependencies: { a: "1" } });
     expect(dependencySectionsChanged(base, manifest({ dependencies: { a: "1" }, overrides: { b: "2" } }))).toEqual([
       "overrides",

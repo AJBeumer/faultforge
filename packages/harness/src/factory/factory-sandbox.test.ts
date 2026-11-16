@@ -24,7 +24,7 @@ import { SANDBOX_HOME, SANDBOX_USER, type Sh } from "./factory-sandbox-setup.ts"
 const root = join(import.meta.dirname, "../../../..");
 const raw = () => JSON.parse(readFileSync(join(root, "factory.json"), "utf8"));
 
-describe("the allow-list in factory.json (#330)", () => {
+describe("the allow-list in factory.json", () => {
   it("is exactly the hosts a run needs: a new one is a reviewed change to factory.json and to this test", () => {
     expect(allowList(loadFactory())).toEqual([
       "api.anthropic.com",
@@ -184,7 +184,7 @@ describe("the egress proxy", () => {
     expect(PROXY_LIMITS).toEqual({ headBytes: 8192, headMs: 30_000, connections: 256 });
   });
 
-  it("refuses a request head over the size limit, before keeping it (Qodo on PR 334)", async () => {
+  it("refuses a request head over the size limit, before keeping it", async () => {
     const { proxy: p, refused } = await proxy(["localhost"], undefined, { ...PROXY_LIMITS, headBytes: 100 });
     expect(await ask(p.port, `CONNECT localhost:443 HTTP/1.1\r\nX: ${"a".repeat(200)}`)).toMatch(/^HTTP\/1\.1 403/);
     expect(refused).toEqual(["(request head too long)"]);

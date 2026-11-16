@@ -22,7 +22,7 @@ const RUNNER = {
 };
 const RUN = { FAULTFORGE_FACTORY_RUN: "r1", FAULTFORGE_RUN_ROOT: "/runs/r1" };
 
-describe("agentEnv: the agent gets an allow-list, not the runner's environment (AUD-H2, #243)", () => {
+describe("agentEnv: the agent gets an allow-list, not the runner's environment", () => {
   it("keeps the system's paths, locale, home and temp folders, and the run's own values", () => {
     const { env } = agentEnv(RUNNER, RUN);
     for (const name of ["PATH", "HOME", "TEMP", "LANG", "LC_ALL", "FAULTFORGE_FACTORY_RUN"])
@@ -30,13 +30,13 @@ describe("agentEnv: the agent gets an allow-list, not the runner's environment (
     expect(env.FAULTFORGE_RUN_ROOT).toBe("/runs/r1");
   });
 
-  it("turns Glob's --no-ignore off, so a Glob from the checkout skips the git-ignored private worktree (#299)", () => {
+  it("turns Glob's --no-ignore off, so a Glob from the checkout skips the git-ignored private worktree", () => {
     expect(agentEnv({ ...RUNNER, CLAUDE_CODE_GLOB_NO_IGNORE: "true" }, RUN).env.CLAUDE_CODE_GLOB_NO_IGNORE).toBe(
       "false",
     );
   });
 
-  it("passes only the listed FAULTFORGE_* variables, never the runner's own by prefix (AUD-H2, re-grade)", () => {
+  it("passes only the listed FAULTFORGE_* variables, never the runner's own by prefix", () => {
     const runner = {
       ...RUNNER,
       FAULTFORGE_PRIVATE_DIR: "/owner/private",
@@ -88,7 +88,7 @@ describe("agentEnv: the agent gets an allow-list, not the runner's environment (
     expect(result.warning).toBeUndefined();
   });
 
-  it("without FAULTFORGE_AGENT_TOKEN keeps the runner's GH_TOKEN, as before, and says so", () => {
+  it("without FAULTFORGE_AGENT_TOKEN keeps the runner's GH_TOKEN, and says so", () => {
     const result = agentEnv(RUNNER, RUN);
     expect(result.env.GH_TOKEN).toBe("runner-token-1234");
     expect(result.agentToken).toBe(false);

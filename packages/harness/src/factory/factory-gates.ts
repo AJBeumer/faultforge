@@ -1,5 +1,5 @@
 /**
- * Owner gates the factory runner decides for itself, whatever the agent reports (#215).
+ * Owner gates the factory runner decides for itself, whatever the agent reports.
  *
  * A pull request that changes the reviewer's own rules or configuration in a reviewed repository can't be
  * merged as ordinary work: Qodo reads those files as review rules, and results are only comparable under
@@ -30,8 +30,7 @@ export function reviewerRuleGates(pages: unknown): string[] {
       "the runner couldn't read every changed file's name, so it can't rule out a change to the reviewer's rules",
     ];
   }
-  // GitHub's files endpoint stops at 3,000 files: a list that long may be cut off, so a rule file could be
-  // past its end (Qodo on PR 220).
+  // A list this long may be cut off, so a rule file could be past its end.
   if (files.length >= MAX_LISTED_FILES) {
     return [
       `the pull request lists ${MAX_LISTED_FILES} or more changed files, more than GitHub returns in full, so the runner can't rule out a change to the reviewer's rules`,
@@ -46,7 +45,7 @@ export function reviewerRuleGates(pages: unknown): string[] {
   return rules.length
     ? [
         // The names reach a ticket comment: only plain path characters survive, in code spans, so a file name
-        // can't become a mention or a link (Qodo on PR 220).
+        // can't become a mention or a link.
         `it changes the reviewer's rules (${rules.map((r) => `\`${r.replace(/[^\w./-]/g, "?")}\``).join(", ")}): the owner records a new configuration version before it merges`,
       ]
     : [];

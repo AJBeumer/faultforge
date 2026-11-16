@@ -1,16 +1,14 @@
 /**
- * A fresh checkout of the harness's `main`, with no inherited git or npm config, that the runner verifies a
- * pull request from instead of the agent's own worktree (#161). Split from factory-tick.ts (#227).
+ * A fresh checkout of the harness's `main`, with no inherited git or npm config. The runner verifies a pull
+ * request from it, never from the agent's own worktree, which the agent could have changed.
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CALL_TIMEOUT_MS, runExternal } from "../shared/github.ts";
 import { LONG_CALL_TIMEOUT_MS, npm } from "./factory-exec.ts";
 
-/** No inherited git or npm config at all: not the user's global `~/.gitconfig` or `~/.npmrc`, not
- * system-wide config either. `buildTrustedCheckout`'s whole point is a checkout nothing the agent did
- * can redirect; a `url.*.insteadOf` rule or a registry override, sitting outside any commit a reviewer
- * sees, would otherwise do exactly that even to a literal URL (Qodo on PR 167, round 2). */
+/** No global, user or system git and npm config: a `url.*.insteadOf` rule or a registry override sits
+ * outside any commit a reviewer sees, and could redirect even a literal URL. */
 function isolatedEnv(home: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1" };
 }
@@ -24,30 +22,18 @@ export function gitIsolated(cwd: string, home: string, args: string[], timeoutMs
 }
 
 /**
- * A freshly initialized git repository, checked out at `remoteUrl`'s `main`, built at
- * `<verifyRoot>/<labDirName>`: the trusted copy of the harness `verifyPr` runs `revert:check` from, so
- * a pull request that edits `revert-check.ts` or a module it imports is judged by what's merged into
- * `main`, never by what that same pull request's own branch holds in the agent's writable worktree
- * (#161).
+ * A new repository at `<verifyRoot>/<labDirName>`, checked out at `remoteUrl`'s `main`, that `verifyPr` runs
+ * `revert:check` from. A pull request that edits `revert-check.ts` is then judged by the merged code, not its own.
  *
- * A fresh `git init`, not a worktree of some existing checkout: that checkout's own local config
- * (`.git/config`) could carry a `url.*.insteadOf` rule an agent set without ever touching a tracked
- * file, silently redirecting even this literal `remoteUrl` to an attacker-controlled `main`. A brand
- * new repository, run with no inherited git or npm config at all (`isolatedEnv`), has nothing like
- * that to inherit (Qodo on PR 167, round 2). `remoteUrl` itself comes from the caller's own
- * `factory.json` reading, a tracked file any edit to would show up in the pull request's own diff
- * (Qodo on PR 167). Its packages are a real `npm ci` against the checked-out lockfile, never shared in
- * from some other checkout's own `node_modules`: that folder is never part of any commit a reviewer
- * sees, so an agent's edit to an installed dependency (`tsx`, a module `revert-check.ts` imports)
- * would otherwise run as if it were trusted, even though the source it was fetched alongside never
- * was (Qodo on PR 167). When `sibling` is given (a repo whose `factory.json` path isn't `.`, such as
- * the target), its `main` is checked out fresh the same way, from its own address, at the same relative
- * path, so `revert-check.ts`'s own path arithmetic finds it exactly as it would in the agent's worktree.
- * Never a link to the agent's checkout of it: its `.git` (hooks, filters, `core.fsmonitor`) is the agent's
- * to write, and git would obey it when `revert:check` fetches and checks files out there (#335).
+ * - A fresh `git init`, not a worktree: an existing checkout's `.git/config` can hold a redirect rule that no
+ *   tracked file shows.
+ * - `remoteUrl` comes from `factory.json`, so any change to it shows in the pull request's diff.
+ * - A real `npm ci`, never another checkout's `node_modules`: that folder is in no commit, so an edited
+ *   dependency would run as if trusted.
+ * - `sibling` (a repo whose path isn't `.`, such as the target) is checked out fresh the same way at the same
+ *   relative path, never linked: the agent can write its `.git` hooks and filters, and git would run them.
  *
- * Throws, with a clear message, when the checkout can't be built - removing anything already made
- * first, so a failure here never leaves anything behind to clean up by hand.
+ * Throws a clear message if it can't be built, after removing anything it made.
  */
 export function buildTrustedCheckout(
   verifyRoot: string,
@@ -71,9 +57,8 @@ export function buildTrustedCheckout(
 function freshCheckout(dir: string, home: string, remoteUrl: string): void {
   mkdirSync(dir, { recursive: true });
   gitIsolated(dir, home, ["init", "-q"], CALL_TIMEOUT_MS);
-  // A real "origin", not just a one-off fetch URL: `revert-check.ts`'s own logic fetches a pull
-  // request's branch from "origin" by name when the repo under test is this very checkout (a
-  // pull request against the harness itself, exactly like this one).
+  // A named "origin", not a one-off fetch URL: `revert-check.ts` fetches a pull request's branch from
+  // "origin" by name when the pull request is against the harness itself.
   gitIsolated(dir, home, ["remote", "add", "origin", remoteUrl], CALL_TIMEOUT_MS);
   gitIsolated(dir, home, ["fetch", "--quiet", "origin", "main"], LONG_CALL_TIMEOUT_MS);
   gitIsolated(dir, home, ["checkout", "-q", "FETCH_HEAD"], CALL_TIMEOUT_MS);
@@ -81,11 +66,7 @@ function freshCheckout(dir: string, home: string, remoteUrl: string): void {
   if (install.status !== 0) throw new Error(`npm ci failed in the trusted checkout: ${install.output.slice(-400)}`);
 }
 
-/**
- * Removes a checkout `buildTrustedCheckout` made: `verifyRoot` and everything in it. There's no shared
- * repository to deregister from - the checkout is its own freshly initialized one - so this is just a
- * removal. Never throws; the message describes what to remove by hand instead.
- */
+/** Removes `verifyRoot` and everything in it. Never throws: it returns what to remove by hand instead. */
 export function removeTrustedCheckout(verifyRoot: string): string | null {
   try {
     rmSync(verifyRoot, { recursive: true, force: true });

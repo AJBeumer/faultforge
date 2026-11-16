@@ -1,13 +1,13 @@
 /**
  * Ending the agent's process tree: when its time limit is hit, when the runner itself is stopped, and when a
- * later tick finds the runner gone but its agent still running (AUD-M19). Split from factory-agent.ts.
+ * later tick finds the runner gone but its agent still running.
  */
 import { spawnSync } from "node:child_process";
 
 /**
- * Kills a process and its children. A process already gone is no crash (audit N-12); any other failure
- * throws, so a caller never takes a kill that didn't happen for one that did (Qodo on PR 268). On Windows
- * `taskkill` answers 128 for a process that isn't there.
+ * Kills a process and its children. A process already gone is no crash; any other failure throws, so a caller
+ * never takes a kill that didn't happen for one that did. On Windows `taskkill` answers 128 for a process that
+ * isn't there.
  */
 export function killTree(
   pid: number,
@@ -45,13 +45,10 @@ export interface ProcessLike {
 }
 
 /**
- * While the agent runs, stopping the runner stops the agent too. Without this, killing the runner left the
- * agent running with the owner's token and no time limit, since the limit is a timer inside the runner
- * (AUD-M19). On a stop signal the agent's tree is killed and the runner exits as that signal would have
- * made it; on a normal exit of the runner the tree is killed as well. A kill the runner can't catch
- * (`kill -9`, a power cut) is covered by the lock instead: it records the agent's pid, and the next tick
- * that takes the lock over kills that tree first (`factory-lock.ts`). Returns the function that removes the
- * handlers once the agent has ended on its own.
+ * While the agent runs, stopping the runner stops the agent too: the time limit is a timer inside the runner, so
+ * otherwise the agent would run on with the owner's token and no limit. A kill the runner can't catch (`kill -9`,
+ * a power cut) is covered by the lock, whose next holder kills the recorded agent first (`factory-lock.ts`).
+ * Returns the function that removes the handlers once the agent has ended on its own.
  */
 export function killOnExit(
   pid: number,

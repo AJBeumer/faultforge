@@ -14,7 +14,7 @@ export function readyCandidates(factory: FactoryConfig, deps: Pick<TickDeps, "la
   const candidates: Candidate[] = [];
   for (const [repoKey, repo] of Object.entries(factory.repos)) {
     // Still agent-working after recovery: a live run's, here or in the other mode, even with a leftover
-    // ready-for-agent beside it. Never picked again (Qodo on PR 268).
+    // ready-for-agent beside it. Never picked again.
     const busy = new Set(deps.labelled(repo.github, LABELS.working).map((t) => t.number));
     for (const issue of deps.labelled(repo.github, LABELS.ready)) {
       if (busy.has(issue.number)) continue;

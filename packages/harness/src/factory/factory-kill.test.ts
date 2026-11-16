@@ -16,7 +16,7 @@ function fakeProcess() {
   return { proc, emitter, exits };
 }
 
-describe("killOnExit: killing the runner kills the agent's tree (AUD-M19)", () => {
+describe("killOnExit: killing the runner kills the agent's tree", () => {
   for (const [signal, code] of [
     ["SIGTERM", 143],
     ["SIGINT", 130],
@@ -67,7 +67,7 @@ describe("killOnExit: killing the runner kills the agent's tree (AUD-M19)", () =
   });
 });
 
-describe("killTree on Windows: a failed taskkill is a failure (Qodo on PR 268)", () => {
+describe("killTree on Windows: a failed taskkill is a failure", () => {
   it.skipIf(process.platform !== "win32")("passes a refused kill on, and takes 'not found' as already gone", () => {
     expect(() => killTree(4242, process.kill, () => ({ status: 1, stderr: "Access is denied." }))).toThrow(
       /taskkill couldn't end pid 4242 \(exit 1\): Access is denied/,

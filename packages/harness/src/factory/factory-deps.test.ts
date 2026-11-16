@@ -46,7 +46,7 @@ vi.mock("../guard/guard-install.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../guard/guard-install.ts")>()),
   unguardedCheckouts: vi.fn(() => ["faultforge-target: no guard hooks"]),
 }));
-// The door runs for real, every check included, but sends with this fake gh: never the real one (#345).
+// The door runs for real, every check included, but sends with this fake gh: never the real one.
 /** Every call the door made, and the error each next call throws (`null` or none: it works). */
 const door = vi.hoisted(() => ({ calls: [] as { args: string[]; input?: string }[], fail: [] as (Error | null)[] }));
 vi.mock("../door/target-post.ts", async (importOriginal) => {
@@ -55,7 +55,7 @@ vi.mock("../door/target-post.ts", async (importOriginal) => {
     ...real,
     sendPost: vi.fn((post: import("../door/target-post.ts").Post, deps: import("../door/target-post.ts").Deps = {}) =>
       real.sendPost(post, {
-        // With this fake gh the gate reads the test's run marker, never the machine's (#347).
+        // With this fake gh the gate reads the test's run marker, never the machine's.
         runMarker: runMarker.path,
         ...deps,
         gh: (args, input) => {
@@ -68,7 +68,7 @@ vi.mock("../door/target-post.ts", async (importOriginal) => {
     ),
   };
 });
-// The runner marks its runs in a file of this test's own, never the machine's fixed marker (#347).
+// The runner marks its runs in a file of this test's own, never the machine's fixed marker.
 const runMarker = vi.hoisted(() => ({ path: "" }));
 vi.mock("../door/target-post-run.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("../door/target-post-run.ts")>();
@@ -81,9 +81,9 @@ vi.mock("../tickets/ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../tickets/ticket-ready.ts")>()),
   checkTicket: vi.fn(() => ({ title: "t", problems: [] })),
 }));
-// The lab root realDeps sees, so a test can stand in for a checkout with no private folder beside it. On the
-// owner's machine `<lab>/private` exists, and in CI it doesn't; a test that depends on which made the local
-// check red while CI stayed green (re-grade of 14 November). Unset, it is the real root.
+// The lab root realDeps sees, so a test can stand in for a checkout with no private folder beside it.
+// `<lab>/private` exists on the owner's machine and not in CI, so a test must not depend on which. Unset, it is
+// the real root.
 const labRoot = vi.hoisted(() => ({ override: undefined as string | undefined }));
 vi.mock("../shared/paths.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("../shared/paths.ts")>();
@@ -114,7 +114,7 @@ import { type Candidate, setupRefusal, type TickDeps, type Workspace } from "./f
 import { verifyPrWith } from "./factory-verify.ts";
 import { GIT_CONTROL, gitControlPrint } from "./git-control.ts";
 
-// A test that starts an agent marks a run for the door (#347) and never reaches the tick's end, which clears it.
+// A test that starts an agent marks a run for the door and never reaches the tick's end, which clears it.
 afterEach(() => rmSync(runMarker.path, { force: true }));
 
 const FACTORY: FactoryConfig = {
@@ -145,7 +145,7 @@ const FACTORY: FactoryConfig = {
 
 const OPTIONS = { minutes: 120, budget: 25 };
 
-describe("hooks-checked reaches the run's saved and published log (#126)", () => {
+describe("hooks-checked reaches the run's saved and published log", () => {
   const LAB = join(import.meta.dirname, "../../../..");
   it("the real log writer appends the event, whole, to the run's .jsonl file", () => {
     const dir = mkdtempSync(join(tmpdir(), "runs-hooks-"));
@@ -179,7 +179,7 @@ describe("hooks-checked reaches the run's saved and published log (#126)", () =>
   });
 });
 
-describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
+describe("realDeps: each step reaches the right call, on fakes", () => {
   let runs: string;
   let before: string | undefined;
 
@@ -260,7 +260,7 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     expect(readFileSync(file, "utf8")).toBe("# Filter\n");
   });
 
-  it("adds a lab ticket's new labels in one edit, then removes each old one on its own, ignoring a label already gone (AUD-M19)", () => {
+  it("adds a lab ticket's new labels in one edit, then removes each old one on its own, ignoring a label already gone", () => {
     vi.mocked(gh)
       .mockImplementationOnce(() => "")
       .mockImplementationOnce(() => {
@@ -280,7 +280,7 @@ describe("realDeps: each step reaches the right call, on fakes (#227)", () => {
     ]);
   });
 
-  it("comments on a lab ticket with gh issue comment, behind the runner's mark (AUD-M21)", () => {
+  it("comments on a lab ticket with gh issue comment, behind the runner's mark", () => {
     realDeps(FACTORY, OPTIONS).comment("owner/lab", 18, "Picked up.");
     expect(vi.mocked(gh)).toHaveBeenCalledWith(
       "issue",
@@ -295,7 +295,7 @@ Picked up.`,
     expect(door.calls).toEqual([]);
   });
 
-  describe("a reviewed repo's ticket is written through the door, never with raw gh (#345)", () => {
+  describe("a reviewed repo's ticket is written through the door, never with raw gh", () => {
     beforeEach(() => {
       door.calls = [];
       door.fail = [];
@@ -392,7 +392,7 @@ Picked up.`,
     );
   });
 
-  it("starts a CI run's agent through the network sandbox, and a PC run's without one (#330)", async () => {
+  it("starts a CI run's agent through the network sandbox, and a PC run's without one", async () => {
     const ws = workspace(join(runs, "run-1"));
     const log = () => {};
     const ok = { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
@@ -406,7 +406,7 @@ Picked up.`,
   });
 
   it.each(["local", "ci"] as const)(
-    "marks the run for the door before a %s agent starts; the runner's own writes still go; the tick's end clears it (#347)",
+    "marks the run for the door before a %s agent starts; the runner's own writes still go; the tick's end clears it",
     async (mode) => {
       const ws = workspace(join(runs, "run-1"));
       const events: string[] = [];
@@ -463,7 +463,7 @@ Picked up.`,
   });
 
   it.each(["local", "ci"] as const)(
-    "replaces a %s marker a killed run left as soon as the lock is taken, so recovery's writes still go (Qodo on PR 349)",
+    "replaces a %s marker a killed run left as soon as the lock is taken, so recovery's writes still go",
     (mode) => {
       writeFileSync(runMarker.path, "left by a killed run");
       const deps = realDeps(FACTORY, OPTIONS, mode);
@@ -485,7 +485,7 @@ Picked up.`,
     expect(call?.[0]).toEqual({ ghJson, git, npm: expect.any(Function) });
     expect(call?.slice(1, 3)).toEqual([FACTORY, runs]);
     expect(call?.[3]("owner/lab")).toBe("https://github.com/owner/lab.git");
-    // Locally, the tests run as the owner; in CI as the sandbox user (#335).
+    // Locally, the tests run as the owner; in CI as the sandbox user.
     expect(call?.slice(4)).toEqual([ws, "target", 19, false]);
   });
 
@@ -511,7 +511,7 @@ Picked up.`,
     );
   });
 
-  it("carries a target ticket's evidence folder into a worktree the runner makes after the agent (AUD-H2, #284)", () => {
+  it("carries a target ticket's evidence folder into a worktree the runner makes after the agent", () => {
     const ws = { ...workspace(join(runs, "run-t")), private: "" };
     const reviews = join(ws.lab, "private", "raw-artifacts", "reviews", "target-pr19");
     mkdirSync(reviews, { recursive: true });
@@ -525,7 +525,7 @@ Picked up.`,
       }
       return "";
     });
-    // The agent can write here: a forged run log must not stand in for the runner's (Qodo on PR 288).
+    // The agent can write here: a forged run log must not stand in for the runner's.
     mkdirSync(join(ws.lab, "private", "raw-artifacts", "factory-runs"), { recursive: true });
     writeFileSync(join(ws.lab, "private", "raw-artifacts", "factory-runs", "run-t.jsonl"), "forged\n");
     writeFileSync(join(runs, "run-t.jsonl"), "runner\n");
@@ -551,7 +551,7 @@ Picked up.`,
     expect(existsSync(ws.lab)).toBe(true);
   });
 
-  it("saves a target run's next copy through the worktree a failed push left, not a second branch (Qodo on PR 288)", () => {
+  it("saves a target run's next copy through the worktree a failed push left, not a second branch", () => {
     const ws = { ...workspace(join(runs, "run-u")), private: "" };
     const temp = join(runs, "run-u-evidence", "private");
     vi.mocked(gitLong).mockImplementation((_cwd, ...args) => {
@@ -572,7 +572,7 @@ Picked up.`,
     expect(vi.mocked(commitAndPublish)).toHaveBeenCalledTimes(2);
   });
 
-  it("never commits through a private checkout whose git hooks or config changed while the agent ran (#335)", () => {
+  it("never commits through a private checkout whose git hooks or config changed while the agent ran", () => {
     const ws = workspace(join(runs, "run-h"));
     writeFileSync(join(runs, "run-h.jsonl"), "{}\n");
     mkdirSync(join(ws.private, ".git", "hooks"), { recursive: true });
@@ -582,7 +582,7 @@ Picked up.`,
     expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
   });
 
-  it("in CI, never commits through the private checkout while a process of the agent's user is left (Qodo on PR 336)", () => {
+  it("in CI, never commits through the private checkout while a process of the agent's user is left", () => {
     const ws = workspace(join(runs, "run-l"));
     writeFileSync(join(runs, "run-l.jsonl"), "{}\n");
     mkdirSync(join(ws.private, ".git", "hooks"), { recursive: true });
@@ -609,14 +609,14 @@ Picked up.`,
     expect(vi.mocked(git)).not.toHaveBeenCalled();
   });
 
-  it("never saves through a private worktree that is gone: git would find the harness instead (Qodo on PR 262)", () => {
+  it("never saves through a private worktree that is gone: git would find the harness instead", () => {
     const ws = workspace(join(runs, "run-gone"));
     rmSync(ws.private, { recursive: true, force: true });
     expect(() => realDeps(FACTORY, OPTIONS).saveEvidence("run-gone", ws)).toThrow(/private worktree is gone/);
     expect(vi.mocked(commitAndPublish)).not.toHaveBeenCalled();
   });
 
-  it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself (#242)", () => {
+  it("a local tick refuses to start beside a reviewed checkout without the git-level guard; CI installs it itself", () => {
     expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual(["faultforge-target: no guard hooks"]);
     expect(vi.mocked(unguardedCheckouts)).toHaveBeenCalledWith(FACTORY, LAB_ROOT, join(LAB_ROOT, "private"));
     expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(
@@ -628,7 +628,7 @@ Picked up.`,
     expect(setupRefusal({ unguarded: () => [] })).toBeNull();
   });
 
-  it("says where guard:install writes when FAULTFORGE_PRIVATE_DIR moves it off the checkout the tick pushes (Qodo on PR 334)", () => {
+  it("says where guard:install writes when FAULTFORGE_PRIVATE_DIR moves it off the checkout the tick pushes", () => {
     const pushed = join(LAB_ROOT, "private");
     const problem = `${pushed} has no guard pre-push hook`;
     vi.stubEnv("FAULTFORGE_PRIVATE_DIR", join(tmpdir(), "elsewhere-private"));
@@ -646,7 +646,7 @@ Picked up.`,
     expect(realDeps(FACTORY, OPTIONS).unguarded?.()).toEqual([problem]);
   });
 
-  it("a local tick reports a private checkout without its pre-push hook before a run starts (PR 333)", async () => {
+  it("a local tick reports a private checkout without its pre-push hook before a run starts", async () => {
     // The wiring: the deps hand the private checkout over, and its problem refuses the tick.
     vi.mocked(unguardedCheckouts).mockReturnValueOnce(["private: no pre-push hook"]);
     expect(setupRefusal(realDeps(FACTORY, OPTIONS))).toMatch(/^factory:tick refused: private: no pre-push hook\./);
@@ -682,7 +682,7 @@ Picked up.`,
   });
 });
 
-describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo on PR 240)", () => {
+describe("realDeps: the workspace installs each repo's packages, on fakes", () => {
   let runs: string;
   let before: string | undefined;
 
@@ -743,7 +743,7 @@ describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo 
   const privateWorktreeAdds = () =>
     vi.mocked(gitLong).mock.calls.filter((c) => c[0] === join(LAB_ROOT, "private") && c[1] === "worktree");
 
-  it("gives a lab ticket's run a private worktree, and a target ticket's run none (AUD-H2, #284)", () => {
+  it("gives a lab ticket's run a private worktree, and a target ticket's run none", () => {
     const { lab } = layout("run-4", false);
     const labRun = realDeps(FACTORY, OPTIONS).workspace("run-4", "lab");
     expect(labRun.private).toBe(join(lab, "private"));
@@ -756,7 +756,7 @@ describe("realDeps: the workspace installs each repo's packages, on fakes (Qodo 
   });
 });
 
-describe("realDeps in CI: no private checkout where a target ticket's agent runs (AUD-H2, #284)", () => {
+describe("realDeps in CI: no private checkout where a target ticket's agent runs", () => {
   let runs: string;
   const saved = { ...process.env };
 
@@ -777,7 +777,7 @@ describe("realDeps in CI: no private checkout where a target ticket's agent runs
 
   const clones = () => vi.mocked(gitLong).mock.calls.filter((c) => c[1] === "clone");
 
-  it("keeps the clone a failed Qodo-state push still needs, and doesn't start a target ticket (Qodo on PR 288)", () => {
+  it("keeps the clone a failed Qodo-state push still needs, and doesn't start a target ticket", () => {
     for (const tree of [join(runs, "private-source"), join(runs, "qodo-check-r", "private")]) {
       mkdirSync(tree, { recursive: true });
       writeFileSync(join(tree, ".git"), "gitdir: x\n");

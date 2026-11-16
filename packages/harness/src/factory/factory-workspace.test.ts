@@ -105,12 +105,12 @@ describe("fingerprints: what the agent must not change", () => {
     expect(prints).toEqual({
       [`the run's guardrail files (${join(lab, ".claude")})`]: sha256("hooks/guard.ts\ndeny\nsettings.json\n{}"),
       "the run's guardrail file packages/harness/src/shared/neutral.ts": sha256("(missing)"),
-      // The door's run gate, whose kind list the policy hook reads (#347).
+      // The door's run gate, whose kind list the policy hook reads.
       "the run's guardrail file packages/harness/src/door/target-post-run.ts": sha256("(missing)"),
     });
   });
 
-  it("covers the giveaway word list the hooks import, outside .claude (AUD-M4, #284)", () => {
+  it("covers the giveaway word list the hooks import, outside .claude", () => {
     const lab = guarded({ "settings.json": "{}" });
     mkdirSync(join(lab, "packages", "harness", "src", "shared"), { recursive: true });
     writeFileSync(
@@ -128,7 +128,7 @@ describe("fingerprints: what the agent must not change", () => {
   it("lists every file outside .claude the hooks import", () => {
     const hooks = join(LAB_ROOT, ".claude", "hooks");
     const imported = new Set<string>();
-    // Every folder below, too: the hooks sit in folders by job (#355).
+    // Every folder below, too: the hooks sit in folders by job.
     const files = (readdirSync(hooks, { recursive: true }) as string[]).filter(
       (f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
     );
@@ -151,7 +151,7 @@ describe("fingerprints: what the agent must not change", () => {
     expect(fingerprints(FACTORY, "unused", "ci", lab)).not.toEqual(edited);
   });
 
-  it("prints the run's private checkout's git hooks and config, which the runner commits through after the agent (#335)", () => {
+  it("prints the run's private checkout's git hooks and config, which the runner commits through after the agent", () => {
     const lab = guarded({ "settings.json": "{}" });
     const priv = gitRepo({ "README.md": "private\n" });
     made.push(priv);
@@ -185,7 +185,7 @@ describe("fingerprints: what the agent must not change", () => {
   });
 });
 
-describe("samePath: one folder, however it is spelled (Windows CI on PR 240)", () => {
+describe("samePath: one folder, however it is spelled", () => {
   it("matches a folder against its real path and a differently cased drive letter", () => {
     const dir = mkdtempSync(join(tmpdir(), "same-path-"));
     expect(samePath(dir, realpathSync.native(dir))).toBe(true);

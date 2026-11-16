@@ -1,6 +1,6 @@
 /**
  * Runs a git command whose output can be any size and hands it back one line at a time, without ever holding
- * all of it (AUD-N6). `execFileSync` buffers the whole output under a fixed `maxBuffer` and `timeout`; a
+ * all of it. `execFileSync` buffers the whole output under a fixed `maxBuffer` and `timeout`; a
  * history that only grows will one day pass both. Here git writes to a temporary file and the file is read
  * in chunks (`LineReader`, which reads any file that way), so memory stays bounded by the longest line and
  * there is no size ceiling. Synchronous, so its callers stay synchronous.

@@ -1,5 +1,5 @@
 /**
- * A wait's time limit bounds its gh calls (Qodo on PR 310): with `callDeadline` set, a call's own time limit is cut
+ * A wait's time limit bounds its gh calls: with `callDeadline` set, a call's own time limit is cut
  * to what is left, a read is not tried again past it, and review:wait sets it for its waiting and clears it before
  * it saves its evidence. gh itself is stubbed.
  */
@@ -30,7 +30,7 @@ afterEach(() => {
 const timeoutOf = (call = 0) =>
   (vi.mocked(execFileSync).mock.calls[call]?.[2] as { timeout?: number } | undefined)?.timeout ?? -1;
 
-describe("gh under a deadline (Qodo on PR 310)", () => {
+describe("gh under a deadline", () => {
   it("keeps the shared time limit when no deadline is set", () => {
     vi.mocked(execFileSync).mockReturnValue("{}");
     gh("api", "repos/o/r");
@@ -62,7 +62,7 @@ describe("gh under a deadline (Qodo on PR 310)", () => {
   });
 });
 
-describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)", () => {
+describe("review:wait bounds its gh calls by its own time limit", () => {
   it("bounds its head reads by the limit, and no evidence read", async () => {
     const seen: { during?: number; saving?: number; suites?: number; feeds?: number } = {};
     const head = "a".repeat(40);
@@ -99,9 +99,9 @@ describe("review:wait bounds its gh calls by its own time limit (Qodo on PR 310)
     const before = Date.now();
     expect(await run({ repoKey: "target", pr: 1, timeoutMinutes: 1, commit: head }, deps)).toBe(1);
     expect(seen.during).toBeGreaterThanOrEqual(before + 60_000);
-    // The wait's own limit, with no grace beyond it (Qodo on PR 312).
+    // The wait's own limit, with no grace beyond it.
     expect(seen.during).toBeLessThanOrEqual(Date.now() + 60_000);
-    // Evidence reads keep their full time limit, so a review seen at the limit is still saved (Qodo on PR 312).
+    // Evidence reads keep their full time limit, so a review seen at the limit is still saved.
     expect(seen.saving).toBeUndefined();
     expect(seen.suites).toBeUndefined();
     expect(seen.feeds).toBeUndefined();

@@ -1,11 +1,9 @@
 /**
- * How the runner reaches the private repo, and where a target ticket's agent must not (AUD-H2, #284).
+ * How the runner reaches the private repo, and where a target ticket's agent must not.
  *
- * On the owner's PC the private repo is the checkout at `<lab>/private`. In CI no checkout exists until the
- * runner makes one: `factory.yml` no longer checks it out before the tick, so a target ticket's agent runs on
- * a VM with no private content on disk. The runner clones it into the runs folder for its own steps (Qodo's
- * state before the agent, the evidence after it) and removes the clone again; a lab ticket's run gets it at
- * `<lab>/private`, as before, because its agent saves evidence there.
+ * On the owner's PC the private repo is the checkout at `<lab>/private`. In CI nothing private is on disk
+ * while a target ticket's agent runs: the runner clones it into the runs folder for its own steps and removes
+ * the clone again. A lab ticket's run gets it at `<lab>/private`, because its agent saves evidence there.
  */
 import { cpSync, existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -43,11 +41,11 @@ export function isReviewedTicket(factory: FactoryConfig, repoKey: string): boole
  * The private checkouts an agent must not read, for its policy hook: the owner's (or the workflow's)
  * `<lab>/private`, the private folder the runner's environment names, the runner's own clone in the runs folder,
  * and in a lab ticket's run its own private worktree (`ownPrivate`), whose evidence the runner writes and
- * commits (#299). Every run gets them, a lab ticket's included: none of its agents reads the answer key.
+ * commits. Every run gets them, a lab ticket's included: none of its agents reads the answer key.
  */
 export function privateCheckoutsFor(runs: string, env: NodeJS.ProcessEnv = process.env, ownPrivate?: string): string[] {
   // The whole runs folder: the runner's clone, a Qodo-state worktree kept after a failed push, and other runs'
-  // leftovers all sit there (Qodo on PR 288). The run's own folder inside it stays its own.
+  // leftovers all sit there. The run's own folder inside it stays its own.
   const paths = [join(LAB_ROOT, "private"), runs];
   if (env.FAULTFORGE_PRIVATE_DIR) paths.push(resolve(env.FAULTFORGE_PRIVATE_DIR));
   if (ownPrivate) paths.push(resolve(ownPrivate));
@@ -55,8 +53,8 @@ export function privateCheckoutsFor(runs: string, env: NodeJS.ProcessEnv = proce
 }
 
 /**
- * Where a target ticket's guard hook finds the private template ids, so its posts are still checked for them
- * (AUD-H1; Qodo on PR 288): the owner's `<lab>/private` when it holds templates. The agent's policy keeps its
+ * Where a target ticket's guard hook finds the private template ids, so its posts are still checked for them:
+ * the owner's `<lab>/private` when it holds templates. The agent's policy keeps its
  * tools out of that folder. In CI there is none: nothing private is on disk, so no id can be learned there.
  * Undefined for a lab ticket, whose guard reads its own `private/` worktree.
  */

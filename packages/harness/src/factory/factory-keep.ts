@@ -1,7 +1,7 @@
 /**
  * Keeps the logs of a CI factory run that never saved them itself: a job cancelled or timed out mid-run, or
- * a tick that crashed before its last copy. The workflow runs it in an `if: always()` step after the tick
- * (AUD-M19), so the transcript, the record a stopped run needs most, is no longer lost with the VM.
+ * a tick that crashed before its last copy. The workflow runs it in an `if: always()` step after the tick,
+ * so the transcript, the record a stopped run needs most, isn't lost with the VM.
  *
  *   npm run factory:keep -- --branch unsaved-<Actions run id>
  *

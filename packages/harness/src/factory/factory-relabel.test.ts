@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ExternalCallError } from "../shared/github.ts";
 import { isLabelAlreadyGone, relabelWith } from "./factory-relabel.ts";
 
-describe("isLabelAlreadyGone (#107)", () => {
+describe("isLabelAlreadyGone", () => {
   it("swallows only gh's own 404 for a label that was never on the issue", () => {
     const gone = new ExternalCallError("gh api", {
       stderr: "gh: HTTP 404: Label does not exist (https://api.github.com/repos/o/r/issues/1/labels/x)\n",
@@ -23,7 +23,7 @@ describe("isLabelAlreadyGone (#107)", () => {
   });
 });
 
-describe("relabelWith (#107, Qodo on PR 123)", () => {
+describe("relabelWith", () => {
   it("always adds, even when every removal failed, and reports nothing when it was just a missing label", () => {
     const added: string[][] = [];
     const gone = () => {
@@ -95,7 +95,7 @@ function labelsOn(start: string[], fail: { add?: boolean; remove?: boolean } = {
   };
 }
 
-describe("relabelWith: add before remove, so a ticket never ends with no factory label (AUD-M19)", () => {
+describe("relabelWith: add before remove, so a ticket never ends with no factory label", () => {
   it("a failed add leaves the old label in place and removes nothing", () => {
     const t = labelsOn(["ready-for-agent"], { add: true });
     const result = relabelWith(["ready-for-agent"], ["agent-working"], t.removeOne, t.addAll);

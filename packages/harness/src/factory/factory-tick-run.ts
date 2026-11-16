@@ -48,7 +48,7 @@ export async function runOnTicket(run: ClaimedRun): Promise<AgentOutcome> {
   const late = provenanceProblems(snapshot.provenance, owner);
   if (late.length) throw new RunnerStop(`the ticket changed before the run started: ${late.join("; ")}`);
   // A retried ticket continues the pull request an earlier run left open, rather than open a second.
-  // Only a hint: a lookup that fails is logged and the run goes on without it (Qodo on PR 268).
+  // Only a hint: a lookup that fails is logged and the run goes on without it.
   let found: string[] = [];
   try {
     found = deps.openPrs?.(pick.github, pick.number) ?? [];
@@ -96,7 +96,7 @@ export function checkRun(run: ClaimedRun, outcome: AgentOutcome, minutes: number
         revertCheckRecord: verification.revertCheckRecord ?? null,
       });
       // Then the files that decide the check, compared by the runner itself at the commit it just verified,
-      // before the PR can count (#341). GitHub's PR ref can lag a push, so the verified commit comes first.
+      // before the PR can count. GitHub's PR ref can lag a push, so the verified commit comes first.
       const weakened = checkFilesProblems(deps, ws, pick, pr, verification.head, owner, outcome.from, log);
       return { ...verification, problems: [...weakened, ...verification.problems] };
     },

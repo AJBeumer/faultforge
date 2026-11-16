@@ -1,5 +1,5 @@
 /**
- * What every record and audit event says about how it was made, in one place (AUD-N1): the tool's name and
+ * What every record and audit event says about how it was made, in one place: the tool's name and
  * version, and the content hash used for `inputHash`, proof-test pins and published records.
  */
 import { createHash } from "node:crypto";

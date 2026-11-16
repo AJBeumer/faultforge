@@ -8,7 +8,7 @@
  * base commit and fails on the variant with a test that ran and failed (a proof that fails to load proves
  * nothing). A control counts as validated only if every proof in the corpus (every bug template's, private
  * and seed) passes on the base commit and still passes on the variant: a change that breaks a known
- * invariant is a real bug, not a control (AUD-M8). Either way the variant must typecheck, with the target's
+ * invariant is a real bug, not a control. Either way the variant must typecheck, with the target's
  * `tsconfig.test.json` when it has one (what its own check compiles), else `tsconfig.json`, and its public
  * tests must run (and pass, for a control). Ledger entry, audit event and raw artefacts go to private
  * storage, which never enters the target repository.

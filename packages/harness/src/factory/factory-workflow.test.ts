@@ -33,7 +33,7 @@ describe("factory workflow", () => {
     expect(workflow).not.toMatch(/github\.event_name != /);
   });
 
-  it("runs one tick at a time without cancelling one in progress, queued on the job, not the workflow (audit N-5)", () => {
+  it("runs one tick at a time without cancelling one in progress, queued on the job, not the workflow", () => {
     const top = workflow.slice(0, workflow.indexOf("\njobs:"));
     expect(top).not.toMatch(/^concurrency:/m);
     const tick = workflow.slice(workflow.indexOf("name: Factory tick"));
@@ -47,11 +47,11 @@ describe("factory workflow", () => {
     expect(job).toBeGreaterThanOrEqual(minutes + 45);
   });
 
-  it("starts a tick when a ticket is left agent-working, so an interrupted run is recovered (#197)", () => {
+  it("starts a tick when a ticket is left agent-working, so an interrupted run is recovered", () => {
     expect(workflow).toMatch(/for label in ready-for-agent agent-working; do/);
   });
 
-  it("doesn't count a ticket a run on the owner's PC claimed and that shows no result yet (Qodo on PR 268)", () => {
+  it("doesn't count a ticket a run on the owner's PC claimed and that shows no result yet", () => {
     // The look job reads the same mark the claim comment carries.
     expect(claimMarker("local")).toBe("<!-- scheduled-run claim mode=local -->");
     expect(workflow).toContain('capture(\\"<!-- scheduled-run claim mode=(?<m>ci|local) -->\\").m');
@@ -87,14 +87,14 @@ describe("factory workflow", () => {
     expect(jobEnv).not.toContain("runner.");
   });
 
-  it("keeps no token on disk: every checkout sets persist-credentials: false, and git pushes through gh (#103)", () => {
+  it("keeps no token on disk: every checkout sets persist-credentials: false, and git pushes through gh", () => {
     const steps = workflow.split(/\n {6}- /).filter((step) => step.includes("actions/checkout@"));
     expect(steps.length).toBeGreaterThanOrEqual(3);
     for (const step of steps) expect(step).toContain("persist-credentials: false");
     expect(workflow).toContain("gh auth setup-git");
   });
 
-  it("gives secrets to the steps that need them, never to the whole job (#103)", () => {
+  it("gives secrets to the steps that need them, never to the whole job", () => {
     expect(workflow).not.toMatch(/name: Factory tick[\s\S]*?\n {4}env:/);
     const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
     for (const secret of ["FACTORY_GH_TOKEN", "QODO_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])
@@ -103,7 +103,7 @@ describe("factory workflow", () => {
     expect(install).not.toContain("secrets.");
   });
 
-  it("keeps a cancelled or crashed run's transcript: an always() step after the tick pushes it to private storage (AUD-M19)", () => {
+  it("keeps a cancelled or crashed run's transcript: an always() step after the tick pushes it to private storage", () => {
     const steps = workflow.split(/\n {6}- /);
     const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
     const keep = steps.findIndex((step) => step.includes("npm run -s factory:keep"));
@@ -118,7 +118,7 @@ describe("factory workflow", () => {
     expect(artifact).toContain("!${{ runner.temp }}/faultforge-runs/*.agent.jsonl");
   });
 
-  it("stops the tick step before the job's own limit, so the keep step still runs, on a branch per attempt (Qodo on PR 268)", () => {
+  it("stops the tick step before the job's own limit, so the keep step still runs, on a branch per attempt", () => {
     const steps = workflow.split(/\n {6}- /);
     const tick = steps.find((step) => step.startsWith("name: Run one tick")) ?? "";
     const stepLimit = Number(tick.match(/\n {8}timeout-minutes: (\d+)/)?.[1]);
@@ -130,7 +130,7 @@ describe("factory workflow", () => {
     expect(workflow).toContain("--branch unsaved-${{ github.run_id }}-${{ github.run_attempt }}");
   });
 
-  it("installs the git-level guard before the agent can commit, after the dependencies (AUD-M17)", () => {
+  it("installs the git-level guard before the agent can commit, after the dependencies", () => {
     const steps = workflow.split(/\n {6}- /);
     const install = steps.findIndex((step) => step.includes("npm run -s guard:install"));
     const deps = steps.findIndex((step) => step.startsWith("name: Install dependencies"));
@@ -141,7 +141,7 @@ describe("factory workflow", () => {
     expect(steps[install]).not.toMatch(/if:|continue-on-error/);
   });
 
-  it("clones the private repo for the logs only after the stop, fresh, into the trusted copy (AUD-H2, #284, #335)", () => {
+  it("clones the private repo for the logs only after the stop, fresh, into the trusted copy", () => {
     const steps = workflow.split(/\n {6}- /);
     const tick = steps.findIndex((step) => step.startsWith("name: Run one tick"));
     const stop = steps.findIndex((step) => step.startsWith("name: Stop the agent's sandbox"));
@@ -156,7 +156,7 @@ describe("factory workflow", () => {
     expect(only?.i).toBeGreaterThan(stop);
     expect(only?.i).toBeLessThan(keep);
     const script = withoutComments(only?.step ?? "");
-    // Runs whatever happened, but never while a process of the agent's user is left (Qodo on PR 334).
+    // Runs whatever happened, but never while a process of the agent's user is left.
     expect(script).toContain("\n        if: always() && steps.stop.outcome == 'success'\n");
     // Fresh: whatever is at the path goes first; the path is in the runner's own temp folder, which the agent can't write.
     expect(script).toContain('rm -rf "$RUNNER_TEMP/trusted-harness/private"');
@@ -166,7 +166,7 @@ describe("factory workflow", () => {
     expect(steps[tick] ?? "").toContain("FAULTFORGE_PRIVATE_REPO: AJBeumer/faultforge-private");
   });
 
-  it("keeps a copy of the harness from before the agent, and runs factory:keep from it, never from the agent's checkout (#335)", () => {
+  it("keeps a copy of the harness from before the agent, and runs factory:keep from it, never from the agent's checkout", () => {
     const steps = workflow.split(/\n {6}- /);
     const at = (test: (step: string) => boolean) => steps.findIndex(test);
     const deps = at((s) => s.startsWith("name: Install dependencies"));
@@ -190,7 +190,7 @@ describe("factory workflow", () => {
     for (const step of steps.slice(stop + 1)) expect(step).not.toContain("working-directory: FaultForge");
   });
 
-  it("gives the tick the agent's own narrower token, which the agent gets as GH_TOKEN (AUD-H2)", () => {
+  it("gives the tick the agent's own narrower token, which the agent gets as GH_TOKEN", () => {
     const tick = workflow.match(/name: Run one tick[\s\S]*?run:/)?.[0] ?? "";
     // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, not a JS template
     expect(tick).toContain("FAULTFORGE_AGENT_TOKEN: ${{ secrets.FACTORY_AGENT_TOKEN }}");
@@ -239,7 +239,7 @@ describe("factory workflow", () => {
     expect(step).not.toMatch(/secrets\.|private/);
   });
 
-  it("runs the agent behind the network sandbox: set up before the tick, stopped after it, the runner's steps outside (#330)", () => {
+  it("runs the agent behind the network sandbox: set up before the tick, stopped after it, the runner's steps outside", () => {
     const steps = workflow.split(/\n {6}- /);
     const at = (test: (step: string) => boolean) => steps.findIndex(test);
     const gitConfig = at((s) => s.includes("gh auth setup-git"));
