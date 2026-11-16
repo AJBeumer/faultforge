@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -268,6 +268,33 @@ describe("loadCases", () => {
       "FF-9005: it has a verdict but no saved record; build one with case:build",
       "FF-9006: its saved record doesn't hold its latest verdict; build it again with case:build",
     ]);
+  });
+
+  /** Appends one verdict event to the made-up audit log. */
+  const appendVerdict = (priv: string, eventId: string, caseId: string, at: unknown) =>
+    appendFileSync(
+      join(priv, "audit-events.jsonl"),
+      `${JSON.stringify({ eventId, type: "case.adjudicated", caseId, at })}\n`,
+    );
+
+  it("takes the latest verdict by its time, as case:build does, when the log holds them out of order", () => {
+    const priv = storage();
+    // An older verdict for FF-9002 written to the log after the one its record was built from.
+    appendVerdict(priv, "late-line", "FF-9002", "2026-11-13T17:00:00.000Z");
+    const { cases, skipped } = loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv });
+    expect(cases.map((c) => c.caseId)).toContain("FF-9002");
+    expect(skipped.join("\n")).not.toContain("FF-9002");
+  });
+
+  it("stops when a verdict has no readable time, and never prints totals that lack the case", () => {
+    for (const at of ["not a time", undefined, 5]) {
+      const priv = storage();
+      appendVerdict(priv, "unreadable", "FF-9002", at);
+      expect(() => loadCases(priv, null, { FAULTFORGE_PRIVATE_DIR: priv })).toThrow(
+        /FF-9002: a verdict in the audit log has no readable time/,
+      );
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("with a public list, says nothing at all about a case outside it", () => {

@@ -22,12 +22,13 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readAuditLog, readLedger } from "../ledger/ledger.ts";
+import { type LedgerEntry, readAuditLog, readLedger } from "../ledger/ledger.ts";
 import { applyMatchRule, isRange, type MatchFinding } from "../match/match-rule.ts";
 import { gateOf, loadFactory, type QualityGate } from "../shared/factory-config.ts";
 import { CASE_ID, privateDir, ROOT } from "../shared/paths.ts";
 import { gateAccount, labelName } from "../shared/quality-gate.ts";
 import { kindTermsOf, templateDir } from "../shared/templates.ts";
+import { latestEvent } from "./case-builder.ts";
 
 /** One case as the replay needs it. */
 export interface ReplayCase {
@@ -231,14 +232,22 @@ export interface LoadResult {
 export function loadCases(priv: string, only: Set<string> | null, env: NodeJS.ProcessEnv = process.env): LoadResult {
   const casesDir = join(priv, "cases");
   const truth = readLedger(join(priv, "ground-truth.jsonl")) as Record<string, unknown>[];
-  // Each case's latest verdict, by the time it was given: the log is in order, so a later one replaces an earlier.
+  // Each case's latest verdict, picked the way `case:build` picks it (`latestEvent`: by time, not by place in
+  // the file), so a record it just built is never taken for a stale one. A verdict with no readable time
+  // stops the replay: totals that silently lack a case would be worse than none.
+  const verdicts = new Map<string, LedgerEntry[]>();
+  for (const e of readAuditLog(join(priv, "audit-events.jsonl"))) {
+    if (e.type !== "case.adjudicated" || typeof e.caseId !== "string") continue;
+    verdicts.set(e.caseId, [...(verdicts.get(e.caseId) ?? []), e]);
+  }
   const latestVerdict = new Map<string, unknown>();
-  for (const e of readAuditLog(join(priv, "audit-events.jsonl")) as {
-    type?: string;
-    caseId?: string;
-    at?: unknown;
-  }[]) {
-    if (e.type === "case.adjudicated" && e.caseId) latestVerdict.set(e.caseId, e.at);
+  for (const [caseId, events] of verdicts) {
+    for (const e of events) {
+      if (typeof e.at !== "string" || Number.isNaN(Date.parse(e.at))) {
+        throw new Error(`${caseId}: a verdict in the audit log has no readable time`);
+      }
+    }
+    latestVerdict.set(caseId, latestEvent(events, ["case.adjudicated"], "the adjudication stage").at);
   }
   const cases: ReplayCase[] = [];
   const skipped: string[] = [];
