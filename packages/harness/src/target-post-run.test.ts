@@ -7,6 +7,7 @@ import { COMMAND_KINDS, type Gh, KINDS, main, type Post, Refused, sendPost } fro
 import {
   AGENT_DOOR_KINDS,
   doorRunHolder,
+  gateMarker,
   RUN_KIND_REASON,
   runGateRefusal,
   runMarkerPath,
@@ -192,5 +193,29 @@ describe("the door's run gate (#347)", () => {
     expect(() => agent.comment("Owner/app", 3, "Done.")).toThrow(Refused);
     holder.end();
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("reads the fixed marker for every send with the door's own gh or git, whatever marker a caller names (Qodo on PR 349)", () => {
+    const named = markerPath();
+    expect(gateMarker(true, named)).toBe(runMarkerPath());
+    expect(gateMarker(true)).toBe(runMarkerPath());
+    // Only a caller with a sender of its own (a test's fake) reads the marker it names.
+    expect(gateMarker(false, named)).toBe(named);
+    expect(gateMarker(false)).toBeUndefined();
+  });
+
+  it("has no way to move the fixed marker: nothing exported sets it", async () => {
+    const gate = await import("./target-post-run.ts");
+    expect(Object.keys(gate).sort()).toEqual(
+      [
+        "AGENT_DOOR_KINDS",
+        "RUN_KIND_REASON",
+        "doorRunHolder",
+        "gateMarker",
+        "runGateRefusal",
+        "runMarkerPath",
+        "startDoorRun",
+      ].sort(),
+    );
   });
 });

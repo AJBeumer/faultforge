@@ -28,7 +28,7 @@ import { ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { evidenceDir, evidenceKindDir, ROOT as LAB_ROOT, privateDir, runsDir } from "./paths.ts";
 import { checkLiveQodoConfig } from "./qodo-check.ts";
-import { AGENT_DOOR_KINDS, doorRunHolder, markerFor } from "./target-post-run.ts";
+import { AGENT_DOOR_KINDS, doorRunHolder } from "./target-post-run.ts";
 import { checkTicket } from "./ticket-ready.ts";
 import { ghSnapshot } from "./ticket-snapshot.ts";
 import { ticketWriter } from "./ticket-write.ts";
@@ -210,7 +210,7 @@ export function realDeps(factory: FactoryConfig, options: TickOptions, mode: Run
     runAgent: (ws, runId, repoKey, number, ticketFile, log) => {
       // Marked before the agent exists, so every door call it makes sees the run (#347); ended when the tick ends.
       doorRun.start(runId);
-      log("door-run", { marker: markerFor(), allowed: AGENT_DOOR_KINDS });
+      log("door-run", { marker: doorRun.marker, allowed: AGENT_DOOR_KINDS });
       return runAgent(
         factory,
         options,

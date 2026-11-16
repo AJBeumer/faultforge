@@ -6,10 +6,12 @@
  * runner's own writes (`ticket-write.ts`), which pass the run's runner key.
  *
  * A run is active while its marker file exists. The runner writes it before the agent starts and removes it when
- * the tick ends (`startDoorRun`). Its path is fixed, never read from the environment, which the agent sets. It
- * holds the run's id, the runner's pid and the SHA-256 of a random key; the key itself stays in the runner's
- * memory and is never written to a file or given to the agent. A marker that can't be read counts as a run whose
- * key can't match, so the door refuses: it fails closed.
+ * the tick ends (`startDoorRun`). Its path is fixed, never read from the environment, which the agent sets, and no
+ * caller can name another for a send through the door's own `gh` or `git` (`gateMarker`). It holds the run's id,
+ * the runner's pid and the SHA-256 of a random key; the key itself stays in the runner's memory and is never
+ * written to a file or given to the agent. A marker that can't be read counts as a run whose key can't match, so
+ * the door refuses: it fails closed. A marker a killed run left behind is refused the same way, on purpose: the
+ * door can't tell it from a live run's, and the refusal names the file to remove (the next run replaces it).
  *
  * What holds where:
  *  - In CI the agent runs as its own user (`factory-sandbox*.ts`). The marker is `/tmp/faultforge-factory-run.json`,
@@ -20,8 +22,9 @@
  *    marker (`.faultforge-factory-run.json` in the owner's profile folder). There the gate stops a call through the
  *    door, but not an agent that deletes the marker first; the policy hook and the run's audit are what stand guard.
  *
- * Code that doesn't go through the door at all (raw `gh` or `git`) is not the gate's to stop: the guard hook
- * refuses every write to a reviewed repo that isn't the door (docs/target-door.md).
+ * Code that doesn't go through the door at all (raw `gh` or `git`, or the door's code handed a sender of its own)
+ * is not the gate's to stop: the guard hook refuses every write to a reviewed repo that isn't the door
+ * (docs/target-door.md).
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -45,16 +48,14 @@ export function runMarkerPath(platform: NodeJS.Platform = process.platform): str
     : "/tmp/faultforge-factory-run.json";
 }
 
-/** The marker the gate reads when a call names none. Only the unit tests' setup changes it (`vitest.setup.ts`). */
-let defaultMarker: string | undefined;
-
-/** Points the gate at another marker for calls that name none: for the test setup only. */
-export function useRunMarker(path: string): void {
-  defaultMarker = path;
-}
-
-/** The marker a call reads: its own, or the default. */
-export const markerFor = (marker?: string) => marker ?? defaultMarker ?? runMarkerPath();
+/**
+ * The marker a send must read. When the door sends with its own `gh` or `git`, always the fixed one: no caller can
+ * point the gate elsewhere (Qodo on PR 349). Only a caller that brings its own sender (a test's fake) reads the
+ * marker it names, or none: such a caller sends nothing through the door's `gh` or `git`, and code that runs `gh`
+ * itself needs no door to do it.
+ */
+export const gateMarker = (ownSender: boolean, named?: string): string | undefined =>
+  ownSender ? runMarkerPath() : named;
 
 // Not provenance.ts's sha256: the door imports only files the guard holds (target-post-door.test.ts).
 const keyDigest = (text: string) => createHash("sha256").update(text).digest();
@@ -79,15 +80,15 @@ function readMarker(path: string): { active: boolean; keyHash?: Buffer } {
 
 /**
  * Why the door may not send a post of this kind now, or undefined. Allowed kinds always pass; any other passes
- * only outside a run, or with the run's runner key.
+ * only outside a run, or with the run's runner key. `marker` is the file to read (`gateMarker`); none, no run.
  */
 export function runGateRefusal(kind: string, gate: { marker?: string; runnerKey?: string } = {}): string | undefined {
   if ((AGENT_DOOR_KINDS as readonly string[]).includes(kind)) return undefined;
-  const path = markerFor(gate.marker);
-  const marker = readMarker(path);
+  if (gate.marker === undefined) return undefined;
+  const marker = readMarker(gate.marker);
   if (!marker.active) return undefined;
   if (gate.runnerKey && marker.keyHash && timingSafeEqual(keyDigest(gate.runnerKey), marker.keyHash)) return undefined;
-  return `${RUN_KIND_REASON} (${kind} refused; the run's marker is ${path}: if no run is active, remove it)`;
+  return `${RUN_KIND_REASON} (${kind} refused; the run's marker is ${gate.marker}: if no run is active, remove it)`;
 }
 
 /** A run the runner has marked active: its key, for the runner's own writes, and the way to end it. */
@@ -101,19 +102,19 @@ export interface DoorRun {
 /**
  * Marks a run active, before the agent starts. A marker left by an earlier run that died is replaced; one the
  * runner can't remove (another user's, in `/tmp`) throws, so the run doesn't start. The file is created anew
- * (`wx`), so a link put in its place is never followed, and only its owner may write it (0644).
+ * (`wx`), so a link put in its place is never followed, and only its owner may write it (0644). `marker` is for
+ * tests; the runner always writes the fixed one.
  */
-export function startDoorRun(runId: string, marker?: string): DoorRun {
-  const path = markerFor(marker);
-  rmSync(path, { force: true });
+export function startDoorRun(runId: string, marker: string = runMarkerPath()): DoorRun {
+  rmSync(marker, { force: true });
   const key = randomBytes(32).toString("hex");
   const keyHash = keyDigest(key).toString("hex");
-  writeFileSync(path, `${JSON.stringify({ run: runId, pid: process.pid, keyHash })}\n`, { flag: "wx", mode: 0o644 });
+  writeFileSync(marker, `${JSON.stringify({ run: runId, pid: process.pid, keyHash })}\n`, { flag: "wx", mode: 0o644 });
   return {
     key,
     end() {
       try {
-        if (JSON.parse(readFileSync(path, "utf8")).keyHash === keyHash) rmSync(path, { force: true });
+        if (JSON.parse(readFileSync(marker, "utf8")).keyHash === keyHash) rmSync(marker, { force: true });
       } catch {
         // Already gone, or not ours: nothing to remove.
       }
@@ -122,9 +123,10 @@ export function startDoorRun(runId: string, marker?: string): DoorRun {
 }
 
 /** The runner's handle on its run: started once before the agent, ended when the tick ends. */
-export function doorRunHolder(marker?: string) {
+export function doorRunHolder(marker: string = runMarkerPath()) {
   let run: DoorRun | undefined;
   return {
+    marker,
     /** Marks the run active, once; returns its key. */
     start(runId: string): string {
       run ??= startDoorRun(runId, marker);

@@ -43,7 +43,7 @@ import { PRIVATE_ID_REASON, privateIdMatcher, privateTemplateIds } from "../../.
 import { type Reviewed, reviewedRepos } from "../../../.claude/hooks/guard-repos.ts";
 import { addressesQodo, telltales } from "./neutral.ts";
 import { branchNameProblem, type Git, pushArgs, readPush } from "./target-post-push.ts";
-import { runGateRefusal } from "./target-post-run.ts";
+import { gateMarker, runGateRefusal } from "./target-post-run.ts";
 
 // The door imports only the guard's own files (guard-self.ts holds them) and Node's: a module it imported that a
 // session could rewrite would decide what the door sends (Qodo on PR 344). It reads the reviewed repos the way the
@@ -95,7 +95,7 @@ export interface Deps {
   gh?: Gh;
   git?: Git;
   env?: NodeJS.ProcessEnv;
-  /** The run marker to read instead of the fixed one: for tests that simulate a run. */
+  /** The run marker a test reads with its own fake `gh` or `git`; a send with the door's own reads the fixed one. */
   runMarker?: string;
   /** The run's runner key: the runner's own writes during a run (`ticket-write.ts`), never the agent's. */
   runnerKey?: string;
@@ -210,7 +210,10 @@ export function ghCall(post: Post): { args: string[]; input?: string } {
  */
 export function sendPost(post: Post, deps: Deps = {}): string {
   const env = deps.env ?? process.env;
-  const gate = runGateRefusal(post.kind, { marker: deps.runMarker, runnerKey: deps.runnerKey });
+  // Sent with the door's own gh or git, the gate reads the fixed marker, whatever the caller names (Qodo on PR 349).
+  const ownSender = post.kind === "push" ? !deps.git : !deps.gh;
+  const marker = gateMarker(ownSender, deps.runMarker);
+  const gate = runGateRefusal(post.kind, { marker, runnerKey: deps.runnerKey });
   if (gate) throw new Refused(refusal([gate]));
   if (post.kind === "push") {
     const git = deps.git ?? realGit;

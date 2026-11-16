@@ -55,6 +55,8 @@ vi.mock("./target-post.ts", async (importOriginal) => {
     ...real,
     sendPost: vi.fn((post: import("./target-post.ts").Post, deps: import("./target-post.ts").Deps = {}) =>
       real.sendPost(post, {
+        // With this fake gh the gate reads the test's run marker, never the machine's (#347).
+        runMarker: runMarker.path,
         ...deps,
         gh: (args, input) => {
           door.calls.push({ args, input });
@@ -65,6 +67,15 @@ vi.mock("./target-post.ts", async (importOriginal) => {
       }),
     ),
   };
+});
+// The runner marks its runs in a file of this test's own, never the machine's fixed marker (#347).
+const runMarker = vi.hoisted(() => ({ path: "" }));
+vi.mock("./target-post-run.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./target-post-run.ts")>();
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  runMarker.path = join(tmpdir(), `door-run-deps-${process.pid}-${Date.now()}.json`);
+  return { ...real, doorRunHolder: () => real.doorRunHolder(runMarker.path) };
 });
 vi.mock("./ticket-ready.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ticket-ready.ts")>()),
@@ -100,11 +111,10 @@ import { ExternalCallError, gh, ghAll, ghJson } from "./github.ts";
 import { unguardedCheckouts } from "./guard-install.ts";
 import { ROOT as LAB_ROOT } from "./paths.ts";
 import { sendPost } from "./target-post.ts";
-import { markerFor } from "./target-post-run.ts";
 import { checkTicket } from "./ticket-ready.ts";
 
 // A test that starts an agent marks a run for the door (#347) and never reaches the tick's end, which clears it.
-afterEach(() => rmSync(markerFor(), { force: true }));
+afterEach(() => rmSync(runMarker.path, { force: true }));
 
 const FACTORY: FactoryConfig = {
   evidence: "private/raw-artifacts",
@@ -401,7 +411,7 @@ Picked up.`,
       const events: string[] = [];
       let markedAtStart = false;
       vi.mocked(runAgent).mockImplementationOnce(async () => {
-        markedAtStart = existsSync(markerFor());
+        markedAtStart = existsSync(runMarker.path);
         return { exitCode: 0, timedOut: false, resultText: null, subtype: "success", costUsd: 1, turns: 2 };
       });
       const deps = realDeps(FACTORY, OPTIONS, mode);
@@ -417,7 +427,7 @@ Picked up.`,
       deps.comment("owner/target", 18, "Done.");
       expect(door.calls.map((c) => c.args.slice(0, 2))).toEqual([["issue", "comment"]]);
       lock.release();
-      expect(existsSync(markerFor())).toBe(false);
+      expect(existsSync(runMarker.path)).toBe(false);
     },
   );
 
