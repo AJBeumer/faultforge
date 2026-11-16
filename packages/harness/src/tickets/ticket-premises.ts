@@ -1,20 +1,13 @@
 /**
  * A ticket's premises: the repository paths, file names, npm scripts and functions it names in
- * backticks as things that already exist. Each one is checked against `origin/main` of the repo's
- * checkout, the revision an unattended run builds from, before the factory builds the ticket. A work
- * order written against a file that was deleted, a helper that no longer exists or a script that never
- * existed is reported as "stale premise" instead of being built on (#147).
+ * backticks as things that already exist. Each is checked against `origin/main`, the revision an
+ * unattended run builds from, so a ticket written against a deleted file or a missing helper is reported
+ * as a "stale premise" instead of being built on.
  *
- * What counts as a premise: a backtick token outside fenced code blocks and `<details>` blocks (kept
- * original wording), outside the ticket's deliverable sections (the first required section, the
- * checklist and "Out of scope", which describe what will or will not exist afterwards), and not
- * introduced by "new", "create", "add" or "gain" in the same clause. A path with a `/` must be in
- * main's tree at that path; a bare file name such as `inject.ts` must be in the tree somewhere, or in
- * the private storage folder beside the checkout, which is never committed. A function must be
- * declared, exported or imported somewhere in main's source files. A premise that the ticket's own
- * repo lacks but a sibling repo of the factory has (a lab ticket naming the target's `INVARIANTS.md`)
- * is not stale. Everything is read through `git`, never from the working tree, so the owner's branch
- * and uncommitted files can't change the verdict. Used by `ticket-ready.ts`; no network.
+ * Tokens in code blocks, `<details>` blocks, the deliverable sections, or introduced as new ("new",
+ * "create", "add") describe what will exist, so they don't count. A premise a sibling repo has (a lab
+ * ticket naming the target's `INVARIANTS.md`) is not stale. Everything is read through `git`, never the
+ * working tree, so the owner's branch and uncommitted files can't change the verdict.
  */
 import { execFileSync } from "node:child_process";
 import { type Dirent, existsSync, readdirSync } from "node:fs";
@@ -118,7 +111,7 @@ function git(checkout: string, args: string[]): string {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5 * 60_000, // a fetch over the network must not hang the readiness check (audit N-14)
+    timeout: 5 * 60_000, // a fetch over the network must not hang the readiness check
   });
 }
 

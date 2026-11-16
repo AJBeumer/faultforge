@@ -66,7 +66,7 @@ describe("appendOnlyProblems: a file's git history", () => {
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toHaveLength(1);
   });
 
-  it("catches an uncommitted edit, not just committed history (Qodo on PR 135)", () => {
+  it("catches an uncommitted edit, not just committed history", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001","validated":true}\n', "first case");
     writeFileSync(join(dir, "ground-truth.jsonl"), '{"caseId":"FF-0001","validated":false}\n');
@@ -80,7 +80,7 @@ describe("appendOnlyProblems: a file's git history", () => {
     expect(appendOnlyProblems(dir, "ground-truth.jsonl")).toEqual([]);
   });
 
-  it("catches a merge commit whose conflict resolution drops a line, which plain git log -p hides (Qodo on PR 135)", () => {
+  it("catches a merge commit whose conflict resolution drops a line, which plain git log -p hides", () => {
     const dir = repo();
     commit(dir, "f.jsonl", "L1\n", "base");
     sh(dir, "switch", "--quiet", "-c", "feature");
@@ -144,7 +144,7 @@ describe("ledgerCheckProblems: both files together", () => {
     expect(ledgerCheckProblems(dir)).toEqual([]);
   });
 
-  it("reports an answer-key line, or a saved review, that doesn't fit its schema (AUD-N5)", () => {
+  it("reports an answer-key line, or a saved review, that doesn't fit its schema", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", `${JSON.stringify(CONTROL_ENTRY)}\n{"caseId":"FF-0002"}\n`, "two cases");
     commit(dir, "audit-events.jsonl", "", "no events");
@@ -174,7 +174,7 @@ const CONTROL_ENTRY = {
   createdAt: "2026-11-01T00:00:00.000Z",
 };
 
-describe("ledgerProblemsWithHistory: what the case commands check first (#224)", () => {
+describe("ledgerProblemsWithHistory: what the case commands check first", () => {
   it("finds a rewritten line in the committed history of a file at its repository's root", () => {
     const dir = repo();
     commit(dir, "audit-events.jsonl", '{"eventId":"e1","type":"x"}\n', "first");
@@ -194,7 +194,7 @@ describe("ledgerProblemsWithHistory: what the case commands check first (#224)",
   });
 });
 
-describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)", () => {
+describe("ledgerProblemsWithHistory refuses what it can't check", () => {
   it("reports a file in a folder inside another repository, rather than skipping its history", () => {
     const dir = repo();
     mkdirSync(join(dir, "nested"));
@@ -204,7 +204,7 @@ describe("ledgerProblemsWithHistory refuses what it can't check (Qodo on PR 232)
   });
 });
 
-describe("appendOnlyProblems: an amendment line is history like any other (M86)", () => {
+describe("appendOnlyProblems: an amendment line is history like any other", () => {
   it("names the commit that removed an amendment", () => {
     const dir = repo();
     const amendment = '{"kind":"amendment","amends":"FF-0001","change":{"x":1},"reason":"r","evidence":"e"}';
@@ -214,7 +214,7 @@ describe("appendOnlyProblems: an amendment line is history like any other (M86)"
   });
 });
 
-describe("appendOnlyProblems: a line inserted before the end (AUD-M10, #251)", () => {
+describe("appendOnlyProblems: a line inserted before the end", () => {
   it("names the commit that inserted a line between two old ones", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0003"}\n', "two cases");
@@ -244,7 +244,7 @@ describe("appendOnlyProblems: a line inserted before the end (AUD-M10, #251)", (
   });
 });
 
-describe("appendOnlyProblems: two branches that each appended, merged (Qodo on PR 269)", () => {
+describe("appendOnlyProblems: two branches that each appended, merged", () => {
   it("accepts the merge, though against one parent the other side's lines come first", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n', "one case");
@@ -268,7 +268,7 @@ describe("appendOnlyProblems: two branches that each appended, merged (Qodo on P
   });
 });
 
-describe("appendOnlyProblems: a merge that inserts against every parent (Qodo on PR 269)", () => {
+describe("appendOnlyProblems: a merge that inserts against every parent", () => {
   it("is still an insertion", () => {
     const dir = repo();
     commit(dir, "ground-truth.jsonl", '{"caseId":"FF-0001"}\n{"caseId":"FF-0009"}\n', "two cases");
@@ -292,7 +292,7 @@ describe("appendOnlyProblems: a merge that inserts against every parent (Qodo on
   });
 });
 
-describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N6, Qodo on PR 280)", () => {
+describe("AppendOnlyScanner: a diff judged line by line, never held whole", () => {
   const diffs = [
     "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,3 @@\n a\n b\n+c",
     "diff --git a/f b/f\n@@ -1,2 +1,2 @@\n a\n-b\n+B",
@@ -316,7 +316,7 @@ describe("AppendOnlyScanner: a diff judged line by line, never held whole (AUD-N
   });
 });
 
-describe("AppendOnlyScanner: a last line without a line break, appended after (Qodo on PR 286)", () => {
+describe("AppendOnlyScanner: a last line without a line break, appended after", () => {
   const NO_BREAK = "\\ No newline at end of file";
 
   it("reads the last line shown as removed and added back unchanged as an append", () => {

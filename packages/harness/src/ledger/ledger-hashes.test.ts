@@ -59,7 +59,7 @@ function fixture(verdictTool = "faultforge-harness@1.0.0") {
   return { root, dir, paths, savePath, env: { FAULTFORGE_PRIVATE_DIR: root } };
 }
 
-describe("hashProblems (AUD-M26, #249)", () => {
+describe("hashProblems", () => {
   it("finds nothing while every input is as the tools hashed it", () => {
     const fx = fixture();
     expect(hashProblems(fx.paths, fx.env)).toEqual([]);
@@ -123,7 +123,7 @@ describe("ownProofFiles", () => {
   });
 });
 
-describe("hashProblems: what Qodo found on PR 264", () => {
+describe("hashProblems: the file a verdict names, amendment times, and a broken template", () => {
   it("checks a verdict against the file it names, even when that isn't the PR's save (--review)", () => {
     const fx = fixture();
     const other = join(fx.root, "elsewhere.review.json");
@@ -164,7 +164,7 @@ describe("hashProblems: what Qodo found on PR 264", () => {
     expect(hashProblems(fx.paths, fx.env)).toEqual([]);
   });
 
-  it("reports a template that no longer parses, and goes on to the other events", () => {
+  it("reports a template that doesn't parse, and goes on to the other events", () => {
     const fx = fixture();
     writeFileSync(join(fx.dir, "template.json"), "{ not json");
     const problems = hashProblems(fx.paths, fx.env);
@@ -173,7 +173,7 @@ describe("hashProblems: what Qodo found on PR 264", () => {
   });
 });
 
-describe("verdictHashProblem: a template named by a later amendment (Qodo on PR 264)", () => {
+describe("verdictHashProblem: a template named by a later amendment", () => {
   it("still holds with the template the verdict read", () => {
     const fx = fixture();
     const other = join(fx.root, "templates", "x-other-v1");
@@ -190,8 +190,8 @@ describe("verdictHashProblem: a template named by a later amendment (Qodo on PR 
   });
 });
 
-describe("hashProblems: a superseded verdict (Qodo on PR 264)", () => {
-  it("is no longer checked once a later verdict names it in supersedes", () => {
+describe("hashProblems: a superseded verdict", () => {
+  it("isn't checked once a later verdict names it in supersedes", () => {
     const fx = fixture();
     writeFileSync(fx.savePath, "{}");
     expect(hashProblems(fx.paths, fx.env)).toHaveLength(1);

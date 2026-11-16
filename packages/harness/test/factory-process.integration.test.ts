@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { ownStartId, processStartId, sameProcess } from "../src/factory/factory-process.ts";
 
-describe("processStartId: the system's own record of a process's start (AUD-M19)", () => {
+describe("processStartId, the system's own record of when a process started", () => {
   it("is the same for this process every time it is read, and is what the lock records", () => {
     const id = processStartId(process.pid);
     expect(id).not.toBeNull();

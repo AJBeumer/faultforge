@@ -74,7 +74,7 @@ function problemsOf(i: BuildInputs): string[] {
   return validateCaseRecord(record);
 }
 
-describe("the five records a publish gate must refuse (AUD-M1)", () => {
+describe("the five records a publish gate must refuse", () => {
   it("a planted bug confirmed missed on a review that never finished", () => {
     expect(problemsOf(inputs("sabotage", "confirmed_missed", "review incomplete", []))).toEqual([
       expect.stringContaining('"review incomplete", not "complete", so confirmed_missed'),
@@ -119,7 +119,7 @@ describe("the five records a publish gate must refuse (AUD-M1)", () => {
   });
 });
 
-describe("latestEvent (AUD-N8)", () => {
+describe("latestEvent", () => {
   const verdict = (eventId: string, at: string) => event("case.adjudicated", { eventId, at });
 
   it("compares times as instants, not as text", () => {
@@ -142,9 +142,9 @@ describe("latestEvent (AUD-N8)", () => {
   });
 });
 
-describe("who drafted a verdict's reason stays out of the record (#321)", () => {
-  // The record schema's `human` block takes no other field (additionalProperties: false, in versions 1 and 2), and
-  // every published record must keep its bytes. So case:build leaves reasonDraftedBy in the audit log only.
+describe("who drafted a verdict's reason stays out of the record", () => {
+  // The schema's `human` block takes no other field, and every published record must keep its bytes, so
+  // reasonDraftedBy stays in the audit log only.
   it.each(["sabotage", "control"] as const)("builds the same %s record with or without it", (kind) => {
     const disposition = kind === "sabotage" ? "confirmed_missed" : "confirmed_clean";
     const plain = inputs(kind, disposition, "complete", []);

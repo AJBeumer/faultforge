@@ -13,7 +13,7 @@ const URL = "https://sdk.qodo.ai/v1/tools/mcp/";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export function apiKey(env: NodeJS.ProcessEnv = process.env): string {
-  // `||`, not `??`: an empty QODO_API_KEY must not block the key file (audit N-6).
+  // `||`, not `??`: an empty QODO_API_KEY must not block the key file.
   const key = env.QODO_API_KEY?.trim() || (env.QODO_KEY_FILE && readFileSync(env.QODO_KEY_FILE, "utf8"));
   if (!key?.trim()) throw new Error("Set QODO_API_KEY, or QODO_KEY_FILE to the path of the key file.");
   return key.trim();
@@ -38,55 +38,44 @@ export function parseRpcBody(text: string): { result?: unknown; error?: unknown 
 export function parseToolText(result: { isError?: boolean; content?: { type: string; text?: string }[] }): unknown {
   const text = result.content?.find((c) => c.type === "text")?.text;
   if (result.isError) throw new Error(`Qodo tool error: ${(text ?? "(no text)").slice(0, 500)}`);
-  // No text is no answer, never the data `null` (audit N-7).
+  // No text is no answer, never the data `null`.
   if (text === undefined) throw new Error("Qodo tool answered with no text");
   return JSON.parse(text);
 }
 
 /**
- * Thrown only for a transport- or protocol-level failure (an HTTP error, a body that didn't parse,
- * or a JSON-RPC envelope `error`) — never for a tool-level answer (`isError` in a successful call,
- * thrown by `parseToolText`). Session recovery below only ever considers this kind: a tool's own
- * answer is Qodo's data, not a sign the connection was lost, however its text reads.
+ * A failure of the connection or protocol, never a tool's own error answer. Only this kind can start a new
+ * session: a tool's answer is Qodo's data, not a sign the connection was lost, however its text reads.
  */
 export class TransportError extends Error {}
 
 /**
- * True when a transport-level failure means Qodo forgot a session it had previously accepted: a
- * 404 (the session id no longer exists), or a JSON-RPC error naming "session" (seen as a "session
- * not found" error after the session had been running a while). Either way the fix is the same:
- * start a new session and try the call again, not report the poll itself as failed.
+ * True when Qodo forgot a session it had accepted: a 404, or an error naming "session". Qodo drops long
+ * sessions, so the answer is a new session and one more try, not a failed poll.
  */
 export function isSessionLost(error: unknown): boolean {
   if (!(error instanceof TransportError)) return false;
   return /HTTP 404\b/.test(error.message) || /\bsession\b/i.test(error.message);
 }
 
-/**
- * One MCP session to Qodo's tool gateway, with no opinion on which tool names are safe to call:
- * that's each client's own allow-list, checked before `callTool` is ever reached.
- */
+/** One MCP session to Qodo. Which tools are safe to call is each client's allow-list, not this class's. */
 export class QodoTransport {
   private session?: string;
   private id = 0;
   private ready?: Promise<void>;
   private readonly key = apiKey();
   /**
-   * The response body text of the last request, kept exactly as received so a caller can save it
-   * even when it fails to parse. Wrapped with the HTTP status when the body wasn't usable as-is
-   * (an error status, or text that didn't parse): the status is then part of what's saved, not
-   * only logged.
+   * The last response body as received, so a caller can save it even when it fails to parse. An unusable
+   * body is wrapped with its HTTP status, so the status is saved too.
    */
   lastRaw = "";
   /**
-   * The raw bodies of transport failures recovered from during the last `callTool()` (session lost,
-   * then a fresh session succeeded), oldest first. A recovery overwrites `lastRaw` with the retry's
-   * own answer, which would otherwise erase the failure that caused it; kept here so a caller can
-   * still save it as evidence.
+   * The failed bodies a session recovery replaced in the last call, oldest first. The retry overwrites
+   * `lastRaw`, so without this the failure that caused it would be lost as evidence.
    */
   lastRecoveredRaw: string[] = [];
 
-  /** Calls one tool by name and returns its text result parsed as JSON. No allow-list here: the caller checked. */
+  /** No allow-list here: the client checked the tool name before calling. */
   async callTool(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
     // Cleared first, so a failed call never leaves the previous answer looking like its own.
     this.lastRaw = "";
@@ -146,8 +135,8 @@ export class QodoTransport {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     this.session ??= res.headers.get("mcp-session-id") ?? undefined;
-    // Kept before anything is checked or parsed, so any failure below still leaves it saved. The key is the
-    // one thing taken out: a body that echoed it must not carry it into saved evidence (audit N-6).
+    // Kept before anything is checked, so any failure below still leaves it saved. The key is taken out:
+    // a body that echoed it must not carry it into saved evidence.
     const text = (await res.text()).replaceAll(this.key, "***");
     this.lastRaw = text;
     if (!res.ok) {

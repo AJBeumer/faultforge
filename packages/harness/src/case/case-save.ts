@@ -1,8 +1,6 @@
 /**
- * `case:build --save`: writes a case's record to `private/cases/<caseId>.json` (AUD-M24), and ends by
- * reminding the owner to anchor the private history in this repository (`npm run ledger:anchor`, AUD-M11):
- * a saved case is the moment the answer key and audit log last grew, so it is the anchor worth having.
- * Split from `case-build.ts`, which is at the module size limit.
+ * `case:build --save`: writes a case's record to `private/cases/<caseId>.json`, then reminds the owner to run
+ * `npm run ledger:anchor`. A saved case is when the answer key and audit log last grew, so that anchor is worth having.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,8 +12,8 @@ export const ANCHOR_REMINDER =
 
 /**
  * Saves `text` as `<casesDir>/<caseId>.json`, created exclusively, so of two builds racing for an absent file
- * only one writes (Qodo on PR 264). The same content already there is fine; other content is refused, never
- * replaced. Returns 0, or 2 when refused. Progress goes to `error` (stderr): stdout holds only the record.
+ * only one writes. The same content already there is fine; other content is refused, never replaced.
+ * Returns 0, or 2 when refused. Progress goes to `error` (stderr), so stdout holds only the record.
  */
 export function saveCaseRecord(casesDir: string, caseId: string, text: string, error: (line: string) => void): 0 | 2 {
   const savePath = join(casesDir, `${caseId}.json`);

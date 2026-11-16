@@ -1,8 +1,6 @@
 /**
- * The wire shapes and glue specific to Qodo's local-review tools: the request Qodo's
- * `start-pre-pr-review` wants, the managed-agent operation envelope every one of the three tools
- * answers with, saving every raw answer before it's parsed, and unwrapping the result chunk's own
- * extra layer of JSON into the review payload underneath.
+ * The wire shapes of Qodo's local-review tools: the request, the operation each tool answers with, saving
+ * every raw answer before it's parsed, and unwrapping the result into the review payload.
  */
 import type { SkippedFile } from "./local-diff.ts";
 import type { LocalReviewPayload } from "./local-findings.ts";
@@ -44,7 +42,6 @@ export interface ResultChunkPage {
   sha256?: string;
 }
 
-/** The read tools this file calls through, scoped to just those three raw strings and bodies. */
 export interface RawCapture {
   call(tool: string, args: Record<string, unknown>): Promise<unknown>;
   lastRaw: string;
@@ -52,10 +49,8 @@ export interface RawCapture {
 }
 
 /**
- * Calls one Qodo tool and saves every raw wire answer it produced — each body recovered from a
- * dropped session, then the final one — before the caller ever sees a parsed result. A tool-level
- * error (a non-JSON reply, or Qodo's own `isError`) still leaves its raw body on disk instead of
- * losing it to the throw: a real gap on `review:local`'s own first run on itself, 12 November.
+ * Saves every raw answer a call produced, recovered sessions included, before the caller sees a parsed
+ * result. A failed call still leaves its raw body on disk, so the throw loses no evidence.
  */
 export async function callAndSaveRaw(
   api: RawCapture,
@@ -81,10 +76,8 @@ export async function callAndSaveRaw(
 }
 
 /**
- * Qodo wraps a managed-agent result one level further than the chunk bytes themselves:
- * `{agent_id, output, terminal_state}`, where `output` is itself a JSON string whose `result` holds
- * the actual review payload (`findings`, `finding_state`, `meta`). Confirmed live, 12 November, on
- * this command's own first real run — an earlier version read the envelope as if it were the payload.
+ * Qodo wraps the result twice: `{agent_id, output, terminal_state}`, where `output` is a JSON string whose
+ * `result` holds the review payload. Reading the envelope as the payload would find no findings.
  */
 export function unwrapResult(text: string): LocalReviewPayload {
   const envelope = JSON.parse(text) as { output?: unknown };

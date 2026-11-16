@@ -1,5 +1,5 @@
 /**
- * Fault injection for the factory's recovery (#308): `factory-relabel.ts` and `factory-recovery.ts` run against a
+ * Fault injection for the factory's recovery: `factory-relabel.ts` and `factory-recovery.ts` run against a
  * fake GitHub that fails at chosen points, and the tick's lock against a holder that really died. After each
  * fault the ticket must be in a state a later tick or the owner finds (a factory label is still on it), and a
  * recovery must then put it right. Never real GitHub: every issue, label and comment lives in memory here.
@@ -83,7 +83,6 @@ class FakeGitHub {
     return [...this.labels].filter(([, set]) => set.has(label)).map(([number]) => ({ number, title: `#${number}` }));
   }
 
-  /** The factory labels on the ticket, sorted. */
   state(number: number): string[] {
     return [...(this.labels.get(number) ?? [])].filter((l) => FACTORY_LABELS.includes(l)).sort();
   }
@@ -124,7 +123,7 @@ function recoverUntilClean(github: FakeGitHub) {
   throw new Error("recovery still failing after three ticks");
 }
 
-describe("a relabel never leaves a ticket with no factory label (#308)", () => {
+describe("a relabel never leaves a ticket with no factory label", () => {
   it.each([
     ["the add fails outright", { op: "add", label: LABELS.help } as Fault, [LABELS.working]],
     [
@@ -180,7 +179,7 @@ describe("a relabel never leaves a ticket with no factory label (#308)", () => {
   });
 });
 
-describe("a stranded agent-working ticket is recovered whatever step fails (#308)", () => {
+describe("a stranded agent-working ticket is recovered whatever step fails", () => {
   it.each([
     ["listing the tickets", { op: "list", label: LABELS.working } as Fault, 1],
     ["the comment", { op: "comment" } as Fault, 1],
@@ -221,7 +220,7 @@ function deadPid(): number {
 }
 
 // Taking a lock reads this process's start time, which takes seconds on Windows.
-describe("a lock whose holder died (#308)", () => {
+describe("a lock whose holder died", () => {
   it("is taken over by the next tick, which then recovers the ticket the dead run left working", () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-faults-lock-"));
     const token = "dead-holder";
@@ -269,7 +268,7 @@ describe("a lock whose holder died (#308)", () => {
   }, 60_000);
 });
 
-describe("a crash between saving evidence and labelling (#308)", () => {
+describe("a crash between saving evidence and labelling", () => {
   it("leaves the evidence saved and the ticket working, and recovery moves it to agent-needs-help", () => {
     const github = new FakeGitHub();
     github.open(7, LABELS.working);

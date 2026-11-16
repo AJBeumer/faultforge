@@ -65,7 +65,7 @@ describe("npm run match: what it refuses with exit 2", () => {
     expect(refused.err).toContain("has no findings list");
   });
 
-  it("a finding whose fields aren't what a finding holds (Qodo on PR 128, round 2)", () => {
+  it("a finding whose fields aren't what a finding holds", () => {
     for (const bad of [{ file: 7 }, { lines: "33" }, { lines: [33] }, { title: 5 }, { category: {} }]) {
       const record = ff0001();
       Object.assign(record.findings[0], bad);
@@ -75,7 +75,7 @@ describe("npm run match: what it refuses with exit 2", () => {
     }
   });
 
-  it("a detection without its match, or with criteria that aren't booleans (audit N-1)", () => {
+  it("a detection without its match, or with criteria that aren't booleans", () => {
     const withoutMatch = ff0001();
     delete withoutMatch.detection.match;
     const half = ff0001();
@@ -87,7 +87,7 @@ describe("npm run match: what it refuses with exit 2", () => {
     }
   });
 
-  it("a template id that would leave the templates folder (Qodo on PR 128, round 2)", () => {
+  it("a template id that would leave the templates folder", () => {
     const record = ff0001();
     record.injection.templateId = "../../examples/FF-0001";
     const refused = runOn(record);
@@ -101,7 +101,7 @@ describe("npm run match: what it refuses with exit 2", () => {
     expect(runOn(record).code).toBe(2);
   });
 
-  it("a template that can't be parsed, or declares no usable terms (Qodo on PR 128)", () => {
+  it("a template that can't be parsed, or declares no usable terms", () => {
     const record = ff0001();
     record.injection.templateId = "broken-template";
     expect(runOn(record, privateTemplate("broken-template", "{ not json")).code).toBe(2);
@@ -139,7 +139,7 @@ describe("disagreements: the record's one set of criteria against the computed r
     detection: { caught: false, matchedFindingIds: [], match },
   });
 
-  it("compares only caught and the matched ids for a miss with several findings (Qodo on PR 128)", () => {
+  it("compares only caught and the matched ids for a miss with several findings", () => {
     const findings = [unplaced("a"), unplaced("b")];
     const result = applyMatchRule(injection, findings, ["term"]);
     const record = miss(findings, { file: { pass: true }, lines: { pass: false }, kind: { pass: true } });
@@ -156,7 +156,7 @@ describe("disagreements: the record's one set of criteria against the computed r
   });
 });
 
-describe("disagreements: caught and the matched ids (M66, M67)", () => {
+describe("disagreements: caught and the matched ids", () => {
   const injection = { file: "src/a.ts", lines: [10, 10] as [number, number] };
   const placed: MatchFinding = { id: "a", file: "src/a.ts", lines: [10, 10], title: "term", summary: "", category: "" };
   const pass = { pass: true };

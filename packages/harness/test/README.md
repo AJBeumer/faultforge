@@ -7,6 +7,8 @@ fast checks stay fast. Unit tests stay next to the code they test, as `<name>.te
 Tests that need the target expect a checkout of `faultforge-target` next to this repository. Those that need
 the private evidence expect `private/`. Each skips itself when what it needs is missing. CI runs them on Linux
 and Windows, with the target checked out next to this repository (the `integration` job in
-`.github/workflows/check.yml`). That job isn't one of the checks `main` requires.
+`.github/workflows/check.yml`). Both of its runs, `npm run test:integration (ubuntu-latest)` and
+`(windows-latest)`, are required checks in the `protect-main` ruleset, like the two `npm run check` jobs: a red
+integration run blocks a merge.
 
 The layout rules are in `CLAUDE.md`, under "Code layout".

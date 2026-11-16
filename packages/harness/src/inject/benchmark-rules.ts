@@ -1,15 +1,15 @@
 /**
- * The rules a template declaring benchmark version 2 must follow (#257; AUD-H3, AUD-H5, AUD-M7). A template
+ * The rules a template declaring benchmark version 2 must follow. A template
  * with no `benchmark`, or `benchmark: 1`, follows version 1 and nothing here applies to it, so no recorded
  * case or template changes.
  *
  * - A bug template's ticket (title, description and criteria) may not restate what the planted change breaks:
- *   none may contain a word starting with one of
- *   its own kind terms, or its invariant id. The ticket would hand the reviewer the oracle (AUD-H3).
+ *   none may contain a word starting with one of its own kind terms, or its invariant id. The ticket would hand
+ *   the reviewer the answer.
  * - A criterion shared with other templates must appear in both a bug template and a control. One found only
- *   in controls, or only in bugs, tells the two apart by its wording alone (AUD-H5).
+ *   in controls, or only in bugs, tells the two apart by its wording alone.
  * - The recorded line range is the lines the change actually touched (`changedLines`), not the whole replaced
- *   block (AUD-M7).
+ *   block.
  */
 
 export interface RuleTemplate {
@@ -22,7 +22,6 @@ export interface RuleTemplate {
   alsoBreaks?: { invariantId: string }[];
 }
 
-/** The benchmark version a template follows: 1 unless it declares another. */
 export function benchmarkOf(template: { benchmark?: unknown }): number {
   return typeof template.benchmark === "number" ? template.benchmark : 1;
 }
@@ -32,7 +31,7 @@ const normal = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
 /**
  * True when `term` starts a word in `text`. Kind terms are often stems ("disclos"), and the match rule finds
  * them inside longer words, so "disclosed" names "disclos" here too. A term must start its word: "race" is
- * not in "trace" (Qodo on PR 274).
+ * not in "trace".
  */
 export function names(text: string, term: string): boolean {
   const escaped = normal(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -45,14 +44,14 @@ export function names(text: string, term: string): boolean {
  */
 export function benchmarkProblems(template: RuleTemplate, others: RuleTemplate[]): string[] {
   if (benchmarkOf(template) < 2) return [];
-  // The comparison below needs the other templates; with none it would pass every criterion unseen (Qodo on PR 274).
+  // The comparison below needs the other templates; with none it would pass every criterion unseen.
   if (!others.some((o) => o.id !== template.id)) {
     return ["no other template was given to compare its ticket wording with"];
   }
   const problems: string[] = [];
   const criteria = template.ticket?.criteria ?? [];
   if (template.kind === "bug") {
-    // Every invariant the change is proven to break, collateral included (Qodo on PR 274).
+    // Every invariant the change is proven to break, collateral included.
     const giveaways = [
       ...(template.match?.kindTerms ?? []),
       ...(template.invariantId ? [template.invariantId] : []),
@@ -86,11 +85,11 @@ export function benchmarkProblems(template: RuleTemplate, others: RuleTemplate[]
 /**
  * The lines a change touched in the new file, 1-based and inclusive: the lines between what the old and new
  * texts share at the top and at the bottom. A pure deletion touches no new line; its range is the one line
- * that now stands where the removed lines were (the last line of the file when they were at its end).
+ * that stands where the removed lines were (the last line of the file when they were at its end).
  */
 export function changedLines(before: string, after: string): [number, number] {
   // Lines, not the empty piece after a final newline: adding or dropping only that newline changes the last
-  // line itself (Qodo on PR 274).
+  // line itself.
   const lines = (text: string) => (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
   const oldLines = lines(before);
   const newLines = lines(after);

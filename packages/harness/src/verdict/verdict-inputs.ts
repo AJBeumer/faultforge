@@ -1,6 +1,6 @@
 /**
  * What `verdict` reads before it asks anything: the case's answer-key entry and audit events, the saved
- * review of its commit on its own PR, and its template. Split out of verdict.ts (module size rule).
+ * review of its commit on its own PR, and its template.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,8 +41,7 @@ export function loadVerdictInputs(
   env: NodeJS.ProcessEnv,
 ): VerdictInputs | { problem: string } {
   const { groundTruthPath, auditEventsPath, reviewsDir } = paths;
-  // A verdict is appended only to an answer key and audit log whose amendments check out (#192). Checked
-  // before anything is read from them: an amendment that changes a case id would hide the case itself.
+  // Check the amendments before reading anything: one that changes a case id would hide the case itself.
   const ledgerIssues = ledgerProblemsWithHistory([groundTruthPath, auditEventsPath]);
   if (ledgerIssues.length) {
     return { problem: `the answer key or audit log has problems:\n${ledgerIssues.map((p) => `- ${p}`).join("\n")}` };
@@ -86,7 +85,7 @@ export function loadVerdictInputs(
       };
     }
   } else {
-    // Found by the case's own PR, so another PR's save of the same commit is never the one judged (AUD-M24).
+    // Found by the case's own PR, so another PR's save of the same commit is never the one judged.
     const pr = casePr(caseEvents);
     if (pr === undefined) {
       return { problem: `${caseId} has no pr.opened event naming its PR, so its saved review can't be found` };
@@ -101,7 +100,7 @@ export function loadVerdictInputs(
     reviewText = found.text;
     review = found.review;
   }
-  // No findings list is not "no findings": it is a save this can't judge (AUD-M1).
+  // No findings list is not "no findings": it is a save this can't judge.
   if (!Array.isArray(review.findings)) return { problem: `${reviewPath} holds no findings list` };
   // One finding per id, or a judgement could land on another finding than the one the rule matched.
   const ids = review.findings.map((f) => f.id);
@@ -109,7 +108,7 @@ export function loadVerdictInputs(
 
   const dir = templateDir(templateId, env);
   if (!dir) return { problem: `template ${templateId} not found in private/templates or templates/seed` };
-  // A control's template declares no match terms (the schema forbids them): there is no bug to match (#162).
+  // A control's template declares no match terms (the schema forbids them): there is no bug to match.
   const isControl = entry.kind === "control";
   let templateText: string;
   let kindTerms: string[] = [];

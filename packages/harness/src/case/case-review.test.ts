@@ -72,7 +72,7 @@ describe("qodoReviewComment", () => {
   });
 });
 
-describe("npm run case:review (#162)", () => {
+describe("npm run case:review", () => {
   it("appends the review.recorded event case:build needs, from what review:wait saved", () => {
     const fx = fixture();
     expect(fx.go()).toBe(0);
@@ -125,7 +125,7 @@ describe("npm run case:review (#162)", () => {
   });
 });
 
-describe("npm run case:review: unfinished reviews, stale comments and how pr.opened names the PR (Qodo on PR 214)", () => {
+describe("npm run case:review: unfinished reviews, stale comments and how pr.opened names the PR", () => {
   it("records an unfinished review that has no review comment, pointing at the PR", () => {
     const fx = fixture({ comments: [QODO_SUMMARY] });
     const dir = join(fx.auditEventsPath, "..", "raw-artifacts", "reviews", "target-pr7");
@@ -210,7 +210,7 @@ describe("npm run case:review: unfinished reviews, stale comments and how pr.ope
   });
 });
 
-describe("npm run case:review refuses a rewritten audit-log history (#224, Qodo on PR 232)", () => {
+describe("npm run case:review refuses a rewritten audit-log history", () => {
   it("exits 2 when a commit in the private repository changed a line of the audit log", () => {
     const fx = fixture();
     const root = join(fx.auditEventsPath, "..");

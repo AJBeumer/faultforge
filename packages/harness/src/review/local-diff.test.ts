@@ -175,7 +175,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff).toContain("diff --git a/tracked.txt b/tracked.txt");
   });
 
-  it("produces a diff `git apply` accepts cleanly against the base commit (Qodo rejected a truncated one live, 12 November)", () => {
+  it("produces a diff `git apply` accepts cleanly against the base commit", () => {
     const repo = initRepo();
     writeFileSync(join(repo, "tracked.txt"), "line1\nline2\n");
     sh(repo, "add", ".");
@@ -184,7 +184,7 @@ describe("buildLocalDiff on a real git repository", () => {
 
     writeFileSync(join(repo, "tracked.txt"), "line1\nline2 modified\n");
     writeFileSync(join(repo, "first-untracked.txt"), "a\nb\n");
-    // The file whose diff lands last matters most: an earlier bug dropped its trailing newline.
+    // The file whose diff lands last matters most: its trailing newline is the easiest to lose.
     writeFileSync(join(repo, "last-untracked.txt"), "c\nd\n");
 
     const split = readWorkingTreeSplit(repo);
@@ -199,7 +199,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(() => sh(clean, "apply", "--check", patchPath)).not.toThrow();
   });
 
-  it("lists a new directory's files individually with --untracked-files=all, not as one entry (a real gap, 12 November)", () => {
+  it("lists a new directory's files individually with --untracked-files=all, not as one entry", () => {
     const repo = initRepo();
     sh(repo, "commit", "-qm", "base", "--allow-empty");
     mkdirSync(join(repo, "newdir"), { recursive: true });
@@ -219,9 +219,8 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff).toContain("diff --git a/newdir/b.txt b/newdir/b.txt");
   });
 
-  // A double quote forces git to quote the whole header, which splitDiffSections's plain a/…/b/…
-  // pattern never matches (confirmed live, 12 November) — but Windows itself refuses that character
-  // in a filename, so the scenario can only be built, and so only matters, on Linux and macOS.
+  // A double quote makes git quote the whole header, which the plain a/… b/… pattern never matches.
+  // Windows refuses that character in a file name, so this can only happen on Linux and macOS.
   it.skipIf(process.platform === "win32")(
     "flags a tracked file whose diff header git had to quote, instead of silently dropping it",
     () => {
@@ -301,7 +300,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff.length).toBeGreaterThan(2_000_000);
   });
 
-  it("sends an untracked file whose name has a space, and calls the snapshot complete only then (#189)", () => {
+  it("sends an untracked file whose name has a space, and calls the snapshot complete only then", () => {
     const repo = initRepo();
     sh(repo, "commit", "-qm", "base", "--allow-empty");
     const base = sh(repo, "rev-parse", "HEAD");
@@ -317,7 +316,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.complete).toBe(true);
   });
 
-  it("diffs a tracked file whose name has a space, never calling it unchanged (#189)", () => {
+  it("diffs a tracked file whose name has a space, never calling it unchanged", () => {
     const repo = initRepo();
     writeFileSync(join(repo, "tracked file.txt"), "1\n");
     sh(repo, "add", ".");
@@ -331,7 +330,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.complete).toBe(true);
   });
 
-  it("lists an untracked file git can't open as excluded, and the snapshot as incomplete (#189)", () => {
+  it("lists an untracked file git can't open as excluded, and the snapshot as incomplete", () => {
     const repo = initRepo();
     sh(repo, "commit", "-qm", "base", "--allow-empty");
     const base = sh(repo, "rev-parse", "HEAD");
@@ -342,7 +341,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff).toBe("");
   });
 
-  it("diffs an untracked file larger than a default child-process buffer (#189)", () => {
+  it("diffs an untracked file larger than a default child-process buffer", () => {
     const repo = initRepo();
     sh(repo, "commit", "-qm", "base", "--allow-empty");
     const base = sh(repo, "rev-parse", "HEAD");
@@ -354,7 +353,7 @@ describe("buildLocalDiff on a real git repository", () => {
     expect(result.diff.length).toBeGreaterThan(1_500_000);
   });
 
-  it("reads a rename from the NUL-separated status without taking the old path as an entry (#189)", () => {
+  it("reads a rename from the NUL-separated status without taking the old path as an entry", () => {
     const repo = initRepo();
     writeFileSync(join(repo, "old name.txt"), "1\n");
     sh(repo, "add", ".");

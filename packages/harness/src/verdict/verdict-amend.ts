@@ -1,19 +1,12 @@
 /**
- * Adds an accurate reason to a verdict already recorded, without replacing it (AUD-H4).
+ * Adds an accurate reason to a verdict already recorded, without replacing it.
  *
  *   npm run verdict:amend -- FF-0012
  *   npm run verdict:amend -- FF-0012 --dry-run     # prints the line it would append, writes nothing
  *
- * It never re-runs or replaces a verdict: the disposition, the original reason, the judgements and the
- * time stay as they were, so `case:build` keeps building the same record. It appends one amendment line to
- * `private/audit-events.jsonl` naming the case's latest `case.adjudicated` event, whose `change` adds
- * `amendedReason` (the owner's new text), `amendedReasonAt` (now) and `amendedReasonBy` (the owner's
- * login), whether the owner wrote it (`amendedReasonDraftedBy`: `owner` or `agent`, asked every time, no
- * default; #321), and marks it `amendedReasonWrittenLater: true`. The amendment's own `reason` says so, and its
- * `evidence` is the saved review the verdict judged. `ledger:check` accepts it: no locked field changes.
- *
- * Asked on a terminal, as `verdict` asks: it prints the verdict and its reason, then asks for the new reason,
- * which must be nonblank, differ from the original, and not be any other case's reason or amended reason.
+ * The verdict itself stays as it was, so `case:build` keeps building the same record. The new reason goes
+ * into one amendment line that changes no locked field, so `ledger:check` accepts it. The reason must differ
+ * from the original and from every other case's reason, and the owner says whether they wrote it.
  *
  * Exit codes: 0 the amendment was appended (or, with `--dry-run`, printed); 1 nothing was written because it
  * was refused: stdin is not a terminal, who wrote the reason got no y or n, the verdict already has an amended reason (or gained one, or was
@@ -87,8 +80,8 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     error(`verdict:amend: ${caseId}'s verdict has no event id, so no amendment can name it; ask the owner`);
     return 2;
   }
-  // The evidence is what the verdict judged: the file it names, else its PR's save, else (a legacy case with
-  // no save) its case record (Qodo on PR 267).
+  // The evidence is what the verdict judged: the file it names, else its PR's save, else (an old case with
+  // no save) its case record.
   const save = entry ? findSavedReview(reviewsDir, String(entry.injectionCommit), casePr(caseEvents)) : undefined;
   const record = join(root, "cases", `${caseId}.json`);
   const evidence =
@@ -123,7 +116,7 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     return 2;
   }
 
-  // Neither the reason it replaces in meaning nor any other case's reason (AUD-H4).
+  // A new reason must say something new: neither the original nor any other case's reason.
   const taken = reasonsOfOtherCases(events, caseId);
   if (typeof verdict.reason === "string") taken.add(normalReason(verdict.reason));
   const ask = options.ask ?? defaultAsk;
@@ -136,8 +129,7 @@ export async function run(caseId: string, options: AmendOptions = {}): Promise<n
     );
     return 1;
   }
-  // Asked every time, as verdict asks it (#321). Its own field: the verdict's `reasonDraftedBy` is about the
-  // original reason, which stays as it was.
+  // Its own field: the verdict's `reasonDraftedBy` is about the original reason, which stays as it was.
   const draftedBy = await askDraftedBy(ask);
   if (!draftedBy) {
     error("verdict:amend: no answer (y or n) to who wrote the reason; nothing written");

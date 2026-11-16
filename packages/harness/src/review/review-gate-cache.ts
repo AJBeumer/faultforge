@@ -1,15 +1,11 @@
 /**
- * What `review:gate` found in each saved review last time, so a commit parses only the files that are new or
- * changed since (AUD-N6). The evidence folder only grows, and the gate runs in a hook with a time limit.
+ * What `review:gate` found in each saved review last time, so a commit parses only new or changed files.
+ * The evidence folder only grows, and the gate runs in a hook with a time limit.
  *
- * One JSON file per evidence folder, under the checkout's own `node_modules/.cache/`: ignored by git, and
- * writable only by whoever can already change the code that reads it, never a shared temp folder another user
- * could fill first (Qodo on PR 278). An entry is used only
- * while its file, and the `split.json` beside a `review.json`, have the same size and times as when it was
- * made; anything else is parsed again. The cache is tied to the source of the code that reads reviews, so a
- * change to how a review is read can never be answered from an older reading. A cache that is missing,
- * unreadable or from other code counts as empty, and one that can't be written is skipped: it changes only
- * how fast the answer comes, never the answer.
+ * The cache lives in the checkout's `node_modules/.cache/`, never a shared temp folder another user could
+ * fill first. An entry is used only while its file, and any `split.json` beside it, keep the same size and
+ * times. The cache is tied to the source of the code that reads reviews, so a change to that code never gets
+ * an older reading. A cache that can't be read or written only costs speed, never changes the answer.
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, type Stats, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -22,9 +18,8 @@ interface Entry {
   record: ReviewRecord | null;
 }
 
-/** The code whose reading the cache holds: this file and the reader. A change to either starts afresh. */
+/** A change to this file or the reader starts the cache afresh. */
 function codeVersion(): string {
-  // The same digest as hashing each file in turn: one hash over their bytes, one after the other.
   return sha256(
     Buffer.concat(
       ["review-gate-cache.ts", "review-gate-records.ts"].map((f) => readFileSync(join(import.meta.dirname, f))),
@@ -32,7 +27,6 @@ function codeVersion(): string {
   );
 }
 
-/** A file's identity for the cache: size and modification and change times. */
 export function stampOf(stat: Pick<Stats, "size" | "mtimeMs" | "ctimeMs">): string {
   return `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }

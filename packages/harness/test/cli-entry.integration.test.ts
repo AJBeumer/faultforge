@@ -1,5 +1,5 @@
 /**
- * Real processes for the entry files on `cli-entry.ts` (AUD-N3): an error while the body's modules load, or a
+ * Real processes for the entry files on `cli-entry.ts`: an error while the body's modules load, or a
  * link error in them, ends with the code the entry passes, never Node's default 1; and the moved scripts'
  * entries still reach their bodies and keep their own codes.
  */
@@ -50,7 +50,7 @@ function fixture(body: Record<string, string>) {
   return tsx(join(dir, "x-cli.ts"), [], dir);
 }
 
-describe("entries on cli-entry.ts, in a real process (AUD-N3)", () => {
+describe("entries on cli-entry.ts, in a real process", () => {
   it("end with the entry's code when a module throws while loading", () => {
     const { code, err } = fixture({
       "x.ts": 'import "./broken.ts";\nexport const main = () => 0;\n',
@@ -82,7 +82,7 @@ describe("entries on cli-entry.ts, in a real process (AUD-N3)", () => {
     expect(rejected.code).toBe(3);
   });
 
-  it("deliver a long output in full before exiting (Qodo on PR 277)", () => {
+  it("deliver a long output in full before exiting", () => {
     const line = `${"x".repeat(99)}\n`;
     const { code, out } = fixture({
       "x.ts": `export const main = () => {\n  for (let i = 0; i < 40000; i++) process.stdout.write(${JSON.stringify(line)});\n  return 0;\n};\n`,

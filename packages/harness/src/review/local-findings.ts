@@ -1,10 +1,8 @@
 /**
- * Reads Qodo's local-review findings and the review's own `finding_state`, and labels each finding
- * from it — never from whether it happens to repeat something seen in an earlier, unrelated run.
+ * Labels Qodo's local-review findings from the review's own `finding_state`, never from whether a finding
+ * repeats one from an earlier, unrelated run.
  *
- * `finding_state.introduced` / `resolved` / `still_open` / `dismissed` each hold full finding objects
- * (not plain ids, despite the shallower shape Qodo returns for a PR review's `get-pr-review-findings`):
- * confirmed live, 12 November, on `review:local`'s own first real run against this repository.
+ * Each `finding_state` list holds full finding objects, not plain ids, unlike a pull request review.
  */
 export interface RawFinding {
   id: string;
@@ -41,8 +39,7 @@ export interface LocalFinding {
   category: string | null;
   title: string | null;
   description: string | null;
-  /** "new": introduced by this run's `finding_state`. "carried over": anything else — including a
-   * finding already resolved or dismissed, which is still worth seeing, just not acted on again. */
+  /** "carried over" includes resolved and dismissed findings: still worth seeing, not acted on again. */
   label: "new" | "carried over";
   /** Not listed in `finding_state.resolved` or `dismissed`: a finding no list names counts as open. */
   open: boolean;
@@ -52,8 +49,7 @@ function idsOf(list: RawFinding[] | undefined): Set<string> {
   return new Set((list ?? []).map((f) => f.id));
 }
 
-/** True when every entry of every `finding_state` list is a finding with a string id, the shape the
- * labels are read from. Anything else (bare ids, say) means the labels can't be trusted (#196). */
+/** False when a `finding_state` entry isn't a finding with a string id: then the labels can't be trusted. */
 export function stateListsReadable(payload: LocalReviewPayload): boolean {
   const state = payload.finding_state ?? {};
   return [state.introduced, state.still_open, state.resolved, state.dismissed].every(
@@ -64,8 +60,6 @@ export function stateListsReadable(payload: LocalReviewPayload): boolean {
   );
 }
 
-/** Every finding Qodo returned, labelled from the review's own `finding_state` — never guessed from
- * whether a finding happens to repeat one seen in an earlier, unrelated run. */
 export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
   const state = payload.finding_state ?? {};
   const introduced = idsOf(state.introduced);
@@ -89,14 +83,13 @@ export function labelFindings(payload: LocalReviewPayload): LocalFinding[] {
       title: f.title ?? null,
       description: f.description ?? null,
       label: introduced.has(f.id) ? "new" : "carried over",
-      // Open when a list says so, or when no list closes it: a finding no list names is not closed (#196),
-      // and one listed both open and closed counts as open, the reading that can't hide a blocker.
+      // A finding no list names is not closed, and one listed both open and closed counts as open:
+      // the reading that can't hide a blocker.
       open: introduced.has(f.id) || stillOpen.has(f.id) || !closed.has(f.id),
     };
   });
 }
 
-/** One printable line for a finding, with its location, label and whether it's still open. */
 export function formatFinding(f: LocalFinding): string {
   const where = f.file ? `${f.file}${f.lines ? `:${f.lines[0]}-${f.lines[1]}` : ""}` : "(no location)";
   const openNote = f.open ? "" : ", closed";

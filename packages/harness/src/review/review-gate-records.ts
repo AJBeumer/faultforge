@@ -1,27 +1,27 @@
 /**
  * Reads the saved local reviews under the evidence folder as records `review:gate` can compare: the trees each
- * one recorded, its base commit and repository, and whether it was complete (and if not, why). Split from
- * `review-gate.ts` (#254), which decides coverage and runs the command.
+ * one recorded, its base commit and repository, and whether it was complete (and if not, why).
+ * `review-gate.ts` decides coverage and runs the command.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { type ReviewCache, sidecarStamp, stampOf } from "./review-gate-cache.ts";
 
 export interface ReviewRecord {
-  /** The saved file this came from, relative to the evidence folder where possible. */
+  /** Relative to the evidence folder where possible. */
   source: string;
-  /** Every tree hash the review recorded (a checkpoint tree, a snapshot tree, or both). */
+  /** A checkpoint tree, a snapshot tree, or both. */
   trees: string[];
   baseSha: string | null;
-  /** The repository the review was run for (`owner/name`), when the saved run says so. */
+  /** `owner/name`, when the saved run says so. */
   repo: string | null;
-  /** Qodo said its coverage of the change was complete. Absent counts as not complete. */
+  /** Absent counts as not complete. */
   complete: boolean;
-  /** When not complete, which condition failed, in words; the gate's "not covered" reason (#254). */
+  /** Which condition failed, in words: the gate's "not covered" reason. */
   incompleteBecause?: string;
-  /** Qodo skipped the review (`review_effort: skip`): it never really ran. */
+  /** Qodo skipped the review, so it never really ran. */
   skipped: boolean;
-  /** When the review was made, in ms: its own recorded time, else the saved file's time. */
+  /** In ms: the review's own recorded time, else the saved file's time. */
   at: number;
 }
 
@@ -32,19 +32,16 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-/** What the run saved next to a review (`split.json`): which repository, and whether every changed
- * file reached Qodo. A review whose diff left a file out is never complete coverage, whatever Qodo's
- * own coverage flag says. */
+/** The `split.json` beside a review. A diff that left a file out is never complete, whatever Qodo says. */
 export interface Sidecar {
   repo: string | null;
   scopeComplete: boolean;
 }
 
 /**
- * Which completeness condition a review fails, in words, or undefined when it meets them all. Coverage, the
- * finding inventory and the local snapshot must all be complete: the same three conditions under which
- * `review:local` itself will not exit 3. In the saved evidence the inventory flag is true exactly when Qodo
- * kept a checkpoint for the review, so the reason Qodo gives is passed on (#254).
+ * Coverage, the finding list and the local diff must all be complete: the same conditions under which
+ * `review:local` won't exit 3. The finding list is complete exactly when Qodo kept a checkpoint, so Qodo's
+ * own reason is passed on.
  */
 function whyIncomplete(
   meta: Record<string, unknown>,
@@ -62,9 +59,7 @@ function whyIncomplete(
   return undefined;
 }
 
-/** Reads one parsed JSON document as a review record, or null when it is not a review with a tree.
- * Unwraps the managed-agent envelope (`{output: "<json>"}` holding `{result: payload}`) that earlier
- * saves used, and a bare `{result: payload}`. */
+/** Null when the document is not a review with a tree. Saves come in two wrappings, and both are unwrapped. */
 export function extractReviewRecord(
   doc: unknown,
   source: string,
@@ -131,8 +126,7 @@ function walk(dir: string, out: string[], problems: string[], top = true): void 
   }
 }
 
-/** The `split.json` `review:local` saved beside a `review.json`, or null when there is none (older saves).
- * The scope counts as incomplete when the diff was never built, or left any file out. */
+/** Null for older saves, which have none. The scope is incomplete when the diff wasn't built or left a file out. */
 function readSidecar(reviewFile: string): { sidecar: Sidecar | null; certain: boolean } {
   if (basename(reviewFile) !== "review.json") return { sidecar: null, certain: true };
   const unknownScope: Sidecar = { repo: null, scopeComplete: false };
@@ -144,19 +138,17 @@ function readSidecar(reviewFile: string): { sidecar: Sidecar | null; certain: bo
       split.diffBuilt !== false && left(split.excludedFiles ?? []) === 0 && left(split.skippedFiles ?? []) === 0;
     return { sidecar: { repo: typeof split.repo === "string" ? split.repo : null, scopeComplete }, certain: true };
   } catch (error) {
-    // No split.json at all is an older save. One that exists but cannot be read or parsed is not: it
-    // may have recorded a file that never reached Qodo, so the review cannot count as complete.
-    // Only a parse failure is certain: a read that failed may succeed next time, so it is never cached
-    // (Qodo on PR 278).
+    // A split.json that exists but can't be read may have recorded a file that never reached Qodo, so the
+    // review can't count as complete. Only a parse failure is cached: a failed read may succeed next time.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { sidecar: null, certain: true };
     return { sidecar: unknownScope, certain: error instanceof SyntaxError };
   }
 }
 
-/** Every saved review with a recorded tree under `root`, however deep. A file that is not JSON, is too
- * large, or holds no review is skipped, never an error: the evidence folder also holds other things.
- * With a cache, a file unchanged since the cache last saw it is not read again (AUD-N6); `parsed` counts the
- * files that were. A file that could not be read is never cached, so it is tried, and reported, every time. */
+/**
+ * A file that isn't a review is skipped, never an error: the evidence folder holds other things too. A file
+ * that couldn't be read is never cached, so it is tried, and reported, every time.
+ */
 export function readReviewRecords(
   root: string,
   cache?: ReviewCache,

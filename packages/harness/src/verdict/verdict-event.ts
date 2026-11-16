@@ -23,7 +23,7 @@ export interface AdjudicationEvent {
   ruleVersion?: string;
   disposition: string;
   reason: string;
-  /** Who drafted `reason`: the owner, or an agent whose draft the owner accepted (#321). Absent on earlier events. */
+  /** Who drafted `reason`: the owner, or an agent whose draft the owner accepted. Older events lack it. */
   reasonDraftedBy?: "owner" | "agent";
   judgements: Judgement[];
   /** The event id of the earlier verdict this one replaces, given with `--supersede`. */
@@ -32,7 +32,7 @@ export interface AdjudicationEvent {
 
 /** A reason as compared across cases: case, spacing and a closing full stop don't make it another reason. */
 export function normalReason(reason: string): string {
-  // Closing full stops and the spaces around them go first, then spacing inside (Qodo on PR 267).
+  // Closing full stops and the spaces around them go first, then spacing inside.
   return reason
     .toLowerCase()
     .replace(/[\s.]+$/, "")
@@ -42,13 +42,13 @@ export function normalReason(reason: string): string {
 
 /**
  * Every reason already given for a verdict on another case, and every amended reason, normalised: a reason
- * that fits one case is the wrong reason for another (AUD-H4).
+ * that fits one case is the wrong reason for another.
  */
 export function reasonsOfOtherCases(events: Record<string, unknown>[], caseId: string): Set<string> {
   const reasons = new Set<string>();
   for (const e of events) {
     if (e.type !== "case.adjudicated" || e.caseId === caseId) continue;
-    // The amendments too: a reason a later amendment replaced is still that case's (Qodo on PR 267).
+    // A reason a later amendment replaced still belongs to that case.
     const changes = Array.isArray(e.amendments) ? e.amendments.map((a) => (a as { change?: unknown }).change) : [];
     for (const source of [e, ...changes]) {
       if (typeof source !== "object" || source === null) continue;
@@ -68,7 +68,7 @@ export const BUG_VERDICTS: Record<string, string> = {
 };
 
 /**
- * A control has no planted bug to catch (#162): `clean` when Qodo raised nothing, `false alarm` when it
+ * A control has no planted bug to catch: `clean` when Qodo raised nothing, `false alarm` when it
  * raised something on a harmless change, `review incomplete` when the review never finished.
  */
 export const CONTROL_VERDICTS: Record<string, string> = {
@@ -79,14 +79,14 @@ export const CONTROL_VERDICTS: Record<string, string> = {
 
 /**
  * A case's verdict that counts: the latest by `at`, as `case:build` picks it (a tie goes to the later line).
- * `verdict --supersede` and `verdict:amend` name this one, never merely the last line (Qodo on PR 267).
+ * `verdict --supersede` and `verdict:amend` name this one, which isn't always the last line.
  */
 export function latestVerdict<T extends Record<string, unknown>>(caseEvents: T[]): T | undefined {
   let latest: T | undefined;
   for (const e of caseEvents) {
     if (e.type !== "case.adjudicated") continue;
     const at = Date.parse(String(e.at));
-    // An unreadable time is refused, as case:build refuses it, never silently ranked (Qodo on PR 267).
+    // An unreadable time is refused, as case:build refuses it, never silently ranked.
     if (Number.isNaN(at)) throw new Error(`verdict ${String(e.eventId)} has no readable time`);
     if (!latest || at >= Date.parse(String(latest.at))) latest = e;
   }

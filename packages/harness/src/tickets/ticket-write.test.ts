@@ -19,8 +19,8 @@ function fakes(doorFails?: Error) {
   return { lab, door, deps: { gh, door: doorGh, guardReviewed: ["Owner/app"] } };
 }
 
-describe("the runner's ticket writes (#345)", () => {
-  it("sends a lab ticket's comment and labels with gh, as before", () => {
+describe("the runner's ticket writes", () => {
+  it("sends a lab ticket's comment and labels with gh", () => {
     const f = fakes();
     const w = ticketWriter([], f.deps);
     w.comment("Owner/lab", 3, "Picked up.");

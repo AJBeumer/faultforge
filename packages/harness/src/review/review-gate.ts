@@ -6,15 +6,12 @@
  *   npm run review:gate -- faultforge                  the staged tree
  *   npm run review:gate -- faultforge --commit HEAD    the tree of a commit
  *
- * Qodo's local review records the git tree it reviewed (`meta.checkpoint.tree_sha`, or on a first run
- * `meta.run.snapshot.tree_sha`). A commit made from exactly those files has the same tree, so the two
- * can be compared byte for byte (measured on ticket #126: the review's tree equalled the first
- * commit's). "Covered" says a complete review, not skipped, saw this tree. It does not say the
- * findings were fixed or dismissed.
+ * Qodo's local review records the git tree it reviewed. A commit made from exactly those files has the
+ * same tree, so the two can be compared exactly. "Covered" says a complete review, not skipped, saw this
+ * tree. It does not say the findings were fixed or dismissed.
  *
- * The staged tree comes from `git write-tree`, which adds the tree to the object store but changes no
- * branch, index, file, review or label. The only other write is a cache of what each saved review held, under
- * `node_modules/.cache/` (`review-gate-cache.ts`), so a commit parses only the reviews saved since the last one.
+ * `git write-tree` adds the staged tree to the object store but changes no branch, index or file. The only
+ * other write is a cache under `node_modules/.cache/`, so a commit parses only reviews saved since the last.
  *
  * Exit codes: 0 covered; 1 not covered (the output names the nearest reviewed tree and its age);
  * 2 could not read the evidence or the tree (a bad option, no such commit, an unreadable folder).
@@ -31,26 +28,23 @@ import { HASH, LINE_BREAK, type ReviewRecord, readReviewRecords } from "./review
 export { extractReviewRecord, type ReviewRecord, readReviewRecords, type Sidecar } from "./review-gate-records.ts";
 
 export interface GateScope {
-  /** `owner/name` of the repository being checked. */
+  /** `owner/name`. */
   repo?: string;
-  /** Whether this checkout holds a commit: a review's base must be one. */
+  /** A review's base must be a commit this checkout holds. */
   hasCommit?: (sha: string) => boolean;
 }
 
 export interface GateResult {
   covered: boolean;
-  /** The review that covers the tree. */
   by: ReviewRecord | null;
-  /** When not covered: the most recent review of any tree, to show how stale the evidence is. */
+  /** The most recent review of any tree, to show how stale the evidence is. */
   nearest: ReviewRecord | null;
-  /** How many saved reviews were usable for this repository. Zero means there is nothing to compare
-   * with, which is not the same as a tree that was not reviewed. */
+  /** Zero means nothing to compare with, which is not the same as a tree that was not reviewed. */
   considered: number;
   reason: string;
 }
 
-/** Whether `tree` was covered. Any complete, not skipped review that recorded this exact tree
- * covers it, however old and whatever else was reviewed since. */
+/** Any complete, not skipped review of this exact tree covers it, however old. */
 export function checkTree(tree: string, allRecords: ReviewRecord[], scope: GateScope = {}): GateResult {
   // A review of another repository, or one made against a base commit this checkout has never had,
   // says nothing about these files, even if the trees happen to be equal.
@@ -96,7 +90,7 @@ export function checkTree(tree: string, allRecords: ReviewRecord[], scope: GateS
   };
 }
 
-/** The tree object a commit contains. Throws when the commit does not exist. */
+/** Throws when the commit does not exist. */
 export function treeOfCommit(repoRoot: string, commit: string): string {
   return execFileSync("git", ["-C", repoRoot, "rev-parse", "--verify", "--quiet", `${commit}^{tree}`], {
     encoding: "utf8",
@@ -104,7 +98,6 @@ export function treeOfCommit(repoRoot: string, commit: string): string {
   }).trim();
 }
 
-/** Whether the checkout holds this commit. */
 export function commitExists(repoRoot: string, sha: string): boolean {
   try {
     execFileSync("git", ["-C", repoRoot, "cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore" });
@@ -114,7 +107,6 @@ export function commitExists(repoRoot: string, sha: string): boolean {
   }
 }
 
-/** The tree of what is staged now. */
 export function stagedTree(repoRoot: string): string {
   return execFileSync("git", ["-C", repoRoot, "write-tree"], {
     encoding: "utf8",
@@ -190,8 +182,7 @@ function main(): number {
   cache.save();
 
   const what = args.commit !== null ? `the tree of ${args.commit}` : "the staged tree";
-  // One git call per distinct base commit, not one per saved review: the evidence folder only grows, and
-  // the hook that runs this has ten seconds (#196).
+  // One git call per distinct base commit: the evidence folder only grows, and the hook has ten seconds.
   const known = new Map<string, boolean>();
   const hasCommit = (sha: string) => {
     if (!known.has(sha)) known.set(sha, commitExists(repoRoot, sha));
@@ -204,9 +195,7 @@ function main(): number {
     console.log("This says a complete review saw this tree, not that its findings were fixed.");
     return 0;
   }
-  // A covering review would have been found even with part of the folder unreadable, but nothing else is
-  // an answer unless everything was read: the missing review may be in what was not. Said first, so
-  // an unreadable folder is never misreported as "no review found".
+  // Only "covered" holds with part of the folder unreadable: the missing review may be in what wasn't read.
   if (problems.length > 0) {
     console.error(`could not read all of the evidence under ${evidence}, so no other answer can be trusted:`);
     for (const problem of problems.slice(0, 5)) console.error(`  ${problem}`);

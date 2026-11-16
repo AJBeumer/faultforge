@@ -1,5 +1,5 @@
 /**
- * The JSON schemas for what private storage holds, applied to every line and file on disk (AUD-N5): each
+ * The JSON schemas for what private storage holds, applied to every line and file on disk: each
  * answer-key line (`schemas/answer-key-entry.v1.json`: a planted bug, a control or an amendment), each entry
  * again with its amendments applied, as the tools read it, and each saved review (`schemas/saved-review.v1.json`,
  * what `review:wait` writes), archived ones included. `ledger:check` reports each one that doesn't fit, by file
@@ -52,7 +52,7 @@ const KINDS = ["sabotage", "control", "amendment"];
 
 /**
  * Why `entry` doesn't fit the answer-key schema, or undefined. Judged against its own kind's definition only,
- * so the complaints are about what it is, never about the kinds it was never meant to be (Qodo on PR 289).
+ * so the complaints are about what it is, never about the kinds it was never meant to be.
  */
 export function answerKeyEntryProblem(entry: unknown): string | undefined {
   const kind = (entry as { kind?: unknown } | null)?.kind;
@@ -67,8 +67,8 @@ export function savedReviewProblem(review: unknown): string | undefined {
 
 /**
  * A problem for each line of the answer key at `path` that doesn't fit its schema, numbered by its line in the
- * file, and for each entry that no longer fits once its amendments are applied: an amendment may only change
- * an entry into another sound entry (Qodo on PR 289). A line that isn't JSON is one problem, named by the reader.
+ * file, and for each entry that stops fitting once its amendments are applied: an amendment may only change
+ * an entry into another sound entry. A line that isn't JSON is one problem, named by the reader.
  */
 export function answerKeyProblems(path: string): string[] {
   if (!existsSync(path)) return [];
@@ -79,13 +79,13 @@ export function answerKeyProblems(path: string): string[] {
   } catch (error) {
     return [`ground-truth.jsonl ${(error as Error).message}`];
   }
-  // The reader skips blank lines, so each entry's own line number is counted here (Qodo on PR 289).
+  // The reader skips blank lines, so each entry's own line number is counted here.
   const lineOf = text.split("\n").flatMap((line, i) => (line.trim() ? [i + 1] : []));
   const problems = entries.flatMap((entry, i) => {
     const problem = answerKeyEntryProblem(entry);
     return problem ? [`ground-truth.jsonl line ${lineOf[i]}: ${problem}`] : [];
   });
-  // Every version an amended entry has had, not only the last: a tool may have read any of them (Qodo on PR 289).
+  // Every version an amended entry has had, not only the last: a tool may have read any of them.
   for (const { amendments, caseId } of readLedger(path)) {
     if (!amendments.length || typeof caseId !== "string") continue;
     for (const [n, { amendments: _applied, ...version }] of entryVersions(path, caseId).entries()) {
@@ -106,7 +106,7 @@ function savesUnder(dir: string): string[] {
     .sort()
     .flatMap((name) => {
       const path = join(dir, name);
-      // A link is never followed: one pointing back up would never end (Qodo on PR 289). review:wait makes none.
+      // A link is never followed: one pointing back up would never end. review:wait makes none.
       const stat = lstatSync(path);
       if (stat.isSymbolicLink()) return [];
       if (stat.isDirectory()) return savesUnder(path);

@@ -1,7 +1,6 @@
 /**
- * Giveaway words in the files of a commit in the reviewed repository (#224, audit H-4). The first case ran
- * while the target's README named this repository; `inject` now refuses a base like that, because the
- * reviewer reads the whole tree, not only the diff.
+ * Giveaway words in the files of a commit in the reviewed repository. `inject` refuses a base that holds
+ * one, because the reviewer reads the whole tree, not only the diff.
  */
 import { execFileSync } from "node:child_process";
 import { telltales } from "../shared/neutral.ts";
@@ -14,7 +13,7 @@ export class TreeUnreadable extends Error {}
 /**
  * `path: reason` for every tracked file at `commit` in `repo` whose path or text holds a giveaway word, or
  * an empty list. Binary files are read as text too: a word inside one is still visible to a reader. A
- * submodule's entry is a commit of another repository, so only its name is read (Qodo on PR 232). Throws
+ * submodule's entry is a commit of another repository, so only its name is read. Throws
  * `TreeUnreadable` when git can't list the tree or read a file.
  */
 export function baseTreeTelltales(repo: string, commit: string): string[] {

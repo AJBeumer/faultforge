@@ -100,7 +100,7 @@ function fixture(
 /**
  * A fake prompt that returns each of `answers` in turn, recording every question asked. Whether the owner wrote
  * the reason is answered `drafted` ("y" unless a test says otherwise) without taking one of `answers`, and isn't
- * recorded as a question: the tests that count questions predate it (#321).
+ * recorded as a question, so the tests that count questions count only the others.
  */
 function fakeAsk(answers: string[], drafted = "y"): { ask: AskFn; questions: string[] } {
   const questions: string[] = [];
@@ -272,7 +272,7 @@ describe("npm run verdict: the event it appends", () => {
     expect(out).toContain("recorded: FF-0001 confirmed_detected");
   });
 
-  it("asks who wrote the reason, right after it, and records the answer as reasonDraftedBy (#321)", async () => {
+  it("asks who wrote the reason, right after it, and records the answer as reasonDraftedBy", async () => {
     for (const [answer, drafted] of [
       ["y", "owner"],
       ["Y", "owner"],
@@ -295,7 +295,7 @@ describe("npm run verdict: the event it appends", () => {
     }
   });
 
-  it("has no silent default: a blank or other answer is asked again, then nothing is recorded (#321)", async () => {
+  it("has no silent default: a blank or other answer is asked again, then nothing is recorded", async () => {
     const { ask } = fakeAsk(["detected", "Qodo named the lines", "real", "r"], "");
     const { code, err, appended } = await runOn("FF-0001", fixture(), { ask });
     expect(code).toBe(2);
@@ -307,7 +307,7 @@ describe("npm run verdict: the event it appends", () => {
     expect(maybe.code).toBe(2);
   });
 
-  it("keeps every earlier event valid: reasonDraftedBy is optional in the schema, and only owner or agent (#321)", () => {
+  it("keeps every earlier event valid: reasonDraftedBy is optional in the schema, and only owner or agent", () => {
     const event = {
       eventId: "e1",
       type: "case.adjudicated",
@@ -354,7 +354,7 @@ describe("npm run verdict: the event it appends", () => {
   });
 
   it("maps each disposition word, case-insensitively, to the schema's enum value", async () => {
-    // The fixture's finding is a catch, so "missed" contradicts the rule and is confirmed first (#192).
+    // The fixture's finding is a catch, so "missed" contradicts the rule and is confirmed first.
     for (const [word, answers, disposition] of [
       ["DETECTED", ["reason", "real", "r"], "confirmed_detected"],
       ["missed", ["yes", "reason", "false alarm", "r"], "confirmed_missed"],
@@ -367,7 +367,7 @@ describe("npm run verdict: the event it appends", () => {
     }
   });
 
-  it("asks before recording an answer the rule contradicts, and writes nothing without a yes (#192)", async () => {
+  it("asks before recording an answer the rule contradicts, and writes nothing without a yes", async () => {
     const refused = await runOn("FF-0001", fixture(), { ask: fakeAsk(["missed", "no"]).ask });
     expect(refused.code).toBe(2);
     expect(refused.err).toContain("contradicts the rule");
@@ -378,7 +378,7 @@ describe("npm run verdict: the event it appends", () => {
     expect(questions.some((q) => q.includes("Record it anyway"))).toBe(false);
   });
 
-  it("refuses to run while the answer key has an amendment that changes a locked field (#192)", async () => {
+  it("refuses to run while the answer key has an amendment that changes a locked field", async () => {
     const root = fixture();
     const groundTruth = join(root, "ground-truth.jsonl");
     appendFileSync(
@@ -514,7 +514,7 @@ describe("parseCliArgs", () => {
   });
 });
 
-describe("npm run verdict: a control case, whose template declares no match terms (#162)", () => {
+describe("npm run verdict: a control case, whose template declares no match terms", () => {
   // A control template as template.v2.json requires it: no invariantId, defectClass, proofTest or match.
   const CONTROL_TEMPLATE = {
     schemaVersion: 2,
@@ -552,7 +552,7 @@ describe("npm run verdict: a control case, whose template declares no match term
     expect(appended[0]).toMatchObject({ disposition: "confirmed_clean", judgements: [] });
   });
 
-  it("refuses a false alarm while a finding is left open (Qodo on PR 214)", async () => {
+  it("refuses a false alarm while a finding is left open", async () => {
     const { ask } = fakeAsk(["false alarm", "harmless change", ""]);
     const { code, err, appended } = await runOn("FF-0002", controlFixture({ findings: [OTHER_FINDING] }), { ask });
     expect(code).toBe(2);
@@ -600,8 +600,8 @@ describe("npm run verdict: a control case, whose template declares no match term
   });
 });
 
-describe("npm run verdict: the save it judges (#244, AUD-M1, AUD-M24)", () => {
-  /** A second save of the same commit, on PR 2. */
+describe("npm run verdict: the save it judges", () => {
+  /** A second save of the same commit, on another PR. */
   function addSaveOnPr2(root: string, review: Record<string, unknown>) {
     const dir = join(root, "raw-artifacts", "reviews", "target-pr2");
     mkdirSync(dir, { recursive: true });
@@ -633,7 +633,7 @@ describe("npm run verdict: the save it judges (#244, AUD-M1, AUD-M24)", () => {
     expect(err).toContain("no pr.opened event naming its PR");
   });
 
-  it("reads a save with no state as unfinished: only review incomplete is offered (M60)", async () => {
+  it("reads a save with no state as unfinished: only review incomplete is offered", async () => {
     const root = fixture({ findings: [] });
     const path = join(root, "raw-artifacts", "reviews", "target-pr1", "c7ffd154.review.json");
     const { state: _gone, ...rest } = JSON.parse(readFileSync(path, "utf8"));
@@ -645,7 +645,7 @@ describe("npm run verdict: the save it judges (#244, AUD-M1, AUD-M24)", () => {
     expect(appended).toEqual([]);
   });
 
-  it("refuses, exit 2, a save with no findings list rather than read it as none (M61)", async () => {
+  it("refuses, exit 2, a save with no findings list rather than read it as none", async () => {
     const root = fixture();
     const path = join(root, "raw-artifacts", "reviews", "target-pr1", "c7ffd154.review.json");
     const { findings: _gone, ...rest } = JSON.parse(readFileSync(path, "utf8"));
@@ -657,7 +657,7 @@ describe("npm run verdict: the save it judges (#244, AUD-M1, AUD-M24)", () => {
   });
 });
 
-describe("npm run verdict: a reason belongs to its case, every match is judged, a repeat supersedes (#250, AUD-H4)", () => {
+describe("npm run verdict: a reason belongs to its case, every match is judged, a repeat supersedes", () => {
   const verdictLine = (fields: Record<string, unknown>) =>
     `${JSON.stringify({ type: "case.adjudicated", at: "2026-11-10T11:50:00.000Z", disposition: "confirmed_detected", ...fields })}\n`;
 
@@ -734,14 +734,14 @@ describe("npm run verdict: a reason belongs to its case, every match is judged, 
   });
 });
 
-describe("npm run verdict: its event fits the audit-event schema (#251)", () => {
+describe("npm run verdict: its event fits the audit-event schema", () => {
   it("passes appendEvent's check for a bug case and a control", async () => {
     const bug = await runOn("FF-0001", fixture(), { ask: fakeAsk(["detected", "Qodo named it", "real", "r"]).ask });
     expect(eventProblems(bug.appended[0])).toEqual([]);
   });
 });
 
-describe("npm run verdict: what Qodo found on PR 267", () => {
+describe("npm run verdict: the verdict agrees with its judgements and the latest record", () => {
   const verdictLine = (fields: Record<string, unknown>) =>
     `${JSON.stringify({ type: "case.adjudicated", caseId: "FF-0001", disposition: "confirmed_detected", reason: "x", ...fields })}\n`;
 
@@ -797,7 +797,7 @@ describe("npm run verdict: what Qodo found on PR 267", () => {
   });
 });
 
-describe("npm run verdict: round two on PR 267", () => {
+describe("npm run verdict: an overruled miss, a verdict with no id, and a reason taken meanwhile", () => {
   it("lets the owner overrule a computed miss, with an unmatched finding judged real", async () => {
     const root = fixture({ findings: [{ ...OTHER_FINDING }] });
     const { code, appended } = await runOn("FF-0001", root, {
@@ -836,7 +836,7 @@ describe("npm run verdict: round two on PR 267", () => {
   });
 });
 
-describe("npm run verdict: round three on PR 267", () => {
+describe("npm run verdict: reasons compared loosely, and saves and times it can't trust", () => {
   it("reads a reason the same whatever spacing or full stops close it", () => {
     for (const r of ["Same reason .", "same reason..", "  SAME   reason  "])
       expect(normalReason(r)).toBe("same reason");
@@ -852,7 +852,7 @@ describe("npm run verdict: round three on PR 267", () => {
   });
 });
 
-describe("verdict: the case id is checked before it names a file (#299)", () => {
+describe("verdict: the case id is checked before it names a file", () => {
   it.each(["../x", "FF-12", "ff-0002", "FF-0002/../../x", "FF-00020"])(
     "refuses %s with exit 2 and reads nothing",
     async (id) => {

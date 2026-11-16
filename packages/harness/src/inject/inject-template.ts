@@ -51,7 +51,7 @@ export interface TestChange {
   content?: string;
 }
 
-/** The old layout, a test change in its own file beside `template.json`: refused, never silently ignored. */
+/** A test change in its own file beside `template.json`: refused, never silently ignored. */
 export const LOOSE_TEST_CHANGE = "test-change.json";
 
 export interface Proof {
@@ -99,7 +99,7 @@ export function templateRefusal(
       return error instanceof Error ? error.message : String(error);
     }
   }
-  // A template declaring benchmark version 2 follows its rules, checked against every other template (#257).
+  // A template declaring benchmark version 2 follows its rules, checked against every other template.
   const ruleProblems = benchmarkProblems(template, others);
   if (ruleProblems.length) return `template ${templateId} breaks the benchmark v2 rules: ${ruleProblems.join("; ")}`;
   return undefined;
@@ -110,7 +110,7 @@ const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 
 /**
  * Why a test change's file can't be used, or undefined. It must be a test file: anything else in the commit
- * would be a second change the answer key never records (Qodo on PR 293). It may never touch git's own
+ * would be a second change the answer key never records. It may never touch git's own
  * folder, and must be another file than the main change's, however either is spelled: the recorded lines are
  * the main change's, and a test change in the same file would move them.
  */
@@ -125,7 +125,7 @@ export function testChangeFileProblem(file: string, mainFile: string): string | 
 
 /**
  * What in a template's test change would give the case away: a giveaway word, a name only the lab uses, or,
- * for a bug, a word starting with one of its kind terms or any invariant it breaks (Qodo on PR 293).
+ * for a bug, a word starting with one of its kind terms or any invariant it breaks.
  */
 function testChangeTelltales(template: Template): string[] {
   const change = template.testChange;
@@ -170,7 +170,7 @@ function present(path: string): boolean {
 
 /**
  * Throws unless `path` is no link itself, and the nearest folder of it that exists really lies inside
- * `targetDir`: no write leaves the target through a link, a dangling one included (Qodo on PR 293).
+ * `targetDir`: no write leaves the target through a link, a dangling one included.
  */
 function assertInside(targetDir: string, path: string): void {
   if (present(path) && lstatSync(path).isSymbolicLink()) throw new Error(`testChange's file ${path} is a link`);
@@ -196,7 +196,7 @@ function replaceFile(path: string, text: string): void {
  */
 export function applyTestChange(targetDir: string, change: TestChange): boolean {
   const path = join(targetDir, change.file);
-  // Checked here too, not only in `templateRefusal`: this is what writes (Qodo on PR 293).
+  // Checked here too, not only in `templateRefusal`: this is what writes.
   const fileProblem = testChangeFileProblem(change.file, "");
   if (fileProblem) throw new Error(`testChange ${fileProblem}`);
   assertInside(targetDir, path);
@@ -217,7 +217,7 @@ export function applyTestChange(targetDir: string, change: TestChange): boolean 
 }
 
 /**
- * A case commit's body (#321): the first sentence of the template's ticket `what`, on one line, ending in a full
+ * A case commit's body: the first sentence of the template's ticket `what`, on one line, ending in a full
  * stop unless it ends in other punctuation, so case commits carry a body as ordinary commits do. A full stop
  * ends a sentence only before a space or the end, so `v1.2` stays whole. The ticket's text is already public on
  * the target and checked for giveaways with the rest of the template.
@@ -251,7 +251,7 @@ export function applyMutation(targetDir: string, template: Template): [number, n
   }
   const changed = source.slice(0, at) + template.replace + source.slice(at + template.find.length);
   writeFileSync(path, changed);
-  // Version 2 records the lines the change touched; version 1 keeps the replaced block, as its cases did (#257).
+  // Version 2 records the lines the change touched; version 1 keeps the whole replaced block, as its cases have it.
   if (benchmarkOf(template) >= 2) return changedLines(source, changed);
   const start = source.slice(0, at).split("\n").length;
   const lineCount = template.replace.replace(/\n$/, "").split("\n").length;
@@ -261,7 +261,7 @@ export function applyMutation(targetDir: string, template: Template): [number, n
 /**
  * Every proof of every bug template, private storage first then `templates/seed` (one copy per template id),
  * each with its own folder. A control's variant must pass all of them: a "harmless" change that breaks any
- * known invariant is a real bug labelled as a control (AUD-M8).
+ * known invariant is a real bug labelled as a control.
  */
 export function proofCorpus(templateRoots: string[], skipped: (id: string, why: string) => void = () => {}): Proof[] {
   const seen = new Set<string>();
@@ -272,7 +272,7 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
       const dir = join(root, id);
       if (seen.has(id) || !existsSync(join(dir, "template.json"))) continue;
       // A template still being written can't stand in the corpus: it is skipped, and said so, rather than
-      // stopping every control (Qodo on PR 271). Only a usable copy marks the id as seen, so a broken private
+      // stopping every control. Only a usable copy marks the id as seen, so a broken private
       // copy never hides a good published one.
       let template: Template;
       try {
@@ -306,7 +306,7 @@ export function proofCorpus(templateRoots: string[], skipped: (id: string, why: 
 
 /**
  * Every valid template under `templateRoots`, private storage first (one per id). A copy that can't be read
- * or fails the schema is left out and hides no other copy of its id (Qodo on PR 274).
+ * or fails the schema is left out and hides no other copy of its id.
  */
 export function loadTemplates(templateRoots: string[]): Template[] {
   const seen = new Set<string>();
@@ -344,7 +344,7 @@ export function variantFailure(
   if (template.kind === "bug" && named("pass").length) {
     return `proof test still passes on the variant, so the mutation is not validated: ${named("pass").join(", ")}`;
   }
-  // A "harmless" change that breaks a known invariant is a real bug labelled as a control (AUD-M8).
+  // A "harmless" change that breaks a known invariant is a real bug labelled as a control.
   if (template.kind === "control" && named("fail").length) {
     return `the control variant fails proofs in the corpus, so it is not a clean control: ${named("fail").join(", ")}`;
   }

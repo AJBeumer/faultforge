@@ -7,35 +7,18 @@
  *   npm run verdict -- FF-0001 --review <path>     # read findings from this file instead of discovering one
  *   npm run verdict -- FF-0001 --supersede <id>    # replace the case's latest verdict, event <id>
  *
- * Reads the case's ground-truth entry (`readLedger`, #10) for the injected file, lines and template,
- * and the saved review (one of the `*.review.json` files `review:wait` writes) of the entry's
- * `injectionCommit` on the case's own PR, as its `pr.opened` event names it (a `--review <path>` is
- * refused if its own `headSha` differs). Prints every finding's match against the fixed rule
- * (`applyMatchRule`, #18): file, lines, width, category and summary, then the overall catch. When the
- * saved review's own `state` is not `"complete"` (skipped, timed out, the head moved on, or no state at
- * all), a warning is printed and the only verdict on offer is `review incomplete`: a clean result from an
- * unfinished review proves nothing. A save with no findings list is refused.
+ * It reads the saved review of the case's injected commit on its own PR, and prints each finding's match
+ * against the fixed rule. A review that isn't complete offers only `review incomplete`: a clean result from
+ * an unfinished review proves nothing.
  *
- * It then asks the owner, on the terminal: the verdict on the planted bug (`detected`, `missed` or
- * `review incomplete`, with a nonblank reason of the case's own — retried, then refused, if left blank or
- * if it is the reason, or amended reason, of another case's verdict), whether the owner wrote that reason
- * ("Did you write this reason yourself? (y/n)", recorded as `reasonDraftedBy`: `owner` or `agent`; asked every
- * time, with no default), and a judgement on every finding:
- * one the rule matched as `real` or `false alarm`, with a reason, never left open; every other one as
- * `real`, `false alarm` or `open`, each with a nonblank reason. A blank answer leaves an unmatched finding
- * `open` at once, unjudged, with no reason asked; it is never recorded as a false alarm. Nothing is
- * written until every question is answered. The event — case id, commit reviewed, owner's login, UTC
- * time, an `inputHash` of the ground truth, the template and the review (so its exact inputs can be
- * checked later), the rule's version, the disposition, its reason and the judgements — is appended to
- * `private/audit-events.jsonl` as one `case.adjudicated` line, or printed instead with `--dry-run`.
+ * The owner gives the verdict with a reason of this case's own, says whether they wrote that reason, and
+ * judges every finding. A finding the rule matched must be judged real or a false alarm, because the verdict
+ * rests on it. A blank answer leaves any other finding open, never a false alarm. Nothing is written until
+ * every question is answered; the event then carries an input hash so its exact inputs can be checked later.
  *
- * A case that already has a verdict is refused unless `--supersede` names that verdict's event id; the
- * new event then records it as `supersedes`. To add a better reason without replacing a verdict, use
- * `verdict:amend`.
- *
- * An answer the match rule contradicts (`detected` for a computed miss, `missed` for a computed catch) is
- * recorded only after the owner confirms it. It is then the owner's judgement on record, but `case:build`
- * will not publish it while its record's checks require the verdict to agree with the rule.
+ * A case that already has a verdict is refused unless `--supersede` names it; `verdict:amend` adds a better
+ * reason without replacing one. An answer the match rule contradicts is recorded only after the owner
+ * confirms it, and `case:build` won't publish it while the record must agree with the rule.
  *
  * Exit codes: 0 the event was appended (or, with `--dry-run`, printed); 1 stdin is not a terminal, so
  * there is nobody to ask — the match is printed, nothing is written; 2 nothing was written, because: the
@@ -118,7 +101,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   const env = options.env ?? process.env;
   const log = options.log ?? ((line: string) => console.log(line));
   const error = options.error ?? ((line: string) => console.error(line));
-  // The id finds the case's files and goes into the event: checked first, so `../x` names nothing (#299).
+  // The id names the case's files and goes into the event, so check it first: `../x` must name nothing.
   if (!caseIdOk(caseId, "verdict", error)) return 2;
 
   const root = privateDir(env);
@@ -140,7 +123,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
   const { entry, review, reviewText, templateText, kindTerms, isControl, injectedFile, injectedLines } = loaded;
 
-  // A second verdict silently winning would change the record (AUD-H4): it must name the one it supersedes.
+  // A second verdict silently winning would change the record, so it must name the one it supersedes.
   const earlier = latestVerdict(loaded.caseEvents);
   if (earlier && typeof earlier.eventId !== "string") {
     error(`verdict: ${caseId}'s verdict has no event id, so nothing can name it to supersede; ask the owner`);
@@ -166,8 +149,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   if (result) printReport(log, findings, result);
   else printControlFindings(log, findings);
 
-  // "complete" only when review:wait finished reviewing this exact commit; anything else (skipped, timed out,
-  // head moved, or no state at all) means a clean result proves nothing, so only "review incomplete" is offered.
+  // Anything short of a finished review of this exact commit means a clean result proves nothing.
   const reviewIncomplete = !isComplete(review);
   if (reviewIncomplete) {
     log(
@@ -190,7 +172,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const ask = options.ask ?? defaultAsk;
-  // A control offers `clean` only when Qodo raised nothing, and `false alarm` only when it raised something.
   const verdicts = isControl ? CONTROL_VERDICTS : BUG_VERDICTS;
   const offered = isControl
     ? [findings.length ? "false alarm" : "clean", "review incomplete"]
@@ -204,7 +185,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     );
     return 2;
   }
-  // An answer the rule contradicts is a permanent line in an append-only log: asked again first (#192).
+  // An answer the rule contradicts becomes a permanent line in an append-only log, so ask again first.
   if (result && bugAnswer !== "review incomplete" && (bugAnswer === "detected") !== result.caught) {
     const sure = await askOneOf(
       ask,
@@ -216,7 +197,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       return 2;
     }
   }
-  // A reason belongs to its case: one pasted from another case's verdict is refused (AUD-H4).
+  // A reason belongs to its case: one pasted from another case's verdict is refused.
   const bugReason = await askOwnReason(ask, "Reason: ", reasonsOfOtherCases(loaded.allEvents, caseId));
   if (typeof bugReason !== "string") {
     error(
@@ -226,7 +207,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     );
     return 2;
   }
-  // Who drafted the reason, asked every time: an agent's draft the owner accepted reads the same (#321).
+  // Asked every time: an agent's draft the owner accepted reads the same as the owner's own words.
   const reasonDraftedBy = await askDraftedBy(ask);
   if (!reasonDraftedBy) {
     error("verdict: no answer (y or n) to who wrote the reason; nothing recorded");
@@ -234,8 +215,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
   }
 
   const judgements: Judgement[] = [];
-  // Every finding is judged. One the rule matched must be judged real or a false alarm, never left open: the
-  // verdict rests on it (AUD-H4). On a control none can be a catch.
+  // A finding the rule matched can't be left open: the verdict rests on it.
   for (const finding of result?.findings ?? findings) {
     const matched = result?.matchedFindingIds.includes(finding.id) ?? false;
     const source = findings.find((f) => f.id === finding.id);
@@ -263,22 +243,21 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     judgements.push({ id: finding.id, verdict: judged.verdict, reason });
   }
 
-  // A control with a finding the owner judges real wasn't clean, so it is neither clean nor a false alarm
-  // (owner's decision, 13 November): the template or the case needs a look before any verdict is recorded.
+  // A control with a real finding is neither clean nor a false alarm: the template or the case needs a look
+  // before any verdict is recorded.
   if (isControl && bugAnswer !== "review incomplete" && judgements.some((j) => j.verdict === "real")) {
     error(
       "verdict: a finding on this control is judged real, so the control was not clean; nothing recorded. Check the template, or record review incomplete with the reason",
     );
     return 2;
   }
-  // A false alarm is a judgement on every finding: one left open isn't judged yet (Qodo on PR 214).
+  // A false alarm is a judgement on every finding, and one left open isn't judged yet.
   if (isControl && bugAnswer === "false alarm" && judgements.some((j) => j.verdict === "open")) {
     error("verdict: a false alarm needs every finding judged a false alarm; one was left open, so nothing recorded");
     return 2;
   }
-  // The verdict rests on the matched findings' judgements, so it must agree with them (Qodo on PR 267):
-  // detected needs one judged real (a matched one when the rule matched any; any one when the owner overruled
-  // a computed miss); missed can't have a matched one judged real.
+  // The verdict must agree with the judgements it rests on. Detected needs a real finding (a matched one when
+  // the rule matched any); missed can't have a matched one judged real.
   const matched = result?.matchedFindingIds ?? [];
   const realAmong = (ids: string[] | undefined) =>
     judgements.some((j) => j.verdict === "real" && (ids === undefined || ids.includes(j.id)));
@@ -302,7 +281,7 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
     tool: TOOL,
     environment: `${platform()}-${arch()}-node${process.versions.node}`,
     inputHash: verdictInputHash(entry, templateText, reviewText),
-    // The file hashed, so the hash is checked against it even when `--review` named another (Qodo on PR 264).
+    // The file hashed, so the hash can be checked against it even when `--review` named another.
     reviewFile: relative(dirname(groundTruthPath), loaded.reviewPath).replace(/\\/g, "/"),
     ...(result ? { ruleVersion: result.ruleVersion } : {}),
     disposition: verdicts[bugAnswer] as string,
@@ -325,7 +304,6 @@ export async function run(caseId: string, options: RunOptions = {}): Promise<num
       error(`verdict: another verdict for ${caseId} (${String(now?.eventId)}) was recorded meanwhile; nothing written`);
       return 2;
     }
-    // And another case may have taken this reason meanwhile.
     if (reasonsOfOtherCases(fresh, caseId).has(normalReason(bugReason))) {
       error("verdict: another case's verdict was given the same reason meanwhile; nothing written");
       return 2;
@@ -374,5 +352,5 @@ export function main(argv: string[]): Promise<number> | number {
   return run(parsed.caseId, { dryRun: parsed.dryRun, reviewPath: parsed.reviewPath, supersede: parsed.supersede });
 }
 
-// Kept importable from here, where callers found them before the split.
+// Callers import these from here as well as from verdict-ask.ts.
 export { type AskFn, printReport } from "./verdict-ask.ts";

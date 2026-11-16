@@ -1,13 +1,13 @@
 /**
- * The one writer of the answer key and the audit log (AUD-M5). Every tool appends through here: an audit
+ * The one writer of the answer key and the audit log. Every tool appends through here: an audit
  * event is checked against its type's schema (`schemas/audit-event.v1.json`) before it is written, an
  * amendment against the rules `ledgerProblems` reads it by, and an answer-key entry for a case the key
  * already holds is refused. Each append takes a lock file beside the ledger, refuses a file whose last line
- * isn't complete, and writes one line (AUD-N8).
+ * isn't complete, and writes one line.
  *
- * Reading stays lenient: `readEventProblems` accepts every shape written by hand before this module existed
- * (`pr.opened` in four key sets, events with no `tool`, reviews with no `state`), checking only what every
- * event on disk has always carried. Those lines may not be edited, so a stricter read would stop every tool.
+ * Reading stays lenient: `readEventProblems` accepts the older hand-written shapes (`pr.opened` in four key
+ * sets, events with no `tool`, reviews with no `state`), checking only what every event on disk carries.
+ * Those lines may not be edited, so a stricter read would stop every tool.
  */
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -141,13 +141,13 @@ export function appendAmendment(
   if (!amendment.amends || !amendment.reason.trim() || !amendment.evidence.trim()) {
     throw new Error("refusing an amendment with no target, reason or evidence");
   }
-  // A locked field written once would make every reader refuse the file for good (Qodo on PR 269).
+  // A locked field written once would make every reader refuse the file for good.
   const locked = LOCKED_FIELDS.filter((field) => Object.hasOwn(change, field));
   if (locked.length) throw new Error(`refusing an amendment that changes ${locked.join(", ")}, which is locked`);
   appendLine(path, { kind: "amendment", ...amendment }, check);
 }
 
-/** Appends one answer-key entry, re-checking under the lock that no entry holds its case id yet (C-14). */
+/** Appends one answer-key entry, re-checking under the lock that no entry holds its case id yet. */
 export function appendAnswerKeyEntry(path: string, entry: Record<string, unknown>): void {
   const caseId = entry.caseId;
   if (typeof caseId !== "string" || !/^FF-\d{4}$/.test(caseId)) {

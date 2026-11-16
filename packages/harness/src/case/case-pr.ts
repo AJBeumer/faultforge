@@ -1,6 +1,5 @@
 /**
- * Opens a case's PR on the reviewed repository and records it, so no `pr.opened` event is typed by hand
- * (AUD-M5).
+ * Opens a case's PR on the reviewed repository and records it, so no `pr.opened` event is typed by hand.
  *
  *   npm run case:pr -- --case FF-NNNN --body "<one ordinary sentence>" --relationships "<what the owner saw>" \
  *     [--benchmark v1] [--dry-run] [--existing <pr number>]
@@ -13,7 +12,7 @@
  * planted from (the injection event's hash). The title is the template's commit message; the body is the
  * sentence given, then `Closes #N`. Both are checked for links to a GitHub issue or PR and for the template's
  * own names, as `case:ticket` checks its text, and the PR is opened through the one door to the reviewed
- * repository (`target-post.ts`, #340), whose checks (giveaway words, private ids, Qodo) run before anything is
+ * repository (`target-post.ts`), whose checks (giveaway words, private ids, Qodo) run before anything is
  * marked or sent, and again on the exact text it sends.
  *
  * The branch must already be pushed, with the injected commit as its head (`gh api` reads it). Then the
@@ -160,11 +159,11 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   if (!Number.isInteger(ticket) || (ticket as number) < 1) {
     return refuse(`${caseId} has no target ticket with a whole issue number: run case:ticket first`);
   }
-  // `Closes #N` names an issue in the PR's own repository, so the ticket must be there (Qodo on PR 269).
+  // `Closes #N` names an issue in the PR's own repository, so the ticket must be there.
   if (issue?.repo !== undefined && issue.repo !== target) {
     return refuse(`${caseId}'s ticket is on ${String(issue.repo)}, not ${target}`);
   }
-  // The template and proofs must be the ones the case was planted from (Qodo on PR 269).
+  // A changed template or proof would mean the PR shows something other than what the answer key describes.
   const injected = events.find((e) => e.type === "sabotage.injected" || e.type === "control.injected");
   if (!injected) return refuse(`${caseId} has no injection event`);
   if (isToolWritten(injected) && typeof injected.inputHash === "string") {
@@ -184,11 +183,11 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
   const body = `${args.body} Closes #${ticket}`;
   const post: Post = { kind: "pr-create", repo: target, base: "main", head: branch, title, body };
   const giveaways = [
-    // The door's own checks, run before anything is marked (#340): giveaway words, private ids, Qodo.
+    // The door's own checks, run before anything is marked: giveaway words, private ids, Qodo.
     ...postProblems(post, env),
     ...[title, body].flatMap((text) => [
       ...(ISSUE_OR_PR_LINK.test(text) ? ["links to a GitHub issue or PR"] : []),
-      // The template's own names, which templateTelltales refuses in every field the reviewer sees (Qodo on PR 269).
+      // The template's own names, which templateTelltales refuses in every field the reviewer sees.
       ...names.filter((n) => text.toLowerCase().includes(n.toLowerCase())).map(() => "names the template"),
     ]),
   ];
@@ -196,13 +195,13 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
 
   let pushed: string;
   try {
-    // One path segment, even for a branch name with a slash (Qodo on PR 269).
+    // One path segment, even for a branch name with a slash.
     pushed = gh(["api", `repos/${target}/branches/${encodeURIComponent(branch)}`, "--jq", ".commit.sha"]).trim();
   } catch (e) {
     return refuse(`the branch ${branch} isn't on ${target} (${message(e)}): push it first`);
   }
   if (pushed !== injectionCommit) return refuse(`${target}'s ${branch} is at ${pushed}, not ${injectionCommit}`);
-  // Qodo is checked here, just before the PR, and only a match counts (Qodo on PR 269).
+  // Checked just before the PR, so the configuration recorded is one Qodo was just seen to match.
   const checked = await (options.qodoCheck ?? liveQodoCheck)(root);
   if (checked.exitCode !== 0 || !checked.snapshotVersion || !checked.evidenceDir) {
     return refuse(`Qodo's configuration check didn't pass (exit ${checked.exitCode}): ${checked.message}`);
@@ -224,7 +223,7 @@ export async function run(args: PrArgs, options: PrOptions = {}): Promise<number
     // A PR opened by hand (no permission for gh) or by a run that stopped: recorded, never opened again.
     url = `https://github.com/${target}/pull/${args.existing}`;
   } else {
-    // Marked before the call: a PR GitHub created during a timed-out call must never get a twin (#216).
+    // Marked before the call: a PR GitHub created during a timed-out call must never get a twin.
     const marker = join(evidenceDir, "gh-pr-create.attempt.txt");
     try {
       writeFileSync(marker, `${now()} gh pr create --repo ${target} --head ${branch}\n`, { flag: "wx" });

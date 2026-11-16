@@ -66,26 +66,26 @@ describe("premisesOf", () => {
     ]);
   });
 
-  it("stops the 'new' look-back at the end of the line or clause (blind review 2, Qodo 10)", () => {
+  it("stops the 'new' look-back at the end of the line or clause", () => {
     const body = ticket("- Adds a dry-run flag\n- Reads `src/gone.ts` for the list; also `src/helpers.ts`");
     expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check", "src/gone.ts", "src/helpers.ts"]);
   });
 
-  it("ignores tokens inside code blocks, indented code blocks and details blocks with attributes (Qodo 9, blind 10)", () => {
+  it("ignores tokens inside code blocks, indented code blocks and details blocks with attributes", () => {
     const body = ticket(
       "Assumes `src/helpers.ts`.\n\n```\nsee `src/gone.ts`\n```\n\n- item\n  ```md\n  `src/also-gone.ts`\n  ```\n\n<details open>\n<summary>Original</summary>\nused `old:script`\n</details>",
     );
     expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check", "src/helpers.ts"]);
   });
 
-  it("skips private paths, with or without a leading ./, URLs, placeholders and directories (Qodo 3)", () => {
+  it("skips private paths, with or without a leading ./, URLs, placeholders and directories", () => {
     const body = ticket(
       "Snapshot in `private/config/qodo-v6/rules.json` or `./private/x.json`; see `https://example.org/a.md`, `raw-artifacts/<ts>/x.json`, `packages/harness/src/`.",
     );
     expect(premisesOf(body, DELIVERABLES).map((p) => p.token)).toEqual(["check"]);
   });
 
-  it("skips the Out of scope section, which names what will not exist (blind 12)", () => {
+  it("skips the Out of scope section, which names what will not exist", () => {
     const body = `${ticket("Reads `src/helpers.ts`.")}\n\n### Out of scope\n- A \`premise:fix\` script and \`docs/premises.md\``;
     expect(premisesOf(body, [...DELIVERABLES, "Out of scope"]).map((p) => p.token)).toEqual([
       "check",
@@ -101,14 +101,14 @@ describe("premisesOf", () => {
     expect(classify("src/a.ts:10-12")).toEqual({ token: "src/a.ts", kind: "path" });
   });
 
-  it("reads the script name out of npm run, with or without arguments (Qodo 4, blind 4)", () => {
+  it("reads the script name out of npm run, with or without arguments", () => {
     expect(classify("npm run qodo:check")).toEqual({ token: "qodo:check", kind: "script" });
     expect(classify("npm run -s check")).toEqual({ token: "check", kind: "script" });
     expect(classify("npm run test:integration -- --runInBand")).toEqual({ token: "test:integration", kind: "script" });
     expect(classify("npm run ticket:ready -- faultforge 47")).toEqual({ token: "ticket:ready", kind: "script" });
   });
 
-  it("does not read a module specifier or a search qualifier as an npm script (blind 3)", () => {
+  it("does not read a module specifier or a search qualifier as an npm script", () => {
     for (const token of [
       "node:fs",
       "node:child_process",
@@ -138,7 +138,7 @@ describe("premisesOf", () => {
   });
 });
 
-describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind 1)", () => {
+describe("premiseProblems reads origin/main, not the working tree", () => {
   it("reports nothing when every premise is on main", () => {
     expect(
       problems(
@@ -168,7 +168,7 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
     ]);
   });
 
-  it("reports a function that exists nowhere, but accepts declared, imported, default, aliased and class names (blind 5, 8; Qodo round 2: multi-line imports)", () => {
+  it("reports a function that exists nowhere, but accepts declared, imported, default, aliased, class and multi-line imported names", () => {
     expect(problems("`resolvePrivate()` and `report()` are elsewhere.")).toEqual([
       `stale premise: resolvePrivate (function) ${HERE}`,
       `stale premise: report (function) ${HERE}`,
@@ -180,15 +180,15 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
     ).toEqual([]);
   });
 
-  it("finds a name declared after multi-byte characters, in a file after a multi-byte file (Qodo round 3)", () => {
+  it("finds a name declared after multi-byte characters, in a file after a multi-byte file", () => {
     expect(problems("Reuse `afterUnicode()` and `privateDir()`.")).toEqual([]);
   });
 
-  it("does not let a path escape the checkout (Qodo 7)", () => {
+  it("does not let a path escape the checkout", () => {
     expect(problems("See `../outside.ts`.")).toEqual([`stale premise: ../outside.ts (path) ${HERE}`]);
   });
 
-  it("accepts a bare name of a private file when private storage is beside the checkout (blind 7)", () => {
+  it("accepts a bare name of a private file when private storage is beside the checkout", () => {
     expect(problems("Append to `BACKLOG.md`.")).toEqual([]);
   });
 
@@ -200,7 +200,7 @@ describe("premiseProblems reads origin/main, not the working tree (Qodo 1, blind
     ]);
   });
 
-  it("accepts a premise a sibling repo has, and names the places searched when nothing has it (Qodo 2, 11)", () => {
+  it("accepts a premise a sibling repo has, and names the places searched when nothing has it", () => {
     const sibling = gitRepo({ "INVARIANTS.md": "# invariants\n" });
     expect(problems("Spread across the target's `INVARIANTS.md`; `src/helpers.ts` stays.")).toEqual([
       `stale premise: INVARIANTS.md (file) ${HERE}`,

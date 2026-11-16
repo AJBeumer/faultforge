@@ -77,7 +77,7 @@ const SAVED = {
   openFindings: [{ ...FINDING, commit: B.slice(0, 7) }],
 };
 
-describe("the answer-key schema (AUD-N5)", () => {
+describe("the answer-key schema", () => {
   it("accepts a planted bug, a control, an amendment, and an early entry with its proof pinned on the entry", () => {
     expect(answerKeyEntryProblem(BUG)).toBeUndefined();
     expect(answerKeyEntryProblem(CONTROL)).toBeUndefined();
@@ -117,7 +117,7 @@ describe("the answer-key schema (AUD-N5)", () => {
   });
 });
 
-describe("the saved-review schema (AUD-N5)", () => {
+describe("the saved-review schema", () => {
   it("accepts what review:wait writes, a review that never finished, and an early save without the later fields", () => {
     expect(savedReviewProblem(SAVED)).toBeUndefined();
     const unfinished = { ...SAVED, state: "review incomplete", reviewSeenCompleteAt: null, reviewEffort: null };
@@ -137,7 +137,7 @@ describe("the saved-review schema (AUD-N5)", () => {
     ["an unknown field", { ...SAVED, verdict: "caught" }],
     ["an open finding without its commit", { ...SAVED, openFindings: [FINDING] }],
     ["a PR that isn't a number", { ...SAVED, pr: "7" }],
-    ["a finding with a field the writer never writes (Qodo on PR 289)", { ...SAVED, findings: [{ ...FINDING, x: 1 }] }],
+    ["a finding with a field the writer never writes", { ...SAVED, findings: [{ ...FINDING, x: 1 }] }],
     ["an open finding with such a field", { ...SAVED, openFindings: [{ ...FINDING, commit: "abcdef0", x: 1 }] }],
   ])("refuses %s", (_name, review) => {
     expect(savedReviewProblem(JSON.parse(JSON.stringify(review)))).toBeDefined();
@@ -157,7 +157,7 @@ describe("the saved-review schema (AUD-N5)", () => {
     ]);
   });
 
-  it("checks archived saves too: an unfinished one renamed, and one moved into its own folder (Qodo on PR 289)", () => {
+  it("checks archived saves too: an unfinished one renamed, and one moved into its own folder", () => {
     const reviews = mkdtempSync(join(tmpdir(), "schemas-archived-"));
     const pr = join(reviews, "target-pr7");
     mkdirSync(join(pr, "bbbbbbb.unfinished-1"), { recursive: true });
@@ -172,7 +172,7 @@ describe("the saved-review schema (AUD-N5)", () => {
   });
 });
 
-describe("the answer key as the tools read it, amendments applied (Qodo on PR 289)", () => {
+describe("the answer key as the tools read it, amendments applied", () => {
   const file = (lines: object[], blankAfterFirst = false) => {
     const path = join(mkdtempSync(join(tmpdir(), "schemas-amended-")), "ground-truth.jsonl");
     const text = lines.map((l) => JSON.stringify(l));
@@ -217,7 +217,7 @@ describe("the answer key as the tools read it, amendments applied (Qodo on PR 28
   });
 });
 
-describe("saved reviews under a link (Qodo on PR 289)", () => {
+describe("saved reviews under a link", () => {
   it("never follows a link, so one pointing back up can't make the check run forever", (context) => {
     const reviews = mkdtempSync(join(tmpdir(), "schemas-link-"));
     mkdirSync(join(reviews, "target-pr7"));

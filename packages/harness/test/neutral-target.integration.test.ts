@@ -1,5 +1,5 @@
 /**
- * The giveaway word list against the reviewed target as it really is (#306): every tracked file, every commit
+ * The giveaway word list against the reviewed target as it really is: every tracked file, every commit
  * message on its history and every branch name must read as ordinary text. A word added to `neutral.ts` that
  * flags ordinary engineering text fails here. Needs the target checked out next to this repository, as on the
  * owner's machine and in CI's integration job.

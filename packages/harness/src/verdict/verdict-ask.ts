@@ -1,6 +1,5 @@
 /**
  * How `verdict` shows a case to the owner and asks for answers: the match report and the terminal questions.
- * Split out of verdict.ts (module size rule) so the control-case path has room (#162).
  */
 import { createInterface } from "node:readline/promises";
 import type { MatchFinding, MatchRuleResult } from "../match/match-rule.ts";
@@ -112,7 +111,7 @@ export async function askJudgement(
   return undefined;
 }
 
-/** Prints a control's findings as Qodo placed them: there is no planted bug to match them against (#162). */
+/** Prints a control's findings as Qodo placed them: there is no planted bug to match them against. */
 export function printControlFindings(log: (line: string) => void, findings: MatchFinding[]): void {
   for (const finding of findings) {
     log(`${finding.id} ${finding.title ? `"${finding.title}"` : ""}`.trim());
@@ -131,7 +130,7 @@ export const DRAFTED_QUESTION = "Did you write this reason yourself? (y/n) ";
 export type ReasonDraftedBy = "owner" | "agent";
 
 /**
- * Whether the owner wrote the reason just given (#321): `y` or `yes` is the owner, `n` or `no` an agent. Asked
+ * Whether the owner wrote the reason just given: `y` or `yes` is the owner, `n` or `no` an agent. Asked
  * again on any other answer, blank included, and undefined after a few tries: there is no default, so the
  * caller records nothing.
  */

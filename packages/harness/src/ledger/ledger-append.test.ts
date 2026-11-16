@@ -24,7 +24,7 @@ const PUBLISHED = {
   path: "examples/FF-9001.json",
 };
 
-describe("every event shape on disk today still reads (AUD-M5, #251)", () => {
+describe("every event shape on disk reads", () => {
   it("passes the read check and the amendment check, one synthetic line per shape", () => {
     const events = readAuditLog(SHAPES);
     expect(events).toHaveLength(17);
@@ -105,7 +105,7 @@ describe("appendAmendment and appendAnswerKeyEntry", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ kind: "amendment", amends: "e1" });
   });
 
-  it("keeps every earlier answer-key line and refuses a case id it already holds (I01, I06)", () => {
+  it("keeps every earlier answer-key line and refuses a case id it already holds", () => {
     const path = temp("ground-truth.jsonl");
     appendAnswerKeyEntry(path, { caseId: "FF-9001", kind: "sabotage" });
     appendAnswerKeyEntry(path, { caseId: "FF-9002", kind: "control" });
@@ -120,7 +120,7 @@ describe("appendAmendment and appendAnswerKeyEntry", () => {
   });
 });
 
-describe("one writer (AUD-M5, #251)", () => {
+describe("one writer for both ledgers", () => {
   // These append to their own run logs, never to the answer key or the audit log.
   const RUN_LOG_WRITERS = ["factory-agent.ts", "factory-deps.ts"];
   // This one appends to this repo's public anchors file (docs/ledger-anchors.txt), never to private storage.
@@ -145,7 +145,7 @@ describe("one writer (AUD-M5, #251)", () => {
   });
 });
 
-describe("appendAmendment: locked fields (Qodo on PR 269)", () => {
+describe("appendAmendment: locked fields", () => {
   it("refuses an amendment that changes a locked field, writing nothing", () => {
     const path = temp("audit-events.jsonl");
     const base = { amends: "e1", at: "2026-11-14T00:00:00Z", reason: "r", evidence: "e" };

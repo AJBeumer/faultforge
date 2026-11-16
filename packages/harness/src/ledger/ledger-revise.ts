@@ -1,7 +1,7 @@
 /**
  * Records that a case's template was changed after the case was planted, as its own audit event
  * (`template.revised`), so a rewrite after a verdict is on the record, dated and explained, instead of known
- * only from a code comment (AUD-M11).
+ * only from a code comment.
  *
  *   npm run ledger:revision -- --case FF-NNNN --template <id> --commit <sha> --reason "<why>" [--dry-run]
  *

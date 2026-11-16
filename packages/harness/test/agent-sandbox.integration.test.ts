@@ -1,5 +1,5 @@
 /**
- * The agent's network sandbox, for real (#330): the same setup the factory workflow runs, the same proxy and the
+ * The agent's network sandbox, for real: the same setup the factory workflow runs, the same proxy and the
  * same launch the tick uses, then programs run as the agent's user. A host off the allow-list must fail however a
  * program reaches for it, through the proxy or around it; the hosts on it must still work.
  *
@@ -61,13 +61,13 @@ const LOCK = {
   },
 };
 
-describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux (#330)", { timeout: 200_000 }, () => {
+describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux", { timeout: 200_000 }, () => {
   let work = "";
   let proxy: EgressProxy;
   const refused: string[] = [];
 
   let input: SetupInput;
-  // An account of that name that was already there is used, and left as it was (Qodo on PR 334).
+  // A machine may already have an account of that name: use it, and never delete it.
   let createdUser = false;
 
   beforeAll(async () => {
@@ -87,7 +87,7 @@ describe.skipIf(!(linux && sudo && opted))("the agent's network sandbox on Linux
     proxy = await startEgressProxy(allowList(loadFactory()), (line) => refused.push(line));
   }, 300_000);
 
-  // The machine is left as it was: no chain, no OUTPUT rule, and no user unless one was there before (Qodo on PR 334).
+  // Leave the machine as the test found it: no chain, no OUTPUT rule, and no user it made.
   afterAll(async () => {
     stopAgentProcesses();
     await proxy?.close();
@@ -310,7 +310,7 @@ https.get("https://${BLOCKED}/", () => { console.log("REACHED"); process.exit(0)
       const allowedBefore = proxy.counts().allowed;
       const claude = join(cli, "node_modules/.bin/claude");
       // The environment the tick gives the agent (factory-agent-env.ts), with a key the API will refuse.
-      // Never a real credential: agentEnv would pass CLAUDE_CODE_OAUTH_TOKEN ahead of the key (Qodo on PR 334).
+      // Drop the real token: agentEnv would pass CLAUDE_CODE_OAUTH_TOKEN ahead of the fake key.
       const { CLAUDE_CODE_OAUTH_TOKEN: _real, ...runner } = process.env;
       const agentLike = { ...agentEnv(runner, {}).env, ANTHROPIC_API_KEY: "sk-ant-api03-not-a-real-key" };
       expect(agentLike).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");

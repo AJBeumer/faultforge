@@ -113,9 +113,8 @@ describe("extractReviewRecord", () => {
   });
 });
 
-// The two shapes in the saved evidence (#254): the toolbox CLI kept a checkpoint and reported its finding list
-// complete; every `review:local` run (API key) kept none, said `checkpoint_unavailable`, and reported it
-// incomplete, with coverage complete in both.
+// The toolbox CLI keeps a checkpoint and reports its finding list complete. A `review:local` run keeps none,
+// says `checkpoint_unavailable`, and reports it incomplete. Both report coverage complete.
 describe("the two kinds of saved local review", () => {
   const withCheckpoint = payload({ checkpointTree: TREE_A });
   const noCheckpoint = (() => {
@@ -141,10 +140,10 @@ describe("the two kinds of saved local review", () => {
   });
 });
 
-describe("the hook that warned after every commit is retired (#254)", () => {
+describe("the review-gate-note hook", () => {
   const root = join(import.meta.dirname, "../../../..");
 
-  it("is no longer registered in the project's Claude Code settings, and its file is gone", () => {
+  it("is not registered in the project's Claude Code settings, and has no file", () => {
     expect(readFileSync(join(root, ".claude/settings.json"), "utf8")).not.toContain("review-gate-note");
     expect(existsSync(join(root, ".claude/hooks/review-gate-note.ts"))).toBe(false);
   });
@@ -338,7 +337,7 @@ describe("treeOfCommit on a real git repository", () => {
     expect(treeOfCommit(dir, "HEAD")).toBe(staged);
   });
 
-  it("changes when one file changes, so the same review no longer covers it", () => {
+  it("changes when one file changes, so the same review doesn't cover it", () => {
     dir = mkdtempSync(join(tmpdir(), "review-gate-git-"));
     sh(dir, "init", "-q", "-b", "main");
     sh(dir, "config", "user.email", "t@example.com");

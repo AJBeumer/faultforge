@@ -12,9 +12,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Problems with an overlay's shape: any field outside the documented, narrow allow-list, or (unless
- * `isLegacy`) any of the extras reserved for a case with no saved review file. Never throws on a
- * malformed shape (an overlay isn't trusted input) — an unexpected type is reported as a problem.
+ * Problems with an overlay's shape: any field outside the allow-list, or (unless `isLegacy`) an extra reserved
+ * for a case with no saved review file. An overlay isn't trusted input, so a bad type is reported, never thrown.
  */
 export function overlayProblems(raw: Record<string, unknown>, isLegacy = false): string[] {
   const problems: string[] = [];

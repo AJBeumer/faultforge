@@ -1,5 +1,5 @@
 /**
- * The case pipeline end to end, on fixtures (#229): `inject` plants a case in a scratch copy of the target and
+ * The case pipeline end to end, on fixtures: `inject` plants a case in a scratch copy of the target and
  * records it in a scratch private folder; a saved review stands in for `review:wait`; then `case:review`,
  * `verdict` (its questions answered by a script, as the owner would) and `case:build` run as they do for a
  * real case. Covers a bug case, a clean control and a control whose review didn't finish. Needs the target
@@ -70,7 +70,7 @@ function world() {
   for (const branch of git("for-each-ref", "--format=%(refname:short)", "refs/heads").split("\n")) {
     if (branch && branch !== "main") git("branch", "-q", "-D", branch);
   }
-  // inject refuses a target without git's own guard (#242), as the owner's checkout has it.
+  // inject refuses a target without git's own guard, so install it, as the owner's checkout has it.
   installHooks(target, join(root, ".claude", "hooks", "git-guard.ts"));
   const priv = tempDir("pipeline-private-");
   mkdirSync(join(priv, "templates", CONTROL_TEMPLATE.id), { recursive: true });
@@ -161,8 +161,7 @@ function reviewed(
 
 /**
  * The change the answer key says was planted, read from the scratch target itself: the recorded commit's own
- * diff, and that it sits on the base the key names. Bookkeeping alone can't stand in for the planted change
- * (Qodo on PR 241).
+ * diff, and that it sits on the base the key names. Bookkeeping alone can't prove the change was planted.
  */
 function plantedDiff(w: ReturnType<typeof world>, caseId: string): string {
   const entry = readLedger(w.groundTruthPath).find((e) => e.caseId === caseId) as unknown as {
@@ -217,7 +216,7 @@ async function adjudicateAndBuild(w: ReturnType<typeof world>, caseId: string, a
   return record;
 }
 
-describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", () => {
+describe.skipIf(!hasRealTarget)("the case pipeline, inject to record", () => {
   it("takes a bug case to a detected record", { timeout: 300_000 }, async () => {
     const w = world();
     expect(inject(w, "idempotency-guard-bypass-v1", "FF-9101")).toBe("ok");
@@ -277,8 +276,7 @@ describe.skipIf(!hasRealTarget)("the case pipeline, inject to record (#229)", ()
   it("takes a review that didn't finish to an incomplete record", { timeout: 300_000 }, async () => {
     const w = world();
     expect(inject(w, CONTROL_TEMPLATE.id, "FF-9103")).toBe("ok");
-    // Timed out, as review:wait saves it ("review incomplete"), with no comment feed: only "review incomplete" may
-    // be recorded (Qodo on PR 241).
+    // Timed out, as review:wait saves it, with no comment feed: only "review incomplete" may be recorded.
     reviewed(w, "FF-9103", 903, { state: "review incomplete", comment: false, findings: [] });
     const record = await adjudicateAndBuild(w, "FF-9103", "review incomplete");
     expect(record).toMatchObject({ status: "incomplete", human: { disposition: "review_incomplete" } });

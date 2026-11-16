@@ -164,7 +164,7 @@ const auditFile = (w: ReturnType<typeof world>) => {
   }
 };
 
-describe("inject run(deps): the gates (AUD-M6, #252)", () => {
+describe("inject run(deps): the gates", () => {
   it("plants a validated bug, keeps every earlier answer-key line, and writes a valid event", () => {
     const w = world();
     expect(w.inject()).toBe(0);
@@ -181,7 +181,7 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(readFileSync(join(w.target, "src", "sum.ts"), "utf8")).toContain("total + 1");
   });
 
-  it("refuses a proof that still passes on the variant, and leaves no branch and no record (I03)", () => {
+  it("refuses a proof that still passes on the variant, and leaves no branch and no record", () => {
     const w = world({ variant: ["pass"] });
     expect(w.inject()).toBe(1);
     expect(w.errors.join("\n")).toContain("still passes on the variant");
@@ -190,14 +190,14 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(auditFile(w)).toEqual([]);
   });
 
-  it("refuses a proof that fails, or never ran, on the base commit (I04, I08)", () => {
+  it("refuses a proof that fails, or never ran, on the base commit", () => {
     expect(world({ base: ["fail"] }).inject()).toBe(1);
     const notRun = world({ base: ["not_run"] });
     expect(notRun.inject()).toBe(1);
     expect(notRun.errors.join("\n")).toContain("did not finish, or ran no test, on the base commit");
   });
 
-  it("refuses to plant, or validate, next to an answer key or audit log with problems, and touches nothing (#224)", () => {
+  it("refuses to plant, or validate, next to an answer key or audit log with problems, and touches nothing", () => {
     for (const validateOnly of [false, true]) {
       const w = world();
       const checked: string[][] = [];
@@ -214,7 +214,7 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     }
   });
 
-  it("refuses a case id already in the answer key (I06), and a malformed one", () => {
+  it("refuses a case id already in the answer key, and a malformed one", () => {
     const w = world();
     expect(w.inject({ caseId: "FF-9500" })).toBe(1);
     expect(w.errors.join("\n")).toContain("FF-9500 is already in the ledger");
@@ -222,26 +222,26 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
     expect(w.lines("ground-truth.jsonl")).toHaveLength(1);
   });
 
-  it("refuses a real case in a target without git's guard, but validates there (#242)", () => {
+  it("refuses a real case in a target without git's guard, but validates there", () => {
     const w = world({ unguarded: "the target has no guard" });
     expect(w.inject()).toBe(1);
     expect(w.errors.join(" ")).toContain("Run npm run guard:install first");
     expect(world({ unguarded: "x" }).inject({ validateOnly: true, caseId: undefined })).toBe(0);
   });
 
-  it("refuses a dirty checkout (I07), a detached HEAD, and a HEAD that isn't origin/main", () => {
+  it("refuses a dirty checkout, a detached HEAD, and a HEAD that isn't origin/main", () => {
     expect(world({ status: " M src/sum.ts" }).inject()).toBe(1);
     expect(world({ head: "HEAD" }).inject()).toBe(1);
     expect(world({ originMain: "e".repeat(40) }).inject()).toBe(1);
   });
 
-  it("refuses a variant whose typecheck or public tests didn't finish, or that doesn't typecheck (I11, I13)", () => {
+  it("refuses a variant whose typecheck or public tests didn't finish, or that doesn't typecheck", () => {
     expect(world({ typecheck: "not_run" }).inject()).toBe(1);
     expect(world({ typecheck: "fail" }).inject()).toBe(1);
     expect(world({ publicTests: "not_run" }).inject()).toBe(1);
   });
 
-  it("typechecks with the target's tsconfig.test.json when it has one (AUD-N7)", () => {
+  it("typechecks with the target's tsconfig.test.json when it has one", () => {
     const plain = world();
     plain.inject();
     expect(plain.steps.find((s) => s[0] === "typecheck")).toContain("tsconfig.json");
@@ -265,7 +265,7 @@ describe("inject run(deps): the gates (AUD-M6, #252)", () => {
   });
 });
 
-describe("inject: the target's real spelling, drive letter included (#316)", () => {
+describe("inject: the target's real spelling, drive letter included", () => {
   it("hands git, every step and every proof the real path, however --target spells the drive", () => {
     const w = world();
     const real = realpathSync.native(w.target);
@@ -292,7 +292,7 @@ describe("inject: the target's real spelling, drive letter included (#316)", () 
   });
 });
 
-describe("inject run(deps): a control must pass the whole proof corpus (AUD-M8, #252)", () => {
+describe("inject run(deps): a control must pass the whole proof corpus", () => {
   it("refuses a real bug labelled as a control: a corpus proof fails on its variant", () => {
     const w = world({ variant: ["fail"] });
     expect(w.inject({ template: CONTROL.id })).toBe(1);
@@ -329,7 +329,7 @@ describe("variantFailure", () => {
   });
 });
 
-describe("the entry: every unexpected error is exit 2, at load time too (#252)", () => {
+describe("the entry: every unexpected error is exit 2, at load time too", () => {
   it("returns 2 when the body fails to load, and when it throws", async () => {
     const quiet = () => {};
     expect(await runEntry("x", () => Promise.reject(new Error("bad import")), [], 2, quiet)).toBe(2);
@@ -353,7 +353,7 @@ describe("the entry: every unexpected error is exit 2, at load time too (#252)",
   });
 });
 
-describe("the entry files load nothing that could fail before their handler exists (#252)", () => {
+describe("the entry files load nothing that could fail before their handler exists", () => {
   it.each(["inject.ts", "review-wait.ts"])(
     "%s imports only cli-entry.ts statically, and loads its body inside runEntry",
     (file) => {
@@ -365,7 +365,7 @@ describe("the entry files load nothing that could fail before their handler exis
   );
 });
 
-describe("proofCorpus: a template still being written (Qodo on PR 271)", () => {
+describe("proofCorpus: a template still being written", () => {
   it("is skipped and named, never stopping the control", () => {
     const root = mkdtempSync(join(tmpdir(), "corpus-"));
     mkdirSync(join(root, "good"));
@@ -382,7 +382,7 @@ describe("proofCorpus: a template still being written (Qodo on PR 271)", () => {
   });
 });
 
-describe("proofCorpus: a broken private copy (Qodo on PR 271)", () => {
+describe("proofCorpus: a broken private copy", () => {
   it("never hides a good published copy of the same template", () => {
     const priv = mkdtempSync(join(tmpdir(), "corpus-priv-"));
     const seed = mkdtempSync(join(tmpdir(), "corpus-seed-"));
@@ -395,7 +395,7 @@ describe("proofCorpus: a broken private copy (Qodo on PR 271)", () => {
   });
 });
 
-describe("inject: what Qodo found on PR 274", () => {
+describe("inject: a control's record of its corpus, and half-written private copies", () => {
   it("names on the control's record any template left out of the corpus", () => {
     const w = world({ variant: ["pass"] });
     w.deps.corpusSkipped = () => ["x-draft-v1: its proof p.test.ts is missing"];
@@ -442,7 +442,7 @@ describe("inject --validate-only runs the target's whole check on the variant", 
     expect(w.errors.join("\n")).toContain("the target's public tests fail on the variant");
   });
 
-  it("leaves a real run as it was: no lint step, and a bug's failing public tests are recorded", () => {
+  it("runs no lint step in a real run, and records a bug's failing public tests", () => {
     const w = world({ publicTests: "fail" });
     expect(w.inject()).toBe(0);
     expect(w.steps.map((s) => s[0])).toEqual(["typecheck", "public-tests"]);
@@ -497,13 +497,13 @@ describe("inject: a template's test change, in the same commit", () => {
     expect(world({ bug: { testChange: { ...EDIT, find: "nowhere\n" } } }).inject()).toBe(2);
   });
 
-  it("refuses a bug's test that names its own kind terms, which the ticket may not either (Qodo on PR 293)", () => {
+  it("refuses a bug's test that names its own kind terms, which the ticket may not either", () => {
     const w = world({ bug: { testChange: { ...NEW, content: 'it("is not off by one", () => {});\n' } } });
     expect(w.inject()).toBe(1);
     expect(w.errors.join("\n")).toContain("testChange.content: restates what the change breaks (off by one)");
   });
 
-  it("refuses a test change to git's own folder, or to a file that isn't a test (Qodo on PR 293)", () => {
+  it("refuses a test change to git's own folder, or to a file that isn't a test", () => {
     const git = world({ control: { testChange: { file: ".git/config", content: "[x]\n" } }, variant: ["pass"] });
     expect(git.inject({ template: CONTROL.id, validateOnly: true, caseId: undefined })).toBe(1);
     expect(git.errors.join("\n")).toContain("may not touch git's own folder");
@@ -513,7 +513,7 @@ describe("inject: a template's test change, in the same commit", () => {
   });
 });
 
-describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
+describe("testChangeFileProblem and applyTestChange", () => {
   it("sees the main change's file however it is spelled", () => {
     expect(testChangeFileProblem("./test//a.test.ts", "test/a.test.ts")).toContain("another file");
     expect(testChangeFileProblem("test/b.test.ts", "test/a.test.ts")).toBeUndefined();
@@ -545,7 +545,7 @@ describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
     expect(existsSync(outside)).toBe(false);
   });
 
-  it("leaves a file hard-linked to the edited test as it was", () => {
+  it("leaves a file hard-linked to the edited test unchanged", () => {
     const target = mkdtempSync(join(tmpdir(), "test-change-target-"));
     const copy = join(mkdtempSync(join(tmpdir(), "test-change-copy-")), "a.test.ts");
     mkdirSync(join(target, "test"));
@@ -574,7 +574,7 @@ describe("testChangeFileProblem and applyTestChange (Qodo on PR 293)", () => {
   });
 });
 
-describe("a case commit has an ordinary body: one sentence from the ticket's what (#321)", () => {
+describe("a case commit has an ordinary body: one sentence from the ticket's what", () => {
   it("commits the template's message with the first sentence of its ticket's what as the body", () => {
     const w = world({
       bug: { ticket: { title: "Tidy the sum", what: "Tidy the sum.  Keep it short.", criteria: ["c"] } },

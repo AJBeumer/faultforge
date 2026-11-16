@@ -200,9 +200,8 @@ describe("propose", () => {
       } as never;
       const lines: string[] = [];
       const result = propose(factory, dir, { open: false }, undefined, undefined, (l) => lines.push(l));
-      // PR 60's findings are the excluded case PR's own; only PR 59's two findings remain, under the
-      // pattern threshold (3), so nothing is proposed — but the read itself must not throw or come up
-      // empty because it looked in "private/" instead of "stash/".
+      // With the case PR's findings excluded, the two left are under the threshold, so nothing is
+      // proposed; the read itself must not throw by looking in "private/" instead of "stash/".
       expect(result.patterns).toEqual([]);
       expect(lines.join("\n")).toContain("No pattern over the threshold");
     } finally {

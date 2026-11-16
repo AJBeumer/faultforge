@@ -17,7 +17,7 @@ function repoWith(files: Record<string, string>): { dir: string; head: string } 
   return { dir, head: git("rev-parse", "HEAD") };
 }
 
-describe("baseTreeTelltales (#224, audit H-4)", () => {
+describe("baseTreeTelltales", () => {
   it("is empty for a tree of ordinary files, the repository's own name included", () => {
     const { dir, head } = repoWith({ "README.md": "# faultforge-target\n\nA booking API.\n", "a.ts": "export {};\n" });
     expect(baseTreeTelltales(dir, head)).toEqual([]);
@@ -33,7 +33,7 @@ describe("baseTreeTelltales (#224, audit H-4)", () => {
   });
 });
 
-describe("baseTreeTelltales: a submodule entry (Qodo on PR 232)", () => {
+describe("baseTreeTelltales: a submodule entry", () => {
   it("reads a submodule's name and doesn't try to read the other repository's commit", () => {
     const { dir } = repoWith({ "a.ts": "export {};\n" });
     const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();

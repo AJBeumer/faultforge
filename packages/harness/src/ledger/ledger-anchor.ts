@@ -1,6 +1,6 @@
 /**
  * Anchors the private repository's history in this public one, so a squashed or rewritten private history
- * can't pass as append-only (AUD-M11). `ledger:check` reads each commit's diff to see that the answer key and
+ * can't pass as append-only. `ledger:check` reads each commit's diff to see that the answer key and
  * the audit log only ever grew; a history squashed or rebuilt from scratch has no old diffs left to read.
  *
  *   npm run ledger:anchor
@@ -27,7 +27,6 @@ import { eachGitLine, LineReader, ownRepoRoot } from "../shared/git-stream.ts";
 import { ROOT } from "../shared/paths.ts";
 import { privateDir } from "../shared/templates.ts";
 
-/** The two append-only files in private storage. */
 export const LEDGER_FILES = ["ground-truth.jsonl", "audit-events.jsonl"] as const;
 
 /** Where the anchors live, in this (public) repository. */
@@ -61,7 +60,7 @@ function git(repoRoot: string, ...args: string[]) {
 
 /**
  * Whether the file at `commit` is the start of the file today, line by line (line endings aside). Both are
- * read one line at a time, side by side, so neither is ever held whole (Qodo on PR 286).
+ * read one line at a time, side by side, so neither is ever held whole.
  */
 function isStartOfToday(privateRoot: string, commit: string, file: string): boolean {
   const path = join(privateRoot, file);
@@ -151,7 +150,7 @@ export function recordAnchor(
   const existing = existsSync(anchorsPath) ? readAnchors(anchorsPath) : { anchors: [], problems: [] };
   if (existing.problems.length) throw new Error(existing.problems.join("; "));
   if (existing.anchors.at(-1)?.commit === commit) return { commit, added: false };
-  // A file whose last line has no line break gets one first, so two anchors never run together (Qodo on PR 286).
+  // A file whose last line has no line break gets one first, so two anchors never run together.
   const text = existsSync(anchorsPath) ? readFileSync(anchorsPath, "utf8") : "";
   const separator = text && !text.endsWith("\n") ? "\n" : "";
   appendFileSync(anchorsPath, `${separator}${now.toISOString().slice(0, 10)} ${commit}\n`);

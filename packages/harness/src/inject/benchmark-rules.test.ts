@@ -21,7 +21,7 @@ const control = (id: string, criteria: string[], benchmark?: number): RuleTempla
   ...(benchmark ? { benchmark } : {}),
 });
 
-describe("benchmarkProblems (#257)", () => {
+describe("benchmarkProblems", () => {
   it("refuses a v2 bug template whose criteria restate its kind terms or invariant", () => {
     const problems = benchmarkProblems(
       bug(["A booking for the last night is accepted at the Boundary.", "Refers to INV-X-001."], 2),
@@ -60,7 +60,7 @@ describe("benchmarkProblems (#257)", () => {
   });
 });
 
-describe("changedLines (#257, AUD-M7)", () => {
+describe("changedLines", () => {
   const file = (lines: string[]) => `${lines.join("\n")}\n`;
 
   it("records only the line that changed inside a wider replaced block", () => {
@@ -71,13 +71,13 @@ describe("changedLines (#257, AUD-M7)", () => {
     expect(changedLines(file(["a", "b"]), file(["a", "x", "y", "b"]))).toEqual([2, 3]);
   });
 
-  it("records a pure deletion as the line now standing where the removed lines were", () => {
+  it("records a pure deletion as the line standing where the removed lines were", () => {
     expect(changedLines(file(["a", "b", "c", "d"]), file(["a", "d"]))).toEqual([2, 2]);
     expect(changedLines(file(["a", "b", "c"]), file(["a", "b"]))).toEqual([2, 2]);
   });
 });
 
-describe("applyMutation and templateRefusal by benchmark version (#257)", () => {
+describe("applyMutation and templateRefusal by benchmark version", () => {
   const base = {
     schemaVersion: 2,
     id: "x-secret-v1",
@@ -124,7 +124,7 @@ describe("applyMutation and templateRefusal by benchmark version (#257)", () => 
   });
 });
 
-describe("benchmarkProblems and changedLines: round two on PR 274", () => {
+describe("benchmarkProblems and changedLines: collateral invariants, nothing to compare with, and a final newline", () => {
   const someone = control("c9", ["Something else."]);
 
   it("refuses a criterion naming a collateral invariant, and reads terms as whole words", () => {

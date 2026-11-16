@@ -1,8 +1,8 @@
 /**
- * The `inputHash` each tool writes into its audit event, computed in one place, and checked again later
- * (AUD-M26): `inject`'s covers the template, its proofs and the base commit; `verdict`'s covers the
- * answer-key entry, the template and the saved review it judged. A template or a saved review changed
- * after the event no longer gives the recorded hash, and `ledger:check` and `case:build` say so.
+ * The `inputHash` each tool writes into its audit event, computed in one place, and checked again later:
+ * `inject`'s covers the template, its proofs and the base commit; `verdict`'s covers the answer-key entry,
+ * the template and the saved review it judged. A template or a saved review changed after the event gives
+ * another hash, and `ledger:check` and `case:build` say so.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -40,9 +40,8 @@ export function isToolWritten(event: Record<string, unknown>): boolean {
 }
 
 /**
- * Hashes that no longer recompute, for a reason recorded before this check existed. Each is pinned to the
- * hash its inputs give today, so any further change is still reported. FF-0001's template gained its kind
- * terms and a second proof on 10 November, after its verdict (AUD-M11, in the decision log).
+ * Hashes that don't recompute, each for a reason the decision log records. Each is pinned to the hash its
+ * inputs give today, so any further change is still reported.
  */
 export const KNOWN_DRIFT: ReadonlyMap<string, { hash: string; reason: string }> = new Map([
   [
@@ -54,7 +53,6 @@ export const KNOWN_DRIFT: ReadonlyMap<string, { hash: string; reason: string }> 
   ],
 ]);
 
-/** The template's text and dir, or undefined. */
 function templateText(id: unknown, env: NodeJS.ProcessEnv): { dir: string; text: string } | undefined {
   if (typeof id !== "string") return undefined;
   const dir = templateDir(id, env);
@@ -80,7 +78,7 @@ export function recomputeInjectionHash(entry: LedgerEntry, env: NodeJS.ProcessEn
 }
 
 /**
- * Why a verdict's `inputHash` no longer holds, or undefined when it does. The save is the file the verdict
+ * Why a verdict's `inputHash` doesn't hold, or undefined when it does. The save is the file the verdict
  * names (`reviewFile`, relative to private storage) or, for an older verdict, the case's own PR's save. The
  * entry is any version the append-only answer key has held for the case (`entryVersions`): the verdict read
  * one of them. Never throws.
@@ -120,7 +118,7 @@ export function verdictHashProblem(
 }
 
 /**
- * Every tool-written injection and verdict event whose `inputHash` no longer recomputes from today's files:
+ * Every tool-written injection and verdict event whose `inputHash` doesn't recompute from today's files:
  * a template, proof or saved review changed after the event recorded it.
  */
 export function hashProblems(
@@ -131,7 +129,7 @@ export function hashProblems(
   const entries = readLedger(paths.groundTruthPath);
   const events = readAuditLog(paths.auditEventsPath);
   const problems: string[] = [];
-  // A verdict a later one superseded no longer stands, so its inputs may have moved on (Qodo on PR 264).
+  // A superseded verdict doesn't stand, so its inputs may have moved on.
   const superseded = new Set(events.map((e) => e.supersedes).filter((id): id is string => typeof id === "string"));
   for (const event of events) {
     if (!isToolWritten(event) || typeof event.inputHash !== "string") continue;
@@ -150,7 +148,7 @@ export function hashProblems(
   return problems;
 }
 
-/** Why an injection event's `inputHash` no longer holds, or undefined when it does (or drifted as recorded). */
+/** Why an injection event's `inputHash` doesn't hold, or undefined when it does (or drifted as recorded). */
 export function injectionHashProblem(
   event: LedgerEntry,
   entries: LedgerEntry[],
