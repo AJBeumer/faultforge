@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 import { spellingProblem } from "./packages/harness/src/shared/drive-spelling.ts";
 
 // Started from another spelling of this folder (`d:\…` for `D:\…`), every test file fails to load with an error
-// that says nothing about the code. Stop with one that says what to run instead (AUD-M25).
+// that says nothing about the code. Stop with one that says what to run instead.
 // Windows only, and only for a difference in case: a junction or symlink to the checkout is left as it was.
 if (process.platform === "win32") {
   const spelling = spellingProblem(process.cwd(), realpathSync.native(process.cwd()));
@@ -15,7 +15,7 @@ if (process.platform === "win32") {
 /**
  * A few tests build fixtures under the OS temp directory by a fixed name (one reviewed-repo config,
  * one body file). Giving each `vitest` invocation its own temp directory, instead of the machine-wide
- * one, means those fixed names can't collide with a concurrent run on the same machine (#110): this
+ * one, means those fixed names can't collide with a concurrent run on the same machine: this
  * repo's own, run twice at once, or alongside the reviewed repo's. `os.tmpdir()` reads `TMPDIR` /
  * `TEMP` / `TMP` at call time, so setting them for the worker processes is enough; nothing that reads
  * them needs to change. Removed on exit, so a run doesn't leave its scratch fixtures behind.

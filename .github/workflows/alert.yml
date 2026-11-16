@@ -1,4 +1,4 @@
-# Raises the lab's alert (#308): one open issue labelled `alert` per kind, or a comment on the open one. Called by
+# Raises the lab's alert: one open issue labelled `alert` per kind, or a comment on the open one. Called by
 # check.yml when CI on main fails, and by factory.yml when a tick ends with exit 2 or 3 or stops without reporting.
 # The text is fixed words, the workflow's name and the run's URL (packages/harness/src/factory/alert.ts): never a log line
 # or a private path.
