@@ -87,6 +87,53 @@ gate with only its first label to fix. The match rule decides which finding desc
 it is not changed. The command reads only. The results are in the
 [decision log](decision-log.md).
 
+## Checking the gate by its outcome
+
+```
+npm run gate:trial -- FF-0012 --gate saved
+npm run gate:trial -- FF-0012 --gate first-label-only
+```
+
+A gate can meet its own rule and still let a defect through. `gate:trial` checks that with tests
+the loop never sees.
+
+1. It makes a scratch copy of the reviewed repository at an adjudicated case's base commit and
+   applies the case's change, uncommitted. The copy can't push anywhere.
+2. Qodo's local review reads the uncommitted change, with the case's ordinary ticket as context.
+3. The gate decides. If it is not met, a builder agent gets the ticket, the gate and the findings
+   it must act on, and nothing else. It works only in the scratch copy.
+4. Steps 2 and 3 repeat until the gate is met or the task is reported not done.
+5. Then the case's proof tests run. Neither the reviewer nor the builder saw them.
+
+The record says how the loop ended and what the proofs say:
+
+- **Gate met, defect gone.** The gate did its job.
+- **Gate met, defect survived.** An escape: the loop said done with the planted defect still in.
+- **Damage.** A proof that passed before the loop fails after it: a fix broke something that worked.
+- **Not done.** The loop stopped and said why: the round limit, a round that closed nothing, an
+  incomplete review, or a disagreement.
+
+A builder that thinks a finding is wrong must hand in a test that would fail if the finding were
+true. If that test passes, the trial stops as "the owner must decide". Without such a test, the
+finding just counts as still open.
+
+Two limits are part of every trial's record:
+
+- **The reviewer's own inventory.** Qodo's local review says whether its list of findings is
+  complete. On a full review with no earlier checkpoint it says "incomplete", and it did so on every
+  local review of 16 November. A trial records that for each round and still treats the round's
+  list as the findings to act on. A trial result is therefore about the findings Qodo returned.
+- **The builder is confined by its tool rules, not by the operating system.** It has no network
+  tool, and the lab's folders and private storage are denied to its file tools. But a test it writes
+  runs as the person running the trial. So after the loop the builder's added lines are read for an
+  absolute path, a climb out of the repository, a reach for the environment or another process, or
+  a word that names the lab. A trial with any of those is recorded as inconclusive. That catches
+  what is written plainly, not a path built at run time.
+
+Only a case the decision log already names can be tried. A trial is not a case: it adds nothing to
+the answer key or to a case record, and its results are never pooled with benchmark results.
+Nothing is written to the reviewed repository, and no finding is dismissed or answered.
+
 ## Why it lives in `factory.json`
 
 `AGENTS.md` and `CLAUDE.md` are read by Qodo as review rules. A gate written there would change
