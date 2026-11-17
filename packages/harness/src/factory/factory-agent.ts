@@ -7,9 +7,10 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
 import { type FactoryConfig, gateOf, type QualityGate, repoConfig, STRICTEST_GATE } from "../shared/factory-config.ts";
 import { gateText } from "../shared/quality-gate.ts";
-import { CI_WAIT_ALONE, ciWaitInstruction, stepResult } from "./factory-agent-checks.ts";
+import { ciWaitInstruction, stepResult } from "./factory-agent-checks.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
+import { agentStep, stepHas } from "./factory-agent-steps.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
 import { guardPrivateDir, privateCheckoutsFor } from "./factory-private.ts";
 import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
@@ -17,6 +18,7 @@ import { type AgentSandbox, type Launch, localSandbox } from "./factory-sandbox.
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
 
+export { agentStep } from "./factory-agent-steps.ts";
 export { killTree } from "./factory-kill.ts";
 
 export interface AgentRun {
@@ -172,22 +174,6 @@ const DENY = [
   "Bash(setx:*)",
 ];
 
-/** A short name for the agent's shell commands worth showing on the timeline, or null. */
-export function agentStep(command: string): string | null {
-  if (/\bgh\s+pr\s+create\b|\btarget:post\s+--\s+pr-create\b/.test(command)) return "pr-opened";
-  if (/\breview:wait\b/.test(command)) return "review-wait";
-  // One command can wait and then push. Both are named, so neither is missing from the log. Only a wait that
-  // is the whole command is plain "ci-wait": then the command's exit code is the wait's own.
-  const pushes = /\bgit\b[^\n]*\bpush\b|\btarget:post\s+--\s+push\b/.test(command);
-  if (/\bci:wait\b/.test(command))
-    return pushes ? "ci-wait+push" : CI_WAIT_ALONE.test(command) ? "ci-wait" : "ci-wait+more";
-  if (pushes) return "push";
-  if (/\bnpm\s+run\s+check\b/.test(command)) return "check";
-  if (/\bticket:ready\b/.test(command)) return "ticket-ready";
-  if (/\brevert:check\b/.test(command)) return "revert-check";
-  return null;
-}
-
 /**
  * Runs the agent on one ticket in `ws` (`TickDeps.runAgent`), with the run's budget and time limit, and reads
  * its result from the stream. Its transcript goes to `<runs>/<run id>.agent.jsonl`. `sandbox` decides how it is
@@ -333,7 +319,7 @@ export async function runAgent(
           // No output here: the event log can be public. The full output stays in the private transcript.
           const step = commands.get(part.tool_use_id ?? "");
           log("agent-step-result", stepResult(step, part.content, Boolean(part.is_error)));
-          if (step === "pr-opened" && !part.is_error) {
+          if (stepHas(step, "pr-opened") && !part.is_error) {
             const url = prUrlFromToolResult(part.content, github);
             if (url) lastPr = url;
           }

@@ -15,6 +15,7 @@ import {
   prUrlFromToolResult,
 } from "./factory-agent.ts";
 import { CI_WAIT_MINUTES, ciWaitInstruction, stepResult, toolExitCode } from "./factory-agent-checks.ts";
+import { stepHas } from "./factory-agent-steps.ts";
 
 describe("agentInstructions", () => {
   it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
@@ -129,6 +130,39 @@ describe("agentInstructions", () => {
     expect(agentStep("npm run ci:wait -- faultforge --timeout 9 && git push origin tidy")).toBe("ci-wait+push");
     expect(agentStep("npm run ci:wait -- faultforge\ngit -C . push")).toBe("ci-wait+push");
     expect(agentStep("git push origin tidy")).toBe("push");
+  });
+
+  it("names every step a command holds, so a wait or a check joined to another step is still in the log", () => {
+    expect(agentStep("npm run ci:wait -- faultforge && npm run check")).toBe("ci-wait+check");
+    expect(agentStep("npm run ci:wait -- faultforge && gh pr create --title t --body-file b.md")).toBe(
+      "pr-opened+ci-wait",
+    );
+    expect(agentStep("git push && npm run review:wait -- faultforge 3 && npm run ci:wait -- faultforge")).toBe(
+      "review-wait+ci-wait+push",
+    );
+    // One step alone keeps its plain name.
+    expect(agentStep("npm run review:wait -- faultforge 3 --commit abc")).toBe("review-wait");
+    expect(agentStep("npm run check")).toBe("check");
+    expect(agentStep("ls -la")).toBeNull();
+  });
+
+  it("reads one step out of a joined name, and nothing out of a missing one", () => {
+    expect(stepHas("review-wait+ci-wait+push", "ci-wait")).toBe(true);
+    expect(stepHas("review-wait+ci-wait+push", "check")).toBe(false);
+    expect(stepHas("ci-wait+more", "ci-wait")).toBe(true);
+    expect(stepHas("ci-wait-more", "ci-wait")).toBe(false);
+    expect(stepHas(undefined, "push")).toBe(false);
+    expect(stepHas(null, "push")).toBe(false);
+  });
+
+  it("puts an exit code only on a wait that was the whole command", () => {
+    for (const command of [
+      "npm run ci:wait -- faultforge && npm run check",
+      "git push && npm run ci:wait -- faultforge",
+    ]) {
+      expect(stepResult(agentStep(command) ?? undefined, "Exit code 1", true)).not.toHaveProperty("exitCode");
+    }
+    expect(stepResult(agentStep("npm run ci:wait -- faultforge") ?? undefined, "Exit code 1", true).exitCode).toBe(1);
   });
 
   it("says to wait for Qodo in the foreground and never to end the turn early, which would end the run", () => {
