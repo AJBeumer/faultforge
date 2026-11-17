@@ -326,7 +326,7 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
 function readCheckout(checkout: string, github: string, deps: CiWaitDeps): { sha: string; address: string } | null {
   try {
     const pushTo = deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/);
-    const addresses = [deps.git(checkout, "remote", "get-url", "origin"), ...pushTo];
+    const addresses = [...deps.git(checkout, "remote", "get-url", "--all", "origin").split(/\r?\n/), ...pushTo];
     // Git rewrites even an explicit address through `url.<base>.insteadOf` and `pushInsteadOf`, so with any
     // such rule the address checked here might not be where the push goes. The door refuses them the same way.
     let rewrites = "";

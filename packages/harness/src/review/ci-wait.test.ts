@@ -288,6 +288,17 @@ describe("ci:wait", () => {
     expect(await run(["faultforge"], w.deps)).toBe(1);
   });
 
+  it("pushes nothing when origin fetches from a second address that is another repository", async () => {
+    const w = world([{ runs: [workflow(1)], jobs: GREEN }], {
+      origin: `${ORIGIN}\nhttps://github.com/AJBeumer/faultforge-target.git`,
+      pushTo: ORIGIN,
+    });
+    expect(await run(["faultforge"], w.deps)).toBe(2);
+    expect(w.errors()).toMatch(/for both fetching and pushing/);
+    expect(w.gitCalls).toContain("remote get-url --all origin");
+    expect(w.gitCalls.some((call) => call.startsWith("push"))).toBe(false);
+  });
+
   it("pushes nothing when the checkout's git config rewrites remote addresses", async () => {
     for (const rewrites of [
       "url.https://github.com/someone/.insteadof https://github.com/AJBeumer/",
