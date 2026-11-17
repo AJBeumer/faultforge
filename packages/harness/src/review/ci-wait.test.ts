@@ -189,7 +189,14 @@ describe("remoteIs", () => {
 /** A fake world: scripted polls, a clock that moves when the command sleeps, and every git call recorded. */
 function world(
   polls: { runs: WorkflowRun[]; jobs?: Job[]; fails?: string }[],
-  options: { dirty?: boolean; pushFails?: boolean; deleteFails?: boolean; origin?: string; pushTo?: string } = {},
+  options: {
+    dirty?: boolean;
+    pushFails?: boolean;
+    deleteFails?: boolean;
+    origin?: string;
+    pushTo?: string;
+    rewrites?: string;
+  } = {},
 ) {
   const gitCalls: string[] = [];
   const out: string[] = [];
@@ -203,6 +210,11 @@ function world(
       const origin = options.origin ?? ORIGIN;
       if (args[0] === "remote") return args.includes("--push") ? (options.pushTo ?? origin) : origin;
       if (args[0] === "status") return options.dirty ? " M file.ts" : "";
+      if (args[0] === "config") {
+        // Like git: exit 1 when no key matches.
+        if (!options.rewrites) throw new Error("exit 1");
+        return options.rewrites;
+      }
       if (args[0] === "rev-parse") return SHA;
       if (args[0] === "push" && !args.includes("--delete") && options.pushFails) throw new Error("rejected");
       if (args[0] === "push" && args.includes("--delete") && options.deleteFails) throw new Error("no such ref");
@@ -274,6 +286,48 @@ describe("ci:wait", () => {
       { runs: [earlier, workflow(8, { conclusion: "failure" })], jobs: [job("npm run check (windows)", "failure")] },
     ]);
     expect(await run(["faultforge"], w.deps)).toBe(1);
+  });
+
+  it("pushes nothing when the checkout's git config rewrites remote addresses", async () => {
+    for (const rewrites of [
+      "url.https://github.com/someone/.insteadof https://github.com/AJBeumer/",
+      "url.git@github.com:AJBeumer/faultforge-target.pushinsteadof https://github.com/AJBeumer/faultforge",
+    ]) {
+      const w = world([{ runs: [workflow(1)], jobs: GREEN }], { rewrites });
+      expect(await run(["faultforge"], w.deps)).toBe(2);
+      expect(w.errors()).toMatch(/rewrites remote addresses/);
+      expect(w.gitCalls.some((call) => call.startsWith("push"))).toBe(false);
+    }
+  });
+
+  it("names its exit code in its last line when factory.json can't be read", async () => {
+    vi.stubEnv("FAULTFORGE_CONFIG", join(tempDir("ci-wait-no-config-"), "missing.json"));
+    try {
+      const w = world([]);
+      expect(await run(["faultforge"], w.deps)).toBe(2);
+      expect(w.errors()).toMatch(/couldn't read factory.json/);
+      expect(w.lastLine()).toBe("ci:wait exit 2");
+      expect(w.gitCalls).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("waits for a required job GitHub lists late, in the same run or in a later workflow", async () => {
+    const linux = GREEN.filter((j) => !j.name.includes("windows"));
+    // The run is listed and done, with the Linux jobs only, on two polls; the Windows jobs come after.
+    const early = { runs: [workflow(1)], jobs: linux };
+    const late = { runs: [workflow(1), workflow(2)], jobs: GREEN };
+    const w = world([early, early, early, late, late]);
+    expect(await run(["faultforge"], w.deps)).toBe(0);
+    expect(w.out()).toContain("npm run check (windows): success");
+  });
+
+  it("waits for a job list that changed between two polls before it judges", async () => {
+    const first = { runs: [workflow(1)], jobs: GREEN.slice(0, 3) };
+    const second = { runs: [workflow(1)], jobs: GREEN };
+    const w = world([first, second, second]);
+    expect(await run(["faultforge"], w.deps)).toBe(0);
   });
 
   it("exits 1, never 2, for a workflow that failed before any job ran", async () => {

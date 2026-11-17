@@ -180,13 +180,18 @@ async function wait(
         const ran = jobs.some(
           (job) => job.status !== "completed" || !["skipped", "neutral"].includes(job.conclusion ?? ""),
         );
-        const ids = runs
-          .map((run) => run.id)
-          .sort()
-          .join(",");
+        // The runs and their jobs must read the same on two polls in a row, so a job GitHub lists late is waited for.
+        const ids = JSON.stringify([
+          runs.map((run) => run.id).sort(),
+          jobs.map((job) => `${job.name}:${job.status}:${job.conclusion}`).sort(),
+        ]);
         ranJob = ran;
         // A run that failed is an answer even with no job that ran (a workflow that failed before any job).
-        settled = (ran || failedRuns(runs).length > 0) && ids === seen;
+        const failed = failedRuns(runs).length > 0;
+        // A required job may come in a workflow GitHub starts later: until each one is listed, it is waited for,
+        // up to the start limit. Then a job still missing counts as not run.
+        const complete = required.every((name) => jobs.some((job) => job.name === name));
+        settled = (ran || failed) && ids === seen && (complete || failed || deps.now() - started > START_LIMIT_MS);
         seen = ids;
       } else seen = "";
     } catch (e) {
@@ -226,7 +231,13 @@ async function wait(
 
 /** Everything before and after the wait: the refusals, the push, and the branch's removal. */
 async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
-  const factory = loadFactory();
+  let factory: ReturnType<typeof loadFactory>;
+  try {
+    factory = loadFactory();
+  } catch (e) {
+    deps.error(`ci:wait: couldn't read factory.json: ${e instanceof Error ? e.message : String(e)}`);
+    return 2;
+  }
   const args = parseCiWaitArgs(argv);
   if (!args || !factory.repos[args.repoKey]) {
     deps.error(`usage: npm run ci:wait -- <${Object.keys(factory.repos).join("|")}> [--timeout minutes]`);
@@ -316,6 +327,18 @@ function readCheckout(checkout: string, github: string, deps: CiWaitDeps): { sha
   try {
     const pushTo = deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/);
     const addresses = [deps.git(checkout, "remote", "get-url", "origin"), ...pushTo];
+    // Git rewrites even an explicit address through `url.<base>.insteadOf` and `pushInsteadOf`, so with any
+    // such rule the address checked here might not be where the push goes. The door refuses them the same way.
+    let rewrites = "";
+    try {
+      rewrites = deps.git(checkout, "config", "--get-regexp", String.raw`^url\..*\.(insteadof|pushinsteadof)$`);
+    } catch {
+      // git exits 1 when no key matches: no rewrite.
+    }
+    if (rewrites.trim()) {
+      deps.error("ci:wait: this checkout's git config rewrites remote addresses, so the push could go elsewhere.");
+      return null;
+    }
     if (!addresses.every((address) => remoteIs(address, github))) {
       deps.error(
         `ci:wait: this checkout's origin is not github.com/${github} for both fetching and pushing, so nothing was pushed.`,
