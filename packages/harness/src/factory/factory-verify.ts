@@ -3,7 +3,7 @@
  * Qodo's review of its head (`review:wait`) and its tests (`revert:check`), both run from a trusted checkout
  * of `main`.
  */
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { type FactoryConfig, gateOf, repoConfig } from "../shared/factory-config.ts";
 import { ROOT as LAB_ROOT, prEvidenceDir } from "../shared/paths.ts";
@@ -33,6 +33,18 @@ export interface Verification {
 export function commitToVerify(localTip: string | null, viewHead: string): string | null {
   const commit = localTip ?? viewHead;
   return /^[0-9a-f]{40}$/i.test(commit) ? commit : null;
+}
+
+/**
+ * Saves the runner's record at `to`, replacing whatever is there, in a folder it creates when needed. It writes
+ * the content and never copies the file: in GitHub Actions the agent runs as another user (`ffagent`), and when it
+ * has run `revert:check` itself, the file at `to` already exists and is that user's. Node's `copyFileSync` then
+ * also sets the file's permissions, which only the owner may do, so Linux refuses with EPERM. Writing the content
+ * needs only write access to the file, which the runner has.
+ */
+export function saveRecord(from: string, to: string): void {
+  mkdirSync(dirname(to), { recursive: true });
+  writeFileSync(to, readFileSync(from));
 }
 
 /** Problems with the PR as GitHub shows it once the review of `pushed` is complete. */
@@ -273,8 +285,7 @@ export function verifyPrWith(
     const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
     if (existsSync(revertRecordFile)) {
       try {
-        mkdirSync(dirname(permanentRecordFile), { recursive: true });
-        copyFileSync(revertRecordFile, permanentRecordFile);
+        saveRecord(revertRecordFile, permanentRecordFile);
         revertCheckRecord = permanentRecordFile;
       } catch (error) {
         problems.push(
