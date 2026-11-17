@@ -13,6 +13,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseJsonLines } from "../shared/jsonl.ts";
 import { evidenceDir, runsDir } from "../shared/paths.ts";
+import { stepHas } from "./factory-agent-steps.ts";
 
 export interface RunEvent {
   t: string;
@@ -97,7 +98,8 @@ export function summarize(events: RunEvent[]): string {
   );
   const cost = typeof agentDone?.costUsd === "number" ? agentDone.costUsd : null;
   const turns = typeof agentDone?.turns === "number" ? agentDone.turns : null;
-  const reviewRounds = events.filter((e) => e.event === "agent-step" && e.step === "review-wait").length;
+  // A command can hold several steps ("review-wait+push"): each that holds a review wait counts.
+  const reviewRounds = events.filter((e) => e.event === "agent-step" && stepHas(e.step, "review-wait")).length;
   const outcome = typeof finished.label === "string" ? finished.label : "n/a";
 
   return (

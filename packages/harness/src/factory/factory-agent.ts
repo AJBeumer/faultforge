@@ -7,8 +7,10 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { basename, delimiter, join, resolve } from "node:path";
 import { type FactoryConfig, gateOf, type QualityGate, repoConfig, STRICTEST_GATE } from "../shared/factory-config.ts";
 import { gateText } from "../shared/quality-gate.ts";
+import { ciWaitInstruction, stepResult } from "./factory-agent-checks.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
+import { stepHas, toolStep } from "./factory-agent-steps.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
 import { guardPrivateDir, privateCheckoutsFor } from "./factory-private.ts";
 import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
@@ -16,6 +18,7 @@ import { type AgentSandbox, type Launch, localSandbox } from "./factory-sandbox.
 import type { Logger, TickOptions, Workspace } from "./factory-tick.ts";
 import { worktreeFor } from "./factory-workspace.ts";
 
+export { agentStep } from "./factory-agent-steps.ts";
 export { killTree } from "./factory-kill.ts";
 
 export interface AgentRun {
@@ -66,6 +69,7 @@ export function agentInstructions(
     `The ticket's text, as the runner checked it, is in ${ticketFile}. Read the ticket from that file only: never with gh issue view, gh api or npm run ticket:ready, which read it live. Don't move the ticket on the project board: the runner tracks it.`,
     'Everything you need from the environment is written here. Don\'t list it (env, printenv and set are blocked); one variable by name, such as echo "$FAULTFORGE_TICKET_FILE", is fine.',
     "In this run, gh api calls about issues, comments or search are blocked. To save and read Qodo's review, use npm run review:wait: it saves every version of the comments and the findings itself.",
+    ciWaitInstruction(repoKey, privateWorktree),
     "Run review:wait in the foreground, with the Bash tool's longest timeout (600000 ms) and --timeout 9, and run it again while it exits 1, up to the round's time. Never start it in the background and never schedule a wakeup: ending your turn ends the run, and nobody wakes you. Report FACTORY_RESULT before you stop, whatever happened.",
     writeInstructions(runRoot, privateWorktree, github),
     `Your working copies are under ${runRoot}. Never read from or write to the owner's own checkouts elsewhere.`,
@@ -146,7 +150,7 @@ interface StreamMessage {
       type: string;
       name?: string;
       id?: string;
-      input?: { command?: string };
+      input?: { command?: string; run_in_background?: unknown };
       tool_use_id?: string;
       is_error?: boolean;
       content?: unknown;
@@ -169,17 +173,6 @@ const DENY = [
   "Bash(schtasks:*)",
   "Bash(setx:*)",
 ];
-
-/** A short name for the agent's shell commands worth showing on the timeline, or null. */
-export function agentStep(command: string): string | null {
-  if (/\bgh\s+pr\s+create\b|\btarget:post\s+--\s+pr-create\b/.test(command)) return "pr-opened";
-  if (/\breview:wait\b/.test(command)) return "review-wait";
-  if (/\bgit\b[^\n]*\bpush\b|\btarget:post\s+--\s+push\b/.test(command)) return "push";
-  if (/\bnpm\s+run\s+check\b/.test(command)) return "check";
-  if (/\bticket:ready\b/.test(command)) return "ticket-ready";
-  if (/\brevert:check\b/.test(command)) return "revert-check";
-  return null;
-}
 
 /**
  * Runs the agent on one ticket in `ws` (`TickDeps.runAgent`), with the run's budget and time limit, and reads
@@ -317,7 +310,7 @@ export async function runAgent(
       for (const part of message.message?.content ?? []) {
         if (part.type === "tool_use" && part.name === "Bash") {
           const command = String(part.input?.command ?? "");
-          const step = agentStep(command);
+          const step = toolStep(command, part.input?.run_in_background === true);
           if (step) {
             commands.set(part.id ?? "", step);
             log("agent-step", { step, command: command.slice(0, 120) });
@@ -325,8 +318,8 @@ export async function runAgent(
         } else if (part.type === "tool_result" && commands.has(part.tool_use_id ?? "")) {
           // No output here: the event log can be public. The full output stays in the private transcript.
           const step = commands.get(part.tool_use_id ?? "");
-          log("agent-step-result", { step, error: Boolean(part.is_error) });
-          if (step === "pr-opened" && !part.is_error) {
+          log("agent-step-result", stepResult(step, part.content, Boolean(part.is_error)));
+          if (stepHas(step, "pr-opened") && !part.is_error) {
             const url = prUrlFromToolResult(part.content, github);
             if (url) lastPr = url;
           }

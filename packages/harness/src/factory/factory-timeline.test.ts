@@ -79,4 +79,16 @@ describe("summarize", () => {
     ];
     expect(summarize(events)).toMatch(/2 review rounds/);
   });
+
+  it("counts a review wait joined to another step in one command", () => {
+    const events = [
+      { t: "2026-11-09T09:00:00.000Z", event: "picked", labelledAt: "2026-11-09T08:00:00Z" },
+      { t: "2026-11-09T09:00:01.000Z", event: "agent-started" },
+      { t: "2026-11-09T09:00:02.000Z", event: "agent-step", step: "review-wait+push" },
+      { t: "2026-11-09T09:00:03.000Z", event: "agent-step", step: "ci-wait+push" },
+      { t: "2026-11-09T09:00:04.000Z", event: "agent-finished", costUsd: 2, turns: 10 },
+      { t: "2026-11-09T09:00:05.000Z", event: "finished", label: "agent-done" },
+    ];
+    expect(summarize(events)).toMatch(/, 1 review round,/);
+  });
 });
