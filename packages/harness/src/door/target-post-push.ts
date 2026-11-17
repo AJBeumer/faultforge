@@ -37,17 +37,10 @@ const lines = (text: string) =>
     .map((line) => line.trim())
     .filter(Boolean);
 
-/**
- * A remote URL on github.com itself, as `owner/name` in lower case, or undefined. The host must be exactly GitHub's
- * (https, `git@github.com:` or ssh, with GitHub's ssh-over-443 host), never a URL that only mentions it in its path.
- */
-export function githubRemote(url: string): string | undefined {
-  const m =
-    /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@(?:ssh\.)?github\.com(?::443)?\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
-      url,
-    );
-  return m ? `${m[1]}/${m[2]}`.toLowerCase() : undefined;
-}
+import { githubRemote } from "../../../../.claude/hooks/shared/repos.ts";
+
+/** A remote URL on github.com itself, as `owner/name`: the guard's own reader, shared with ci:wait. */
+export { githubRemote };
 
 /**
  * Every URL `origin` fetches from and pushes to: all must be `repo` on github.com, or the push could go somewhere

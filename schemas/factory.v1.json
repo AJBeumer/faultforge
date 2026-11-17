@@ -96,6 +96,13 @@
             }
           }
         },
+        "ciJobs": {
+          "description": "The CI jobs that must run and succeed before a commit counts as green, by the names GitHub shows. ci:wait fails a commit when one of them did not run, and refuses a repo that names none.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "start": {
           "description": "How to run the app for a live check, or null if there is nothing to run.",
           "oneOf": [

@@ -17,6 +17,9 @@ export interface RepoConfig {
    * only. Regular expressions on repo-relative paths. Required by the schema; optional here so a test's made-up
    * config needs none (a run without it fails closed). */
   checkFiles?: { files: string; scripts: string };
+  /** The CI jobs that must run and succeed for a commit to count as green (`ci:wait`), by the names GitHub
+   * shows. Without it `ci:wait` refuses: it never guesses which jobs matter from the ones that ran. */
+  ciJobs?: string[];
 }
 
 /** The quality gate: Qodo's labels (`action_level`) that must be fixed, and those only reported to the owner. */

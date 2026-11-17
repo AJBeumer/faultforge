@@ -7,6 +7,7 @@
     "match": "tsx packages/harness/src/cli/match-cli.ts",
     "ticket:ready": "tsx packages/harness/src/cli/ticket-ready-cli.ts",
     "review:wait": "tsx packages/harness/src/cli/review-wait.ts",
+    "ci:wait": "tsx packages/harness/src/cli/ci-wait-cli.ts",
     "review:local": "tsx packages/harness/src/review/review-local.ts",
     "review:gate": "tsx packages/harness/src/review/review-gate.ts",
     "gate:check": "tsx packages/harness/src/cli/gate-check-cli.ts",

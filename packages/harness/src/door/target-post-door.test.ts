@@ -20,6 +20,7 @@ const WRITE_CALL =
 /** Modules that write elsewhere, and where. Each is checked to still write only there. */
 const ELSEWHERE: Record<string, string> = {
   "alert.ts": "the lab's own issues (its repo is the lab's, from factory.json)",
+  "ci-wait.ts": "git push of a scratch branch in a lab repository; it refuses a reviewed one before any git call",
   "rules-propose.ts": "the lab's own issues (rule proposals)",
   "factory-evidence.ts": "git push of the private evidence repo",
   "factory-keep.ts": "git push of the private evidence repo",
@@ -54,6 +55,13 @@ describe("one door to the reviewed repository", () => {
     expect(ELSEWHERE["factory-deps.ts"]).toBeUndefined();
     expect(readFileSync(sourcePath("factory-deps.ts"), "utf8")).toMatch(/\bticketWriter\(/);
     expect(readFileSync(sourcePath("ticket-write.ts"), "utf8")).toMatch(/\bsendPost\(/);
+  });
+
+  it("keeps ci:wait's scratch-branch push out of a reviewed repository: it refuses before it reads the checkout", () => {
+    const text = readFileSync(sourcePath("ci-wait.ts"), "utf8");
+    // The refusal comes before the first git call in the command's body.
+    expect(text.indexOf('repo.guard === "reviewed"')).toBeGreaterThan(-1);
+    expect(text.indexOf('repo.guard === "reviewed"')).toBeLessThan(text.indexOf("deps.git(checkout"));
   });
 
   it("sends case:ticket's issue and case:pr's PR through the door", () => {

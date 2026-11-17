@@ -53,7 +53,12 @@ describe("factory.json names the files that decide the check", () => {
     expect(changed(targetConfig, [...shared, "src/app.ts", "test/app.test.ts", "package-lock.json"])).toEqual(
       [...shared].sort(),
     );
-    const lab = ["packages/harness/src/repo/vitest-run.ts", "packages/harness/src/docs/docs-check.ts", "factory.json"];
+    const lab = [
+      "packages/harness/src/repo/vitest-run.ts",
+      "packages/harness/src/docs/docs-check.ts",
+      "packages/harness/src/review/ci-wait.ts",
+      "factory.json",
+    ];
     expect(changed(labConfig, [...shared, ...lab, "packages/harness/src/match/match.ts", "README.md"])).toEqual(
       [...shared, ...lab].sort(),
     );
@@ -67,9 +72,10 @@ describe("the lab's list keeps up with the check's own code", () => {
       relative(LAB, resolve(LAB, dirname(file), m[1] ?? "")).replaceAll("\\", "/"),
     );
 
-  it("covers every module the check's scripts and the Vitest config load, however deep", () => {
+  it("covers every module the check's scripts, ci:wait and the Vitest config load, however deep", () => {
     const scripts = JSON.parse(readFileSync(join(LAB, "package.json"), "utf8")).scripts as Record<string, string>;
-    const entries = ["check", "typecheck", "lint", "test", "docs:check"]
+    // ci:wait decides whether a lab commit may reach a pull request, so its code counts as the check's own.
+    const entries = ["check", "typecheck", "lint", "test", "docs:check", "ci:wait"]
       .flatMap((name) => [...(scripts[name] ?? "").matchAll(/tsx (\S+\.ts)/g)].map((m) => m[1] ?? ""))
       .concat("vitest.config.ts");
     const seen = new Set<string>();

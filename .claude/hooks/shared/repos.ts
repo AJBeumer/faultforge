@@ -196,6 +196,19 @@ export function githubRepo(url: string): string | undefined {
   return githubRepos(url)[0];
 }
 
+/**
+ * The repo a remote URL is on github.com itself, as `owner/name` in lower case, or undefined. Unlike `githubRepo`,
+ * the whole URL must be one (https, `git@github.com:` or ssh, with GitHub's ssh-over-443 host): for where a push
+ * goes, never "might reach" (the door, ci:wait).
+ */
+export function githubRemote(url: string): string | undefined {
+  const m =
+    /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@(?:ssh\.)?github\.com(?::443)?\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
+      url,
+    );
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : undefined;
+}
+
 /** The path with its nearest existing folder resolved through links; the rest as written. */
 function real(path: string): string {
   let head = resolve(path);
