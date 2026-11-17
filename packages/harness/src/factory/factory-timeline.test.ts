@@ -38,7 +38,8 @@ const notReadyRun = [
 describe("summarize", () => {
   it("sums up a finished run", () => {
     expect(summarize(finishedRun)).toBe(
-      "Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost $1.62, 60 turns, 1 review round, outcome agent-done",
+      "Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost $1.62, 60 turns, " +
+        "1 review round, 0 ci:waits (0 green), outcome agent-done",
     );
   });
 
@@ -62,7 +63,8 @@ describe("summarize", () => {
     ];
     const summary = summarize(events);
     expect(summary).toBe(
-      "Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost n/a, n/a turns, 0 review rounds, outcome agent-needs-help",
+      "Summary: label to result 14.3 min, waiting 9.1 min, agent 4.8 min, cost n/a, n/a turns, " +
+        "0 review rounds, 0 ci:waits (0 green), outcome agent-needs-help",
     );
     expect(summary).not.toMatch(/NaN|\$0\.00(?!\d)/);
   });
@@ -90,5 +92,49 @@ describe("summarize", () => {
       { t: "2026-11-09T09:00:05.000Z", event: "finished", label: "agent-done" },
     ];
     expect(summarize(events)).toMatch(/, 1 review round,/);
+  });
+
+  it("shows 0 ci:waits when a run never ran one", () => {
+    expect(summarize(finishedRun)).toMatch(/, 0 ci:waits \(0 green\), outcome/);
+  });
+
+  it("uses singular wording for exactly one ci:wait", () => {
+    const events = [
+      { t: "2026-11-09T09:00:00.000Z", event: "picked", labelledAt: "2026-11-09T08:00:00Z" },
+      { t: "2026-11-09T09:00:01.000Z", event: "agent-started" },
+      { t: "2026-11-09T09:00:02.000Z", event: "agent-step", step: "ci-wait" },
+      { t: "2026-11-09T09:00:03.000Z", event: "agent-step-result", step: "ci-wait", error: false, exitCode: 0 },
+      { t: "2026-11-09T09:00:04.000Z", event: "agent-finished", costUsd: 2, turns: 10 },
+      { t: "2026-11-09T09:00:05.000Z", event: "finished", label: "agent-done" },
+    ];
+    expect(summarize(events)).toMatch(/, 1 ci:wait \(1 green\), outcome/);
+  });
+
+  it("counts two ci:waits, one green and one failed", () => {
+    const events = [
+      { t: "2026-11-09T09:00:00.000Z", event: "picked", labelledAt: "2026-11-09T08:00:00Z" },
+      { t: "2026-11-09T09:00:01.000Z", event: "agent-started" },
+      { t: "2026-11-09T09:00:02.000Z", event: "agent-step", step: "ci-wait" },
+      { t: "2026-11-09T09:00:03.000Z", event: "agent-step-result", step: "ci-wait", error: true, exitCode: 1 },
+      { t: "2026-11-09T09:00:04.000Z", event: "agent-step", step: "ci-wait" },
+      { t: "2026-11-09T09:00:05.000Z", event: "agent-step-result", step: "ci-wait", error: false, exitCode: 0 },
+      { t: "2026-11-09T09:00:06.000Z", event: "agent-finished", costUsd: 2, turns: 10 },
+      { t: "2026-11-09T09:00:07.000Z", event: "finished", label: "agent-done" },
+    ];
+    expect(summarize(events)).toMatch(/, 2 ci:waits \(1 green\), outcome/);
+  });
+
+  it("counts a ci:wait joined to another step or run in the background, but never as green", () => {
+    const events = [
+      { t: "2026-11-09T09:00:00.000Z", event: "picked", labelledAt: "2026-11-09T08:00:00Z" },
+      { t: "2026-11-09T09:00:01.000Z", event: "agent-started" },
+      { t: "2026-11-09T09:00:02.000Z", event: "agent-step", step: "ci-wait+push" },
+      { t: "2026-11-09T09:00:03.000Z", event: "agent-step-result", step: "ci-wait+push", error: false },
+      { t: "2026-11-09T09:00:04.000Z", event: "agent-step", step: "ci-wait+background" },
+      { t: "2026-11-09T09:00:05.000Z", event: "agent-step-result", step: "ci-wait+background", error: false },
+      { t: "2026-11-09T09:00:06.000Z", event: "agent-finished", costUsd: 2, turns: 10 },
+      { t: "2026-11-09T09:00:07.000Z", event: "finished", label: "agent-done" },
+    ];
+    expect(summarize(events)).toMatch(/, 2 ci:waits \(0 green\), outcome/);
   });
 });

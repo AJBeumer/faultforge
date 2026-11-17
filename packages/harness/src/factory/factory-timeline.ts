@@ -73,10 +73,16 @@ function fmtCount(value: number | null, word: string): string {
   return `${value} ${word}${value === 1 ? "" : "s"}`;
 }
 
+/** How many `ci:wait` runs there were, and how many of those were green, e.g. "2 ci:waits (1 green)". */
+function fmtCiWait(waits: number, green: number): string {
+  return `${waits} ci:wait${waits === 1 ? "" : "s"} (${green} green)`;
+}
+
 /**
- * One line summing up a run: label to result, waiting, agent time, cost, turns and review rounds,
- * and how it ended. A run with no `finished` event (refused or not ready) only has waiting and the
- * outcome: there was no agent run to measure.
+ * One line summing up a run: label to result, waiting, agent time, cost, turns, review rounds, how
+ * many `ci:wait` runs there were and how many of those were green, and how it ended. A run with no
+ * `finished` event (refused or not ready) only has waiting and the outcome: there was no agent run to
+ * measure.
  */
 export function summarize(events: RunEvent[]): string {
   const picked = events.find((e) => e.event === "picked");
@@ -100,12 +106,19 @@ export function summarize(events: RunEvent[]): string {
   const turns = typeof agentDone?.turns === "number" ? agentDone.turns : null;
   // A command can hold several steps ("review-wait+push"): each that holds a review wait counts.
   const reviewRounds = events.filter((e) => e.event === "agent-step" && stepHas(e.step, "review-wait")).length;
+  // A wait joined to other steps or run in the background still counts as a ci:wait (it has no step
+  // of its own to drop); only a step named exactly "ci-wait" ever carries the exit code, so only that
+  // one, with exitCode 0, counts as green.
+  const ciWaits = events.filter((e) => e.event === "agent-step" && stepHas(e.step, "ci-wait")).length;
+  const ciWaitsGreen = events.filter(
+    (e) => e.event === "agent-step-result" && e.step === "ci-wait" && e.exitCode === 0,
+  ).length;
   const outcome = typeof finished.label === "string" ? finished.label : "n/a";
 
   return (
     `Summary: label to result ${fmtMinutes(labelToResult)}, waiting ${fmtMinutes(waiting)}, ` +
     `agent ${fmtMinutes(agentMinutes)}, cost ${fmtCost(cost)}, ${fmtCount(turns, "turn")}, ` +
-    `${fmtCount(reviewRounds, "review round")}, outcome ${outcome}`
+    `${fmtCount(reviewRounds, "review round")}, ${fmtCiWait(ciWaits, ciWaitsGreen)}, outcome ${outcome}`
   );
 }
 
