@@ -343,6 +343,28 @@ describe("ci:wait", () => {
     expect(w.out()).toContain("npm run check (windows): success");
   });
 
+  it("waits for a required job that is listed but still running, instead of failing it", async () => {
+    const running = GREEN.map((j) => (j.name === "npm run check (windows)" ? job(j.name, null, "in_progress") : j));
+    const early = { runs: [workflow(1)], jobs: running };
+    const done = { runs: [workflow(1)], jobs: GREEN };
+    const w = world([early, early, early, done, done]);
+    expect(await run(["faultforge"], w.deps)).toBe(0);
+  });
+
+  it("gives no result when origin changed while the push ran", async () => {
+    const w = world([{ runs: [workflow(1)], jobs: GREEN }]);
+    const git = w.deps.git;
+    let pushed = false;
+    w.deps.git = (cwd, ...args) => {
+      if (args[0] === "push" && !args.includes("--delete")) pushed = true;
+      if (pushed && args[0] === "remote") return "https://github.com/someone/elsewhere.git";
+      return git(cwd, ...args);
+    };
+    expect(await run(["faultforge"], w.deps)).toBe(2);
+    expect(w.errors()).toMatch(/origin changed during the push/);
+    expect(w.out()).not.toContain("every job passed");
+  });
+
   it("waits for a job list that changed between two polls before it judges", async () => {
     const first = { runs: [workflow(1)], jobs: GREEN.slice(0, 3) };
     const second = { runs: [workflow(1)], jobs: GREEN };

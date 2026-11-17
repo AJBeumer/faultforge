@@ -10,6 +10,7 @@ A PR's review, waited for and saved as evidence, and the checks built on it.
 - `review-local.ts` with `local-*.ts`: Qodo's review of a local diff, before a PR.
 - `ci-wait.ts`: a commit's checks on every operating system, on a scratch branch, before a PR sees it.
   `ci-wait-verdict.ts`: its pure rules (which runs are its own, what passed, which remote is the repository).
+  `ci-wait-origin.ts`: whether `origin` can send a push anywhere but the configured repository.
 
 Entry points: `npm run ci:wait` (`cli/ci-wait-cli.ts`), `npm run review:wait` (`cli/review-wait.ts`), `npm run review:gate` (`review-gate.ts`), `npm run gate:check` (`cli/gate-check-cli.ts`),
 `npm run review:local` (`review-local.ts`).

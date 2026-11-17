@@ -42,6 +42,7 @@ import { reviewedRepos } from "../../../../.claude/hooks/shared/repos.ts";
 import { type FactoryConfig, loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { callDeadline, ghJson } from "../shared/github.ts";
 import { ROOT } from "../shared/paths.ts";
+import { originIs, originProblem } from "./ci-wait-origin.ts";
 import {
   failedRuns,
   type Job,
@@ -199,7 +200,7 @@ async function wait(
         const failed = failedRuns(runs).length > 0;
         // A required job may come in a workflow GitHub starts later: until each one is listed, it is waited for,
         // up to the start limit. Then a job still missing counts as not run.
-        const complete = required.every((name) => jobs.some((job) => job.name === name));
+        const complete = required.every((name) => jobs.some((job) => job.name === name && job.status === "completed"));
         settled = (ran || failed) && ids === seen && (complete || failed || deps.now() - started > START_LIMIT_MS);
         seen = ids;
       } else seen = "";
@@ -223,7 +224,8 @@ async function wait(
       deps.error(`ci:wait: the checks didn't finish in ${args.timeoutMinutes} minutes, so there is no result.`);
       return 2;
     }
-    await deps.sleep(POLL_MS);
+    // Never asleep past the limit: the last sleep is cut to the time left.
+    await deps.sleep(Math.max(1, Math.min(POLL_MS, deadline - now)));
   }
   const verdict = jobsVerdict(jobs, required);
   // A run's own result counts too: a failed run is not green, even if its list of jobs came back without the
@@ -284,18 +286,20 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
     if (sha === null) return 2;
     branch = scratchBranch(sha, deps.now(), deps.nonce());
     try {
-      // By the remote's name, not its address: the lab's git guard reads which commits are new against
-      // `origin`'s branches, and against a bare address it would find every commit new and refuse. Git's
-      // pre-push hook is given the address the push really goes to, and refuses a reviewed repository by it,
-      // so a remote changed after the check above still can't reach one.
-      // Only the scratch branch: `push.followTags` in a config would send tags too, which no removal undoes.
+      // By name: the lab's git guard finds new commits against `origin`'s branches (a bare address makes all
+      // new, and it refuses), and its pre-push hook refuses a reviewed repository by the real address. No tags:
+      // `push.followTags` would send them too, which no removal undoes.
       deps.git(checkout, "push", "--quiet", "--no-follow-tags", "origin", `${sha}:refs/heads/${branch}`);
       pushed = true;
     } catch (e) {
       deps.error(`ci:wait: couldn't push the scratch branch: ${e instanceof Error ? e.message : String(e)}`);
       code = 2;
     }
-    if (pushed) {
+    // And `origin` is read once more: changed while the push ran, the branch may be elsewhere, so no result.
+    if (pushed && !originIs(checkout, repo.github, deps.git)) {
+      deps.error(`ci:wait: origin changed during the push, so ${branch} may not be in github.com/${repo.github}.`);
+      code = 2;
+    } else if (pushed) {
       deps.out(`Pushed ${sha.slice(0, 7)} to ${branch}; waiting for its checks (up to ${args.timeoutMinutes} min)…`);
       code = await wait(args, repo.github, branch, sha, required, deadline, deps);
     }
@@ -337,24 +341,9 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
  */
 function readCheckout(checkout: string, github: string, deps: CiWaitDeps): string | null {
   try {
-    const pushTo = deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/);
-    const addresses = [...deps.git(checkout, "remote", "get-url", "--all", "origin").split(/\r?\n/), ...pushTo];
-    // Git rewrites even an explicit address through `url.<base>.insteadOf` and `pushInsteadOf`, so with any
-    // such rule the address checked here might not be where the push goes. The door refuses them the same way.
-    let rewrites = "";
-    try {
-      rewrites = deps.git(checkout, "config", "--get-regexp", String.raw`^url\..*\.(insteadof|pushinsteadof)$`);
-    } catch {
-      // git exits 1 when no key matches: no rewrite.
-    }
-    if (rewrites.trim()) {
-      deps.error("ci:wait: this checkout's git config rewrites remote addresses, so the push could go elsewhere.");
-      return null;
-    }
-    if (!addresses.every((address) => remoteIs(address, github))) {
-      deps.error(
-        `ci:wait: this checkout's origin is not github.com/${github} for both fetching and pushing, so nothing was pushed.`,
-      );
+    const problem = originProblem(checkout, github, deps.git);
+    if (problem) {
+      deps.error(`ci:wait: ${problem}, so nothing was pushed.`);
       return null;
     }
     if (deps.git(checkout, "status", "--porcelain")) {
@@ -370,7 +359,12 @@ function readCheckout(checkout: string, github: string, deps: CiWaitDeps): strin
 
 /** The command's body: its result, and then its last line, which names the exit code. */
 export async function run(argv: string[], deps: CiWaitDeps = realDeps): Promise<number> {
-  const code = await body(argv, deps);
+  let code: 0 | 1 | 2 = 2;
+  try {
+    code = await body(argv, deps);
+  } catch (e) {
+    deps.error(`ci:wait stopped on an unexpected error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+  }
   deps.out(`ci:wait exit ${code}`);
   return code;
 }
