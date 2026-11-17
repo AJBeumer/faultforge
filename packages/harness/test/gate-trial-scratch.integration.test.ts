@@ -19,6 +19,12 @@ const GATE: QualityGate = {
   maxRounds: 3,
 };
 
+/**
+ * Each test here clones a repository, checks out a commit and tries a push that must fail. On a shared
+ * Windows runner that has taken longer than Vitest's 5 seconds, which is a slow runner, not a bug.
+ */
+const SLOW_RUNNER_MS = 60_000;
+
 describe("a gate trial's scratch copy", () => {
   let root: string;
   afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 3 }));
@@ -43,78 +49,86 @@ describe("a gate trial's scratch copy", () => {
     return { repo, publicAddress, base };
   }
 
-  it("sits at the commit asked for, fetches from the address given, and refuses to push", () => {
-    const { repo, publicAddress, base } = source();
-    const app = makeScratch(root, repo, publicAddress, base, false);
-    expect(git(app, "rev-parse", "HEAD")).toBe(base);
-    // Trimmed: git may check the file out with this system's own line ending.
-    expect(readFileSync(join(app, "limit.js"), "utf8").trim()).toBe("export const limit = 280;");
-    expect(git(app, "remote", "get-url", "origin")).toBe(publicAddress);
-    expect(git(app, "remote", "get-url", "--push", "origin")).toBe(NO_PUSH);
-    // A push from the copy fails, and the address it was told to fetch from holds nothing afterwards.
-    expect(() => git(app, "push", "origin", "HEAD:refs/heads/leak")).toThrow();
-    expect(git(publicAddress, "for-each-ref")).toBe("");
-    // The source checkout is untouched: still on its later commit, with no new branch.
-    expect(git(repo, "rev-parse", "HEAD")).not.toBe(base);
-    expect(git(repo, "branch", "--list").split("\n")).toHaveLength(1);
-  });
+  it(
+    "sits at the commit asked for, fetches from the address given, and refuses to push",
+    () => {
+      const { repo, publicAddress, base } = source();
+      const app = makeScratch(root, repo, publicAddress, base, false);
+      expect(git(app, "rev-parse", "HEAD")).toBe(base);
+      // Trimmed: git may check the file out with this system's own line ending.
+      expect(readFileSync(join(app, "limit.js"), "utf8").trim()).toBe("export const limit = 280;");
+      expect(git(app, "remote", "get-url", "origin")).toBe(publicAddress);
+      expect(git(app, "remote", "get-url", "--push", "origin")).toBe(NO_PUSH);
+      // A push from the copy fails, and the address it was told to fetch from holds nothing afterwards.
+      expect(() => git(app, "push", "origin", "HEAD:refs/heads/leak")).toThrow();
+      expect(git(publicAddress, "for-each-ref")).toBe("");
+      // The source checkout is untouched: still on its later commit, with no new branch.
+      expect(git(repo, "rev-parse", "HEAD")).not.toBe(base);
+      expect(git(repo, "branch", "--list").split("\n")).toHaveLength(1);
+    },
+    SLOW_RUNNER_MS,
+  );
 
-  it("carries one whole trial on a real folder: change, review, fix, proofs, record", async () => {
-    const { repo, publicAddress, base } = source();
-    let app = "";
-    let asCheckedOut = "";
-    let saved: TrialRecord | undefined;
-    const limitIs = (n: number) => readFileSync(join(app, "limit.js"), "utf8").includes(`limit = ${n};`);
-    const reviews: TrialReview[] = [
-      {
-        complete: true,
-        open: [{ id: "f1", severity: "remediation_recommended", title: "The limit was widened", file: "limit.js" }],
-        evidence: "review-1",
-        inventoryComplete: true,
-      },
-      { complete: true, inventoryComplete: true, open: [], evidence: "review-2" },
-    ];
-    const io: TrialIo = {
-      prepare: async () => {
-        app = makeScratch(root, repo, publicAddress, base, false);
-        asCheckedOut = readFileSync(join(app, "limit.js"), "utf8");
-        // The change under review, uncommitted: the limit widened tenfold.
-        writeFileSync(join(app, "limit.js"), "export const limit = 2800;\n");
-      },
-      proofs: () => [{ invariantId: "INV-LIMIT", own: true }],
-      // The stand-in proof reads the real file: it fails while the limit is the widened one.
-      runProofs: async () => [limitIs(2800) ? "fail" : "pass"],
-      review: async (round) => reviews[round - 1] as TrialReview,
-      build: async (_round, _prompt, mustFix) => {
-        // The fix puts the file back exactly as it was checked out, line ending included.
-        writeFileSync(join(app, "limit.js"), asCheckedOut);
-        return mustFix.map((f) => ({ id: f.id, decision: "fixed" as const }));
-      },
-      evidencePasses: async () => false,
-      changeProblems: () => [],
-      publicTests: async () => "pass",
-      save: (record) => {
-        saved = record;
-      },
-      log: () => {},
-    };
-    const facts = {
-      caseId: "FF-9001",
-      control: false,
-      templateId: "made-up-v1",
-      targetCommit: base,
-      ticket: { url: "https://github.com/owner/app/issues/1", title: "Tidy the limit", body: "Keep it as it is." },
-    };
-    const record = await runTrial(facts, "saved", GATE, io);
-    expect(record.status).toBe("done");
-    expect(record.result).toBe("gate met, defect gone");
-    expect(record.proofs).toEqual([{ invariantId: "INV-LIMIT", own: true, before: "fail", after: "pass" }]);
-    expect(saved).toBe(record);
-    // The fix was made in the scratch copy and never committed: its head is still the base, the tree is
-    // back to it, and nothing reached the public address.
-    expect(existsSync(join(app, "limit.js"))).toBe(true);
-    expect(git(app, "rev-parse", "HEAD")).toBe(base);
-    expect(git(app, "status", "--short")).toBe("");
-    expect(git(publicAddress, "for-each-ref")).toBe("");
-  });
+  it(
+    "carries one whole trial on a real folder: change, review, fix, proofs, record",
+    async () => {
+      const { repo, publicAddress, base } = source();
+      let app = "";
+      let asCheckedOut = "";
+      let saved: TrialRecord | undefined;
+      const limitIs = (n: number) => readFileSync(join(app, "limit.js"), "utf8").includes(`limit = ${n};`);
+      const reviews: TrialReview[] = [
+        {
+          complete: true,
+          open: [{ id: "f1", severity: "remediation_recommended", title: "The limit was widened", file: "limit.js" }],
+          evidence: "review-1",
+          inventoryComplete: true,
+        },
+        { complete: true, inventoryComplete: true, open: [], evidence: "review-2" },
+      ];
+      const io: TrialIo = {
+        prepare: async () => {
+          app = makeScratch(root, repo, publicAddress, base, false);
+          asCheckedOut = readFileSync(join(app, "limit.js"), "utf8");
+          // The change under review, uncommitted: the limit widened tenfold.
+          writeFileSync(join(app, "limit.js"), "export const limit = 2800;\n");
+        },
+        proofs: () => [{ invariantId: "INV-LIMIT", own: true }],
+        // The stand-in proof reads the real file: it fails while the limit is the widened one.
+        runProofs: async () => [limitIs(2800) ? "fail" : "pass"],
+        review: async (round) => reviews[round - 1] as TrialReview,
+        build: async (_round, _prompt, mustFix) => {
+          // The fix puts the file back exactly as it was checked out, line ending included.
+          writeFileSync(join(app, "limit.js"), asCheckedOut);
+          return mustFix.map((f) => ({ id: f.id, decision: "fixed" as const }));
+        },
+        evidencePasses: async () => false,
+        changeProblems: () => [],
+        publicTests: async () => "pass",
+        save: (record) => {
+          saved = record;
+        },
+        log: () => {},
+      };
+      const facts = {
+        caseId: "FF-9001",
+        control: false,
+        templateId: "made-up-v1",
+        targetCommit: base,
+        ticket: { url: "https://github.com/owner/app/issues/1", title: "Tidy the limit", body: "Keep it as it is." },
+      };
+      const record = await runTrial(facts, "saved", GATE, io);
+      expect(record.status).toBe("done");
+      expect(record.result).toBe("gate met, defect gone");
+      expect(record.proofs).toEqual([{ invariantId: "INV-LIMIT", own: true, before: "fail", after: "pass" }]);
+      expect(saved).toBe(record);
+      // The fix was made in the scratch copy and never committed: its head is still the base, the tree is
+      // back to it, and nothing reached the public address.
+      expect(existsSync(join(app, "limit.js"))).toBe(true);
+      expect(git(app, "rev-parse", "HEAD")).toBe(base);
+      expect(git(app, "status", "--short")).toBe("");
+      expect(git(publicAddress, "for-each-ref")).toBe("");
+    },
+    SLOW_RUNNER_MS,
+  );
 });
