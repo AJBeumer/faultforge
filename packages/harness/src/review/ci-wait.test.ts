@@ -193,6 +193,7 @@ function world(
     dirty?: boolean;
     pushFails?: boolean;
     deleteFails?: boolean;
+    deleteError?: string;
     origin?: string;
     pushTo?: string;
     rewrites?: string;
@@ -217,7 +218,8 @@ function world(
       }
       if (args[0] === "rev-parse") return SHA;
       if (args[0] === "push" && !args.includes("--delete") && options.pushFails) throw new Error("rejected");
-      if (args[0] === "push" && args.includes("--delete") && options.deleteFails) throw new Error("no such ref");
+      if (args[0] === "push" && args.includes("--delete") && options.deleteFails)
+        throw new Error(options.deleteError ?? "network down");
       return "";
     },
     runs: () => {
@@ -246,8 +248,8 @@ describe("ci:wait", () => {
       { runs: [workflow(1)], jobs: GREEN },
     ]);
     expect(await run(["faultforge"], w.deps)).toBe(0);
-    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags ${ORIGIN} ${SHA}:refs/heads/${BRANCH}`);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
+    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags origin ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
     expect(w.out()).toContain("npm run check (windows): success");
     expect(w.out()).toContain("every job passed on a7439ec");
     expect(w.lastLine()).toBe("ci:wait exit 0");
@@ -349,13 +351,12 @@ describe("ci:wait", () => {
     expect(w.errors()).not.toMatch(/ran no check/);
   });
 
-  it("pushes to the push address it checked, and removes the branch there", async () => {
-    const pushTo = "git@github.com:AJBeumer/faultforge.git";
-    const w = world([{ runs: [workflow(1)], jobs: GREEN }], { pushTo });
+  it("pushes by the remote's name, so the lab's git guard compares against origin's branches", async () => {
+    // Seen on a real run: pushed to a bare address, the guard found all 785 commits new and refused.
+    const w = world([{ runs: [workflow(1)], jobs: GREEN }], { pushTo: "git@github.com:AJBeumer/faultforge.git" });
     expect(await run(["faultforge"], w.deps)).toBe(0);
-    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags ${pushTo} ${SHA}:refs/heads/${BRANCH}`);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${pushTo} --delete ${BRANCH}`);
-    expect(w.gitCalls.some((call) => call.startsWith("push --quiet origin"))).toBe(false);
+    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags origin ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
   });
 
   it("waits for a run GitHub lists a moment after the first one finished", async () => {
@@ -466,15 +467,26 @@ describe("ci:wait", () => {
     const w = world([], { pushFails: true, deleteFails: true });
     expect(await run(["faultforge"], w.deps)).toBe(2);
     expect(w.errors()).toMatch(/couldn't push the scratch branch: rejected/);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
     // The branch may be there after all: its name is given, so it can be removed by hand.
     expect(w.errors()).toMatch(new RegExp(`if ${BRANCH} is on GitHub, the push made it after all; delete it by hand`));
+  });
+
+  it("says nothing more after a failed push when there was no branch to remove", async () => {
+    const w = world([], {
+      pushFails: true,
+      deleteFails: true,
+      deleteError: "error: unable to delete 'x': remote ref does not exist",
+    });
+    expect(await run(["faultforge"], w.deps)).toBe(2);
+    expect(w.errors()).not.toMatch(/delete it by hand/);
+    expect(w.lastLine()).toBe("ci:wait exit 2");
   });
 
   it("says nothing more after a failed push when the branch it may have made was removed", async () => {
     const w = world([], { pushFails: true });
     expect(await run(["faultforge"], w.deps)).toBe(2);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
     expect(w.errors()).not.toMatch(/delete it by hand/);
   });
 

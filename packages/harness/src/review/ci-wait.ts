@@ -268,19 +268,19 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   // included. Only removing the branch comes after it, with its own `GIT_TIMEOUT_MS`.
   callDeadline.at = Date.now() + (deadline - deps.now());
   let branch: string | undefined;
-  let address = "";
   let pushed = false;
   let code: 0 | 1 | 2 | undefined;
   try {
-    const read = readCheckout(checkout, repo.github, deps);
-    if (read === null) return 2;
-    const { sha } = read;
-    // The push and the removal go to the address that was checked, never to whatever `origin` names by then.
-    address = read.address;
+    const sha = readCheckout(checkout, repo.github, deps);
+    if (sha === null) return 2;
     branch = scratchBranch(sha, deps.now(), deps.nonce());
     try {
+      // By the remote's name, not its address: the lab's git guard reads which commits are new against
+      // `origin`'s branches, and against a bare address it would find every commit new and refuse. Git's
+      // pre-push hook is given the address the push really goes to, and refuses a reviewed repository by it,
+      // so a remote changed after the check above still can't reach one.
       // Only the scratch branch: `push.followTags` in a config would send tags too, which no removal undoes.
-      deps.git(checkout, "push", "--quiet", "--no-follow-tags", address, `${sha}:refs/heads/${branch}`);
+      deps.git(checkout, "push", "--quiet", "--no-follow-tags", "origin", `${sha}:refs/heads/${branch}`);
       pushed = true;
     } catch (e) {
       deps.error(`ci:wait: couldn't push the scratch branch: ${e instanceof Error ? e.message : String(e)}`);
@@ -301,9 +301,11 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   // Whatever the result: a scratch branch left behind would be one more branch nobody owns. A push that
   // failed may still have made it, so it is removed then too.
   try {
-    deps.git(checkout, "push", "--quiet", address, "--delete", branch);
+    deps.git(checkout, "push", "--quiet", "origin", "--delete", branch);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
+    // After a failed push, "no such branch" is the usual answer: there is nothing to remove, and nothing to say.
+    if (!pushed && /remote ref does not exist/.test(reason)) return code;
     deps.error(
       pushed
         ? `ci:wait: couldn't delete ${branch}; delete it by hand: ${reason}`
@@ -319,12 +321,12 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
 }
 
 /**
- * The commit to check and the address to push it to, or null after saying why there is none. The scratch
- * branch goes to `origin`'s push address, and the checks are read from the configured repository: they must be
- * one and the same, or the branch lands in a fork and the wait watches somewhere else. A remote can push to
- * other addresses than it fetches from, so every address it pushes to is checked too.
+ * The commit to check, or null after saying why there is none. The scratch branch goes to `origin`, and the
+ * checks are read from the configured repository: they must be one and the same, or the branch lands in a fork
+ * and the wait watches somewhere else. A remote can push to other addresses than it fetches from, so every
+ * address it fetches from and pushes to is checked.
  */
-function readCheckout(checkout: string, github: string, deps: CiWaitDeps): { sha: string; address: string } | null {
+function readCheckout(checkout: string, github: string, deps: CiWaitDeps): string | null {
   try {
     const pushTo = deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/);
     const addresses = [...deps.git(checkout, "remote", "get-url", "--all", "origin").split(/\r?\n/), ...pushTo];
@@ -350,7 +352,7 @@ function readCheckout(checkout: string, github: string, deps: CiWaitDeps): { sha
       deps.error("ci:wait: there are uncommitted changes. It checks the commit, so commit first.");
       return null;
     }
-    return { sha: deps.git(checkout, "rev-parse", "HEAD"), address: (pushTo[0] ?? "").trim() };
+    return deps.git(checkout, "rev-parse", "HEAD");
   } catch (e) {
     deps.error(`ci:wait: couldn't read the checkout: ${e instanceof Error ? e.message : String(e)}`);
     return null;
