@@ -72,10 +72,12 @@ export function saveRecord(from: string, to: string, root: string): void {
     }
     if (link) throw new Error(`${path} is a link, so the record is not saved through it`);
   }
+  // Read first: a record that can't be read must leave the one at `to` as it was, never emptied.
+  const content = readFileSync(from);
   mkdirSync(dirname(to), { recursive: true });
   const fd = openSync(to, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0));
   try {
-    writeFileSync(fd, readFileSync(from));
+    writeFileSync(fd, content);
   } finally {
     closeSync(fd);
   }

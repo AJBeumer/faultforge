@@ -58,6 +58,13 @@ describe("saveRecord: the runner's record replaces one the agent left, without c
     expect(readdirSync(outside)).toEqual([]);
   });
 
+  it("leaves the existing record as it was when the runner's record can't be read", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "record.json"), '{"exit":0}');
+    expect(() => saveRecord(join(dir, "missing.json"), join(dir, "record.json"), dir)).toThrow(/ENOENT/);
+    expect(readFileSync(join(dir, "record.json"), "utf8")).toBe('{"exit":0}');
+  });
+
   it("refuses a destination outside the root it is given", () => {
     const dir = tempDir("save-record-");
     writeFileSync(join(dir, "runner.json"), '{"exit":0}');
