@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { tempDir } from "../fixtures/temp-dir.ts";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { npm as realNpm } from "./factory-exec.ts";
 import type { Workspace } from "./factory-tick.ts";
@@ -14,10 +15,75 @@ import {
   commitToVerify,
   prViewProblems,
   readJsonRecord,
+  saveRecord,
   type VerifyPrIo,
   verifyPrWith,
   waitForChecks,
 } from "./factory-verify.ts";
+
+describe("saveRecord: the runner's record replaces one the agent left, without copying the file", () => {
+  it("saves the record into a folder that doesn't exist yet", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "runner.json"), '{"exit":0}');
+    const to = join(dir, "evidence", "revert-checks", "faultforge-pr394", "b18eace.revert-check.json");
+    saveRecord(join(dir, "runner.json"), to, dir);
+    expect(readFileSync(to, "utf8")).toBe('{"exit":0}');
+  });
+
+  it("replaces a file already at the destination with the runner's record", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "runner.json"), '{"exit":0}');
+    writeFileSync(join(dir, "agent.json"), '{"exit":0,"from":"the agent, longer than the runner record"}');
+    saveRecord(join(dir, "runner.json"), join(dir, "agent.json"), dir);
+    expect(readFileSync(join(dir, "agent.json"), "utf8")).toBe('{"exit":0}');
+  });
+
+  it("refuses a link where the record goes, and writes nothing through it", (ctx) => {
+    const dir = tempDir("save-record-");
+    const outside = tempDir("save-record-outside-");
+    writeFileSync(join(dir, "runner.json"), '{"exit":0}');
+    writeFileSync(join(outside, "precious.txt"), "keep me");
+    try {
+      symlinkSync(join(outside, "precious.txt"), join(dir, "record.json"), "file");
+    } catch {
+      return ctx.skip(); // this system lets no unprivileged user make a file link (Windows without developer mode)
+    }
+    expect(() => saveRecord(join(dir, "runner.json"), join(dir, "record.json"), dir)).toThrow(/is a link/);
+    expect(readFileSync(join(outside, "precious.txt"), "utf8")).toBe("keep me");
+  });
+
+  it("refuses a linked folder on the way to the record, and writes nothing through it", () => {
+    const dir = tempDir("save-record-");
+    const outside = tempDir("save-record-outside-");
+    writeFileSync(join(dir, "runner.json"), '{"exit":0}');
+    // A junction on Windows, which needs no privilege; a plain folder link elsewhere.
+    symlinkSync(outside, join(dir, "evidence"), "junction");
+    const to = join(dir, "evidence", "pr", "record.json");
+    expect(() => saveRecord(join(dir, "runner.json"), to, dir)).toThrow(/is a link/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it("leaves the existing record as it was when the runner's record can't be read", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "record.json"), '{"exit":0}');
+    expect(() => saveRecord(join(dir, "missing.json"), join(dir, "record.json"), dir)).toThrow(/ENOENT/);
+    expect(readFileSync(join(dir, "record.json"), "utf8")).toBe('{"exit":0}');
+  });
+
+  it("refuses a destination outside the root it is given", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "runner.json"), '{"exit":0}');
+    expect(() => saveRecord(join(dir, "runner.json"), join(dir, "..", "elsewhere.json"), dir)).toThrow(/not inside/);
+  });
+
+  it("never copies the file or sets its mode, which only the file's owner may do", () => {
+    // Seen in Actions: copying over the agent's own record failed with EPERM, after the copy set the file's mode.
+    const body = saveRecord.toString();
+    expect(body).not.toMatch(/copyFile|cpSync|chmod|chown/);
+    const source = readFileSync(join(import.meta.dirname, "factory-verify.ts"), "utf8");
+    expect(source).not.toMatch(/\bcopyFileSync\(/);
+  });
+});
 
 describe("readJsonRecord: never throws on a missing or damaged file", () => {
   let dir: string;

@@ -3,8 +3,19 @@
  * Qodo's review of its head (`review:wait`) and its tests (`revert:check`), both run from a trusted checkout
  * of `main`.
  */
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import {
+  closeSync,
+  constants,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type FactoryConfig, gateOf, repoConfig } from "../shared/factory-config.ts";
 import { ROOT as LAB_ROOT, prEvidenceDir } from "../shared/paths.ts";
 import { type GateRecord, gateAccount } from "../shared/quality-gate.ts";
@@ -73,6 +84,43 @@ export function waitForChecks<V extends { statusCheckRollup?: Check[] }>(
     if (failed || rollup.every(checkFinished)) return { view, timedOut: false };
     if (now() - started >= CHECKS_WAIT_MS) return { view, timedOut: true };
     sleep(CHECKS_POLL_MS);
+  }
+}
+
+/**
+ * Saves the runner's record at `to`, replacing whatever is there, in a folder it creates when needed. It writes
+ * the content and never copies the file: in GitHub Actions the agent runs as another user (`ffagent`), and when it
+ * has run `revert:check` itself, the file at `to` already exists and is that user's. Node's `copyFileSync` then
+ * also sets the file's permissions, which only the owner may do, so Linux refuses with EPERM. Writing the content
+ * needs only write access to the file, which the runner has.
+ *
+ * The agent can write the folders below `root` (its own checkout), so it could put a link where the record goes,
+ * and a write through it would land in any file the runner can write. So no folder from `root` down, and not the
+ * file itself, may be a link, and the file is opened without following one where the system can (`O_NOFOLLOW`).
+ */
+export function saveRecord(from: string, to: string, root: string): void {
+  const rel = relative(root, to);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`${to} is not inside ${root}`);
+  let path = root;
+  for (const part of rel.split(sep)) {
+    path = join(path, part);
+    let link: boolean;
+    try {
+      link = lstatSync(path).isSymbolicLink();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break; // the rest is made fresh below
+      throw error;
+    }
+    if (link) throw new Error(`${path} is a link, so the record is not saved through it`);
+  }
+  // Read first: a record that can't be read must leave the one at `to` as it was, never emptied.
+  const content = readFileSync(from);
+  mkdirSync(dirname(to), { recursive: true });
+  const fd = openSync(to, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0));
+  try {
+    writeFileSync(fd, content);
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -328,8 +376,7 @@ export function verifyPrWith(
     const revertRecord = readJsonRecord(revertRecordFile) as { exit?: 0 | 1 | 2 } | null;
     if (existsSync(revertRecordFile)) {
       try {
-        mkdirSync(dirname(permanentRecordFile), { recursive: true });
-        copyFileSync(revertRecordFile, permanentRecordFile);
+        saveRecord(revertRecordFile, permanentRecordFile, ws.lab);
         revertCheckRecord = permanentRecordFile;
       } catch (error) {
         problems.push(
