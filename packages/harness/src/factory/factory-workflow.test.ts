@@ -7,6 +7,8 @@ import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadFactory } from "../shared/factory-config.ts";
 import { claimMarker } from "./factory-comments.ts";
+import { REVERT_CHECK_TIMEOUT_MS } from "./factory-exec.ts";
+import { CHECKS_WAIT_MS } from "./factory-verify.ts";
 
 const root = join(import.meta.dirname, "../../../..");
 const workflow = readFileSync(join(root, ".github/workflows/factory.yml"), "utf8");
@@ -126,6 +128,16 @@ describe("factory workflow", () => {
     const agentLimit = Number(workflow.match(/factory:tick -- --ci --minutes (\d+)/)?.[1]);
     expect(stepLimit).toBeGreaterThan(agentLimit);
     expect(jobLimit - stepLimit).toBeGreaterThanOrEqual(5);
+  });
+
+  it("gives the tick step room for the agent and every wait of the verification after it", () => {
+    const steps = workflow.split(/\n {6}- /);
+    const tick = steps.find((step) => step.startsWith("name: Run one tick")) ?? "";
+    const stepLimit = Number(tick.match(/\n {8}timeout-minutes: (\d+)/)?.[1]);
+    const agentLimit = Number(workflow.match(/factory:tick -- --ci --minutes (\d+)/)?.[1]);
+    // review:wait in the verification waits up to 5 minutes; then the PR's checks, then revert:check.
+    const verifyMinutes = 5 + CHECKS_WAIT_MS / 60_000 + REVERT_CHECK_TIMEOUT_MS / 60_000;
+    expect(stepLimit).toBeGreaterThanOrEqual(agentLimit + verifyMinutes);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expressions, not a JS template
     expect(workflow).toContain("--branch unsaved-${{ github.run_id }}-${{ github.run_attempt }}");
   });
