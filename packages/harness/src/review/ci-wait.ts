@@ -42,6 +42,27 @@ import { reviewedRepos } from "../../../../.claude/hooks/shared/repos.ts";
 import { loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { callDeadline, ghJson } from "../shared/github.ts";
 import { ROOT } from "../shared/paths.ts";
+import {
+  failedRuns,
+  type Job,
+  jobsVerdict,
+  ownRuns,
+  remoteIs,
+  runsFinished,
+  scratchBranch,
+  type WorkflowRun,
+} from "./ci-wait-verdict.ts";
+
+export {
+  failedRuns,
+  type Job,
+  jobsVerdict,
+  ownRuns,
+  remoteIs,
+  runsFinished,
+  scratchBranch,
+  type WorkflowRun,
+} from "./ci-wait-verdict.ts";
 
 export interface CiWaitArgs {
   repoKey: string;
@@ -63,85 +84,6 @@ export function parseCiWaitArgs(argv: string[]): CiWaitArgs | null {
   } catch {
     return null;
   }
-}
-
-/** One workflow run GitHub started. */
-export interface WorkflowRun {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  head_branch: string | null;
-  head_sha: string;
-}
-
-/** One job of a workflow run. */
-export interface Job {
-  name: string;
-  status: string;
-  conclusion: string | null;
-}
-
-/**
- * The scratch branch of one wait: by the commit, the moment, and a few characters the wait drew at random. So
- * no two waits share a branch, even two for one commit that start in the same millisecond.
- */
-export function scratchBranch(sha: string, now: number, nonce: string): string {
-  return `ci-wait/${sha.slice(0, 12)}-${now.toString(36)}-${nonce}`;
-}
-
-/** The runs that are this wait's own: started for its branch, at its commit. */
-export function ownRuns(runs: WorkflowRun[], branch: string, sha: string): WorkflowRun[] {
-  return runs.filter((run) => run.head_branch === branch && run.head_sha === sha);
-}
-
-/** True once at least one run has started and every one of them has finished. */
-export function runsFinished(runs: WorkflowRun[]): boolean {
-  return runs.length > 0 && runs.every((run) => run.status === "completed");
-}
-
-const PASSING = ["success", "skipped", "neutral"];
-
-/**
- * Pure: the verdict on the finished runs' jobs. It passes only when every job ended as success, skipped or
- * neutral, and every job in `required` (the repository's `ciJobs`) ran and ended as success. The required
- * jobs are named, never guessed from what ran: a commit whose Windows job was skipped or never started is
- * not green, however many other jobs passed. With no required job named, nothing passes.
- */
-export function jobsVerdict(jobs: Job[], required: string[]): { passed: boolean; failed: string[]; lines: string[] } {
-  const sorted = [...jobs].sort((a, b) => a.name.localeCompare(b.name));
-  const lines = sorted.map((job) => `  ${job.name}: ${job.status === "completed" ? job.conclusion : job.status}`);
-  const failed = sorted
-    .filter((job) => job.status !== "completed" || !PASSING.includes(job.conclusion ?? ""))
-    .map((job) => job.name);
-  const succeeded = new Set(sorted.filter((job) => job.conclusion === "success").map((job) => job.name));
-  const missing = required
-    .filter((name) => !succeeded.has(name) && !failed.includes(name))
-    .map((name) => `${name} (required, did not run)`);
-  const all = [...failed, ...missing];
-  return { passed: required.length > 0 && all.length === 0, failed: all, lines };
-}
-
-/** The finished runs that did not end as success, skipped or neutral, each named with how it ended. */
-export function failedRuns(runs: WorkflowRun[]): string[] {
-  return runs
-    .filter((run) => !PASSING.includes(run.conclusion ?? ""))
-    .map((run) => `the ${run.name} workflow (${run.conclusion ?? "no result"})`)
-    .sort();
-}
-
-/**
- * True when a git remote address names the GitHub repository `github` (`owner/name`): by https, by ssh, or by
- * GitHub's ssh over port 443. The host must be GitHub's own, never an address that only mentions it. These are
- * the spellings the door's reader takes (`door/target-post-push.ts`); the door keeps its own copy, because it
- * imports nothing from this area.
- */
-export function remoteIs(url: string, github: string): boolean {
-  const match =
-    /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@(?:ssh\.)?github\.com(?::443)?\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(
-      url.trim(),
-    );
-  return match?.[1]?.toLowerCase() === github.toLowerCase();
 }
 
 /** What the command needs from the world, so a test can run it whole. */
@@ -180,10 +122,12 @@ const git = (cwd: string, ...args: string[]) =>
 const realDeps: CiWaitDeps = {
   git,
   runs: (github, branch) =>
-    ghJson<{ workflow_runs: WorkflowRun[] }>(
+    ghJson<{ workflow_runs: WorkflowRun[] }[]>(
       "api",
+      "--paginate",
+      "--slurp",
       `repos/${github}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=100`,
-    ).workflow_runs,
+    ).flatMap((page) => page.workflow_runs),
   jobs: (github, runId) =>
     ghJson<{ jobs: Job[] }[]>(
       "api",
@@ -241,7 +185,8 @@ async function wait(
           .sort()
           .join(",");
         ranJob = ran;
-        settled = ran && ids === seen;
+        // A run that failed is an answer even with no job that ran (a workflow that failed before any job).
+        settled = (ran || failedRuns(runs).length > 0) && ids === seen;
         seen = ids;
       } else seen = "";
     } catch (e) {
@@ -312,14 +257,18 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   // included. Only removing the branch comes after it, with its own `GIT_TIMEOUT_MS`.
   callDeadline.at = Date.now() + (deadline - deps.now());
   let branch: string | undefined;
+  let address = "";
   let pushed = false;
   let code: 0 | 1 | 2 | undefined;
   try {
-    const sha = readCheckout(checkout, repo.github, deps);
-    if (sha === null) return 2;
+    const read = readCheckout(checkout, repo.github, deps);
+    if (read === null) return 2;
+    const { sha } = read;
+    // The push and the removal go to the address that was checked, never to whatever `origin` names by then.
+    address = read.address;
     branch = scratchBranch(sha, deps.now(), deps.nonce());
     try {
-      deps.git(checkout, "push", "--quiet", "origin", `${sha}:refs/heads/${branch}`);
+      deps.git(checkout, "push", "--quiet", address, `${sha}:refs/heads/${branch}`);
       pushed = true;
     } catch (e) {
       deps.error(`ci:wait: couldn't push the scratch branch: ${e instanceof Error ? e.message : String(e)}`);
@@ -340,7 +289,7 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
   // Whatever the result: a scratch branch left behind would be one more branch nobody owns. A push that
   // failed may still have made it, so it is removed then too.
   try {
-    deps.git(checkout, "push", "--quiet", "origin", "--delete", branch);
+    deps.git(checkout, "push", "--quiet", address, "--delete", branch);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     deps.error(
@@ -358,17 +307,15 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
 }
 
 /**
- * The commit to check, or null after saying why there is none. The scratch branch goes to `origin`, and the
- * checks are read from the configured repository: they must be one and the same, or the branch lands in a fork
- * and the wait watches somewhere else. A remote can push to other addresses than it fetches from, so every
- * address it pushes to is checked too.
+ * The commit to check and the address to push it to, or null after saying why there is none. The scratch
+ * branch goes to `origin`'s push address, and the checks are read from the configured repository: they must be
+ * one and the same, or the branch lands in a fork and the wait watches somewhere else. A remote can push to
+ * other addresses than it fetches from, so every address it pushes to is checked too.
  */
-function readCheckout(checkout: string, github: string, deps: CiWaitDeps): string | null {
+function readCheckout(checkout: string, github: string, deps: CiWaitDeps): { sha: string; address: string } | null {
   try {
-    const addresses = [
-      deps.git(checkout, "remote", "get-url", "origin"),
-      ...deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/),
-    ];
+    const pushTo = deps.git(checkout, "remote", "get-url", "--push", "--all", "origin").split(/\r?\n/);
+    const addresses = [deps.git(checkout, "remote", "get-url", "origin"), ...pushTo];
     if (!addresses.every((address) => remoteIs(address, github))) {
       deps.error(
         `ci:wait: this checkout's origin is not github.com/${github} for both fetching and pushing, so nothing was pushed.`,
@@ -379,7 +326,7 @@ function readCheckout(checkout: string, github: string, deps: CiWaitDeps): strin
       deps.error("ci:wait: there are uncommitted changes. It checks the commit, so commit first.");
       return null;
     }
-    return deps.git(checkout, "rev-parse", "HEAD");
+    return { sha: deps.git(checkout, "rev-parse", "HEAD"), address: (pushTo[0] ?? "").trim() };
   } catch (e) {
     deps.error(`ci:wait: couldn't read the checkout: ${e instanceof Error ? e.message : String(e)}`);
     return null;

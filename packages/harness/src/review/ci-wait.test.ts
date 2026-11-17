@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { githubRemote } from "../door/target-post-push.ts";
 import { tempDir } from "../fixtures/temp-dir.ts";
 import { callDeadline } from "../shared/github.ts";
 import { ROOT } from "../shared/paths.ts";
@@ -21,6 +22,7 @@ import {
 
 const SHA = "a7439ecd94b508ca794789f933ad28cd5d596aa8";
 const BRANCH = scratchBranch(SHA, 0, "n0");
+const ORIGIN = "https://github.com/AJBeumer/faultforge.git";
 const job = (name: string, conclusion: string | null, status = "completed"): Job => ({ name, status, conclusion });
 // The jobs factory.json names for the lab: the fake world answers with these, as GitHub does.
 const REQUIRED = [
@@ -161,6 +163,27 @@ describe("remoteIs", () => {
       expect(remoteIs(url, "owner/lab")).toBe(false);
     }
   });
+
+  it("takes exactly the addresses the door's reader takes, so the two copies can't drift apart unseen", () => {
+    for (const url of [
+      "https://github.com/Owner/Lab.git",
+      "https://x-access-token@github.com/owner/lab.git",
+      "git@github.com:owner/lab.git",
+      "ssh://git@github.com/owner/lab",
+      "ssh://git@ssh.github.com:443/owner/lab.git",
+      "ssh://git@github.com:443/Owner/lab",
+      "https://github.com/someone/lab.git",
+      "https://example.com/owner/lab.git",
+      "/srv/git/lab.git",
+      "https://github.com.evil.example/owner/lab",
+      "https://evil.example/github.com/owner/lab",
+      "https://evil.example/x?https://github.com/owner/lab",
+      "ssh://git@ssh.github.com:22/owner/lab.git",
+      "https://github.com/owner/lab/extra",
+    ]) {
+      expect(remoteIs(url, "owner/lab"), url).toBe(githubRemote(url) === "owner/lab");
+    }
+  });
 });
 
 /** A fake world: scripted polls, a clock that moves when the command sleeps, and every git call recorded. */
@@ -177,7 +200,7 @@ function world(
   const deps: CiWaitDeps = {
     git: (_cwd, ...args) => {
       gitCalls.push(args.join(" "));
-      const origin = options.origin ?? "https://github.com/AJBeumer/faultforge.git";
+      const origin = options.origin ?? ORIGIN;
       if (args[0] === "remote") return args.includes("--push") ? (options.pushTo ?? origin) : origin;
       if (args[0] === "status") return options.dirty ? " M file.ts" : "";
       if (args[0] === "rev-parse") return SHA;
@@ -211,8 +234,8 @@ describe("ci:wait", () => {
       { runs: [workflow(1)], jobs: GREEN },
     ]);
     expect(await run(["faultforge"], w.deps)).toBe(0);
-    expect(w.gitCalls).toContain(`push --quiet origin ${SHA}:refs/heads/${BRANCH}`);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
+    expect(w.gitCalls).toContain(`push --quiet ${ORIGIN} ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
     expect(w.out()).toContain("npm run check (windows): success");
     expect(w.out()).toContain("every job passed on a7439ec");
     expect(w.lastLine()).toBe("ci:wait exit 0");
@@ -251,6 +274,23 @@ describe("ci:wait", () => {
       { runs: [earlier, workflow(8, { conclusion: "failure" })], jobs: [job("npm run check (windows)", "failure")] },
     ]);
     expect(await run(["faultforge"], w.deps)).toBe(1);
+  });
+
+  it("exits 1, never 2, for a workflow that failed before any job ran", async () => {
+    const failedEarly = { runs: [workflow(1, { conclusion: "startup_failure" })], jobs: [] };
+    const w = world([failedEarly, failedEarly]);
+    expect(await run(["faultforge"], w.deps)).toBe(1);
+    expect(w.out()).toContain("the Check workflow (startup_failure)");
+    expect(w.errors()).not.toMatch(/ran no check/);
+  });
+
+  it("pushes to the push address it checked, and removes the branch there", async () => {
+    const pushTo = "git@github.com:AJBeumer/faultforge.git";
+    const w = world([{ runs: [workflow(1)], jobs: GREEN }], { pushTo });
+    expect(await run(["faultforge"], w.deps)).toBe(0);
+    expect(w.gitCalls).toContain(`push --quiet ${pushTo} ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${pushTo} --delete ${BRANCH}`);
+    expect(w.gitCalls.some((call) => call.startsWith("push --quiet origin"))).toBe(false);
   });
 
   it("waits for a run GitHub lists a moment after the first one finished", async () => {
@@ -361,7 +401,7 @@ describe("ci:wait", () => {
     const w = world([], { pushFails: true, deleteFails: true });
     expect(await run(["faultforge"], w.deps)).toBe(2);
     expect(w.errors()).toMatch(/couldn't push the scratch branch: rejected/);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
     // The branch may be there after all: its name is given, so it can be removed by hand.
     expect(w.errors()).toMatch(new RegExp(`if ${BRANCH} is on GitHub, the push made it after all; delete it by hand`));
   });
@@ -369,7 +409,7 @@ describe("ci:wait", () => {
   it("says nothing more after a failed push when the branch it may have made was removed", async () => {
     const w = world([], { pushFails: true });
     expect(await run(["faultforge"], w.deps)).toBe(2);
-    expect(w.gitCalls.at(-1)).toBe(`push --quiet origin --delete ${BRANCH}`);
+    expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
     expect(w.errors()).not.toMatch(/delete it by hand/);
   });
 
