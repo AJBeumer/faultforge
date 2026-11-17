@@ -35,10 +35,52 @@ export function commitToVerify(localTip: string | null, viewHead: string): strin
   return /^[0-9a-f]{40}$/i.test(commit) ? commit : null;
 }
 
+/** One of a PR's checks as `gh pr view --json statusCheckRollup` gives it: a check run or a status context. */
+export type Check = { name?: string; context?: string; status?: string; conclusion?: string; state?: string };
+
+/** How often the runner reads a PR's checks again while some are still running, and for how long at most. */
+export const CHECKS_POLL_MS = 30_000;
+export const CHECKS_WAIT_MS = 15 * 60_000;
+
+/**
+ * True once a check has finished. A check run has finished when its `status` is `COMPLETED`; a status context
+ * when its `state` is neither `PENDING` nor `EXPECTED`. A check that gives only a conclusion has finished.
+ */
+export function checkFinished(c: Check): boolean {
+  if (c.status) return c.status.toUpperCase() === "COMPLETED";
+  if (c.state) return !["PENDING", "EXPECTED"].includes(c.state.toUpperCase());
+  return Boolean(c.conclusion);
+}
+
+const passed = (c: Check) => ["SUCCESS", "NEUTRAL", "SKIPPED"].includes((c.conclusion || c.state || "").toUpperCase());
+
+/**
+ * Reads a PR's view with `read` until its checks have all finished, a check has failed, or `CHECKS_WAIT_MS` has
+ * passed since the first read, `CHECKS_POLL_MS` apart. Gives the last view, and whether checks were still
+ * running when the time ran out. The agent can report a PR ready while its CI still runs (a review can take a
+ * minute, the Windows jobs several), and a check that passes a few minutes later is not a failure.
+ */
+export function waitForChecks<V extends { statusCheckRollup?: Check[] }>(
+  read: () => V,
+  sleep: (ms: number) => void,
+  now: () => number,
+): { view: V; timedOut: boolean } {
+  const started = now();
+  for (;;) {
+    const view = read();
+    const rollup = view.statusCheckRollup ?? [];
+    const failed = rollup.some((c) => checkFinished(c) && !passed(c));
+    if (failed || rollup.every(checkFinished)) return { view, timedOut: false };
+    if (now() - started >= CHECKS_WAIT_MS) return { view, timedOut: true };
+    sleep(CHECKS_POLL_MS);
+  }
+}
+
 /** Problems with the PR as GitHub shows it once the review of `pushed` is complete. */
 export function prViewProblems(
-  view: { state: string; headRefOid: string; statusCheckRollup?: Parameters<typeof checkProblems>[0] },
+  view: { state: string; headRefOid: string; statusCheckRollup?: Check[] },
   pushed: string,
+  timedOut = false,
 ): string[] {
   const problems: string[] = [];
   if (view.state !== "OPEN") problems.push(`the pull request is ${String(view.state).toLowerCase()}, not open`);
@@ -47,24 +89,23 @@ export function prViewProblems(
       `GitHub shows the head as ${view.headRefOid.slice(0, 7)}, not the agent's last commit ${pushed.slice(0, 7)}`,
     );
   }
-  problems.push(...checkProblems(view.statusCheckRollup ?? []));
+  problems.push(...checkProblems(view.statusCheckRollup ?? [], timedOut));
   return problems;
 }
 
-/** Problems with a PR's checks: none may be pending or failed, and at least one must have run. */
-export function checkProblems(
-  rollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[],
-): string[] {
+/**
+ * Problems with a PR's checks: none may be pending or failed, and at least one must have run. With `timedOut`
+ * (the runner waited `CHECKS_WAIT_MS` and none had failed), the ones still running are named as not finished.
+ */
+export function checkProblems(rollup: Check[], timedOut = false): string[] {
   if (!rollup.length) return ["no checks ran on the pull request"];
-  const bad = rollup.filter((c) => {
-    const state = (c.conclusion || c.state || c.status || "").toUpperCase();
-    return !["SUCCESS", "NEUTRAL", "SKIPPED"].includes(state);
-  });
-  return bad.length
-    ? [
-        `checks not green: ${bad.map((c) => `${c.name ?? c.context} ${c.conclusion || c.state || c.status}`).join(", ")}`,
-      ]
-    : [];
+  const bad = rollup.filter((c) => !passed(c));
+  if (!bad.length) return [];
+  const list = bad.map((c) => `${c.name ?? c.context} ${c.conclusion || c.state || c.status}`).join(", ");
+  const failed = bad.some(checkFinished);
+  return timedOut && !failed
+    ? [`checks not finished after ${CHECKS_WAIT_MS / 60_000} minutes: ${list}`]
+    : [`checks not green: ${list}`];
 }
 
 /**
@@ -109,6 +150,14 @@ export interface VerifyPrIo {
   ghJson: <T>(...args: string[]) => T;
   git: (cwd: string, ...args: string[]) => string;
   npm: (cwd: string, args: string[], timeoutMs?: number) => { status: number | null; output: string };
+  /** Blocks for `ms` while checks run; a test passes its own, so nothing waits. */
+  sleep?: (ms: number) => void;
+  now?: () => number;
+}
+
+/** Blocks for `ms` without spinning: the verification is synchronous. */
+function pauseSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
@@ -221,17 +270,23 @@ export function verifyPrWith(
         head: pushed,
         problems: [meaning[review.status ?? 2] ?? `review:wait exited ${review.status}`, ...problems],
       };
-    // Read again after the review: state, head and checks must all be of the pushed commit.
-    const view = io.ghJson<Parameters<typeof prViewProblems>[0]>(
-      "pr",
-      "view",
-      String(pr),
-      "--repo",
-      github,
-      "--json",
-      "state,headRefOid,statusCheckRollup",
+    // Read again after the review: state, head and checks must all be of the pushed commit. Checks still
+    // running are waited for, up to a limit.
+    const { view, timedOut } = waitForChecks(
+      () =>
+        io.ghJson<Parameters<typeof prViewProblems>[0]>(
+          "pr",
+          "view",
+          String(pr),
+          "--repo",
+          github,
+          "--json",
+          "state,headRefOid,statusCheckRollup",
+        ),
+      io.sleep ?? pauseSync,
+      io.now ?? Date.now,
     );
-    problems.push(...prViewProblems(view, pushed));
+    problems.push(...prViewProblems(view, pushed, timedOut));
     // Read from GitHub by the runner, never taken from the agent's report.
     try {
       ownerGates = reviewerRuleGates(io.ghJson("api", "--paginate", "--slurp", `repos/${github}/pulls/${pr}/files`));

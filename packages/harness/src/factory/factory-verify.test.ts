@@ -6,7 +6,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FactoryConfig } from "../shared/factory-config.ts";
 import { npm as realNpm } from "./factory-exec.ts";
 import type { Workspace } from "./factory-tick.ts";
-import { commitToVerify, prViewProblems, readJsonRecord, type VerifyPrIo, verifyPrWith } from "./factory-verify.ts";
+import {
+  CHECKS_POLL_MS,
+  CHECKS_WAIT_MS,
+  checkFinished,
+  checkProblems,
+  commitToVerify,
+  prViewProblems,
+  readJsonRecord,
+  type VerifyPrIo,
+  verifyPrWith,
+  waitForChecks,
+} from "./factory-verify.ts";
 
 describe("readJsonRecord: never throws on a missing or damaged file", () => {
   let dir: string;
@@ -295,6 +306,89 @@ process.exit(1);
   });
 });
 
+describe("waitForChecks: checks still running are waited for, up to a limit", () => {
+  const pass = (name: string) => ({ name, status: "COMPLETED", conclusion: "SUCCESS" });
+  const running = (name: string) => ({ name, status: "IN_PROGRESS", conclusion: "" });
+  const fail = (name: string) => ({ name, status: "COMPLETED", conclusion: "FAILURE" });
+
+  /** Gives the views in turn (the last one again after that), and a clock that moves only when it sleeps. */
+  function world(views: { statusCheckRollup: ReturnType<typeof pass>[] }[]) {
+    let clock = 0;
+    let reads = 0;
+    const slept: number[] = [];
+    const read = () => views[Math.min(reads++, views.length - 1)] as (typeof views)[number];
+    return {
+      run: () =>
+        waitForChecks(
+          read,
+          (ms) => {
+            slept.push(ms);
+            clock += ms;
+          },
+          () => clock,
+        ),
+      reads: () => reads,
+      slept,
+    };
+  }
+
+  it("waits while a check runs, and passes once every check has passed", () => {
+    const w = world([
+      { statusCheckRollup: [pass("npm run check"), running("npm run check (windows)")] },
+      { statusCheckRollup: [pass("npm run check"), running("npm run check (windows)")] },
+      { statusCheckRollup: [pass("npm run check"), pass("npm run check (windows)")] },
+    ]);
+    const { view, timedOut } = w.run();
+    expect(timedOut).toBe(false);
+    expect(checkProblems(view.statusCheckRollup, timedOut)).toEqual([]);
+    expect(w.reads()).toBe(3);
+    expect(w.slept).toEqual([CHECKS_POLL_MS, CHECKS_POLL_MS]);
+  });
+
+  it("stops at a failure seen on a later read, and reads no further", () => {
+    const w = world([
+      { statusCheckRollup: [running("npm run check (windows)")] },
+      { statusCheckRollup: [fail("npm run check (windows)")] },
+      { statusCheckRollup: [pass("npm run check (windows)")] },
+    ]);
+    const { view, timedOut } = w.run();
+    expect(w.reads()).toBe(2);
+    expect(checkProblems(view.statusCheckRollup, timedOut)[0]).toMatch(/^checks not green: .*FAILURE/);
+  });
+
+  it("doesn't wait when a check has already failed, however many still run", () => {
+    const w = world([{ statusCheckRollup: [fail("npm run check"), running("npm run check (windows)")] }]);
+    const { view, timedOut } = w.run();
+    expect(w.reads()).toBe(1);
+    expect(w.slept).toEqual([]);
+    expect(checkProblems(view.statusCheckRollup, timedOut)[0]).toMatch(/^checks not green/);
+  });
+
+  it("gives up after the limit and names what still runs as not finished", () => {
+    const w = world([{ statusCheckRollup: [pass("npm run check"), running("npm run check (windows)")] }]);
+    const { view, timedOut } = w.run();
+    expect(timedOut).toBe(true);
+    expect(w.slept.reduce((a, b) => a + b, 0)).toBe(CHECKS_WAIT_MS);
+    expect(checkProblems(view.statusCheckRollup, timedOut)).toEqual([
+      "checks not finished after 15 minutes: npm run check (windows) IN_PROGRESS",
+    ]);
+  });
+
+  it("reads once when every check has finished", () => {
+    const w = world([{ statusCheckRollup: [pass("npm run check"), pass("npm run check (windows)")] }]);
+    expect(w.run().timedOut).toBe(false);
+    expect(w.reads()).toBe(1);
+  });
+
+  it("knows a status context's pending state as running, and a check with only a conclusion as finished", () => {
+    expect(checkFinished({ context: "ci", state: "PENDING" })).toBe(false);
+    expect(checkFinished({ context: "ci", state: "EXPECTED" })).toBe(false);
+    expect(checkFinished({ context: "ci", state: "SUCCESS" })).toBe(true);
+    expect(checkFinished({ name: "check", conclusion: "SUCCESS" })).toBe(true);
+    expect(checkFinished({ name: "check", status: "QUEUED", conclusion: "" })).toBe(false);
+  });
+});
+
 describe("verifying the commit the agent pushed", () => {
   const OLD = `506f56d${"0".repeat(33)}`;
   const PUSHED = `56fb13c${"1".repeat(33)}`;
@@ -321,6 +415,17 @@ describe("verifying the commit the agent pushed", () => {
 
   it("passes an open PR at the pushed commit with green checks", () => {
     expect(prViewProblems({ state: "OPEN", headRefOid: PUSHED, statusCheckRollup: ok }, PUSHED)).toEqual([]);
+  });
+
+  it("names checks still running after the wait as not finished, and a failure as not green", () => {
+    const running = [{ name: "npm run check (windows)", status: "IN_PROGRESS", conclusion: "" }];
+    expect(checkProblems(running, true)).toEqual([
+      `checks not finished after 15 minutes: npm run check (windows) IN_PROGRESS`,
+    ]);
+    // Without the wait, a running check is as today: not green.
+    expect(checkProblems(running)[0]).toMatch(/^checks not green: npm run check \(windows\) IN_PROGRESS/);
+    const failedToo = [...running, { name: "npm run check", status: "COMPLETED", conclusion: "FAILURE" }];
+    expect(checkProblems(failedToo, true)[0]).toMatch(/^checks not green: .*FAILURE/);
   });
 
   it("still reports a closed PR and failing checks", () => {

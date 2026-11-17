@@ -79,9 +79,10 @@ jobs:
     concurrency:
       group: factory-tick
       cancel-in-progress: false
-    # The agent gets --minutes; the tick then audits, verifies the PR (revert:check alone may take 25
-    # minutes) and saves evidence. 45 minutes beyond the agent keeps a cancelled job from stranding a ticket.
-    timeout-minutes: 165
+    # The agent gets --minutes; the tick then audits, verifies the PR (it waits up to 15 minutes for the PR's
+    # checks, and revert:check alone may take 25) and saves evidence. 60 minutes beyond the agent keeps a
+    # cancelled job from stranding a ticket.
+    timeout-minutes: 180
     # The tick's exit code, for the alert job.
     outputs:
       code: ${{ steps.tick.outputs.code || steps.unreported.outputs.code }}
@@ -146,7 +147,7 @@ jobs:
         id: tick
         working-directory: FaultForge
         # Ten minutes inside the job's own limit: a tick stopped here still leaves the job time to keep its logs.
-        timeout-minutes: 155
+        timeout-minutes: 170
         # The runner context exists in a step's env, not in the job's.
         env:
           GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
