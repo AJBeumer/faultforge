@@ -14,6 +14,7 @@ import {
   killTree,
   prUrlFromToolResult,
 } from "./factory-agent.ts";
+import { CI_WAIT_MINUTES, ciWaitInstruction, stepResult, toolExitCode } from "./factory-agent-checks.ts";
 
 describe("agentInstructions", () => {
   it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
@@ -46,6 +47,88 @@ describe("agentInstructions", () => {
     const text = agentInstructions("/runs/r", "faultforge", 107, "/runs/r/ticket.md");
     expect(text).toContain("Don't list it (env, printenv and set are blocked)");
     expect(text).toContain('echo "$FAULTFORGE_TICKET_FILE", is fine');
+  });
+
+  it("tells a lab ticket's agent to get both operating systems green before every push to the pull request", () => {
+    const text = agentInstructions("/runs/r", "faultforge", 18, "/runs/r/ticket.md", true);
+    expect(text).toContain(ciWaitInstruction("faultforge", true));
+    expect(text).toContain("npm run ci:wait -- faultforge");
+    expect(text).toContain("the first one too");
+    expect(text).toContain("costs no review round");
+    expect(text).toContain("never piped into another command");
+  });
+
+  it("tells a reviewed repository's agent not to run ci:wait, which pushes nothing there", () => {
+    const text = agentInstructions("/runs/r", "target", 18, "/runs/r/ticket.md", false, "Owner/app");
+    expect(text).toContain(ciWaitInstruction("target", false));
+    expect(text).toContain("don't run ci:wait here");
+    expect(text).not.toContain("npm run ci:wait -- target");
+  });
+
+  it("gives ci:wait less time than the Bash tool gives a command, so it ends itself and cleans up", () => {
+    expect(CI_WAIT_MINUTES * 60_000).toBeLessThan(600_000);
+    expect(ciWaitInstruction("faultforge", true)).toContain(`--timeout ${CI_WAIT_MINUTES}`);
+    expect(ciWaitInstruction("faultforge", true)).toContain("600000 ms");
+  });
+
+  it("names a ci:wait call as its own step in the run log, never as a push or a check", () => {
+    expect(agentStep("npm run ci:wait -- faultforge")).toBe("ci-wait");
+    expect(agentStep("npm run ci:wait -- faultforge --timeout 9 2>&1")).toBe("ci-wait");
+    // Joined to another step, it is still a wait, but its exit code is no longer the command's.
+    for (const command of [
+      "git commit -F msg.txt && npm run ci:wait -- faultforge --timeout 30",
+      "npm run ci:wait -- faultforge; echo done",
+      "npm run ci:wait -- faultforge || true",
+      "npm run ci:wait -- faultforge | tail -1",
+      "npm run ci:wait -- faultforge > out.txt",
+      "npm run ci:wait -- $(echo faultforge)",
+    ]) {
+      expect(agentStep(command)).toBe("ci-wait+more");
+    }
+  });
+
+  it("records the exit code the agent's tool reported for the command, never one the command printed", () => {
+    // As a real run's transcript shows it: a failed command's result starts with the tool's own line.
+    expect(toolExitCode("Exit code 1\n  npm run check (windows): failure\nci:wait exit 1", true)).toBe(1);
+    expect(toolExitCode([{ type: "text", text: "Exit code 2\nci:wait exit 2" }], true)).toBe(2);
+    expect(toolExitCode("Exit code 144", true)).toBe(144);
+    // A result that is no error is exit 0, whatever the command printed.
+    expect(toolExitCode("Exit code 1\nci:wait exit 1", false)).toBe(0);
+    expect(toolExitCode("ci:wait exit 0", false)).toBe(0);
+  });
+
+  it("puts the exit code in the run log for a ci:wait step only", () => {
+    expect(stepResult("ci-wait", "Exit code 1\nci:wait exit 1", true)).toEqual({
+      step: "ci-wait",
+      error: true,
+      exitCode: 1,
+    });
+    expect(stepResult("ci-wait", "ci:wait exit 0", false)).toEqual({ step: "ci-wait", error: false, exitCode: 0 });
+    // A wait joined to other steps: the tool's code is the whole command's, which could hide the wait's.
+    expect(stepResult("ci-wait+more", "done", false)).toEqual({ step: "ci-wait+more", error: false });
+    expect(stepResult("ci-wait+push", "pushed", false)).toEqual({ step: "ci-wait+push", error: false });
+    expect(stepResult("check", "Exit code 1", true)).toEqual({ step: "check", error: true });
+  });
+
+  it("records no exit code when the tool named none: the command was refused, timed out or killed", () => {
+    for (const content of [
+      "PreToolUse:Bash hook error: refused",
+      "Command timed out after 10m 0s",
+      "ci:wait exit 0\nExit code 0",
+      " Exit code 1",
+      "Exit code 1 and more",
+      [{ type: "image" }, { type: "text", text: "Exit code 1" }],
+      undefined,
+      null,
+    ]) {
+      expect(toolExitCode(content, true)).toBeNull();
+    }
+  });
+
+  it("names both when one command waits and then pushes, so the push is not missing from the run log", () => {
+    expect(agentStep("npm run ci:wait -- faultforge --timeout 9 && git push origin tidy")).toBe("ci-wait+push");
+    expect(agentStep("npm run ci:wait -- faultforge\ngit -C . push")).toBe("ci-wait+push");
+    expect(agentStep("git push origin tidy")).toBe("push");
   });
 
   it("says to wait for Qodo in the foreground and never to end the turn early, which would end the run", () => {

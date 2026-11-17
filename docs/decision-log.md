@@ -42,3 +42,5 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 - [16 November: Qodo configuration v11, web search off](decisions/week-3.md#16-november-qodo-configuration-v11-web-search-off)
 - [16 November: a layout a person can work in, and Qodo configuration v12](decisions/week-3.md#16-november-a-layout-a-person-can-work-in-and-qodo-configuration-v12)
 - [Day 9: Set up quality gates](decisions/week-3.md#day-9-set-up-quality-gates)
+- [Day 9, later: questions before the build, and the first factory run under the gate](decisions/week-3.md#day-9-later-questions-before-the-build-and-the-first-factory-run-under-the-gate)
+- [17 November: green before review, in smaller pull requests](decisions/week-3.md#17-november-green-before-review-in-smaller-pull-requests)
