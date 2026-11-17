@@ -30,6 +30,16 @@ export function agentStep(command: string): string | null {
   return names.length ? names.join("+") : null;
 }
 
+/**
+ * The step name for one Bash tool call: `agentStep`'s, with "+background" when the call ran in the background.
+ * Claude Code answers such a call at once, with no error, before the command has done anything, so its result
+ * says nothing about the command: a background wait is never plain "ci-wait" and so carries no exit code.
+ */
+export function toolStep(command: string, background: boolean): string | null {
+  const step = agentStep(command);
+  return step && background ? `${step}+background` : step;
+}
+
 /** True when the step name `step` (from `agentStep`) holds `part`. */
 export function stepHas(step: unknown, part: string): boolean {
   return typeof step === "string" && step.split("+").includes(part);

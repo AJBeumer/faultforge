@@ -10,7 +10,7 @@ import { gateText } from "../shared/quality-gate.ts";
 import { ciWaitInstruction, stepResult } from "./factory-agent-checks.ts";
 import { writeInstructions } from "./factory-agent-door.ts";
 import { agentEnv } from "./factory-agent-env.ts";
-import { agentStep, stepHas } from "./factory-agent-steps.ts";
+import { stepHas, toolStep } from "./factory-agent-steps.ts";
 import { killOnExit, killTree } from "./factory-kill.ts";
 import { guardPrivateDir, privateCheckoutsFor } from "./factory-private.ts";
 import { BROKER_ENV, reviewBroker } from "./factory-review-broker.ts";
@@ -150,7 +150,7 @@ interface StreamMessage {
       type: string;
       name?: string;
       id?: string;
-      input?: { command?: string };
+      input?: { command?: string; run_in_background?: unknown };
       tool_use_id?: string;
       is_error?: boolean;
       content?: unknown;
@@ -310,7 +310,7 @@ export async function runAgent(
       for (const part of message.message?.content ?? []) {
         if (part.type === "tool_use" && part.name === "Bash") {
           const command = String(part.input?.command ?? "");
-          const step = agentStep(command);
+          const step = toolStep(command, part.input?.run_in_background === true);
           if (step) {
             commands.set(part.id ?? "", step);
             log("agent-step", { step, command: command.slice(0, 120) });

@@ -15,7 +15,7 @@ import {
   prUrlFromToolResult,
 } from "./factory-agent.ts";
 import { CI_WAIT_MINUTES, ciWaitInstruction, stepResult, toolExitCode } from "./factory-agent-checks.ts";
-import { stepHas } from "./factory-agent-steps.ts";
+import { stepHas, toolStep } from "./factory-agent-steps.ts";
 
 describe("agentInstructions", () => {
   it("states the quality gate exactly as factory.json holds it, and no threshold of its own", () => {
@@ -153,6 +153,19 @@ describe("agentInstructions", () => {
     expect(stepHas("ci-wait-more", "ci-wait")).toBe(false);
     expect(stepHas(undefined, "push")).toBe(false);
     expect(stepHas(null, "push")).toBe(false);
+  });
+
+  it("names a call run in the background as such, and gives a background wait no exit code", () => {
+    // Claude Code answers a background call at once, with no error, before the wait has checked anything.
+    const step = toolStep("npm run ci:wait -- faultforge --timeout 9", true);
+    expect(step).toBe("ci-wait+background");
+    expect(stepHas(step, "ci-wait")).toBe(true);
+    expect(stepResult(step ?? undefined, "Command running in background with ID: b1", false)).toEqual({
+      step: "ci-wait+background",
+      error: false,
+    });
+    expect(toolStep("npm run ci:wait -- faultforge --timeout 9", false)).toBe("ci-wait");
+    expect(toolStep("ls", true)).toBeNull();
   });
 
   it("puts an exit code only on a wait that was the whole command", () => {
