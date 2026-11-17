@@ -36,10 +36,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { reviewedRepos } from "../../../../.claude/hooks/shared/repos.ts";
-import { loadFactory, repoConfig } from "../shared/factory-config.ts";
+import { type FactoryConfig, loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { callDeadline, ghJson } from "../shared/github.ts";
 import { ROOT } from "../shared/paths.ts";
 import {
@@ -97,6 +97,8 @@ export interface CiWaitDeps {
   now: () => number;
   /** A few random characters for the scratch branch's name. */
   nonce: () => string;
+  /** The configuration: the checked-in `factory.json`, never a file `FAULTFORGE_CONFIG` names. */
+  config: () => FactoryConfig;
   out: (line: string) => void;
   error: (line: string) => void;
 }
@@ -106,21 +108,25 @@ export const GIT_TIMEOUT_MS = 30_000;
 
 /**
  * The time one git call may take: `GIT_TIMEOUT_MS`, cut to what is left before `deadlineAt` when one is set,
- * and never under a second, so a call made at the limit still fails cleanly instead of at once.
+ * or 0 when nothing is left: then the call is not started at all.
  */
 export function gitTimeout(now: number, deadlineAt: number | undefined): number {
-  return deadlineAt === undefined ? GIT_TIMEOUT_MS : Math.max(1_000, Math.min(GIT_TIMEOUT_MS, deadlineAt - now));
+  return deadlineAt === undefined ? GIT_TIMEOUT_MS : Math.max(0, Math.min(GIT_TIMEOUT_MS, deadlineAt - now));
 }
 
-const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, ...args], {
+/** git in `cwd`, cut to the time limit; exported so a test can show it starts nothing past the limit. */
+export const realGit = (cwd: string, ...args: string[]) => {
+  const timeout = gitTimeout(Date.now(), callDeadline.at);
+  if (timeout <= 0) throw new Error(`the time limit had passed, so git ${args[0] ?? ""} was not started`);
+  return execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: gitTimeout(Date.now(), callDeadline.at),
+    timeout,
   }).trim();
+};
 
 const realDeps: CiWaitDeps = {
-  git,
+  git: realGit,
   runs: (github, branch) =>
     ghJson<{ workflow_runs: WorkflowRun[] }[]>(
       "api",
@@ -138,6 +144,9 @@ const realDeps: CiWaitDeps = {
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   now: Date.now,
   nonce: () => randomBytes(4).toString("hex"),
+  // The jobs that must pass and the repository to push to come from the checked-in file only: it is among the
+  // files that decide the check, so a change to it shows in the PR, where a chosen file would not.
+  config: () => loadFactory(join(ROOT, "factory.json")),
   out: (line) => console.log(line),
   error: (line) => console.error(line),
 };
@@ -231,9 +240,9 @@ async function wait(
 
 /** Everything before and after the wait: the refusals, the push, and the branch's removal. */
 async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
-  let factory: ReturnType<typeof loadFactory>;
+  let factory: FactoryConfig;
   try {
-    factory = loadFactory();
+    factory = deps.config();
   } catch (e) {
     deps.error(`ci:wait: couldn't read factory.json: ${e instanceof Error ? e.message : String(e)}`);
     return 2;

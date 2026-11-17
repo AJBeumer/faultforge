@@ -3,6 +3,7 @@
  * whether the jobs and runs passed, and whether a remote address is the configured repository. Pure, so each
  * rule is tested on its own; `ci-wait.ts` does the pushing and the waiting.
  */
+import { githubRemote } from "../../../../.claude/hooks/shared/repos.ts";
 
 /** One workflow run GitHub started. */
 export interface WorkflowRun {
@@ -70,17 +71,10 @@ export function failedRuns(runs: WorkflowRun[]): string[] {
 }
 
 /**
- * True when a git remote address names the GitHub repository `github` (`owner/name`): by https, by ssh, or by
- * GitHub's ssh over port 443. The host must be GitHub's own, never an address that only mentions it. These are
- * the spellings the door's reader takes (`door/target-post-push.ts`); the door keeps its own copy, because it
- * imports nothing from this area, and a test fails when the two disagree on any address it lists. The guard's
- * wider reader (`githubRepos`) is not used here: it finds a GitHub address anywhere in a URL, which is right for
- * "might this reach a reviewed repo" and wrong for "this push goes there".
+ * True when a git remote address names the GitHub repository `github` (`owner/name`), read by the one exact
+ * reader the door uses too (`githubRemote` in the guard's `shared/repos.ts`): the whole address must be on
+ * github.com itself, never one that only mentions it.
  */
 export function remoteIs(url: string, github: string): boolean {
-  const match =
-    /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@(?:ssh\.)?github\.com(?::443)?\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(
-      url.trim(),
-    );
-  return match?.[1]?.toLowerCase() === github.toLowerCase();
+  return githubRemote(url.trim()) === github.toLowerCase();
 }

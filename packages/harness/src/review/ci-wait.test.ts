@@ -1,8 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { githubRemote as sharedGithubRemote } from "../../../../.claude/hooks/shared/repos.ts";
 import { githubRemote } from "../door/target-post-push.ts";
 import { tempDir } from "../fixtures/temp-dir.ts";
+import { loadFactory } from "../shared/factory-config.ts";
 import { callDeadline } from "../shared/github.ts";
 import { ROOT } from "../shared/paths.ts";
 import {
@@ -13,6 +15,7 @@ import {
   jobsVerdict,
   ownRuns,
   parseCiWaitArgs,
+  realGit,
   remoteIs,
   run,
   runsFinished,
@@ -159,30 +162,18 @@ describe("remoteIs", () => {
       "https://evil.example/github.com/owner/lab",
       "ssh://git@ssh.github.com:22/owner/lab.git",
       "https://github.com/owner/lab/extra",
+      // The guard's wider reader would find GitHub here; for where a push goes, the whole address must be it.
+      "https://evil.example/x?https://github.com/owner/lab",
     ]) {
       expect(remoteIs(url, "owner/lab")).toBe(false);
     }
   });
 
-  it("takes exactly the addresses the door's reader takes, so the two copies can't drift apart unseen", () => {
-    for (const url of [
-      "https://github.com/Owner/Lab.git",
-      "https://x-access-token@github.com/owner/lab.git",
-      "git@github.com:owner/lab.git",
-      "ssh://git@github.com/owner/lab",
-      "ssh://git@ssh.github.com:443/owner/lab.git",
-      "ssh://git@github.com:443/Owner/lab",
-      "https://github.com/someone/lab.git",
-      "https://example.com/owner/lab.git",
-      "/srv/git/lab.git",
-      "https://github.com.evil.example/owner/lab",
-      "https://evil.example/github.com/owner/lab",
-      "https://evil.example/x?https://github.com/owner/lab",
-      "ssh://git@ssh.github.com:22/owner/lab.git",
-      "https://github.com/owner/lab/extra",
-    ]) {
-      expect(remoteIs(url, "owner/lab"), url).toBe(githubRemote(url) === "owner/lab");
-    }
+  it("reads the address with the door's own reader: one copy, not two", () => {
+    expect(readFileSync(join(ROOT, "packages/harness/src/review/ci-wait-verdict.ts"), "utf8")).toMatch(
+      /\bgithubRemote\(/,
+    );
+    expect(githubRemote).toBe(sharedGithubRemote);
   });
 });
 
@@ -234,6 +225,7 @@ function world(
     },
     now: () => clock,
     nonce: () => "n0",
+    config: () => loadFactory(join(ROOT, "factory.json")),
     out: (line) => out.push(line),
     error: (line) => errors.push(line),
   };
@@ -314,13 +306,28 @@ describe("ci:wait", () => {
   });
 
   it("names its exit code in its last line when factory.json can't be read", async () => {
-    vi.stubEnv("FAULTFORGE_CONFIG", join(tempDir("ci-wait-no-config-"), "missing.json"));
+    const w = world([]);
+    w.deps.config = () => {
+      throw new Error("ENOENT: no such file");
+    };
+    expect(await run(["faultforge"], w.deps)).toBe(2);
+    expect(w.errors()).toMatch(/couldn't read factory.json: ENOENT/);
+    expect(w.lastLine()).toBe("ci:wait exit 2");
+    expect(w.gitCalls).toEqual([]);
+  });
+
+  it("takes the jobs that must pass from the checked-in factory.json, never from a file FAULTFORGE_CONFIG names", async () => {
+    // A chosen file that names only the Linux job would let a commit pass without Windows.
+    const factory = JSON.parse(readFileSync(join(ROOT, "factory.json"), "utf8"));
+    factory.repos.faultforge.ciJobs = ["npm run check"];
+    const config = join(tempDir("ci-wait-linux-only-"), "factory.json");
+    writeFileSync(config, JSON.stringify(factory));
+    vi.stubEnv("FAULTFORGE_CONFIG", config);
     try {
-      const w = world([]);
-      expect(await run(["faultforge"], w.deps)).toBe(2);
-      expect(w.errors()).toMatch(/couldn't read factory.json/);
-      expect(w.lastLine()).toBe("ci:wait exit 2");
-      expect(w.gitCalls).toEqual([]);
+      const linuxOnly = GREEN.filter((j) => !j.name.includes("windows"));
+      const w = world([{ runs: [workflow(1)], jobs: linuxOnly }]);
+      expect(await run(["faultforge"], w.deps)).toBe(1);
+      expect(w.out()).toContain("npm run check (windows) (required, did not run)");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -416,23 +423,17 @@ describe("ci:wait", () => {
     expect(w.gitCalls.some((call) => call.startsWith("push"))).toBe(false);
   });
 
-  it("refuses the reviewed repository even when a chosen config calls it a lab repository", async () => {
-    // FAULTFORGE_CONFIG can name any file. One that relabels the target, with jobs to wait for, is still refused.
+  it("refuses the reviewed repository even when its config calls it a lab repository", async () => {
+    // The guard's own list always holds the target, whatever a config says: a relabelled one is still refused.
     const factory = JSON.parse(readFileSync(join(ROOT, "factory.json"), "utf8"));
     factory.repos.target = { ...factory.repos.target, guard: "lab", ciJobs: ["npm run check"] };
-    const config = join(tempDir("ci-wait-config-"), "factory.json");
-    writeFileSync(config, JSON.stringify(factory));
-    vi.stubEnv("FAULTFORGE_CONFIG", config);
-    try {
-      const w = world([{ runs: [workflow(1)], jobs: GREEN }], {
-        origin: "https://github.com/AJBeumer/faultforge-target.git",
-      });
-      expect(await run(["target"], w.deps)).toBe(2);
-      expect(w.errors()).toMatch(/reviewed repository/);
-      expect(w.gitCalls).toEqual([]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const w = world([{ runs: [workflow(1)], jobs: GREEN }], {
+      origin: "https://github.com/AJBeumer/faultforge-target.git",
+    });
+    w.deps.config = () => factory;
+    expect(await run(["target"], w.deps)).toBe(2);
+    expect(w.errors()).toMatch(/reviewed repository/);
+    expect(w.gitCalls).toEqual([]);
   });
 
   it("refuses a reviewed repository, and makes no git call there", async () => {
@@ -530,11 +531,25 @@ describe("ci:wait", () => {
     expect(9 * 60_000 + GIT_TIMEOUT_MS).toBeLessThan(600_000);
   });
 
-  it("cuts a git call's time to what is left before the limit, and never below a second", () => {
+  it("cuts a git call's time to what is left before the limit, and to nothing once it has passed", () => {
     expect(gitTimeout(0, undefined)).toBe(GIT_TIMEOUT_MS);
     expect(gitTimeout(0, 10 * 60_000)).toBe(GIT_TIMEOUT_MS);
     expect(gitTimeout(0, 5_000)).toBe(5_000);
-    expect(gitTimeout(10_000, 5_000)).toBe(1_000);
+    expect(gitTimeout(5_000, 5_000)).toBe(0);
+    expect(gitTimeout(10_000, 5_000)).toBe(0);
+  });
+
+  it("starts no git call once the time limit has passed", () => {
+    callDeadline.at = Date.now() - 1;
+    try {
+      expect(() => realGit(ROOT, "push", "--quiet", "origin", "HEAD:refs/heads/never")).toThrow(
+        /the time limit had passed, so git push was not started/,
+      );
+    } finally {
+      callDeadline.at = undefined;
+    }
+    // With no limit set (removing the branch), a call runs as usual.
+    expect(realGit(ROOT, "rev-parse", "--is-inside-work-tree")).toBe("true");
   });
 
   it("reads the checkout and pushes within the time limit, and removes the branch after it with its own", async () => {
