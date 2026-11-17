@@ -13,6 +13,7 @@ import {
   checkFinished,
   checkProblems,
   commitToVerify,
+  MAX_RECORD_BYTES,
   prViewProblems,
   readJsonRecord,
   saveRecord,
@@ -67,6 +68,14 @@ describe("saveRecord: the runner's record replaces one the agent left, without c
     const dir = tempDir("save-record-");
     writeFileSync(join(dir, "record.json"), '{"exit":0}');
     expect(() => saveRecord(join(dir, "missing.json"), join(dir, "record.json"), dir)).toThrow(/ENOENT/);
+    expect(readFileSync(join(dir, "record.json"), "utf8")).toBe('{"exit":0}');
+  });
+
+  it("refuses a record over the size limit, and leaves the existing one as it was", () => {
+    const dir = tempDir("save-record-");
+    writeFileSync(join(dir, "huge.json"), "x".repeat(MAX_RECORD_BYTES + 1));
+    writeFileSync(join(dir, "record.json"), '{"exit":0}');
+    expect(() => saveRecord(join(dir, "huge.json"), join(dir, "record.json"), dir)).toThrow(/more than the/);
     expect(readFileSync(join(dir, "record.json"), "utf8")).toBe('{"exit":0}');
   });
 

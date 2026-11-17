@@ -13,6 +13,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -98,6 +99,8 @@ export function waitForChecks<V extends { statusCheckRollup?: Check[] }>(
  * and a write through it would land in any file the runner can write. So no folder from `root` down, and not the
  * file itself, may be a link, and the file is opened without following one where the system can (`O_NOFOLLOW`).
  */
+export const MAX_RECORD_BYTES = 1024 * 1024;
+
 export function saveRecord(from: string, to: string, root: string): void {
   const rel = relative(root, to);
   if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error(`${to} is not inside ${root}`);
@@ -113,7 +116,11 @@ export function saveRecord(from: string, to: string, root: string): void {
     }
     if (link) throw new Error(`${path} is a link, so the record is not saved through it`);
   }
-  // Read first: a record that can't be read must leave the one at `to` as it was, never emptied.
+  // Read first: a record that can't be read must leave the one at `to` as it was, never emptied. Its test names
+  // come from the pull request, so its size is capped before it is read whole.
+  const size = statSync(from).size;
+  if (size > MAX_RECORD_BYTES)
+    throw new Error(`${from} is ${size} bytes, more than the ${MAX_RECORD_BYTES} a record may be`);
   const content = readFileSync(from);
   mkdirSync(dirname(to), { recursive: true });
   const fd = openSync(to, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0));
