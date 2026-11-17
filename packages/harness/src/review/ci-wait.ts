@@ -279,7 +279,8 @@ async function body(argv: string[], deps: CiWaitDeps): Promise<0 | 1 | 2> {
     address = read.address;
     branch = scratchBranch(sha, deps.now(), deps.nonce());
     try {
-      deps.git(checkout, "push", "--quiet", address, `${sha}:refs/heads/${branch}`);
+      // Only the scratch branch: `push.followTags` in a config would send tags too, which no removal undoes.
+      deps.git(checkout, "push", "--quiet", "--no-follow-tags", address, `${sha}:refs/heads/${branch}`);
       pushed = true;
     } catch (e) {
       deps.error(`ci:wait: couldn't push the scratch branch: ${e instanceof Error ? e.message : String(e)}`);

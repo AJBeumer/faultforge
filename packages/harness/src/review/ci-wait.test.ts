@@ -246,7 +246,7 @@ describe("ci:wait", () => {
       { runs: [workflow(1)], jobs: GREEN },
     ]);
     expect(await run(["faultforge"], w.deps)).toBe(0);
-    expect(w.gitCalls).toContain(`push --quiet ${ORIGIN} ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags ${ORIGIN} ${SHA}:refs/heads/${BRANCH}`);
     expect(w.gitCalls.at(-1)).toBe(`push --quiet ${ORIGIN} --delete ${BRANCH}`);
     expect(w.out()).toContain("npm run check (windows): success");
     expect(w.out()).toContain("every job passed on a7439ec");
@@ -353,7 +353,7 @@ describe("ci:wait", () => {
     const pushTo = "git@github.com:AJBeumer/faultforge.git";
     const w = world([{ runs: [workflow(1)], jobs: GREEN }], { pushTo });
     expect(await run(["faultforge"], w.deps)).toBe(0);
-    expect(w.gitCalls).toContain(`push --quiet ${pushTo} ${SHA}:refs/heads/${BRANCH}`);
+    expect(w.gitCalls).toContain(`push --quiet --no-follow-tags ${pushTo} ${SHA}:refs/heads/${BRANCH}`);
     expect(w.gitCalls.at(-1)).toBe(`push --quiet ${pushTo} --delete ${BRANCH}`);
     expect(w.gitCalls.some((call) => call.startsWith("push --quiet origin"))).toBe(false);
   });
