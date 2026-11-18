@@ -126,28 +126,58 @@ describe("runStats", () => {
   it("counts a failed pre-flight and a run that ended on a runner error", () => {
     const s = runStats([
       { id: "a", events: [ev("picked"), ev("claimed"), ev("hooks-checked", { ok: false })] },
-      { id: "b", events: [ev("picked"), ev("claimed"), ev("error", { message: "gh failed" })] },
+      { id: "b", events: [ev("picked"), ev("claimed"), ev("error", { message: "gh failed", afterLabel: null })] },
     ]);
     expect(s.preflightFailed).toBe(1);
     expect(s.stops.find((x) => x.id === "a")?.where).toBe("preflight");
     expect(s.stops.find((x) => x.id === "b")).toEqual({ id: "b", where: "error", reason: "gh failed" });
   });
 
-  it("calls a run a runner error when the error came before it finished, not after", () => {
+  it("calls a run a runner error only for the error a failed tick logs, never for one the run went on after", () => {
     const failedTick = [
       ...stuckRun.slice(0, 4),
-      ev("error", { message: "the clarify step failed" }),
+      ev("error", { message: "the tick threw", afterLabel: null }),
       ev("finished", { label: "agent-needs-help", reason: "the runner failed" }),
     ];
     const failedReport = [...stuckRun, ev("error", { message: "couldn't report on the ticket" })];
+    const failedLookup = [
+      ...stuckRun.slice(0, 3),
+      ev("error", { message: "couldn't list open pull requests" }),
+      ...stuckRun.slice(3),
+    ];
     const s = runStats([
       { id: "a", events: failedTick },
       { id: "b", events: failedReport },
+      { id: "c", events: failedLookup },
     ]);
     expect(s.stops.map((x) => [x.id, x.where])).toEqual([
       ["a", "error"],
       ["b", "agent"],
+      ["c", "agent"],
     ]);
+  });
+
+  it("counts a weakened or unread check as a failed verify, and an allowed one as passed", () => {
+    const withCheckFiles = (outcome: string) => [
+      ...doneRun.slice(0, -1),
+      ev("check-files", { outcome }),
+      ev("finished", {
+        label: outcome === "allowed" ? "agent-done" : "agent-needs-help",
+        reason: outcome,
+      }),
+    ];
+    const s = runStats([
+      { id: "a", events: withCheckFiles("check-weakened") },
+      { id: "b", events: withCheckFiles("unread") },
+      { id: "c", events: withCheckFiles("allowed") },
+    ]);
+    expect(s.stops.map((x) => [x.id, x.where])).toEqual([
+      ["a", "verify"],
+      ["b", "verify"],
+    ]);
+    expect(s.verified).toBe(3);
+    expect(s.verifyProblems).toBe(2);
+    expect(s.verified - s.verifyProblems).toBe(s.done);
   });
 
   it("sends each run down one path only: an audit problem is never also counted as verified", () => {

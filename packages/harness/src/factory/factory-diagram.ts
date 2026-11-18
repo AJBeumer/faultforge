@@ -97,15 +97,23 @@ const preflightFailed = (events: RunEvent[]) =>
     (x) => (x.event === "qodo-checked" && x.exitCode !== 0) || (x.event === "hooks-checked" && x.ok !== true),
   );
 
+/** Check-file outcomes that fail a run (`factory-check-files.ts`); `unchanged` and `allowed` let it go on. */
+const CHECK_FILES_FAIL = new Set(["check-weakened", "unread"]);
+
+/** Whether the runner's verification failed: its own problems, or the check-file comparison that follows it. */
+const verifyFailed = (events: RunEvent[]) =>
+  problemsOf(find(events, "verified")).length > 0 ||
+  events.some((e) => e.event === "check-files" && CHECK_FILES_FAIL.has(String(e.outcome)));
+
 /**
  * The one place a run stopped, or null when it ended as `agent-done`. In the runner's order: the label, the
- * ticket, the pre-flight, the questions, a runner error logged before the run finished (one logged after it,
- * such as a failed report on the ticket, didn't stop the run), then the audit, verify and the agent's loop.
+ * ticket, the pre-flight, the questions, a runner error, then the audit, verify and the agent's loop. A runner
+ * error is the one `failTick` logs, with an `afterLabel` key, when a tick throws. Other `error` events (a
+ * failed lookup, a failed report on the ticket) are logged and the run goes on, so they don't count as a stop.
  */
 function stopOf(run: RunRecord): Stop | null {
   const { id, events } = run;
-  const finishedAt = events.findIndex((e) => e.event === "finished");
-  const finished = events[finishedAt];
+  const finished = find(events, "finished");
   const reason = typeof finished?.reason === "string" ? finished.reason : "";
   if (finished?.label === "agent-done") return null;
   const refused = find(events, "refused");
@@ -114,12 +122,12 @@ function stopOf(run: RunRecord): Stop | null {
   if (notReady) return { id, where: "ticket", reason: problemsOf(notReady).join("; ") };
   if (preflightFailed(events)) return { id, where: "preflight", reason };
   if (finished?.label === "needs-owner-answer") return { id, where: "questions", reason };
-  const error = events.find((e, i) => e.event === "error" && (finishedAt < 0 || i < finishedAt));
+  const error = events.find((e) => e.event === "error" && Object.hasOwn(e, "afterLabel"));
   if (error || !finished) {
     return { id, where: "error", reason: String(error?.message ?? "the run ended without a result") };
   }
   if (problemsOf(find(events, "audited")).length) return { id, where: "audit", reason };
-  if (problemsOf(find(events, "verified")).length) return { id, where: "verify", reason };
+  if (verifyFailed(events)) return { id, where: "verify", reason };
   return { id, where: "agent", reason: agentReason(events) || reason };
 }
 
@@ -157,7 +165,7 @@ export function runStats(runs: RunRecord[]): Stats {
     agentNoResult: count((e) => has(e, "agent-finished") && agentOutcome(e) === null),
     auditProblems: count((e) => problemsOf(find(e, "audited")).length > 0),
     verified: count((e) => cleanAudit(e) && has(e, "verified")),
-    verifyProblems: count((e) => cleanAudit(e) && problemsOf(find(e, "verified")).length > 0),
+    verifyProblems: count((e) => cleanAudit(e) && has(e, "verified") && verifyFailed(e)),
     done: count((e) => find(e, "finished")?.label === "agent-done"),
     stops,
   };
