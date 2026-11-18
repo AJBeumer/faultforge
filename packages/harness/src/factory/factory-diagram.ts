@@ -35,7 +35,7 @@ export interface Skipped {
 /** Where a run that did not end as `agent-done` stopped, and the runner's reason. */
 export interface Stop {
   id: string;
-  where: "label" | "ticket" | "questions" | "agent" | "audit" | "verify" | "error";
+  where: "label" | "ticket" | "preflight" | "questions" | "agent" | "audit" | "verify" | "error";
   reason: string;
 }
 
@@ -43,6 +43,9 @@ export interface Stats {
   runs: number;
   first: string | null;
   last: string | null;
+  /** The first and last run ids counted, in name order (which is start-time order). */
+  firstId: string | null;
+  lastId: string | null;
   refused: number;
   notReady: number;
   claimed: number;
@@ -60,6 +63,7 @@ export interface Stats {
   agentStuck: number;
   agentNoResult: number;
   auditProblems: number;
+  /** Runs the runner verified after a clean audit: the ones that reach verify on the chart. */
   verified: number;
   verifyProblems: number;
   done: number;
@@ -88,22 +92,35 @@ function agentReason(events: RunEvent[]): string {
   return typeof result?.reason === "string" ? result.reason : "";
 }
 
-/** The one place a run stopped, or null when it ended as `agent-done`. Audit is reported before verify. */
+const preflightFailed = (events: RunEvent[]) =>
+  events.some(
+    (x) => (x.event === "qodo-checked" && x.exitCode !== 0) || (x.event === "hooks-checked" && x.ok !== true),
+  );
+
+/**
+ * The one place a run stopped, or null when it ended as `agent-done`. In the runner's order: the label, the
+ * ticket, the pre-flight, the questions, a runner error logged before the run finished (one logged after it,
+ * such as a failed report on the ticket, didn't stop the run), then the audit, verify and the agent's loop.
+ */
 function stopOf(run: RunRecord): Stop | null {
   const { id, events } = run;
-  const finished = find(events, "finished");
+  const finishedAt = events.findIndex((e) => e.event === "finished");
+  const finished = events[finishedAt];
   const reason = typeof finished?.reason === "string" ? finished.reason : "";
   if (finished?.label === "agent-done") return null;
   const refused = find(events, "refused");
   if (refused) return { id, where: "label", reason: String(refused.reason ?? "") };
   const notReady = find(events, "not-ready");
   if (notReady) return { id, where: "ticket", reason: problemsOf(notReady).join("; ") };
+  if (preflightFailed(events)) return { id, where: "preflight", reason };
   if (finished?.label === "needs-owner-answer") return { id, where: "questions", reason };
+  const error = events.find((e, i) => e.event === "error" && (finishedAt < 0 || i < finishedAt));
+  if (error || !finished) {
+    return { id, where: "error", reason: String(error?.message ?? "the run ended without a result") };
+  }
   if (problemsOf(find(events, "audited")).length) return { id, where: "audit", reason };
   if (problemsOf(find(events, "verified")).length) return { id, where: "verify", reason };
-  if (finished) return { id, where: "agent", reason: agentReason(events) || reason };
-  const error = find(events, "error");
-  return { id, where: "error", reason: String(error?.message ?? "the run ended without a result") };
+  return { id, where: "agent", reason: agentReason(events) || reason };
 }
 
 export function runStats(runs: RunRecord[]): Stats {
@@ -114,16 +131,18 @@ export function runStats(runs: RunRecord[]): Stats {
     .filter((t): t is string => typeof t === "string")
     .sort();
   const stops = runs.map(stopOf).filter((s): s is Stop => s !== null);
+  const ids = runs.map((r) => r.id).sort();
+  const cleanAudit = (e: RunEvent[]) => has(e, "audited") && !problemsOf(find(e, "audited")).length;
   return {
     runs: runs.length,
     first: times[0] ?? null,
     last: times.at(-1) ?? null,
+    firstId: ids[0] ?? null,
+    lastId: ids.at(-1) ?? null,
     refused: count((e) => has(e, "refused")),
     notReady: count((e) => has(e, "not-ready")),
     claimed: count((e) => has(e, "claimed")),
-    preflightFailed: count((e) =>
-      e.some((x) => (x.event === "qodo-checked" && x.exitCode !== 0) || (x.event === "hooks-checked" && x.ok !== true)),
-    ),
+    preflightFailed: count(preflightFailed),
     clarified: count((e) => has(e, "clarified") || has(e, "clarify-skipped")),
     questions: count((e) => e.some((x) => x.event === "clarified" && x.result === "questions for the owner")),
     built: count((e) => has(e, "agent-started")),
@@ -137,8 +156,8 @@ export function runStats(runs: RunRecord[]): Stats {
     agentStuck: count((e) => agentOutcome(e) === "stuck"),
     agentNoResult: count((e) => has(e, "agent-finished") && agentOutcome(e) === null),
     auditProblems: count((e) => problemsOf(find(e, "audited")).length > 0),
-    verified: count((e) => has(e, "verified")),
-    verifyProblems: count((e) => problemsOf(find(e, "verified")).length > 0),
+    verified: count((e) => cleanAudit(e) && has(e, "verified")),
+    verifyProblems: count((e) => cleanAudit(e) && problemsOf(find(e, "verified")).length > 0),
     done: count((e) => find(e, "finished")?.label === "agent-done"),
     stops,
   };
@@ -149,7 +168,6 @@ const label = (text: string) => `"${text.replace(/"/g, "#quot;").replace(/\|/g, 
 
 export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
   const stoppedAt = (where: Stop["where"]) => s.stops.filter((x) => x.where === where).length;
-  const agentStops = stoppedAt("agent");
   return [
     "flowchart TD",
     `  T[${label(`Owner labels a ticket ready-for-agent<br/>${s.runs} runs picked one up`)}] --> L{${label("Label added by the owner?")}}`,
@@ -158,6 +176,7 @@ export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
     `  R -- ${label(`no: ${s.notReady}`)} --> OT{{${label("Owner rewrites the ticket")}}}`,
     "  OT -.-> T",
     `  R -- ${label(`yes: ${s.claimed} claimed`)} --> P{${label(`Pre-flight<br/>Qodo's configuration matches its snapshot,<br/>the guard hooks answer as tested<br/>failed: ${s.preflightFailed}`)}}`,
+    `  P -- ${label(`failed: ${stoppedAt("preflight")}`)} --> H`,
     `  P --> W[${label("PLANNED: Codebase Wisdom checks<br/>the ticket's claims about the code")}]:::planned`,
     `  P --> C{${label(`Questions before the build<br/>read-only agent: what would a builder guess?<br/>asked in ${s.clarified} runs`)}}`,
     "  W -.-> C",
@@ -173,7 +192,7 @@ export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
     `  CW -- green --> PR[${label(`Push, open or update the PR<br/>PR opened in ${s.prRuns} runs`)}]`,
     `  PR --> RW{${label(`review:wait<br/>Qodo's review of the head commit is complete<br/>${s.reviewRuns} runs`)}}`,
     `  RW --> G{${label(`Quality gate, factory.json<br/>fix: ${gate.fix.join(", ") || "none"}<br/>flag for the owner: ${gate.flag.join(", ") || "none"}<br/>at most ${gate.maxRounds} review rounds`)}}`,
-    `  RR[${label("NOT USED: Review Resolver<br/>findings come from Qodo's API through review:wait;<br/>marking them in Qodo is against the project rules")}]:::planned`,
+    `  RR[${label("PLANNED: Review Resolver, reading findings only<br/>today review:wait reads them from Qodo's API;<br/>marking findings in Qodo is against the project rules")}]:::planned`,
     "  RR -.-> G",
     `  G -- ${label(`must-fix open, rounds left<br/>re-reviews: ${s.reReviews}`)} --> B`,
     `  G -- clear --> RC{${label(`revert:check<br/>the new tests fail without the change<br/>${s.revertRuns} runs`)}}`,
@@ -182,10 +201,10 @@ export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
     `  G -- ${label("round limit, budget or time")} --> AS[${label(`Agent reports stuck: ${s.agentStuck}<br/>no result: ${s.agentNoResult}`)}]`,
     `  AR --> AU{${label("Runner's audit<br/>main didn't move, nothing posted,<br/>the ticket didn't change")}}`,
     "  AS --> AU",
-    `  AU -- ${label(`problems: ${s.auditProblems}`)} --> H{{${label("agent-needs-help<br/>the owner decides: fix, allow a round, or close")}}}`,
-    `  AU -- ${label(`agent stuck: ${agentStops}`)} --> H`,
-    `  AU -- ${label(`ready: ${s.verified} verified`)} --> V{${label("Runner's verify, from a trusted main<br/>PR open at the pushed head, required checks green,<br/>review record of the head, gate met, revert:check")}}`,
-    `  V -- ${label(`problems: ${s.verifyProblems}`)} --> H`,
+    `  AU -- ${label(`problems: ${stoppedAt("audit")}`)} --> H{{${label("agent-needs-help<br/>the owner decides: fix, allow a round, or close")}}}`,
+    `  AU -- ${label(`agent stuck: ${stoppedAt("agent")}`)} --> H`,
+    `  AU -- ${label(`ready: ${s.verified}`)} --> V{${label("Runner's verify, from a trusted main<br/>PR open at the pushed head, required checks green,<br/>review record of the head, gate met, revert:check")}}`,
+    `  V -- ${label(`problems: ${stoppedAt("verify")}`)} --> H`,
     `  B -. ${label(`runner error: ${stoppedAt("error")}`)} .-> H`,
     `  V -- ${label(`ok: ${s.done}`)} --> D{{${label("agent-done<br/>the owner checks the criteria and merges")}}}`,
     "  D --> M[(main)]",
@@ -196,6 +215,7 @@ export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
 const WHERE: Record<Stop["where"], string> = {
   label: "label check",
   ticket: "ticket:ready",
+  preflight: "pre-flight",
   questions: "questions before the build",
   agent: "agent's own loop",
   audit: "runner's audit",
@@ -203,16 +223,23 @@ const WHERE: Record<Stop["where"], string> = {
   error: "runner error",
 };
 
+/** The page lists at most this many stopped runs, the latest, so it stays within docs:check's 150 lines. */
+const STOPS_LISTED = 30;
+
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").slice(0, 160);
 
 export function diagramDoc(s: Stats, config: FactoryConfig, skipped: Skipped[]): string {
   const gate = gateOf(config);
   const ciJobs = config.repos[LAB]?.ciJobs ?? [];
   const range = s.first && s.last ? `${s.first.slice(0, 10)} to ${s.last.slice(0, 10)}` : "no dates";
+  const recent = s.stops.slice(-STOPS_LISTED);
+  const byGate = (Object.keys(WHERE) as Stop["where"][])
+    .map((where) => [where, s.stops.filter((x) => x.where === where).length] as const)
+    .filter(([, n]) => n > 0);
   return [
     "# The factory, drawn from its own data",
     "",
-    `Generated by \`npm run factory:diagram\` from ${s.runs} lab run records (${range}, UTC) and \`factory.json\`. Do not edit by hand; run the command again.`,
+    `Generated by \`npm run factory:diagram\` from ${s.runs} lab run records, \`${s.firstId}\` to \`${s.lastId}\` (${range}, UTC), and \`factory.json\`. Do not edit by hand; run the command again.`,
     'Each number counts runs, except "fail" and "re-reviews", which count events. Dashed steps are not part of the factory\'s runs today.',
     skipped.length
       ? `Skipped, not readable: ${skipped.map((x) => `\`${x.file}\` (${cell(x.reason)})`).join(", ")}.`
@@ -243,9 +270,17 @@ export function diagramDoc(s: Stats, config: FactoryConfig, skipped: Skipped[]):
     "",
     `${s.done} of ${s.runs} runs ended as \`agent-done\`. The others stopped at one place each, the first the runner reports.`,
     "",
+    "| Stopped at | Runs |",
+    "|---|---:|",
+    ...byGate.map(([where, n]) => `| ${WHERE[where]} | ${n} |`),
+    "",
+    s.stops.length > recent.length
+      ? `The latest ${recent.length} of ${s.stops.length} stopped runs; the run records hold the rest.`
+      : "Every stopped run:",
+    "",
     "| Run | Stopped at | Reason |",
     "|---|---|---|",
-    ...s.stops.map((x) => `| \`${x.id}\` | ${WHERE[x.where]} | ${cell(x.reason)} |`),
+    ...recent.map((x) => `| \`${x.id}\` | ${WHERE[x.where]} | ${cell(x.reason)} |`),
     "",
   ].join("\n");
 }
@@ -260,7 +295,11 @@ export function readRuns(dir: string): { runs: RunRecord[]; skipped: Skipped[] }
     .sort()) {
     try {
       const events = parseJsonLines<RunEvent>(readFileSync(join(dir, file), "utf8"));
-      if (!events.length || events.some((e) => typeof e?.event !== "string")) throw new Error("no events");
+      if (!events.length) throw new Error("no events");
+      const bad = events.findIndex(
+        (e) => typeof e?.event !== "string" || typeof e.t !== "string" || Number.isNaN(Date.parse(e.t)),
+      );
+      if (bad >= 0) throw new Error(`event ${bad + 1} has no event name or no valid time`);
       runs.push({ id: file.replace(/\.jsonl$/, ""), events });
     } catch (error) {
       skipped.push({ file, reason: (error as Error).message });

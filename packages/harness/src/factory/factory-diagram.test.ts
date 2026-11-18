@@ -129,7 +129,48 @@ describe("runStats", () => {
       { id: "b", events: [ev("picked"), ev("claimed"), ev("error", { message: "gh failed" })] },
     ]);
     expect(s.preflightFailed).toBe(1);
+    expect(s.stops.find((x) => x.id === "a")?.where).toBe("preflight");
     expect(s.stops.find((x) => x.id === "b")).toEqual({ id: "b", where: "error", reason: "gh failed" });
+  });
+
+  it("calls a run a runner error when the error came before it finished, not after", () => {
+    const failedTick = [
+      ...stuckRun.slice(0, 4),
+      ev("error", { message: "the clarify step failed" }),
+      ev("finished", { label: "agent-needs-help", reason: "the runner failed" }),
+    ];
+    const failedReport = [...stuckRun, ev("error", { message: "couldn't report on the ticket" })];
+    const s = runStats([
+      { id: "a", events: failedTick },
+      { id: "b", events: failedReport },
+    ]);
+    expect(s.stops.map((x) => [x.id, x.where])).toEqual([
+      ["a", "error"],
+      ["b", "agent"],
+    ]);
+  });
+
+  it("sends each run down one path only: an audit problem is never also counted as verified", () => {
+    const auditThenCleanVerify = [
+      ...doneRun.slice(0, -3),
+      ev("audited", { problems: ["main of faultforge moved"] }),
+      ev("verified", { problems: [] }),
+      ev("finished", { label: "agent-needs-help", reason: "audit" }),
+    ];
+    const verifyProblem = [
+      ...doneRun.slice(0, -2),
+      ev("verified", { problems: ["checks not green"] }),
+      ev("finished", { label: "agent-needs-help", reason: "verify" }),
+    ];
+    const s = runStats([
+      { id: "a", events: auditThenCleanVerify },
+      { id: "b", events: verifyProblem },
+      { id: "c", events: doneRun },
+    ]);
+    expect(s.verified).toBe(2);
+    expect(s.verifyProblems).toBe(1);
+    expect(s.verified - s.verifyProblems).toBe(s.done);
+    expect(s.stops.map((x) => x.where)).toEqual(["audit", "verify"]);
   });
 });
 
@@ -148,12 +189,18 @@ describe("mermaid", () => {
     expect(line("Codebase Wisdom")).toContain(":::planned");
     expect(line("Qodo local review of")).toContain(":::planned");
     expect(line("Review Resolver")).toContain(":::planned");
+    expect(line("Review Resolver")).toContain("PLANNED: Review Resolver");
     expect(line("review of the head commit is complete")).not.toContain(":::planned");
     expect(line("ci:wait")).toContain("npm run check (windows)");
     expect(chart).toContain("round limit, budget or time");
     expect(chart).toContain("the owner checks the criteria and merges");
     expect(chart).toContain("Owner rewrites the ticket");
     expect(chart).toContain("classDef planned stroke-dasharray");
+  });
+
+  it("gives a failed pre-flight its own path to the owner", () => {
+    const s = runStats([{ id: "a", events: [ev("picked"), ev("claimed"), ev("qodo-checked", { exitCode: 1 })] }]);
+    expect(mermaid(s, gate, [])).toContain('P -- "failed: 1" --> H');
   });
 
   it("keeps quotes and pipes out of the labels", () => {
@@ -171,6 +218,23 @@ describe("diagramDoc", () => {
     );
     expect(doc).toContain("No run record was skipped.");
     expect(doc.split("\n").length).toBeLessThanOrEqual(150);
+  });
+
+  it("names the first and last run counted", () => {
+    const doc = diagramDoc(runStats(runs), config, []);
+    expect(doc).toContain("`20261109-080000-faultforge-3` to `20261110-110000-faultforge-2`");
+  });
+
+  it("stays within docs:check's 150 lines however many runs stopped", () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      id: `run-${String(i).padStart(3, "0")}`,
+      events: notReadyRun,
+    }));
+    const doc = diagramDoc(runStats(many), config, []);
+    expect(doc.split("\n").length).toBeLessThanOrEqual(150);
+    expect(doc).toContain("| ticket:ready | 200 |");
+    expect(doc).toContain("The latest 30 of 200 stopped runs");
+    expect(doc).toContain("`run-199`");
   });
 });
 
@@ -192,6 +256,14 @@ describe("readRuns", () => {
     const doc = diagramDoc(runStats(read), config, skipped);
     expect(doc).toContain("Skipped, not readable: `20261110-120000-faultforge-9.jsonl`");
     expect(doc).toContain("from 1 lab run records");
+  });
+
+  it("skips a record with an event that has no valid time", () => {
+    dir = tempDir("ff-diagram-time-");
+    writeFileSync(join(dir, "20261110-100000-faultforge-1.jsonl"), jsonl([{ event: "finished", label: "agent-done" }]));
+    const { runs: read, skipped } = readRuns(dir);
+    expect(read).toEqual([]);
+    expect(skipped[0]?.reason).toBe("event 1 has no event name or no valid time");
   });
 
   it("exits 2 when there are no run records", () => {
