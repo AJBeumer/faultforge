@@ -10,6 +10,7 @@ import { QodoApi } from "../qodo/qodo-api.ts";
 import {
   findingsFor,
   findingsShapeProblem,
+  localReviewFindings,
   openFindings,
   type QodoReview,
   reviewEffort,
@@ -263,7 +264,9 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
     `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}). Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
   );
   log(`CI: ${record.ci}`);
+  const carriedOver = result.review ? localReviewFindings(result.review).length : 0;
   log(`${findings.length} finding(s) on ${short}; ${open.length} open on this PR in total:`);
+  if (carriedOver) log(`${carriedOver} finding(s) carried over from local reviews (review_source: local_skill).`);
   for (const f of open) {
     const where = f.file ? `${f.file}${f.lines ? `:${f.lines[0]}-${f.lines[1]}` : ""}` : "(no location)";
     log(`- [${f.severity}] ${f.title} (${f.category}, ${where}, raised on ${f.commit})`);
