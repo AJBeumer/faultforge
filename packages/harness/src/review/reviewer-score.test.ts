@@ -8,6 +8,7 @@ import {
   decide,
   type KeyEntry,
   main,
+  parseReplays,
   parseReview,
   type RunScore,
   readRuns,
@@ -131,13 +132,134 @@ describe("decide", () => {
 describe("reading saved reviews", () => {
   let dir = "";
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
-  const answer = (findings: unknown[]) => JSON.stringify({ findings });
-  const qodo = (id: string, file: string, start: number, end: number) => ({
+  const answer = (findings: unknown[], session: Record<string, unknown> = { run_id: 7, status: "completed" }) =>
+    JSON.stringify({ findings, review_session: session });
+  const qodo = (id: string, file: string, start: unknown, end: unknown, run = 7) => ({
     id,
     file_path: file,
     start_line: start,
     end_line: end,
     title: id,
+    review_run_id: run,
+  });
+  const writeRuns = (arms: Record<string, string[]>, replayPrs: number[], body = answer([])) => {
+    for (const [arm, runs] of Object.entries(arms)) {
+      for (const r of runs) {
+        mkdirSync(join(dir, "runs", arm, r), { recursive: true });
+        for (const pr of replayPrs) writeFileSync(join(dir, "runs", arm, r, `pr${pr}.qodo-api.raw.json`), body);
+      }
+    }
+  };
+  const writeKey = (entries: unknown[]) =>
+    writeFileSync(join(dir, "key.jsonl"), `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`);
+  const runMain = (extra: string[], replayArg = "411=391") => {
+    const out: string[] = [];
+    const code = main(
+      ["--key", join(dir, "key.jsonl"), "--runs", join(dir, "runs"), "--replays", replayArg, ...extra],
+      (l) => out.push(l),
+    );
+    return { code, out: out.join("\n") };
+  };
+
+  it("reads a JSON-RPC answer saved as JSON, and an event stream whose data line has no space", () => {
+    const inner = answer([qodo("f1", "src/a.ts", 10, 10)]);
+    const rpc = JSON.stringify({ jsonrpc: "2.0", result: { content: [{ type: "text", text: inner }] } });
+    expect(parseReview(rpc).findings).toHaveLength(1);
+    expect(parseReview(`event: message\ndata:${rpc}\n`).findings).toHaveLength(1);
+  });
+
+  it("refuses a review that is not completed", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411], answer([], { run_id: 7, status: "started" }));
+    expect(() => readRuns(join(dir, "runs"), replays)).toThrow(/not completed/);
+  });
+
+  it("refuses a review that carries findings from an earlier review of the same pull request", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411], answer([qodo("f1", "src/a.ts", 10, 10, 6)]));
+    expect(() => readRuns(join(dir, "runs"), replays)).toThrow(/from another review/);
+  });
+
+  it("refuses a finding whose lines are there but not whole numbers", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411], answer([qodo("f1", "src/a.ts", "10", 12)]));
+    expect(() => readRuns(join(dir, "runs"), replays)).toThrow(/lines/);
+  });
+
+  it("refuses arms with different runs, or fewer than two runs each", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey(key);
+    writeRuns({ A: ["1", "2"], B: ["1"] }, [411]);
+    expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("the same runs") });
+    rmSync(join(dir, "runs"), { recursive: true });
+    writeRuns({ A: ["1"], B: ["1"] }, [411]);
+    expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("at least two runs") });
+  });
+
+  it("refuses a key line range that is not a range", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey([{ id: "k", pr: 391, kind: "late", file: "src/a.ts", lines: [12, 10] }]);
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411]);
+    expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("entry 1") });
+  });
+
+  it("refuses a key whose pull request has no replay", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey([...key, { id: "k-312", pr: 312, kind: "late", file: "src/a.ts", lines: [1, 1] }]);
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411]);
+    expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("312 has no replay") });
+  });
+
+  it("refuses replay pairs that are malformed or repeated", () => {
+    expect(() => parseReplays("411=391=1")).toThrow(/not <replay>=<pr>/);
+    expect(() => parseReplays("411=391,411=392")).toThrow(/twice/);
+  });
+
+  it("refuses a confirmation that is not yes or no, or that repeats an earlier one", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey(key);
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411], answer([qodo("f1", "src/a.ts", 10, 10)]));
+    const confirm = (lines: unknown[]) =>
+      writeFileSync(join(dir, "confirm.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const base = { entry: "k-late", arm: "A", run: "1", finding: "f1" };
+    confirm([{ ...base, kind: "maybe" }]);
+    expect(runMain(["--confirm", join(dir, "confirm.jsonl")])).toMatchObject({
+      code: 2,
+      out: expect.stringContaining("yes or no"),
+    });
+    confirm([
+      { ...base, kind: "yes" },
+      { ...base, kind: "no" },
+    ]);
+    expect(runMain(["--confirm", join(dir, "confirm.jsonl")])).toMatchObject({
+      code: 2,
+      out: expect.stringContaining("twice"),
+    });
+  });
+
+  it("keeps a finding id that catches an entry in one replay from hiding an unmatched finding in another", () => {
+    const twoReplays = new Map([
+      [411, 391],
+      [412, 312],
+    ]);
+    const k: KeyEntry[] = [{ id: "k", pr: 391, kind: "late", file: "src/a.ts", lines: [10, 10] }];
+    const runs: SavedRun[] = [
+      { arm: "A", run: "1", replayPr: 411, findings: [finding("same", "src/a.ts", [10, 10])] },
+      { arm: "A", run: "1", replayPr: 412, findings: [finding("same", "src/z.ts", [1, 1])] },
+    ];
+    const found = candidates(k, runs, twoReplays);
+    expect(scoreRuns(k, runs, found, [yes("k", "A", "1", "same")])).toEqual([
+      { arm: "A", run: "1", late: 1, first: 0, unmatched: 1 },
+    ]);
+  });
+
+  it("prints each arm's lowest and highest late and first-review catches", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey(key);
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411]);
+    const { out } = runMain([]);
+    expect(out).toContain("arm A: late 0 to 0 of 1, first review 0 to 0 of 1");
+    expect(out).toContain("arm B: late 0 to 0 of 1, first review 0 to 0 of 1");
   });
 
   it("reads Qodo's JSON and the event stream review:wait saves", () => {
