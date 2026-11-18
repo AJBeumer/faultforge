@@ -7,6 +7,7 @@ import { isSessionLost, parseRpcBody, parseToolText, QodoApi, TransportError } f
 import {
   findingsFor,
   findingsShapeProblem,
+  localReviewFindings,
   openFindings,
   type QodoReview,
   reviewEffort,
@@ -827,6 +828,61 @@ describe("findingsShapeProblem: every finding is read field by field", () => {
     expect(findingsShapeProblem(twoRounds, PR1_HEAD)).toBeUndefined();
     expect(findingsShapeProblem(withFinding({ git_sha: earlier }), PR1_HEAD)).toMatch(/none on/);
   });
+
+  it("reads a review as complete when every finding is a local_skill finding on a commit no run reviewed", () => {
+    const earlier = "e".repeat(40);
+    const onlyLocal = withFinding({ git_sha: earlier, review_source: "local_skill" });
+    expect(findingsShapeProblem(onlyLocal, PR1_HEAD)).toBeUndefined();
+  });
+
+  it("still calls a review unreadable when its off-commit findings are not local_skill findings", () => {
+    const earlier = "e".repeat(40);
+    const notLocal = withFinding({ git_sha: earlier, review_source: "pr_review" });
+    expect(findingsShapeProblem(notLocal, PR1_HEAD)).toMatch(/none on/);
+  });
+
+  it("still calls a review unreadable when a real finding sits beside a carried-over local one", () => {
+    const earlier = "e".repeat(40);
+    const mixed: QodoReview = {
+      ...pr1,
+      findings: [
+        { ...onlyFinding, git_sha: earlier, review_source: "pr_review" },
+        { ...onlyFinding, id: "local-1", git_sha: earlier, review_source: "local_skill" },
+      ],
+      finding_count: 2,
+    };
+    expect(findingsShapeProblem(mixed, PR1_HEAD)).toMatch(/lists 1 findings, none on/);
+  });
+});
+
+describe("localReviewFindings", () => {
+  const onlyFinding = pr1.findings?.find((f) => f.git_sha === PR1_HEAD) as NonNullable<QodoReview["findings"]>[0];
+
+  it("reads back every local_skill finding, whatever its dismiss reason or attribution status", () => {
+    const earlier = "e".repeat(40);
+    const review: QodoReview = {
+      ...pr1,
+      findings: [
+        { ...onlyFinding, git_sha: earlier, review_source: "local_skill" },
+        {
+          ...onlyFinding,
+          id: "local-2",
+          git_sha: earlier,
+          review_source: "local_skill",
+          dismiss_reason: "not_valid",
+          attribution_status: "implemented",
+        },
+        { ...onlyFinding, id: "pr-finding", review_source: null },
+      ],
+      finding_count: 3,
+    };
+    expect(localReviewFindings(review)).toHaveLength(2);
+    expect(localReviewFindings(review).map((f) => f.id)).toEqual([onlyFinding.id, "local-2"]);
+  });
+
+  it("finds none when no finding was carried over from a local review", () => {
+    expect(localReviewFindings(pr1)).toEqual([]);
+  });
 });
 
 describe("reviewState: a skip wins, and only true is complete", () => {
@@ -898,6 +954,66 @@ describe("run: what review:wait saves, and what it refuses", () => {
     expect(await h.wait()).toBe(0);
     expect(h.saved()).toMatchObject({ state: "complete", headSha: PR1_HEAD, findings: [{ lines: [33, 33] }] });
     expect(savedReviewProblem(h.saved())).toBeUndefined();
+  });
+
+  it("saves exactly the same data as before this change, for a review with no local_skill findings", async () => {
+    const h = harness([pr1]);
+    expect(await h.wait()).toBe(0);
+    const finding = {
+      id: "db9e3625-ca25-490b-8bdf-a61f58b4f0bf",
+      file: "src/bookings/create.ts",
+      lines: [33, 33],
+      severity: "action_required",
+      category: "Security",
+      title: "Booking replays expose another user's data",
+      description:
+        "`createBooking` looks up a booking using the caller-controlled `idempotencyKey` instead of the `bookingId` saved in the caller’s idempotency record, then returns any match without checking its owner. On a same-body replay, an ordinary key misses and creates another booking with a `201` response, while a key matching another user’s booking ID returns that user’s full booking instead of the caller’s recorded booking.",
+    };
+    expect(h.saved()).toEqual({
+      repo: "Owner/target",
+      pr: 1,
+      headSha: PR1_HEAD,
+      state: "complete",
+      headMovedTo: null,
+      pushSeenAt: "2026-11-13T23:59:00Z",
+      reviewEffort: "standard",
+      reviewRounds: 1,
+      reviewSeenCompleteAt: "2026-11-14T00:00:00.000Z",
+      reviewSeenCompleteNote:
+        "first poll that saw the run finished; at most one poll interval (20 s) after it finished",
+      reviewStartedAt: "2026-11-02T14:27:20.043967Z",
+      recordedAt: "2026-11-14T00:00:00.000Z",
+      ci: "no checks",
+      abTest: { name: null, arm: null },
+      findings: [finding],
+      openFindings: [{ ...finding, commit: PR1_HEAD.slice(0, 7) }],
+    });
+  });
+
+  it("names the findings carried over from a local review, without changing what is saved", async () => {
+    const earlier = "e".repeat(40);
+    const onlyFinding = pr1.findings?.[0] as NonNullable<QodoReview["findings"]>[0];
+    const withLocalFinding: QodoReview = {
+      ...pr1,
+      findings: [
+        ...(pr1.findings ?? []),
+        { ...onlyFinding, id: "local-1", git_sha: earlier, review_source: "local_skill" },
+      ],
+      finding_count: 2,
+    };
+    const h = harness([withLocalFinding]);
+    expect(await h.wait()).toBe(0);
+    // Unreviewed by the PR's own run, so it never joins "findings on <head>", but it is still reported,
+    // and it is still open (the gate, not review:wait, decides whether that makes it count).
+    expect(h.saved().findings).toHaveLength(1);
+    expect(h.saved().openFindings).toHaveLength(2);
+    expect(h.out.join("\n")).toContain("1 finding(s) carried over from local reviews (review_source: local_skill).");
+  });
+
+  it("says nothing about carried-over findings when there are none", async () => {
+    const h = harness([pr1]);
+    expect(await h.wait()).toBe(0);
+    expect(h.out.join("\n")).not.toContain("carried over from local reviews");
   });
 
   it("saves a timeout as review incomplete, never complete, and exits 1", async () => {

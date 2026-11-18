@@ -21,9 +21,14 @@ export interface QodoReview {
     description?: string | null;
     attribution_status?: string | null;
     dismiss_reason?: string | null;
+    /** "local_skill" for a finding Qodo carried onto this review from a local (pre-PR) review, attached on
+     * a commit the PR's own run never reviewed. */
+    review_source?: string | null;
   }[];
   finding_count?: number;
 }
+
+const LOCAL_SKILL = "local_skill";
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
@@ -71,6 +76,8 @@ function findingProblem(finding: unknown, index: number): string | undefined {
  * must carry the fields `findingsFor` reads, in the form it compares them. And findings that are
  * all on commits Qodo reports no run for, with none on `headSha`, mean the commit ids changed form: an
  * error, never an empty review. Findings on earlier commits of the same PR, which Qodo did review, are fine.
+ * A finding carried over from a local review (`review_source: "local_skill"`) sits on a commit the PR's own
+ * run never reviewed by design, so it is left out of that check; `localReviewFindings` reads it back.
  */
 export function findingsShapeProblem(review: QodoReview, headSha?: string): string | undefined {
   if (!Array.isArray(review.findings)) return "Qodo's complete review holds no findings list";
@@ -97,8 +104,13 @@ export function findingsShapeProblem(review: QodoReview, headSha?: string): stri
     ...(review.review_runs ?? []).map((r) => r.commit_sha),
     review.review_session?.commit_sha,
   ]);
-  if (!review.findings.some((f) => f.git_sha === headSha) && review.findings.every((f) => !reviewed.has(f.git_sha))) {
-    return `Qodo's complete review lists ${review.findings.length} findings, none on ${headSha} or on any commit it reports reviewing`;
+  const counted = review.findings.filter((f) => f.review_source !== LOCAL_SKILL);
+  if (
+    counted.length > 0 &&
+    !counted.some((f) => f.git_sha === headSha) &&
+    counted.every((f) => !reviewed.has(f.git_sha))
+  ) {
+    return `Qodo's complete review lists ${counted.length} findings, none on ${headSha} or on any commit it reports reviewing`;
   }
   return undefined;
 }
@@ -171,4 +183,15 @@ export function openFindings(review: QodoReview): (Finding & { commit: string })
   return (review.findings ?? [])
     .filter((f) => !f.dismiss_reason && f.attribution_status !== "implemented")
     .map((f) => ({ ...(findingsFor({ findings: [f] }, f.git_sha)[0] as Finding), commit: f.git_sha.slice(0, 7) }));
+}
+
+/**
+ * Every finding Qodo carried onto this review from a local (pre-PR) review, whatever its dismiss reason or
+ * attribution status: the full set the Result section names, not only the ones still open. Reported, not
+ * acted on: whether one of them counts as open for the gate is the gate's rule, not this module's.
+ */
+export function localReviewFindings(review: QodoReview): Finding[] {
+  return (review.findings ?? [])
+    .filter((f) => f.review_source === LOCAL_SKILL)
+    .map((f) => findingsFor({ findings: [f] }, f.git_sha)[0] as Finding);
 }
