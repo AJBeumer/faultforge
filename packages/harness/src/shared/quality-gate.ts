@@ -70,14 +70,16 @@ const PLAIN: Record<string, string> = {
 
 /**
  * Text from outside, made safe for one line of a report: control characters (line breaks, carriage returns,
- * escape sequences) become spaces, and characters that could mention, link or mark up become "?".
+ * escape sequences) become spaces, and characters that could mention, link or mark up become "?". A
+ * parenthesis is kept: without `[` and `]` it can't form a Markdown link on its own, so it is safe, and
+ * keeping it lets a question or a finding read the way its author wrote it.
  */
 export function plainText(text: string, max: number): string {
   return (
     text
       // Control characters, and the line and paragraph separators, by their Unicode classes.
       .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")
-      .replace(/[`@<>[\]()|]/g, "?")
+      .replace(/[`@<>[\]|]/g, "?")
       .replace(/ +/g, " ")
       .trim()
       .slice(0, max)
