@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { loadFactory, type QualityGate, STRICTEST_GATE } from "./factory-config.ts";
-import { closedFindings, findingLabel, findingTitle, gateAccount, gateReport, gateText } from "./quality-gate.ts";
+import {
+  closedFindings,
+  findingLabel,
+  findingTitle,
+  gateAccount,
+  gateReport,
+  gateText,
+  plainText,
+} from "./quality-gate.ts";
 
 const GATE: QualityGate = {
   fix: ["action_required", "remediation_recommended"],
@@ -222,10 +230,26 @@ describe("text from the review can't forge a report line", () => {
 describe("findingTitle", () => {
   it("keeps a title to one bounded line that can't mention anyone, link or break a table", () => {
     const title = findingTitle({ title: "Ping @owner\n[link](http://x) `code` | <b>" + "x".repeat(300) });
-    expect(title).not.toMatch(/[@`<>[\]()|\n]/);
+    expect(title).not.toMatch(/[@`<>[\]|\n]/);
+    expect(title).toContain("?link?(http://x)");
     expect(title.length).toBeLessThanOrEqual(120);
     expect(findingTitle({})).toBe("(untitled)");
     expect(findingTitle({ title: "   " })).toBe("(untitled)");
+  });
+});
+
+describe("plainText", () => {
+  it("keeps a parenthesis: without [ and ] it can't make a Markdown link on its own", () => {
+    expect(plainText("Fixed (1 green)", 40)).toBe("Fixed (1 green)");
+  });
+
+  it("still can't form a link or a mention", () => {
+    expect(plainText("[x](https://example.com)", 40)).toBe("?x?(https://example.com)");
+    expect(plainText("@someone", 40)).toBe("?someone");
+  });
+
+  it("still replaces every other marked character", () => {
+    expect(plainText("`a` <b> [c] d|e", 40)).toBe("?a? ?b? ?c? d?e");
   });
 });
 

@@ -86,7 +86,8 @@ describe("questionsComment", () => {
     };
     const body = questionsComment([hostile], "ready-for-agent");
     const questionLine = body.split("\n").find((l) => l.startsWith("**1."));
-    expect(questionLine).not.toMatch(/[@<>[\]()`]/);
+    expect(questionLine).not.toMatch(/[@<>[\]`]/);
+    expect(questionLine).toContain("?this?(http://x)");
     // The only line that is a mark is the comment's own: the quoted one is plain text now.
     expect(body.split("\n").filter((l) => l.trimStart().startsWith("<!--"))).toEqual([QUESTIONS_MARKER]);
   });
