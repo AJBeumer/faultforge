@@ -254,6 +254,10 @@ export function parseReplays(text: string | undefined): Map<number, number> {
     if (parts.length !== 2 || !Number.isInteger(replay) || !Number.isInteger(original))
       throw new Error(`--replays: "${pair}" is not <replay>=<pr>`);
     if (map.has(replay as number)) throw new Error(`--replays: replay ${replay} is named twice`);
+    // One replay per original: two would give one run two reviews of the same code, and their candidates
+    // could share a confirmation.
+    const other = [...map].find(([, o]) => o === original);
+    if (other) throw new Error(`--replays: ${other[0]} and ${replay} both replay ${original}`);
     map.set(replay as number, original as number);
   }
   if (!map.size) throw new Error("--replays: give at least one <replay>=<pr> pair");

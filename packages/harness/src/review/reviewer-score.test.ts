@@ -232,6 +232,7 @@ describe("reading saved reviews", () => {
   it("refuses replay pairs that are malformed or repeated", () => {
     expect(() => parseReplays("411=391=1")).toThrow(/not <replay>=<pr>/);
     expect(() => parseReplays("411=391,411=392")).toThrow(/twice/);
+    expect(() => parseReplays("411=391,412=391")).toThrow(/both replay 391/);
   });
 
   it("refuses a confirmation that is not yes or no, or that repeats an earlier one", () => {
