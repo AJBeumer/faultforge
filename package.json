@@ -17,6 +17,7 @@
     "factory:tick": "tsx packages/harness/src/cli/factory-tick-cli.ts",
     "factory:timeline": "tsx packages/harness/src/cli/factory-timeline-cli.ts",
     "factory:diagram": "tsx packages/harness/src/cli/factory-diagram-cli.ts",
+    "reviewer:score": "tsx packages/harness/src/cli/reviewer-score-cli.ts",
     "factory:keep": "tsx packages/harness/src/factory/factory-keep.ts",
     "factory:recover": "tsx packages/harness/src/cli/factory-recover-cli.ts",
     "factory:sandbox": "tsx packages/harness/src/factory/factory-sandbox-setup.ts",
