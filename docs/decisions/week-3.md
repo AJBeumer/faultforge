@@ -141,5 +141,6 @@ The eighth independent re-grade scored Maintainability 6. The owner decided that
 - **Lesson or decision:**
   - **Much of what a first review "misses" is run-to-run variation.** With no change at all, a fresh first review caught 4 to 6 of the 12 defects that the original round 1 had missed. Instructions can't fix that; more than one review of a change might.
   - **The instructions changed what Qodo raised, not what it caught.** More findings, the same catches. Fewer findings alone wouldn't have meant a better review either.
+  - **Exploratory, asked after the result and not pre-registered: two reviews catch more than one.** From the same confirmations, a single review caught 7 to 10 of the 21 defects; two reviews under the same setup together 10 to 12; one usual and one custom review together 12 to 13. A direction, not a rate. It gets its own pre-registered test before the factory relies on it: ticket #430.
   - **`qodo:check` can't see a repository's `.pr_agent.toml`**, in the Wiki or the root. It would have reported v12 throughout v13. Ticket #428.
 - **Remaining risk:** four PRs and two runs per setup: a direction at most. "Fixed" is Qodo's own marking. Qodo has reviewed this code before and may remember it; both setups share that. Whether Qodo loaded the Wiki file can't be checked from its API. The matches were judged by the agent, not the owner.
