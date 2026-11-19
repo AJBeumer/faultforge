@@ -107,6 +107,9 @@ export function scoreRuns(
     if (answers.has(k)) throw new Error(`confirmation ${i + 1} answers the same candidate twice`);
     answers.set(k, c.kind);
   }
+  const current = new Set(found.map((c) => confirmKey(c.entry.id, c.arm, c.run, c.finding.id)));
+  const stale = [...answers.keys()].filter((k) => !current.has(k));
+  if (stale.length) throw new Error(`${stale.length} confirmation(s) answer no candidate, the first: ${stale[0]}`);
   const missing = found.filter((c) => !answers.has(confirmKey(c.entry.id, c.arm, c.run, c.finding.id)));
   if (missing.length) {
     const first = missing[0] as Candidate;
@@ -216,11 +219,17 @@ export function readRuns(dir: string, replays: Map<number, number>): SavedRun[] 
 
 /** The pre-registered method: arms A and B with the same runs, at least two each. */
 export function checkRunSets(runs: SavedRun[]): void {
-  const of = (arm: string) => [...new Set(runs.filter((r) => r.arm === arm).map((r) => r.run))].sort().join(",");
-  const arms = [...new Set(runs.map((r) => r.arm))].sort().join(",");
-  if (arms !== "A,B") throw new Error(`the runs need arms A and B, found: ${arms || "none"}`);
-  if (of("A") !== of("B")) throw new Error(`arms A and B need the same runs: A has ${of("A")}, B has ${of("B")}`);
-  if (of("A").split(",").length < 2) throw new Error("each arm needs at least two runs");
+  const of = (arm: string) => [...new Set(runs.filter((r) => r.arm === arm).map((r) => r.run))].sort();
+  const show = (names: string[]) => names.map((n) => JSON.stringify(n)).join(" ");
+  const arms = [...new Set(runs.map((r) => r.arm))].sort();
+  if (arms.length !== 2 || arms[0] !== "A" || arms[1] !== "B") {
+    throw new Error(`the runs need arms A and B, found: ${show(arms) || "none"}`);
+  }
+  const [a, b] = [of("A"), of("B")];
+  if (a.length !== b.length || a.some((name, i) => name !== b[i])) {
+    throw new Error(`arms A and B need the same runs: A has ${show(a)}, B has ${show(b)}`);
+  }
+  if (a.length < 2) throw new Error("each arm needs at least two runs");
 }
 
 export function readKey(path: string): KeyEntry[] {

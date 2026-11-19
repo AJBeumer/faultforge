@@ -196,6 +196,25 @@ describe("reading saved reviews", () => {
     expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("at least two runs") });
   });
 
+  it("counts runs, not the pieces of a run name with a comma in it", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey(key);
+    writeRuns({ A: ["1,2"], B: ["1,2"] }, [411]);
+    expect(runMain([])).toMatchObject({ code: 2, out: expect.stringContaining("at least two runs") });
+  });
+
+  it("refuses a confirmation that answers no current candidate", () => {
+    dir = tempDir("ff-reviewer-score-");
+    writeKey(key);
+    writeRuns({ A: ["1", "2"], B: ["1", "2"] }, [411]);
+    const stale = { entry: "k-late", arm: "A", run: "1", finding: "gone", kind: "yes" };
+    writeFileSync(join(dir, "confirm.jsonl"), `${JSON.stringify(stale)}\n`);
+    expect(runMain(["--confirm", join(dir, "confirm.jsonl")])).toMatchObject({
+      code: 2,
+      out: expect.stringContaining("answer no candidate"),
+    });
+  });
+
   it("refuses a key line range that is not a range", () => {
     dir = tempDir("ff-reviewer-score-");
     writeKey([{ id: "k", pr: 391, kind: "late", file: "src/a.ts", lines: [12, 10] }]);
