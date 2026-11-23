@@ -1,0 +1,126 @@
+/**
+ * Whether a proof's patch stays inside the lines a finding cites. Pure: reads the patch text only.
+ *
+ * A proof shows that the cited lines cause the failure: the test fails, and passes once only those lines
+ * change. A patch that edits anything else could make the test pass for another reason, so it proves nothing
+ * about the cited lines.
+ */
+
+/** A finding's location: one file, lines `start` to `end` (1-based, inclusive) of the reviewed commit. */
+export interface Cited {
+  file: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Why `patch` reaches outside `cited`, or null when it stays inside. Inside means: one file, the cited one,
+ * modified in place (not created, deleted or renamed); every removed line is a cited line; every added line
+ * sits right after a cited line or right before the first one.
+ */
+export function patchProblem(patch: string, cited: Cited): string | null {
+  const lines = patch.replace(/\r\n/g, "\n").split("\n");
+  const files = lines.filter((l) => l.startsWith("+++ ") || l.startsWith("--- "));
+  if (files.length === 0) return "the patch changes no file";
+  const names = new Set(
+    files.map((l) =>
+      l
+        .slice(4)
+        .replace(/^[ab]\//, "")
+        .trim(),
+    ),
+  );
+  if (names.has("/dev/null")) return "the patch creates or deletes a file";
+  if (names.size !== 1 || !names.has(cited.file)) {
+    return `the patch changes ${[...names].join(", ")}, not only ${cited.file}`;
+  }
+  if (lines.some((l) => /^(rename|copy|new file|deleted file) /.test(l))) return "the patch renames or creates a file";
+
+  let old = 0; // the last line of the old file the walk has passed
+  let inHunk = false;
+  let changes = 0;
+  for (const line of lines) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+    if (header) {
+      // "-0,0" (an empty old file) and "-N,0" (insert after line N) both mean: nothing read yet past line N.
+      old = Number(header[1]) - (header[2] === "0" ? 0 : 1);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || line.startsWith("+++ ") || line.startsWith("--- ")) continue;
+    if (line.startsWith("-")) {
+      old += 1;
+      changes += 1;
+      if (old < cited.start || old > cited.end)
+        return `the patch removes line ${old}, outside ${cited.start}-${cited.end}`;
+    } else if (line.startsWith("+")) {
+      changes += 1;
+      if (old < cited.start - 1 || old > cited.end) {
+        return `the patch adds a line after line ${old}, outside ${cited.start}-${cited.end}`;
+      }
+    } else if (line.startsWith(" ")) {
+      old += 1;
+    } else if (!line.startsWith("\\")) {
+      inHunk = false; // anything else ends the hunk ("\ No newline at end of file" does not)
+    }
+  }
+  return changes === 0 ? "the patch changes no line" : null;
+}
+
+/** A fix as a bundle states it: lines `start` to `end` of the file replaced by `lines` (none to delete them). */
+export interface Replacement {
+  start: number;
+  end: number;
+  lines: string[];
+}
+
+/** The unified diff that makes `fix` to `text` (the file `file`), or null when `fix` names lines `text` lacks. */
+export function replacementPatch(text: string, file: string, fix: Replacement): string | null {
+  const source = text.split(/\r?\n/);
+  const valid = Number.isInteger(fix.start) && Number.isInteger(fix.end) && Array.isArray(fix.lines);
+  if (!valid || fix.start < 1 || fix.end < fix.start || fix.end > source.length) return null;
+  const old = source.slice(fix.start - 1, fix.end);
+  const newStart = fix.lines.length ? fix.start : fix.start - 1;
+  return [
+    `--- a/${file}`,
+    `+++ b/${file}`,
+    `@@ -${fix.start},${old.length} +${newStart},${fix.lines.length} @@`,
+    ...old.map((l) => `-${l}`),
+    ...fix.lines.map((l) => `+${l}`),
+    "",
+  ].join("\n");
+}
+
+/**
+ * `text` with a one-file patch applied, or null when any hunk's context or removed lines don't match `text`
+ * exactly at the hunk's position. Strict on purpose: no fuzz, no search for a nearby match. Line ends of
+ * `text` are kept.
+ */
+export function applyPatch(text: string, patch: string): string | null {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const source = text.split(/\r?\n/);
+  const out: string[] = [];
+  let next = 0; // index into `source` of the first line not yet copied
+  let inHunk = false;
+  for (const line of patch.replace(/\r\n/g, "\n").split("\n")) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+    if (header) {
+      const at = Number(header[1]) - (header[2] === "0" ? 0 : 1);
+      if (at < next) return null;
+      out.push(...source.slice(next, at));
+      next = at;
+      inHunk = true;
+    } else if (!inHunk || line.startsWith("\\")) {
+      // headers before the first hunk, and the no-newline marker
+    } else if (line.startsWith("+")) {
+      out.push(line.slice(1));
+    } else if (line.startsWith("-") || line.startsWith(" ")) {
+      if (source[next] !== line.slice(1)) return null;
+      if (line.startsWith(" ")) out.push(source[next] as string);
+      next += 1;
+    } else {
+      inHunk = false;
+    }
+  }
+  return [...out, ...source.slice(next)].join(eol);
+}
