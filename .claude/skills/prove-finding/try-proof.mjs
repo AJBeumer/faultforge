@@ -19,7 +19,7 @@
 // outside the cited lines.
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const root = process.cwd();
@@ -29,9 +29,18 @@ function fail(message) {
   console.error(`try-proof: ${message}`);
   process.exit(2);
 }
-/** True when `p` is a relative path that stays inside the working folder. */
+/** The real path of `p`'s nearest existing folder or file, so a symlinked folder can't lead outside. */
+function realNearest(p) {
+  let at = resolve(root, p);
+  while (!existsSync(at)) at = dirname(at);
+  return realpathSync.native(at);
+}
+/** True when `p` is a relative path that stays inside the working folder, symlinks resolved. */
 const inside = (p) =>
-  !isAbsolute(p) && !relative(root, resolve(root, p)).startsWith("..") && !p.split(/[\\/]/).includes("..");
+  !isAbsolute(p) &&
+  !p.split(/[\\/]/).includes("..") &&
+  !relative(realpathSync.native(root), realNearest(p)).startsWith("..") &&
+  !isAbsolute(relative(realpathSync.native(root), realNearest(p)));
 
 if (!bundle || !citedFile || !lines)
   fail("usage: try-proof.mjs <bundle folder> <cited file> <start>-<end> [--with-fix]");

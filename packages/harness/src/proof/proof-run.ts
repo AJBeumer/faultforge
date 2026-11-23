@@ -22,7 +22,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { plainEnv } from "../case/gate-trial-builder.ts";
 import { sha256 } from "../shared/provenance.ts";
 import { applyPatch, type Cited, type Replacement, replacementPatch } from "./proof-patch.ts";
@@ -132,6 +132,12 @@ export function testOnCommit(
   try {
     const before = hashes(dir, files);
     mkdirSync(dirname(join(dir, testPath)), { recursive: true });
+    // A symlinked folder in the commit could lead the write outside the export: resolve before writing.
+    const real = relative(realpathSync.native(dir), realpathSync.native(dirname(join(dir, testPath))));
+    if (real.startsWith("..") || isAbsolute(real)) {
+      writeFileSync(join(out, `${name}.log`), `not run: ${testPath} resolves outside the export\n`);
+      return { result: "error" as RunClass, changedFiles: [], dir };
+    }
     writeFileSync(join(dir, testPath), testText);
     const result = runTest(dir, testPath, out, name);
     return { result, changedFiles: changed(dir, before), dir };
