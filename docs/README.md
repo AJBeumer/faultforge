@@ -64,6 +64,7 @@ New to the project's words? The [glossary](glossary.md) defines each one.
 - [review:gate](review-gate.md): whether a commit's files were seen by a finished local review.
 - [Questions before the build](ticket-questions.md): the factory asks the owner about a gap in a ticket before it builds, and `npm run clarify:measure`.
 - [The quality gate](quality-gate.md): which findings must be fixed before a task is done, and `npm run gate:check`.
+- [Qodo's approval label](approval-label.md): the workflow and guard behind "Qodo approved", and `npm run approval:check`.
 - [The factory, drawn from its own data](factory-diagram.md): every gate from ticket to `main`, the approval label and the route to a person included, with how often each one passed or stopped a run. Written by `npm run factory:diagram`.
 
 ## Rules for coding agents

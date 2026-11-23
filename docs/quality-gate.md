@@ -15,6 +15,8 @@ It is data, in the `gate` section of [`factory.json`](../factory.json):
 }
 ```
 
+Qodo applies the same threshold as an approval workflow that labels a pull request; see [Qodo's approval label](approval-label.md).
+
 Qodo's API labels each finding with an `action_level`. Its review comments show the same three
 levels as High, Medium and Low.
 
