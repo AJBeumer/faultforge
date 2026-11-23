@@ -35,8 +35,12 @@ describe("climbProblem", () => {
     expect(climbProblem(at, 'import "../../../../vitest.config.ts";')).toBeNull();
   });
   it("refuses one that climbs above it, with either slash", () => {
-    expect(climbProblem(at, 'readFileSync("../../../../../secret")')).toMatch(/5 folders up/);
+    expect(climbProblem(at, 'readFileSync("../../../../../secret")')).toMatch(/above the repository/);
     expect(climbProblem("a.proof.test.ts", 'import "..\\\\x.ts";')).toMatch(/above the repository/);
+  });
+  it("adds up separate climbs, as the path resolves", () => {
+    expect(climbProblem("src/a/t.proof.test.ts", 'readFileSync("../../x/../../secret")')).toMatch(/\.\.\/secret/);
+    expect(climbProblem("src/a/t.proof.test.ts", 'import "../b/../c.ts";')).toBeNull();
   });
 });
 

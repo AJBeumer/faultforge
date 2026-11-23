@@ -142,8 +142,17 @@ export interface Decision {
  */
 export function climbProblem(testPath: string, testText: string): string | null {
   const depth = testPath.replace(/\\/g, "/").split("/").length - 1;
-  const deepest = Math.max(0, ...[...testText.matchAll(/(?:\.\.[\\/])+/g)].map((m) => m[0].length / 3));
-  return deepest > depth ? `a relative path climbs ${deepest} folders up, above the repository (${depth} deep)` : null;
+  // Every path-like token with a `..` in it, walked segment by segment from the test's folder, so separate
+  // climbs (`../../x/../../y`) add up as they would when the path resolves.
+  for (const [token] of testText.matchAll(/[^\s"'`()]*\.\.[\\/][^\s"'`()]*/g)) {
+    let level = depth;
+    for (const segment of token.split(/[\\/]/)) {
+      if (segment === "..") level -= 1;
+      else if (segment !== "." && segment !== "") level += 1;
+      if (level < 0) return `the relative path ${token} climbs above the repository (the test is ${depth} deep)`;
+    }
+  }
+  return null;
 }
 
 /** The problems that need no run: where the test goes, what it reaches for, and what the patch touches. */
