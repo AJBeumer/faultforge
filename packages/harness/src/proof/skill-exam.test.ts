@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { examDecision, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
+import {
+  examDecision,
+  examOptions,
+  insideFolder,
+  loadedFirst,
+  pairResults,
+  readTranscript,
+  sessionDeny,
+} from "./skill-exam.ts";
 
 const line = (o: unknown) => JSON.stringify(o);
 const transcript = [
@@ -31,6 +39,58 @@ describe("readTranscript", () => {
     const late = transcript.replace('"name":"Skill","input":{"skill":"prove-finding"}', '"name":"Read","input":{}');
     expect(loadedFirst(readTranscript(late, "prove-finding"), "prove-finding")).toBe(false);
     expect(loadedFirst(readTranscript("", "prove-finding"), "prove-finding")).toBe(false);
+  });
+});
+
+describe("sessionDeny", () => {
+  const reads = (rules: string[]) => rules.filter((r) => r.startsWith("Read("));
+  it("denies the lab's parent and private storage, however --repo is set", () => {
+    const own = sessionDeny("D:/P/lab", "D:/P/lab/private", "D:/P/lab");
+    expect(reads(own.rules)).toContain("Read(//d/P/**)");
+    expect(reads(own.rules)).toContain("Read(//d/P/lab/private/**)");
+    const elsewhere = sessionDeny("D:/P/lab", "D:/P/lab/private", "E:/work/target");
+    expect(reads(elsewhere.rules)).toContain("Read(//d/P/**)"); // the case records stay out of reach
+  });
+  it("denies another repository itself, not its parent, so a temp export beside it stays open", () => {
+    const { rules, folders } = sessionDeny("/home/u/lab", "/home/u/lab/private", "/tmp/target");
+    expect(reads(rules)).toContain("Read(//tmp/target/**)");
+    expect(reads(rules)).not.toContain("Read(//tmp/**)");
+    expect(folders.some((f) => insideFolder("/tmp/proof-abc", f))).toBe(false);
+    expect(folders.some((f) => insideFolder("/home/u/scratch/proof-abc", f))).toBe(true);
+  });
+});
+
+describe("insideFolder", () => {
+  it("compares as text, any case and either slash, never by prefix alone", () => {
+    expect(insideFolder("C:\\T\\proof-1", "c:/t")).toBe(true);
+    expect(insideFolder("C:/T", "C:/T/")).toBe(true);
+    expect(insideFolder("C:/Temp/proof-1", "C:/T")).toBe(false);
+  });
+});
+
+describe("examOptions", () => {
+  const flag = (argv: string[], name: string) => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  it("reads the key's repository from --repo, and this checkout without it", () => {
+    expect(examOptions(["--key", "k.json", "--out", "o", "--repo", "../target"], flag)?.repo).toBe("../target");
+    expect(examOptions(["--key", "k.json", "--out", "o"], flag)).toEqual({
+      key: "k.json",
+      out: "o",
+      repo: ".",
+      budget: 5,
+      rescore: false,
+    });
+  });
+  it("reads --only, --budget and --rescore", () => {
+    const options = examOptions(["--key", "k", "--out", "o", "--only", "t1,t2", "--budget", "3", "--rescore"], flag);
+    expect(options).toMatchObject({ only: ["t1", "t2"], budget: 3, rescore: true });
+  });
+  it("refuses a missing key or output folder, or a budget that isn't a positive number", () => {
+    expect(examOptions(["--out", "o"], flag)).toBeNull();
+    expect(examOptions(["--key", "k"], flag)).toBeNull();
+    expect(examOptions(["--key", "k", "--out", "o", "--budget", "lots"], flag)).toBeNull();
   });
 });
 
