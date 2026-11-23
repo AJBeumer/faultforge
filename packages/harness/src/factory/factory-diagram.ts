@@ -15,12 +15,20 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type FactoryConfig, gateOf, loadFactory, type QualityGate } from "../shared/factory-config.ts";
+import {
+  type FactoryConfig,
+  gateOf,
+  loadFactory,
+  type QualityGate,
+  type RepoConfig,
+} from "../shared/factory-config.ts";
 import { parseJsonLines } from "../shared/jsonl.ts";
 import { evidenceDir, ROOT } from "../shared/paths.ts";
 import type { RunEvent } from "./factory-timeline.ts";
 
 const LAB = "faultforge";
+
+type Approval = NonNullable<RepoConfig["approval"]>;
 
 export interface RunRecord {
   id: string;
@@ -174,7 +182,27 @@ export function runStats(runs: RunRecord[]): Stats {
 /** A Mermaid label: quotes and pipes would end it early. */
 const label = (text: string) => `"${text.replace(/"/g, "#quot;").replace(/\|/g, "#124;")}"`;
 
-export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
+/** The approval step: Qodo's workflow labels, a guard sends the PR to a person, `approval:check` checks the label. */
+function approvalSteps(approval: Approval | undefined): string[] {
+  if (!approval) return ["  D --> M[(main)]"];
+  const guards = approval.guards.join(", ") || "none";
+  return [
+    `  D --> QW{${label(`Qodo's approval workflow, after each review<br/>nothing above Low, no guarded path<br/>guards: ${guards}`)}}`,
+    `  QW -- ${label("a guarded path")} --> HP{{${label("Held for a person<br/>no label, even with a clean review")}}}`,
+    `  QW -- ${label("findings above Low")} --> NL[${label("No label")}]`,
+    `  QW -- clean --> QL[${label(`Label: ${approval.label}<br/>added by ${approval.actor}`)}]`,
+    `  QL --> AC{${label("approval:check<br/>added by Qodo's app after the head's review began,<br/>gate met, every CI check finished, no guarded path")}}`,
+    // disagree only happens with a label on the PR: its own step, never the no-label one.
+    `  AC -- disagree --> LD{{${label("Label not backed by our checks<br/>the owner looks before merging")}}}`,
+    `  AC -- approved-verified --> OM`,
+    "  NL --> OM",
+    "  HP --> OM",
+    "  LD --> OM",
+    `  OM{{${label("The owner checks the criteria and merges<br/>a label is not an approval vote")}}} --> M[(main)]`,
+  ];
+}
+
+export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[], approval?: Approval): string {
   const stoppedAt = (where: Stop["where"]) => s.stops.filter((x) => x.where === where).length;
   return [
     "flowchart TD",
@@ -214,8 +242,8 @@ export function mermaid(s: Stats, gate: QualityGate, ciJobs: string[]): string {
     `  AU -- ${label(`ready: ${s.verified}`)} --> V{${label("Runner's verify, from a trusted main<br/>PR open at the pushed head, required checks green,<br/>review record of the head, gate met, revert:check")}}`,
     `  V -- ${label(`problems: ${stoppedAt("verify")}`)} --> H`,
     `  B -. ${label(`runner error: ${stoppedAt("error")}`)} .-> H`,
-    `  V -- ${label(`ok: ${s.done}`)} --> D{{${label("agent-done<br/>the owner checks the criteria and merges")}}}`,
-    "  D --> M[(main)]",
+    `  V -- ${label(`ok: ${s.done}`)} --> D{{${label(approval ? "agent-done" : "agent-done<br/>the owner checks the criteria and merges")}}}`,
+    ...approvalSteps(approval),
     "  classDef planned stroke-dasharray: 5 5",
   ].join("\n");
 }
@@ -239,6 +267,7 @@ const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").s
 export function diagramDoc(s: Stats, config: FactoryConfig, skipped: Skipped[]): string {
   const gate = gateOf(config);
   const ciJobs = config.repos[LAB]?.ciJobs ?? [];
+  const approval = config.repos[LAB]?.approval;
   const range = s.first && s.last ? `${s.first.slice(0, 10)} to ${s.last.slice(0, 10)}` : "no dates";
   const recent = s.stops.slice(-STOPS_LISTED);
   const byGate = (Object.keys(WHERE) as Stop["where"][])
@@ -254,7 +283,7 @@ export function diagramDoc(s: Stats, config: FactoryConfig, skipped: Skipped[]):
       : "No run record was skipped.",
     "",
     "```mermaid",
-    mermaid(s, gate, ciJobs),
+    mermaid(s, gate, ciJobs, approval),
     "```",
     "",
     "## The gates",
@@ -272,6 +301,12 @@ export function diagramDoc(s: Stats, config: FactoryConfig, skipped: Skipped[]):
     "| `revert:check` | The new tests fail without the change | The tests run on the base | Back to the build |",
     "| Audit | `main` didn't move, nothing was posted, the ticket didn't change | GitHub's history for the run's window | `agent-needs-help` |",
     "| Verify | All of the above, rechecked by the runner from a trusted `main` | GitHub and the saved records | `agent-needs-help` |",
+    ...(approval
+      ? [
+          `| Approval label | Qodo's workflow: nothing above Low and no guarded path (${approval.guards.map((g) => `\`${g}\``).join(", ") || "none"}); then \`${approval.label}\` | Qodo's review of the head | No label; a guarded path goes to a person |`,
+          `| \`approval:check\` | The label was added by \`${approval.actor}\` after the head's review began; gate met; every CI check finished | The PR's timeline, the saved review, the checks | \`disagree\`: the owner looks before merging |`,
+        ]
+      : []),
     "| Merge | The owner's decision | The PR and its evidence | The owner sends it back |",
     "",
     "## Where runs stopped",
