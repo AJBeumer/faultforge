@@ -35,6 +35,7 @@
       ],
       "approval": {
         "label": "Qodo approved",
+        "actor": "qodo-code-review[bot]",
         "guards": [".claude/hooks/**"]
       },
       "start": null,

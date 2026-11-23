@@ -35,8 +35,35 @@ export function blockingLevels(levels: (string | null | undefined)[], flag: stri
   return levels.map((level) => level ?? "none").filter((level) => !flag.includes(level));
 }
 
+/** A label event from a pull request's timeline. */
+export interface LabelEvent {
+  event?: string;
+  label?: { name?: string };
+  actor?: { login?: string } | null;
+  created_at?: string;
+}
+
+/**
+ * Why the label on the PR can't count as Qodo's approval of this head, or null when it can: its last add must
+ * be by Qodo's app (`actor`) and no earlier than Qodo's review of the head started. A label a person added, or
+ * one left on from an older head, is not the workflow's verdict on this commit.
+ */
+export function labelProblem(events: LabelEvent[], actor: string, reviewStartedAt: unknown): string | null {
+  const added = events.filter((e) => e.event === "labeled").at(-1);
+  if (!added) return "the label is on the PR, but its history shows no add";
+  const by = added.actor?.login ?? "unknown";
+  if (by !== actor) return `the label was added by ${by}, not by ${actor}`;
+  const at = Date.parse(added.created_at ?? "");
+  const started = typeof reviewStartedAt === "string" ? Date.parse(reviewStartedAt) : Number.NaN;
+  if (Number.isNaN(at) || Number.isNaN(started)) return "the label's time or the review's start time is unknown";
+  if (at < started) return "the label was added before Qodo began reviewing this head: it belongs to an older head";
+  return null;
+}
+
 export interface ApprovalFacts {
   labelled: boolean;
+  /** Why the label can't count as Qodo's approval of this head (`labelProblem`); null when it can. */
+  labelProblem: string | null;
   /** Changed files that match a guard. */
   guarded: string[];
   /** Qodo's review of the head finished, and every open finding is one the gate only flags (Low). */
@@ -58,6 +85,9 @@ export function judge(facts: ApprovalFacts): ApprovalJudgement {
   if (facts.guarded.length) blockers.push(`it touches a guarded path: ${facts.guarded.join(", ")}`);
   if (!facts.reviewClean) blockers.push("Qodo's review of the head is not complete, or has an open finding above Low");
   if (facts.labelled) {
+    if (facts.labelProblem) {
+      return { verdict: "disagree", reasons: ["the label is not Qodo's approval of this head", facts.labelProblem] };
+    }
     if (blockers.length)
       return { verdict: "disagree", reasons: ["the label is on a head the workflow should not approve", ...blockers] };
     const unverified: string[] = [];

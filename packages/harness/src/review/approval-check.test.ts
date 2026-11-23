@@ -1,13 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { loadFactory } from "../shared/factory-config.ts";
-import { type ApprovalCheckDeps, type Check, ciGreen, type LabelEvent, type PrView, run } from "./approval-check.ts";
+import {
+  type ApprovalCheckDeps,
+  type Check,
+  ciGreen,
+  type LabelEvent,
+  MAX_LISTED_FILES,
+  type PrView,
+  run,
+} from "./approval-check.ts";
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
 const repo = loadFactory().repos.faultforge;
 const JOBS = repo?.ciJobs ?? [];
 const LABEL = repo?.approval?.label ?? "";
+const ACTOR = repo?.approval?.actor ?? "";
+const STARTED = "2026-11-23T12:00:00Z";
 const green: Check[] = JOBS.map((name) => ({ name, status: "COMPLETED", conclusion: "SUCCESS" }));
+const added = (login: string, at: string): LabelEvent => ({
+  event: "labeled",
+  label: { name: LABEL },
+  actor: { login },
+  created_at: at,
+});
 
 function harness(opts: {
   labelled?: boolean;
@@ -21,14 +37,16 @@ function harness(opts: {
   const view: PrView = {
     headRefOid: HEAD,
     labels: opts.labelled ? [{ name: LABEL }] : [],
-    files: (opts.files ?? ["packages/harness/src/x.ts"]).map((path) => ({ path })),
     statusCheckRollup: opts.checks ?? green,
   };
   const review =
-    opts.review === undefined ? { headSha: HEAD, state: "complete", openFindings: [], reviewRounds: 1 } : opts.review;
+    opts.review === undefined
+      ? { headSha: HEAD, state: "complete", openFindings: [], reviewRounds: 1, reviewStartedAt: STARTED }
+      : opts.review;
   const deps: ApprovalCheckDeps = {
     view: () => view,
-    timeline: () => opts.events ?? [],
+    files: () => opts.files ?? ["packages/harness/src/x.ts"],
+    timeline: () => opts.events ?? (opts.labelled ? [added(ACTOR, "2026-11-23T12:05:00Z")] : []),
     read: () => (review === null ? undefined : JSON.stringify(review)),
     out: (l) => out.push(l),
     error: (l) => err.push(l),
@@ -37,13 +55,10 @@ function harness(opts: {
 }
 
 describe("approval:check", () => {
-  it("verifies a label that the saved review, the gate and CI back", () => {
-    const h = harness({
-      labelled: true,
-      events: [{ event: "labeled", label: { name: LABEL }, actor: { login: "qodo" }, created_at: "t1" }],
-    });
+  it("verifies a label Qodo's app added after reviewing the head, which the review, the gate and CI back", () => {
+    const h = harness({ labelled: true });
     expect(run(["faultforge", "5"], h.deps)).toBe(0);
-    expect(h.out.join("\n")).toMatch(/t1 {2}labeled by qodo/);
+    expect(h.out.join("\n")).toMatch(new RegExp(`12:05:00Z {2}labeled by ${ACTOR.replace(/[[\]]/g, "\\$&")}`));
     expect(h.out.join("\n")).toMatch(/verdict: approved-verified/);
   });
 
@@ -53,7 +68,38 @@ describe("approval:check", () => {
   });
 
   it("calls a label on a skipped review a disagreement", () => {
-    const h = harness({ labelled: true, review: { headSha: HEAD, state: "skipped by Qodo", openFindings: [] } });
+    const h = harness({
+      labelled: true,
+      review: { headSha: HEAD, state: "skipped by Qodo", openFindings: [], reviewStartedAt: STARTED },
+    });
+    expect(run(["faultforge", "5"], h.deps)).toBe(3);
+  });
+
+  // Proof test for the review finding "Manually added labels appear verified" (certificate issued).
+  it("does not verify a label a person added by hand", () => {
+    const h = harness({ labelled: true, events: [added("some-person", "2026-11-23T20:00:00Z")] });
+    expect(run(["faultforge", "5"], h.deps)).toBe(3);
+    expect(h.out.join("\n")).toMatch(/added by some-person/);
+  });
+
+  // Proof test for the review finding "An old-head label can appear current" (certificate issued).
+  it("does not verify a label added before Qodo began reviewing the current head", () => {
+    const h = harness({ labelled: true, events: [added(ACTOR, "2026-11-23T10:00:00Z")] });
+    expect(run(["faultforge", "5"], h.deps)).toBe(3);
+    expect(h.out.join("\n")).toMatch(/belongs to an older head/);
+  });
+
+  // Proof test for the review finding "Large pull requests can bypass the guard" (certificate issued).
+  it("refuses a pull request with more files than GitHub lists, since a guarded one may be missing", () => {
+    const files = Array.from({ length: MAX_LISTED_FILES }, (_, i) => `src/f${i}.ts`);
+    const h = harness({ labelled: true, files });
+    expect(run(["faultforge", "5"], h.deps)).toBe(2);
+    expect(run(["faultforge", "5", "--predict"], h.deps)).toBe(2);
+  });
+
+  it("reads past 100 files, so a guarded file further down still holds the PR", () => {
+    const files = [...Array.from({ length: 150 }, (_, i) => `src/f${i}.ts`), ".claude/hooks/a.ts"];
+    const h = harness({ labelled: true, files });
     expect(run(["faultforge", "5"], h.deps)).toBe(3);
   });
 
@@ -101,5 +147,13 @@ describe("CI green", () => {
     expect(ciGreen([...green, { name: "other", status: "COMPLETED", conclusion: "FAILURE" }], JOBS)).toBe(false);
     expect(ciGreen([{ ...green[0], status: "IN_PROGRESS", conclusion: "" }, ...green.slice(1)], JOBS)).toBe(false);
     expect(ciGreen(green, [])).toBe(false);
+  });
+
+  // Proof test for the review finding "Skipped required jobs pass approval" (certificate issued).
+  it("does not count a required job that was skipped or neutral, while an optional one may be", () => {
+    const [first, ...rest] = green;
+    expect(ciGreen([{ ...first, conclusion: "SKIPPED" }, ...rest], JOBS)).toBe(false);
+    expect(ciGreen([{ ...first, conclusion: "NEUTRAL" }, ...rest], JOBS)).toBe(false);
+    expect(ciGreen([...green, { name: "optional", status: "COMPLETED", conclusion: "SKIPPED" }], JOBS)).toBe(true);
   });
 });

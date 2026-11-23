@@ -104,12 +104,13 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "approval": {
-          "description": "A copy of the repo's Qodo approval workflow, which no API can read (approval:check). label: the name of the label the workflow adds. guards: the approval guards' glob patterns on repo-relative paths; a PR touching one waits for a person.",
+          "description": "A copy of the repo's Qodo approval workflow, which no API can read (approval:check). label: the name of the label the workflow adds. actor: the GitHub login that adds it (Qodo's app); a label anyone else added doesn't count. guards: the approval guards' glob patterns on repo-relative paths; a PR touching one waits for a person.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["label", "guards"],
+          "required": ["label", "actor", "guards"],
           "properties": {
             "label": { "type": "string", "minLength": 1 },
+            "actor": { "type": "string", "minLength": 1 },
             "guards": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
           }
         },
