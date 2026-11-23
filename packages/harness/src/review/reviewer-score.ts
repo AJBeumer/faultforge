@@ -38,6 +38,8 @@ export interface RunFinding {
   file: string | null;
   lines: [number, number] | null;
   title: string | null;
+  /** Qodo's label (`action_level`), when the review gives one. */
+  level?: string;
 }
 
 /** One saved review: arm, run and replay PR. */
@@ -187,6 +189,7 @@ function toFinding(raw: unknown, where: string): RunFinding {
     file: typeof f.file_path === "string" ? f.file_path : null,
     lines,
     title: typeof f.title === "string" ? f.title : null,
+    level: typeof f.action_level === "string" ? f.action_level : undefined,
   };
 }
 
