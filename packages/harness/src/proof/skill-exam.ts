@@ -6,6 +6,7 @@
  * the commit that fixed it, it isn't. Both sides run blind, in fresh sessions. Only the verifier's
  * certificates are scored, never what the agent says.
  */
+import { builderDeny } from "../case/gate-trial-builder.ts";
 
 /** The first tool call in a `stream-json` transcript, and what the session listed and spent. */
 export interface TranscriptFacts {
@@ -72,6 +73,32 @@ export interface PairResult {
   fixedCertified: boolean;
   /** "green" means the proof test agrees with the real fix; unset when there was no test to run. */
   reviewedTestOnFixed?: string;
+}
+
+/** A path as text to compare: forward slashes, lower case, no trailing slash. */
+const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/**
+ * What a session's file tools are denied, anchored on the lab checkout, never on `--repo`: the lab's parent folder
+ * (all its checkouts, the case records and templates) and private storage, as for gate trials (`builderDeny`); and,
+ * when the key's commits are in another repository, that checkout itself, not its parent, so an export in a
+ * neighbouring temp folder stays open. `folders` lists what is denied, so a caller can refuse an export inside one.
+ */
+export function sessionDeny(lab: string, privateStorage: string, repo: string): { rules: string[]; folders: string[] } {
+  const other = norm(repo) !== norm(lab);
+  const rules = [...builderDeny(lab, privateStorage), ...(other ? builderDeny(lab, repo) : [])];
+  const labParent = lab
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .replace(/\/[^/]*$/, "");
+  return { rules: [...new Set(rules)], folders: [labParent, privateStorage, ...(other ? [repo] : [])] };
+}
+
+/** True when `path` is `folder` or inside it, compared as text. */
+export function insideFolder(path: string, folder: string): boolean {
+  const p = norm(path);
+  const f = norm(folder);
+  return p === f || p.startsWith(`${f}/`);
 }
 
 /** `skill:exam`'s options. `repo` holds the key's commits: this checkout unless `--repo` names another. */

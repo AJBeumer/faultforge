@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { examDecision, examOptions, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
+import {
+  examDecision,
+  examOptions,
+  insideFolder,
+  loadedFirst,
+  pairResults,
+  readTranscript,
+  sessionDeny,
+} from "./skill-exam.ts";
 
 const line = (o: unknown) => JSON.stringify(o);
 const transcript = [
@@ -31,6 +39,32 @@ describe("readTranscript", () => {
     const late = transcript.replace('"name":"Skill","input":{"skill":"prove-finding"}', '"name":"Read","input":{}');
     expect(loadedFirst(readTranscript(late, "prove-finding"), "prove-finding")).toBe(false);
     expect(loadedFirst(readTranscript("", "prove-finding"), "prove-finding")).toBe(false);
+  });
+});
+
+describe("sessionDeny", () => {
+  const reads = (rules: string[]) => rules.filter((r) => r.startsWith("Read("));
+  it("denies the lab's parent and private storage, however --repo is set", () => {
+    const own = sessionDeny("D:/P/lab", "D:/P/lab/private", "D:/P/lab");
+    expect(reads(own.rules)).toContain("Read(//d/P/**)");
+    expect(reads(own.rules)).toContain("Read(//d/P/lab/private/**)");
+    const elsewhere = sessionDeny("D:/P/lab", "D:/P/lab/private", "E:/work/target");
+    expect(reads(elsewhere.rules)).toContain("Read(//d/P/**)"); // the case records stay out of reach
+  });
+  it("denies another repository itself, not its parent, so a temp export beside it stays open", () => {
+    const { rules, folders } = sessionDeny("/home/u/lab", "/home/u/lab/private", "/tmp/target");
+    expect(reads(rules)).toContain("Read(//tmp/target/**)");
+    expect(reads(rules)).not.toContain("Read(//tmp/**)");
+    expect(folders.some((f) => insideFolder("/tmp/proof-abc", f))).toBe(false);
+    expect(folders.some((f) => insideFolder("/home/u/scratch/proof-abc", f))).toBe(true);
+  });
+});
+
+describe("insideFolder", () => {
+  it("compares as text, any case and either slash, never by prefix alone", () => {
+    expect(insideFolder("C:\\T\\proof-1", "c:/t")).toBe(true);
+    expect(insideFolder("C:/T", "C:/T/")).toBe(true);
+    expect(insideFolder("C:/Temp/proof-1", "C:/T")).toBe(false);
   });
 });
 

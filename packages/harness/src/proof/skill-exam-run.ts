@@ -25,13 +25,21 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { builderDeny, plainEnv } from "../case/gate-trial-builder.ts";
+import { plainEnv } from "../case/gate-trial-builder.ts";
 import { claudeBinary } from "../factory/factory-agent.ts";
-import { privateDir } from "../shared/paths.ts";
+import { privateDir, ROOT } from "../shared/paths.ts";
 import { sha256 } from "../shared/provenance.ts";
 import { commitFiles, exportCommit, flag, SetupError, testOnCommit, verifyBundle } from "./proof-run.ts";
 import { testPathProblem } from "./proof-verify.ts";
-import { examDecision, examOptions, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
+import {
+  examDecision,
+  examOptions,
+  insideFolder,
+  loadedFirst,
+  pairResults,
+  readTranscript,
+  sessionDeny,
+} from "./skill-exam.ts";
 
 const SKILL = "prove-finding";
 const SESSION_TIMEOUT_MS = 30 * 60_000;
@@ -73,8 +81,13 @@ export function trialPrompt(loc: Location, title: string, description: string): 
 }
 
 function runSession(dir: string, prompt: string, tdir: string, budget: number, repo: string): void {
+  const deny = sessionDeny(ROOT, privateDir(), repo);
+  // A denied folder holding the export would leave the session unable to read its own code: stop, don't run it.
+  const blocked = deny.folders.find((f) => insideFolder(dir, f));
+  if (blocked)
+    throw new SetupError(`the export ${dir} lies inside ${blocked}, which the session's file tools are denied`);
   const settings = join(tdir, "session-settings.json");
-  writeFileSync(settings, JSON.stringify({ permissions: { deny: builderDeny(repo, privateDir()) } }, null, 2));
+  writeFileSync(settings, JSON.stringify({ permissions: { deny: deny.rules } }, null, 2));
   const mcp = join(tdir, "session-mcp.json");
   writeFileSync(mcp, JSON.stringify({ mcpServers: {} }));
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk"];
@@ -108,8 +121,9 @@ function runTrial(repo: string, key: Key, trial: Key["trials"][number], out: str
     const dir = exportCommit(repo, loc.commit);
     try {
       for (const f of ["settings.json", "settings.local.json"]) rmSync(join(dir, ".claude", f), { force: true });
-      // The skill comes from this checkout, whatever repository the key's commits are in.
-      const skill = join(resolve("."), ".claude", "skills", SKILL);
+      // The skill comes from the lab checkout running this code, whatever repository holds the key's commits and
+      // whichever folder the command was started from.
+      const skill = join(ROOT, ".claude", "skills", SKILL);
       cpSync(skill, join(dir, ".claude", "skills", SKILL), { recursive: true });
       runSession(dir, trialPrompt(loc, pair.title, pair.description), tdir, budget, repo);
       if (existsSync(join(dir, "proof-bundle"))) cpSync(join(dir, "proof-bundle"), bundle, { recursive: true });
