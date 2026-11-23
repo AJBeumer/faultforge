@@ -48,6 +48,8 @@ export interface SavedRun {
   run: string;
   replayPr: number;
   findings: RunFinding[];
+  /** Qodo's `review_complete` for the session. A session can say `completed` while this stays false. */
+  reviewComplete?: boolean;
 }
 
 export interface Confirmation {
@@ -156,7 +158,7 @@ export function decide(scores: RunScore[]): Decision {
 
 export interface ParsedReview {
   findings?: unknown;
-  review_session?: { run_id?: unknown; status?: unknown } | null;
+  review_session?: { run_id?: unknown; status?: unknown; review_complete?: unknown } | null;
 }
 
 /**
@@ -213,7 +215,13 @@ export function readRuns(dir: string, replays: Map<number, number>): SavedRun[] 
           (f) => (f as { review_run_id?: unknown })?.review_run_id !== session.run_id,
         );
         if (foreign.length) throw new Error(`${file}: ${foreign.length} finding(s) come from another review`);
-        runs.push({ arm, run, replayPr, findings: review.findings.map((f) => toFinding(f, file)) });
+        runs.push({
+          arm,
+          run,
+          replayPr,
+          findings: review.findings.map((f) => toFinding(f, file)),
+          reviewComplete: session.review_complete === true,
+        });
       }
     }
   }
