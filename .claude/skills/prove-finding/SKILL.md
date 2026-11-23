@@ -24,7 +24,7 @@ The working folder is a throwaway export of exactly the commit that was reviewed
 
 Do them in order. Write down what you did at each step; it goes into `notes.md`.
 
-1. **Check the inputs.** Open the cited file and read the cited lines. If the file is missing or shorter than the end line, stop and ask. Copy the cited lines, exactly as they are, into `notes.md`.
+1. **Check the inputs, with the file tools.** Use Read and Glob for every check: open the cited file and read the cited lines, and confirm `node_modules/vitest` and the helper exist. Don't use the shell for this: **the only shell command this skill runs is the helper** in steps 5 and 6, and other commands may be refused. If the file is missing or shorter than the end line, stop and ask. Copy the cited lines, exactly as they are, into `notes.md`.
 
 2. **State the claim as a test case.** In one or two sentences in `notes.md`: which function or entry point, which input, what the code does now according to the finding, and what it should do instead. If the finding is not about behaviour a test can observe (a comment, naming, style, documentation, a CI workflow, performance without a stated limit), skip to step 7 with `inconclusive` and say why.
 
@@ -50,7 +50,7 @@ Do them in order. Write down what you did at each step; it goes into `notes.md`.
    - **Still red with the fix, or the fix needs a line outside the cited range:** the cited lines are not shown to be the cause. The verdict is `inconclusive`; say in `notes.md` which other lines the fix would need. Do not widen the range.
    - Never change the test to make it pass with your fix. If the test was wrong, go back to step 4 and run step 5 again.
 
-   **Every verdict except `inconclusive` rests on runs you saw.** `supported` needs the helper's RED then GREEN; `disproven` needs its GREEN. If a command or a file write is refused, don't reason your way to a verdict from reading the code: the verdict is `inconclusive`, and `notes.md` says what was refused.
+   **Every verdict except `inconclusive` rests on runs you saw.** `supported` needs the helper's RED then GREEN; `disproven` needs its GREEN. A refused command other than the helper says nothing about the helper: run the helper exactly as written above. Only if the helper itself is refused, don't reason your way to a verdict from reading the code: the verdict is `inconclusive`, and `notes.md` says what was refused.
 
 7. **Write the bundle** to the bundle folder:
    - `proof.json`:

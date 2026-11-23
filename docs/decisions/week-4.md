@@ -71,3 +71,41 @@ The owner asked to include Ponytail (github.com/DietrichGebert/ponytail, MIT), a
   - The two runs split on one borderline finding.
   - The network stays open to agent-written tests (#27).
   - Native addons are allowed in the sandbox: only the ones `npm ci` installs from the lockfile.
+
+## 23 November: prove-finding at scale, and on a planted bug
+
+*After Day 13, same day. Qodo configuration v12. The target repository was only read, into temporary exports.*
+
+- **FF-0001, proven** ([PR #446](https://github.com/AJBeumer/faultforge/pull/446), ticket #445).
+  - Qodo's finding on our first adjudicated case ("Booking replays expose another user's data", `src/bookings/create.ts` line 33) ran through `prove-finding` in two fresh, blind sessions. The key's hash was committed first.
+  - **The planted commit got a certificate; its base commit got none.** The session on the base answered `disproven`.
+  - The fix the session wrote for line 33 is byte for byte the line the template replaced. It worked from Qodo's text alone: no case record, no template, no base commit.
+  - This meets #28's criterion "Supports FF-0001's finding with a failing test".
+- **Skill exam v2: 12 pairs from 7 lab PRs** ([PR #447](https://github.com/AJBeumer/faultforge/pull/447), ticket #444). Selection and decision rules were fixed in advance. One amendment came before any session ran: at most two findings per PR, because the rule as written drew 8 of 12 from one PR.
+
+  | | Run 1 | Run 2 (two refinements from run 1) |
+  |---|---|---|
+  | Real findings certified | 6 of 12 (95% interval 25% to 75%) | 6 of 12 |
+  | False proofs on fixed code | 0 of 12 (95% interval 0% to 24%) | 0 of 12 |
+  | Fixed side answered `disproven` | 6 of 12 | 10 of 12 |
+  | Sessions with a refused shell command | 20 of 24 | 0 of 24 |
+  | Decision ("works" needed 8 of 12) | inconclusive | inconclusive |
+
+- **What run 1 found, and what changed for run 2:**
+  - **The verifier refused a valid test.** A `../../` import that stays inside the repository was rejected. The climb check now resolves each path from the test's own folder; Qodo's round 1 on PR #447 tightened it further.
+  - **Sessions stalled on the shell.** Most sessions had a compound shell check refused, and 8 stopped before running the helper. The skill now checks inputs with Read and Glob and names the helper as its only shell command.
+  - **One session claimed `supported` without running the helper.** The verifier certified it on its own runs. Run 2 had no such case.
+- **Why real findings went unproven (run 2):**
+  - two are about wording, so no test can observe them;
+  - two need a real process (`git`, `npm`, `gh`), which the sandbox forbids;
+  - two need a fix outside the cited lines.
+
+  In run 1, one of these findings was certified with a fix inside the lines; in run 2, the session found a fix outside them, which is where Qodo's real fix was.
+- **Lesson or decision:**
+  - **At twelve pairs the skill says "no" reliably:** 24 fixed-side sessions, 0 certificates.
+  - **About half of real findings are provable within their cited lines in a sandbox.** The rest are wording, need processes, or need a fix elsewhere. A certificate is strong evidence when it exists; its absence says little.
+  - **The pre-registered rule says inconclusive, twice, and that is the result.**
+- **Remaining risk:**
+  - Lab code only, one model.
+  - Pairs aren't independent across runs.
+  - The network is still open to agent-written tests (#27).
