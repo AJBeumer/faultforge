@@ -9,6 +9,11 @@ describe("replacementPatch", () => {
     expect(patchProblem(patch, { file: "f.ts", start: 2, end: 2 })).toBeNull();
     expect(patchProblem(patch, { file: "f.ts", start: 3, end: 3 })).toMatch(/outside/);
   });
+  it("keeps a new line that starts with ++ inside the hunk, not as a file header", () => {
+    const patch = replacementPatch(text, "f.ts", { start: 2, end: 2, lines: ["++ x", "-- y"] }) as string;
+    expect(patchProblem(patch, { file: "f.ts", start: 2, end: 2 })).toBeNull();
+    expect(applyPatch(text, patch)).toBe("one\n++ x\n-- y\nthree\n");
+  });
   it("deletes lines when the replacement is empty", () => {
     const patch = replacementPatch(text, "f.ts", { start: 2, end: 3, lines: [] }) as string;
     expect(applyPatch(text, patch)).toBe("one\n");
@@ -34,6 +39,12 @@ describe("applyPatch", () => {
   });
   it("keeps Windows line ends", () => {
     expect(applyPatch("a\r\nb\r\n", p("@@ -1,1 +1,1 @@\n-a\n+A\n"))).toBe("A\r\nb\r\n");
+  });
+  it("keeps every untouched line's own end in a file with mixed ends", () => {
+    expect(applyPatch("a\r\nb\nc\r\n", p("@@ -2,1 +2,1 @@\n-b\n+B\n"))).toBe("a\r\nB\nc\r\n");
+  });
+  it("refuses a hunk cut short of its header's counts", () => {
+    expect(applyPatch(text, p("@@ -2,2 +2,2 @@\n two\n"))).toBeNull();
   });
 });
 

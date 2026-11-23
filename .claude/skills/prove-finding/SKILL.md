@@ -18,7 +18,7 @@ You need all four. If one is missing, stop and ask for it (see "Stop and ask").
 3. **The cited lines**: a start and an end line, 1-based, in the checkout you are given.
 4. **The bundle folder**: where to write the result. Default `proof-bundle/` in the working folder.
 
-The working folder is a checkout of exactly the commit that was reviewed, with dependencies installed. Read the code only from this folder.
+The working folder is a throwaway export of exactly the commit that was reviewed, with dependencies installed and no `.git` (`npm run skill:exam` makes one per trial). Never a real checkout: the helper places your test and fix there, and refuses a folder with `.git`. Read the code only from this folder.
 
 ## Steps
 
@@ -33,7 +33,7 @@ Do them in order. Write down what you did at each step; it goes into `notes.md`.
 4. **Write the proof test into the bundle folder** as `proof-bundle/proof.test.ts`, and start `proof-bundle/proof.json` with its `testPath`: where the test will sit, `<folder of the cited file>/<name>.proof.test.ts` (a new file; never an existing one). Write the test's imports as seen from `testPath`. You never write the test into the checkout yourself: the helper in step 5 places it, runs it and removes it. Rules for the test:
    - Call the real code through its exports. Don't copy the code under test into the test.
    - Assert the behaviour the finding says is correct, with `expect`. The test must fail with an `AssertionError` when the problem is there. A crash, a thrown `TypeError`, an import error or a timeout is not a proof. If the claimed problem is a thrown error, assert it with `expect(() => ...).not.toThrow()` or `await expect(...).resolves`.
-   - Use only relative paths inside the repository. No absolute paths, no `../../` above the repository, no network.
+   - Use only relative paths inside the repository. No absolute paths, no `../../` above the repository, no network. The test runs under Node's permission model: it can read only the working folder, can't write any existing file, and can't start a process, so a test that tries gets an `ERROR`, not a proof.
    - Keep it to one `it` (two at most), named after the claim.
 
 5. **Run it on the code as it is**, with the helper that travels with this skill, from the working folder:
@@ -83,6 +83,7 @@ Stop, say what is missing, and don't write a bundle when:
 - the finding text, the cited file, the cited lines or the bundle folder is not given;
 - the cited file doesn't exist, or has fewer lines than the cited end line;
 - the working folder has no `node_modules/vitest`, or the helper `.claude/skills/prove-finding/try-proof.mjs` is missing;
+- the working folder is a git checkout (it has `.git`), not a throwaway export;
 - the working folder is not a checkout of the code the finding is about (the cited lines don't contain anything the finding mentions).
 
 ## Never

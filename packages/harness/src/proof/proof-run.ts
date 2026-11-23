@@ -12,23 +12,28 @@
  * `testPath` and run with Vitest's JSON reporter; then the patch is applied and the test runs again. Every
  * report and log is saved under `--out` before the decision, then `certificate.json`.
  *
- * Not a sandbox: the test runs as the person running this, with their network. See #27.
+ * Each test runs under Node's permission model (`sandboxArgs`): it reads only the export and writes only its temp
+ * folder, Vitest's caches and the report, and starts no process. Not a full sandbox: the network is open. See #27.
  *
  * Exit codes: 0 certificate issued; 1 no certificate (the proof does not hold, or the agent did not claim one);
  * 2 could not run (bad arguments, a missing bundle file, or git, npm or the export failing).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { plainEnv } from "../case/gate-trial-builder.ts";
 import { sha256 } from "../shared/provenance.ts";
 import { applyPatch, type Cited, type Replacement, replacementPatch } from "./proof-patch.ts";
 import {
+  agreedClass,
   classifyRun,
   decide,
   type ProofFacts,
   type RunClass,
+  SANDBOX_CACHES,
+  sandboxArgs,
   staticProblems,
   type VitestReport,
 } from "./proof-verify.ts";
@@ -60,7 +65,9 @@ export function commitFiles(repo: string, commit: string): Set<string> {
  * checkout's index and working tree are never touched, and the folder holds no `.git` of the repository.
  */
 export function exportCommit(repo: string, commit: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "proof-"));
+  // Its real spelling: a Windows temp folder can be an 8.3 short name, and the repository's Vitest config refuses
+  // to start from a folder whose spelling differs from its real path.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "proof-")));
   const index = join(dir, ".export-index");
   const env = { ...process.env, GIT_INDEX_FILE: index };
   must(run("git", ["-C", repo, "read-tree", commit], repo, env), "git read-tree");
@@ -76,22 +83,39 @@ function hashes(dir: string, files: ReadonlySet<string>): Map<string, string> {
   return new Map([...files].map((f) => [f, existsSync(join(dir, f)) ? sha256(readFileSync(join(dir, f))) : "missing"]));
 }
 
-/** Existing files whose content differs from `before`, except those in `allowed`. */
-function changed(dir: string, before: Map<string, string>, allowed: string[] = []): string[] {
+/**
+ * Existing files whose content differs from `before`. Belt and braces: under the permission model a test can't
+ * write an existing file at all, so a change made and undone during the run is ruled out there, not here.
+ */
+function changed(dir: string, before: Map<string, string>): string[] {
   const after = hashes(dir, new Set(before.keys()));
-  return [...before].filter(([f, h]) => !allowed.includes(f) && after.get(f) !== h).map(([f]) => f);
+  return [...before].filter(([f, h]) => after.get(f) !== h).map(([f]) => f);
 }
 
-/** Runs one test file in `dir` and saves its report and log as `<out>/<name>.*`. */
+/**
+ * Runs one test file in `dir` under Node's permission model (`sandboxArgs`) and saves its report and log as
+ * `<out>/<name>.*`. A report left from before is removed first, so only this run's report can be read.
+ */
 export function runTest(dir: string, testPath: string, out: string, name: string): RunClass {
-  const report = join(out, `${name}.report.json`);
-  const vitest = join(dir, "node_modules", "vitest", "vitest.mjs");
-  const args = [vitest, "run", testPath, "--reporter=json", `--outputFile=${report}`];
-  const result = run(process.execPath, args, dir, plainEnv(process.env), TEST_TIMEOUT_MS);
+  // Written inside the sandbox's own temp folder (the run may read nothing outside the export), then saved.
+  const tmp = join(dir, ".proof-tmp");
+  const report = join(tmp, `${name}.report.json`);
+  rmSync(join(out, `${name}.report.json`), { force: true });
+  // Emptied before every run: what one run wrote to its temp folder or the caches can't reach the next.
+  for (const d of [tmp, ...SANDBOX_CACHES.map((c) => join(dir, "node_modules", c))]) {
+    rmSync(d, { recursive: true, force: true });
+    mkdirSync(d, { recursive: true });
+  }
+  // Vitest creates this token on its first start, which the sandbox doesn't let it do; a fresh one per run.
+  writeFileSync(join(dir, "node_modules", ".vitest", ".vitest-secret-token"), randomBytes(32).toString("hex"));
+  const env = { ...plainEnv(process.env), TMP: tmp, TEMP: tmp, TMPDIR: tmp };
+  const result = run(process.execPath, sandboxArgs(dir, tmp, report, testPath), dir, env, TEST_TIMEOUT_MS);
   const timedOut = result.error ? `\n[ended: ${result.error.message}]` : "";
   writeFileSync(join(out, `${name}.log`), `exit ${result.status}${timedOut}\n${result.stdout}\n${result.stderr}`);
   if (!existsSync(report)) return "error";
-  return classifyRun(JSON.parse(readFileSync(report, "utf8")) as VitestReport);
+  const text = readFileSync(report, "utf8");
+  writeFileSync(join(out, `${name}.report.json`), text);
+  return agreedClass(classifyRun(JSON.parse(text) as VitestReport), result.status);
 }
 
 /** Places the test in a fresh export of `commit`, runs it, and reports how it ended and what it changed. */
@@ -162,13 +186,14 @@ export function verifyBundle(repo: string, commit: string, cited: Cited, bundle:
 
   const first = testOnCommit(repo, commit, testPath, testText, out, "reviewed");
   try {
-    const before = hashes(first.dir, facts.existing);
     // Applied here, not with `git apply`: the patch is confined to one file, and a strict match needs no git setup.
     const citedPath = join(first.dir, cited.file);
     const applied = applyPatch(readFileSync(citedPath, "utf8"), patch);
     if (applied !== null) writeFileSync(citedPath, applied);
+    // Taken after the patch, so the cited file is checked too: the patched run may change nothing at all.
+    const before = hashes(first.dir, facts.existing);
     const patched: RunClass = applied !== null ? runTest(first.dir, testPath, out, "patched") : "error";
-    const changedFiles = [...first.changedFiles, ...changed(first.dir, before, [cited.file])];
+    const changedFiles = [...first.changedFiles, ...changed(first.dir, before)];
     const decision = decide({ ...facts, reviewed: first.result, patched, changedFiles });
     if (applied === null) decision.reasons.push("the patch did not apply to the reviewed commit");
     return finish({ ...base, ...hashed, reviewed: first.result, patched, ...decision });
@@ -177,7 +202,8 @@ export function verifyBundle(repo: string, commit: string, cited: Cited, bundle:
   }
 }
 
-function flag(argv: string[], name: string): string | undefined {
+/** The value after `--<name>` in `argv`, for this area's two commands. */
+export function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 ? argv[i + 1] : undefined;
 }

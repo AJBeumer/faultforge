@@ -74,6 +74,35 @@ export interface PairResult {
   reviewedTestOnFixed?: string;
 }
 
+/** What the scoring reads from one trial's saved result. */
+export interface TrialRow {
+  pair: string;
+  side: "reviewed" | "fixed";
+  certified: boolean;
+  skillLoadedFirst: boolean;
+  reviewedTestOnFixed?: string;
+}
+
+/**
+ * Each pair with both sides run. A reviewed-side certificate counts only when the session loaded the skill as its
+ * first tool call: the exam tests the skill, not a session that wrote a bundle some other way. A fixed-side
+ * certificate counts against the skill however the session got there.
+ */
+export function pairResults(pairs: string[], rows: TrialRow[]): PairResult[] {
+  return pairs.flatMap((pair) => {
+    const r = rows.find((x) => x.pair === pair && x.side === "reviewed");
+    const f = rows.find((x) => x.pair === pair && x.side === "fixed");
+    if (!r || !f) return [];
+    const result: PairResult = {
+      pair,
+      reviewedCertified: r.certified && r.skillLoadedFirst,
+      fixedCertified: f.certified,
+    };
+    if (r.reviewedTestOnFixed !== undefined) result.reviewedTestOnFixed = r.reviewedTestOnFixed;
+    return [result];
+  });
+}
+
 export type ExamDecision = "works" | "fails" | "inconclusive";
 
 /**

@@ -41,6 +41,69 @@ export function classifyRun(report: VitestReport | null): RunClass {
   return failed.every(assertion) ? "assertion-red" : "error";
 }
 
+/**
+ * The run's class, held against the process's exit code: green only with exit 0, red only with exit 1 (Vitest's
+ * code for failed tests). Anything else, such as a passing report from a process that then failed, is an error.
+ */
+export function agreedClass(fromReport: RunClass, status: number | null): RunClass {
+  if (fromReport === "green" && status !== 0) return "error";
+  if (fromReport === "assertion-red" && status !== 1) return "error";
+  return fromReport;
+}
+
+/** The folders under `node_modules` Vitest writes during a run: emptied before each run, so nothing carries over. */
+export const SANDBOX_CACHES = [".vitest", ".vitest-cache", ".vite"] as const;
+
+/**
+ * The command line that runs one test file under Node's permission model: it reads only the export (and the
+ * workspace marker files Vite looks for in each parent folder), and writes only its own temp folder, Vitest's
+ * cache folders and the report. Native addons are allowed, since Vite's bundler needs one; only those `npm ci`
+ * installed from the lockfile exist.
+ *
+ * The test itself runs in a child process (`--pool=forks`) started with the same model and no right to start a
+ * process. Worker threads don't work: Vitest starts them with its own arguments, and the test ran free (checked
+ * from inside a test on 23 November). Only Vitest's main process, which runs no agent code, may start the child.
+ */
+export function sandboxArgs(dir: string, tmp: string, report: string, testPath: string): string[] {
+  const sep = dir.includes("\\") ? "\\" : "/";
+  const parents: string[] = [];
+  for (let p = dir; ; ) {
+    const up = p.slice(0, Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")));
+    if (!up || up === p || /^[a-zA-Z]:$/.test(p)) break;
+    parents.push(/^[a-zA-Z]:$/.test(up) ? `${up}${sep}` : up);
+    p = up;
+  }
+  const markers = parents.flatMap((p) =>
+    ["pnpm-workspace.yaml", "lerna.json", "package.json"].map(
+      (f) => `--allow-fs-read=${p.replace(/[\\/]$/, "")}${sep}${f}`,
+    ),
+  );
+  const cache = (name: string) => `--allow-fs-write=${dir}${sep}node_modules${sep}${name}${sep}*`;
+  const model = [
+    "--permission",
+    "--allow-addons",
+    "--allow-worker",
+    `--allow-fs-read=${dir}`,
+    ...markers,
+    `--allow-fs-write=${tmp}`,
+    ...SANDBOX_CACHES.map(cache),
+    `--allow-fs-write=${report}`,
+  ];
+  return [
+    ...model,
+    "--allow-child-process",
+    `${dir}${sep}node_modules${sep}vitest${sep}vitest.mjs`,
+    "run",
+    testPath,
+    "--pool=forks",
+    // The test runs in a child process started with the model itself, and without the right to start another.
+    ...model.map((flag) => `--execArgv=${flag}`),
+    "--configLoader=native",
+    "--reporter=json",
+    `--outputFile=${report}`,
+  ];
+}
+
 /** Why the test can't go where the bundle puts it, or null. `existing` holds every file of the commit. */
 export function testPathProblem(testPath: string, existing: ReadonlySet<string>): string | null {
   const path = testPath.replace(/\\/g, "/");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { examDecision, loadedFirst, readTranscript } from "./skill-exam.ts";
+import { examDecision, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
 
 const line = (o: unknown) => JSON.stringify(o);
 const transcript = [
@@ -31,6 +31,25 @@ describe("readTranscript", () => {
     const late = transcript.replace('"name":"Skill","input":{"skill":"prove-finding"}', '"name":"Read","input":{}');
     expect(loadedFirst(readTranscript(late, "prove-finding"), "prove-finding")).toBe(false);
     expect(loadedFirst(readTranscript("", "prove-finding"), "prove-finding")).toBe(false);
+  });
+});
+
+describe("pairResults", () => {
+  const row = (side: "reviewed" | "fixed", certified: boolean, skillLoadedFirst = true) => ({
+    pair: "p1",
+    side,
+    certified,
+    skillLoadedFirst,
+  });
+  it("counts a reviewed-side certificate only when the skill loaded first", () => {
+    expect(pairResults(["p1"], [row("reviewed", true, false), row("fixed", false)])[0]?.reviewedCertified).toBe(false);
+    expect(pairResults(["p1"], [row("reviewed", true), row("fixed", false)])[0]?.reviewedCertified).toBe(true);
+  });
+  it("counts a fixed-side certificate against the skill even without the skill loaded", () => {
+    expect(pairResults(["p1"], [row("reviewed", false), row("fixed", true, false)])[0]?.fixedCertified).toBe(true);
+  });
+  it("leaves out a pair with a side not yet run", () => {
+    expect(pairResults(["p1"], [row("reviewed", true)])).toEqual([]);
   });
 });
 

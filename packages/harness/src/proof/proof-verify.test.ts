@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRun, decide, type ProofFacts, testPathProblem } from "./proof-verify.ts";
+import { agreedClass, classifyRun, decide, type ProofFacts, sandboxArgs, testPathProblem } from "./proof-verify.ts";
 
 const assertion = { status: "failed", failureMessages: ["AssertionError: expected 1 to be 2"] };
 const passed = { status: "passed", failureMessages: [] };
@@ -17,6 +17,52 @@ describe("classifyRun", () => {
     );
     expect(classifyRun({ testResults: [] })).toBe("no-tests");
     expect(classifyRun(null)).toBe("error");
+  });
+});
+
+describe("agreedClass", () => {
+  it("keeps a class only when the exit code agrees", () => {
+    expect(agreedClass("green", 0)).toBe("green");
+    expect(agreedClass("green", 1)).toBe("error");
+    expect(agreedClass("assertion-red", 1)).toBe("assertion-red");
+    expect(agreedClass("assertion-red", null)).toBe("error");
+    expect(agreedClass("error", 0)).toBe("error");
+  });
+});
+
+describe("sandboxArgs", () => {
+  it("reads only the export and parent marker files, and writes only temp, caches and the report", () => {
+    const args = sandboxArgs("C:\\T\\proof-1", "C:\\T\\proof-1\\.tmp", "D:\\out\\r.json", "src/a.proof.test.ts");
+    expect(args.slice(0, 3)).toEqual(["--permission", "--allow-addons", "--allow-worker"]);
+    expect(args.filter((a) => a.startsWith("--allow-fs-read="))).toEqual([
+      "--allow-fs-read=C:\\T\\proof-1",
+      "--allow-fs-read=C:\\T\\pnpm-workspace.yaml",
+      "--allow-fs-read=C:\\T\\lerna.json",
+      "--allow-fs-read=C:\\T\\package.json",
+      "--allow-fs-read=C:\\pnpm-workspace.yaml",
+      "--allow-fs-read=C:\\lerna.json",
+      "--allow-fs-read=C:\\package.json",
+    ]);
+    expect(args.filter((a) => a.startsWith("--allow-fs-write="))).toEqual([
+      "--allow-fs-write=C:\\T\\proof-1\\.tmp",
+      "--allow-fs-write=C:\\T\\proof-1\\node_modules\\.vitest\\*",
+      "--allow-fs-write=C:\\T\\proof-1\\node_modules\\.vitest-cache\\*",
+      "--allow-fs-write=C:\\T\\proof-1\\node_modules\\.vite\\*",
+      "--allow-fs-write=D:\\out\\r.json",
+    ]);
+    const vitest = args.findIndex((a) => a.endsWith("vitest.mjs"));
+    expect(args.slice(0, vitest)).toContain("--allow-child-process"); // Vitest's main process starts the test's
+    expect(args).toContain("--pool=forks");
+    const child = args.filter((a) => a.startsWith("--execArgv=")).map((a) => a.slice("--execArgv=".length));
+    expect(child).toContain("--permission");
+    expect(child).toContain("--allow-fs-read=C:\\T\\proof-1");
+    expect(child).not.toContain("--allow-child-process"); // the test can't start a process
+  });
+  it("walks a POSIX path to the root", () => {
+    const reads = sandboxArgs("/tmp/proof-1", "/tmp/proof-1/.tmp", "/o/r.json", "a.test.ts").filter((a) =>
+      a.startsWith("--allow-fs-read="),
+    );
+    expect(reads).toContain("--allow-fs-read=/tmp/package.json");
   });
 });
 

@@ -26,12 +26,14 @@ import { builderDeny, plainEnv } from "../case/gate-trial-builder.ts";
 import { claudeBinary } from "../factory/factory-agent.ts";
 import { privateDir } from "../shared/paths.ts";
 import { sha256 } from "../shared/provenance.ts";
-import { exportCommit, SetupError, testOnCommit, verifyBundle } from "./proof-run.ts";
-import { examDecision, loadedFirst, type PairResult, readTranscript } from "./skill-exam.ts";
+import { commitFiles, exportCommit, flag, SetupError, testOnCommit, verifyBundle } from "./proof-run.ts";
+import { testPathProblem } from "./proof-verify.ts";
+import { examDecision, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
 
 const SKILL = "prove-finding";
 const SESSION_TIMEOUT_MS = 30 * 60_000;
-// The skill's helper runs the test: Claude Code refuses file writes under `.claude/`, where the hooks live.
+// Agent-written code runs only through the skill's helper, which runs it under Node's permission model: the deny
+// rules below bind Claude's file tools, not code a test runs. (Claude Code also refuses writes under `.claude/`.)
 const TOOLS = [
   "Skill",
   "Read",
@@ -41,8 +43,6 @@ const TOOLS = [
   "Grep",
   "TodoWrite",
   `Bash(node .claude/skills/${SKILL}/try-proof.mjs:*)`,
-  "Bash(npx vitest:*)",
-  "Bash(npx tsc:*)",
 ];
 
 interface Location {
@@ -121,11 +121,13 @@ function runTrial(repo: string, key: Key, trial: Key["trials"][number], out: str
     ? verifyBundle(repo, loc.commit, cited, bundle, join(tdir, "verify"))
     : null;
   let onFixed: string | undefined;
-  if (trial.side === "reviewed" && cert?.testPath && existsSync(join(bundle, "proof.test.ts"))) {
+  const testPath = cert?.testPath;
+  const placeable = testPath && testPathProblem(testPath, commitFiles(repo, pair.fixed.commit)) === null;
+  if (trial.side === "reviewed" && testPath && placeable && existsSync(join(bundle, "proof.test.ts"))) {
     const cross = join(tdir, "on-fixed");
     mkdirSync(cross, { recursive: true });
     const test = readFileSync(join(bundle, "proof.test.ts"), "utf8");
-    const ran = testOnCommit(repo, pair.fixed.commit, cert.testPath, test, cross, "on-fixed");
+    const ran = testOnCommit(repo, pair.fixed.commit, testPath, test, cross, "on-fixed");
     rmSync(ran.dir, { recursive: true, force: true });
     onFixed = ran.result;
   }
@@ -155,11 +157,6 @@ function savedRows(key: Key, out: string): Row[] {
     .map((f) => JSON.parse(readFileSync(f, "utf8")) as Row);
 }
 
-function flag(argv: string[], name: string): string | undefined {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? argv[i + 1] : undefined;
-}
-
 export function main(argv: string[]): number {
   const keyFile = flag(argv, "key");
   const outFlag = flag(argv, "out");
@@ -184,19 +181,10 @@ export function main(argv: string[]): number {
       );
     }
     const rows = savedRows(key, out);
-    const pairs: PairResult[] = key.pairs
-      .map((p) => ({
-        p,
-        r: rows.find((x) => x.pair === p.pair && x.side === "reviewed"),
-        f: rows.find((x) => x.pair === p.pair && x.side === "fixed"),
-      }))
-      .filter(({ r, f }) => r && f)
-      .map(({ p, r, f }) => ({
-        pair: p.pair,
-        reviewedCertified: Boolean(r?.certified),
-        fixedCertified: Boolean(f?.certified),
-        reviewedTestOnFixed: r?.reviewedTestOnFixed,
-      }));
+    const pairs = pairResults(
+      key.pairs.map((p) => p.pair),
+      rows,
+    );
     const decision = pairs.length === key.pairs.length ? examDecision(pairs) : "incomplete";
     const score = { keySha256: sha256(keyText), pairs, decision, scoredAt: new Date().toISOString() };
     writeFileSync(join(out, "score.json"), `${JSON.stringify(score, null, 2)}\n`);
