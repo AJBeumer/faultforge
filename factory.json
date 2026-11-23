@@ -33,6 +33,11 @@
         "npm run test:integration (ubuntu-latest)",
         "npm run test:integration (windows-latest)"
       ],
+      "approval": {
+        "label": "Qodo approved",
+        "actor": "qodo-code-review[bot]",
+        "guards": [".claude/hooks/**"]
+      },
       "start": null,
       "tickets": {
         "sections": ["Result", "Done when", "Must not break"],

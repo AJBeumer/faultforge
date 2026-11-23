@@ -10,6 +10,8 @@
     "ci:wait": "tsx packages/harness/src/cli/ci-wait-cli.ts",
     "review:local": "tsx packages/harness/src/review/review-local.ts",
     "review:gate": "tsx packages/harness/src/review/review-gate.ts",
+    "approval:check": "tsx packages/harness/src/cli/approval-check-cli.ts",
+    "approval:replay": "tsx packages/harness/src/cli/approval-replay-cli.ts",
     "gate:check": "tsx packages/harness/src/cli/gate-check-cli.ts",
     "gate:replay": "tsx packages/harness/src/cli/gate-replay-cli.ts",
     "gate:trial": "tsx packages/harness/src/cli/gate-trial-cli.ts",

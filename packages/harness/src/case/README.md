@@ -9,11 +9,13 @@ One case end to end, after `inject`: its ticket, its PR, its saved review, and i
   `record-print.ts`: builds the record from the saved evidence, and saves it to private storage.
 - `gate-replay.ts`: what each quality-gate threshold would have decided on the saved reviews of adjudicated
   cases.
+- `approval-replay.ts`: whether Qodo's "approved" label would have approved a planted bug or held a control,
+  and, given a review test's key and runs, code with proven defects.
 - `gate-trial.ts` with `gate-trial-run.ts`, `gate-trial-real.ts`, `gate-trial-review.ts` and
   `gate-trial-builder.ts`: the review-and-fix loop run under a gate
   on an adjudicated case's change, then judged by proof tests the loop never saw.
 
-Entry points: `npm run case:ticket`, `case:pr`, `case:review`, `case:rerun`, `case:build`, `gate:replay` and
-`gate:trial` (in `cli/`).
+Entry points: `npm run case:ticket`, `case:pr`, `case:review`, `case:rerun`, `case:build`, `gate:replay`,
+`approval:replay` and `gate:trial` (in `cli/`).
 
 Uses: `shared`, `match`, `qodo`, `review`, `ledger`, `door`, `inject`.

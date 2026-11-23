@@ -20,6 +20,9 @@ export interface RepoConfig {
   /** The CI jobs that must run and succeed for a commit to count as green (`ci:wait`), by the names GitHub
    * shows. Without it `ci:wait` refuses: it never guesses which jobs matter from the ones that ran. */
   ciJobs?: string[];
+  /** A copy of the repo's Qodo approval workflow: the label it adds, who adds it, and the guarded paths
+   * (`approval:check`). */
+  approval?: { label: string; actor: string; guards: string[] };
 }
 
 /** The quality gate: Qodo's labels (`action_level`) that must be fixed, and those only reported to the owner. */
