@@ -51,3 +51,4 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 
 - [23 November: Ponytail in interactive sessions only](decisions/week-4.md#23-november-ponytail-in-interactive-sessions-only)
 - [Day 12: Give your factory the full picture](decisions/week-4.md#day-12-give-your-factory-the-full-picture)
+- [Day 12, later: every review records the tickets Qodo cited](decisions/week-4.md#day-12-later-every-review-records-the-tickets-qodo-cited)

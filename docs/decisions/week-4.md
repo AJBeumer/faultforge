@@ -32,3 +32,10 @@ The owner asked to include Ponytail (github.com/DietrichGebert/ponytail, MIT), a
   - **The citation is the evidence, and silence proves nothing.** A ticket finding shows the source was read; a review with no findings shows neither that it was read nor that the ticket is met. So the factory's own checks stay the verification of a ticket's Done when list. Qodo's ticket findings are an extra signal on top.
   - **Linking the wrong ticket is not neutral.** Every replay body from now on links the original PR's own ticket, as PR 367 did.
 - **Remaining risk:** one PR, one expectation, two runs. The baseline linked a wrong ticket, not none. Qodo had reviewed this commit five times before and may remember it.
+
+## Day 12, later: every review records the tickets Qodo cited
+
+- **Decision:** Day 12 showed that a ticket citation is the only evidence in Qodo's answer that it used the linked source. So `review:wait` now saves `ticketsCited` for every PR review: the tickets Qodo cited in its findings on that commit, each once. It prints either "Source: Qodo cited <ticket>" or "no finding cites a ticket. That shows neither that the ticket was read nor that it is met." Ticket #437, [PR #438](https://github.com/AJBeumer/faultforge/pull/438), merged as `54caabf`.
+- **Qodo's review of PR #438:** round 1 raised one Medium. A citation's source was printed verbatim, so a newline or terminal escape in it could forge report lines. Reproduced with a failing test, then fixed: only plain web addresses count. Round 2 found nothing, and the quality gate was met in 2 of 3 rounds.
+- **Measured on PR #438 itself:** neither review cited #437, and both saves record `ticketsCited: []`. That fits Day 12: a clean review says nothing about the ticket. The ticket's checklist was verified by its own tests.
+- **Unchanged:** the gate reads findings, not this field. Older saves without the field still pass `ledger:check`.
