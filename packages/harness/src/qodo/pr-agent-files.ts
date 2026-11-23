@@ -8,7 +8,7 @@
  * when the repository has a Wiki but no page yet (a clone then answers "Repository not found"). Anything else
  * that keeps a file from being read throws, so the check can't read a failure as "absent".
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExternalCallError, gh, ghJson, runExternal } from "../shared/github.ts";
@@ -38,12 +38,15 @@ export function readPrAgentFiles(repos: string[], readers: FileReaders): PrAgent
   ]);
 }
 
-/** A file's text, from a snapshot or live; a repository and place the snapshot has no record of count as absent. */
+/** A file's text, from a snapshot or live, by repository and place. */
 function textById(files: PrAgentFile[]): Map<string, string | null> {
   return new Map(files.map((f) => [`${f.repo} ${f.place}`, f.text]));
 }
 
-/** "new" when a file appeared, "missing" when one went, "changed" when its text differs. */
+/**
+ * "new" when a file appeared, "missing" when one went, "changed" when its text differs. A file the check reads
+ * but the snapshot holds no record of is a difference too, even when it is absent: only a record says it was.
+ */
 export function comparePrAgentFiles(live: PrAgentFile[], snapshot: PrAgentFile[]): Difference[] {
   const before = textById(snapshot);
   const after = textById(live);
@@ -52,7 +55,9 @@ export function comparePrAgentFiles(live: PrAgentFile[], snapshot: PrAgentFile[]
     const was = before.get(id) ?? null;
     const is = after.get(id) ?? null;
     const name = `${id} .pr_agent.toml`;
-    if (was === null && is !== null) differences.push({ kind: "file", type: "new", id, name });
+    if (!before.has(id)) {
+      differences.push({ kind: "file", type: "changed", id, name, field: "record", before: "no record", after: is });
+    } else if (was === null && is !== null) differences.push({ kind: "file", type: "new", id, name });
     else if (was !== null && is === null) differences.push({ kind: "file", type: "missing", id, name });
     else if (was !== is)
       differences.push({ kind: "file", type: "changed", id, name, field: "text", before: was, after: is });
@@ -73,21 +78,32 @@ export interface ReaderCalls {
   /** The root file's raw text; throws `ExternalCallError` (404 in its stderr when there is none). */
   rootText(repo: string): string;
   repoInfo(repo: string): { has_wiki?: boolean; private?: boolean };
-  /** Clones the Wiki into `dir`; throws `ExternalCallError` on failure. */
+  /** Clones the Wiki into `dir` without checking it out; throws `ExternalCallError` on failure. */
   cloneWiki(repo: string, dir: string): void;
+  /** The Wiki's files at HEAD, with git's mode for each (`100644` a plain file, `120000` a link). */
+  listWiki(dir: string): { mode: string; name: string }[];
+  /** A file's bytes as committed: no line-ending conversion, and a link is never followed. */
+  showWiki(dir: string, name: string): string;
 }
+
+const git = (dir: string, ...args: string[]) => runExternal(`git ${args[0]}`, "git", ["-C", dir, ...args], 60_000);
 
 const realCalls: ReaderCalls = {
   rootText: (repo) => gh("api", `repos/${repo}/contents/.pr_agent.toml`, "-H", "Accept: application/vnd.github.raw"),
   repoInfo: (repo) => ghJson("api", `repos/${repo}`),
   cloneWiki: (repo, dir) => {
-    runExternal(
-      "git clone",
-      "git",
-      ["clone", "-q", "--depth", "1", `https://github.com/${repo}.wiki.git`, dir],
-      CLONE_TIMEOUT_MS,
-    );
+    const url = `https://github.com/${repo}.wiki.git`;
+    runExternal("git clone", "git", ["clone", "-q", "--no-checkout", "--depth", "1", url, dir], CLONE_TIMEOUT_MS);
   },
+  listWiki: (dir) =>
+    git(dir, "ls-tree", "-z", "HEAD")
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const [meta = "", name = ""] = line.split("\t");
+        return { mode: meta.split(" ")[0] ?? "", name };
+      }),
+  showWiki: (dir, name) => git(dir, "cat-file", "blob", `HEAD:${name}`),
 };
 
 const said = (error: unknown, pattern: RegExp) => error instanceof ExternalCallError && pattern.test(error.stderr);
@@ -116,8 +132,16 @@ export function makeReaders(calls: ReaderCalls): FileReaders {
           if (said(error, /Repository not found/i)) return null;
           throw error;
         }
-        const page = wikiPage(readdirSync(dir));
-        return page === undefined ? null : readFileSync(join(dir, page), "utf8");
+        // Read from git, not from a checkout: a page committed as a link would otherwise copy the file it points
+        // at into the evidence, and a checkout's line endings depend on the machine.
+        const files = calls.listWiki(dir);
+        const page = wikiPage(files.map((f) => f.name));
+        if (page === undefined) return null;
+        const mode = files.find((f) => f.name === page)?.mode;
+        if (mode !== "100644" && mode !== "100755") {
+          throw new Error(`the Wiki page ${page} is not a plain file (git mode ${mode}), so it is not read`);
+        }
+        return calls.showWiki(dir, page);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

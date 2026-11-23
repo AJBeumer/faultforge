@@ -68,8 +68,9 @@ function writeSnapshot(
     join(dir, "cross-repo-relations.json"),
     JSON.stringify({ relations: data.relations ?? [], repo: "AJBeumer/faultforge-target", shallow: false }),
   );
-  if (data.files !== "none")
-    writeFileSync(join(dir, "pr-agent-files.json"), JSON.stringify({ files: data.files ?? [] }));
+  // By default the record matches what `deps()` reads live: the lab's Wiki page, absent.
+  const files = data.files ?? [{ repo: "AJBeumer/faultforge", place: "wiki", text: null }];
+  if (data.files !== "none") writeFileSync(join(dir, "pr-agent-files.json"), JSON.stringify({ files }));
 }
 
 describe("compareRules", () => {

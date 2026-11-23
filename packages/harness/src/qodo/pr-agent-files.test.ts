@@ -1,5 +1,3 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ExternalCallError } from "../shared/github.ts";
 import {
@@ -20,10 +18,22 @@ function calls(over: Partial<ReaderCalls> = {}): ReaderCalls {
       throw failed("gh: Not Found (HTTP 404)");
     },
     repoInfo: () => ({ has_wiki: true, private: false }),
-    cloneWiki: (_repo, dir) => writeFileSync(join(dir, "Home.md"), "home\n"),
+    cloneWiki: () => {},
+    listWiki: () => [{ mode: "100644", name: "Home.md" }],
+    showWiki: (_dir, name) => `the bytes of ${name}`,
     ...over,
   };
 }
+
+/** A Wiki holding Home.md and one page `.pr_agent.toml.md` with git's `mode`. */
+const withPage = (mode: string, text = TOML) =>
+  calls({
+    listWiki: () => [
+      { mode: "100644", name: "Home.md" },
+      { mode, name: ".pr_agent.toml.md" },
+    ],
+    showWiki: (_dir, name) => (name === ".pr_agent.toml.md" ? text : "home\n"),
+  });
 
 describe("reading the files", () => {
   it("records a root file's text, and none on a 404", () => {
@@ -43,8 +53,8 @@ describe("reading the files", () => {
   });
 
   it("reads the Wiki page, and records none when the Wiki is off, empty, or has no such page", () => {
-    const page = calls({ cloneWiki: (_r, dir) => writeFileSync(join(dir, ".pr_agent.toml.md"), TOML) });
-    expect(makeReaders(page).wiki("o/r")).toBe(TOML);
+    expect(makeReaders(withPage("100644")).wiki("o/r")).toBe(TOML);
+    expect(makeReaders(withPage("100755")).wiki("o/r")).toBe(TOML);
     expect(makeReaders(calls({ repoInfo: () => ({ has_wiki: false, private: false }) })).wiki("o/r")).toBeNull();
     const empty = calls({
       cloneWiki: () => {
@@ -66,6 +76,24 @@ describe("reading the files", () => {
       /not public/,
     );
     expect(() => makeReaders(calls({ repoInfo: () => ({ has_wiki: true }) })).wiki("o/r")).toThrow(/not public/);
+  });
+
+  it("refuses a Wiki page committed as a link, or as anything but a plain file, and never reads it", () => {
+    let read = false;
+    for (const mode of ["120000", "160000", "040000"]) {
+      const showWiki = () => {
+        read = true;
+        return "a file the link points at";
+      };
+      const link = { ...withPage(mode), showWiki };
+      expect(() => makeReaders(link).wiki("o/r")).toThrow(/not a plain file/);
+    }
+    expect(read).toBe(false);
+  });
+
+  it("keeps the page's bytes as committed, line endings included", () => {
+    const crlf = '[review_agent]\r\nissues_user_guidelines = "x"\r\n';
+    expect(makeReaders(withPage("100644", crlf)).wiki("o/r")).toBe(crlf);
   });
 
   it("reads both places for every repository", () => {
@@ -107,8 +135,19 @@ describe("comparing with the snapshot", () => {
     );
   });
 
-  it("treats a place the snapshot has no record of as absent", () => {
-    expect(comparePrAgentFiles([file("root", null)], [])).toEqual([]);
-    expect(comparePrAgentFiles([file("root", TOML)], [])[0]?.type).toBe("new");
+  // Proof test for the review finding "Incomplete snapshots pass the check" (certificate issued).
+  it("reports a file the snapshot holds no record of, even an absent one", () => {
+    expect(comparePrAgentFiles([file("root", null)], [])).toEqual([
+      {
+        kind: "file",
+        type: "changed",
+        id: "a/lab root",
+        name: "a/lab root .pr_agent.toml",
+        field: "record",
+        before: "no record",
+        after: null,
+      },
+    ]);
+    expect(comparePrAgentFiles([file("root", TOML)], [])[0]).toEqual(expect.objectContaining({ after: TOML }));
   });
 });
