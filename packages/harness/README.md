@@ -24,8 +24,9 @@ checks it, so there is no import cycle between areas.
 | 12 | [`verdict/`](src/verdict/README.md) | The owner's verdict on a case, and its amendments. |
 | 13 | [`rules/`](src/rules/README.md) | Evidence for Qodo's rules, and proposals for new ones. |
 | 14 | [`factory/`](src/factory/README.md) | The unattended factory run: pick, workspace, agent, settle, recover. |
-| 15 | [`repo/`](src/repo/README.md) | Checks on the repository as a whole, and the test launcher. |
-| 16 | [`cli/`](src/cli/README.md) | The thin entry points `npm run` starts; each loads its area's body. |
+| 15 | [`proof/`](src/proof/README.md) | Proofs of review findings, their verifier, and the skill's exam. |
+| 16 | [`repo/`](src/repo/README.md) | Checks on the repository as a whole, and the test launcher. |
+| 17 | [`cli/`](src/cli/README.md) | The thin entry points `npm run` starts; each loads its area's body. |
 
 `src/fixtures/` holds test support only. Slow tests live in `test/` ([README](test/README.md)).
 

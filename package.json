@@ -43,7 +43,9 @@
     "case:review": "tsx packages/harness/src/cli/case-review-cli.ts",
     "target:post": "node packages/harness/src/door/target-post-cli.ts",
     "case:rerun": "tsx packages/harness/src/cli/case-rerun-cli.ts",
-    "guard:install": "tsx packages/harness/src/cli/guard-install-cli.ts"
+    "guard:install": "tsx packages/harness/src/cli/guard-install-cli.ts",
+    "proof:verify": "tsx packages/harness/src/cli/proof-verify-cli.ts",
+    "skill:exam": "tsx packages/harness/src/cli/skill-exam-cli.ts"
   },
   "repository": {
     "type": "git",
