@@ -12,9 +12,13 @@ import { askGuard, guardConfig, labWithPrivate, privateStore, REPOS, scratchFold
 import { check } from "../git-guard.ts";
 import { decide } from "../guard-target.ts";
 
-const LAB = "D:\\Projects\\FaultForge";
-const TARGET = "D:\\Projects\\faultforge-target";
-const CONFIG = guardConfig(tempRepo(true).dir);
+/**
+ * Checkouts of their own, never the owner's: the guard reads a checkout's pending changes, so a real one would
+ * let whatever is uncommitted there decide a test, and on another machine the folders don't exist.
+ */
+const LAB = tempRepo(true).dir;
+const TARGET = tempRepo(true).dir;
+const CONFIG = guardConfig(TARGET);
 
 /**
  * A private folder holding one unreleased template and one that is already in templates/seed/. Its name has a
