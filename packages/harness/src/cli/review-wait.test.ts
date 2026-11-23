@@ -987,7 +987,30 @@ describe("run: what review:wait saves, and what it refuses", () => {
       abTest: { name: null, arm: null },
       findings: [finding],
       openFindings: [{ ...finding, commit: PR1_HEAD.slice(0, 7) }],
+      ticketsCited: [],
     });
+  });
+
+  it("records and reports the tickets Qodo cited on the head commit", async () => {
+    const ticket = "https://github.com/Owner/target/issues/4";
+    const onlyFinding = pr1.findings?.[0] as NonNullable<QodoReview["findings"]>[0];
+    const citing: QodoReview = {
+      ...pr1,
+      findings: [{ ...onlyFinding, evidence: { citations: [{ source_type: "ticket", source: ticket }] } }],
+    };
+    const h = harness([citing]);
+    expect(await h.wait()).toBe(0);
+    expect(h.saved().ticketsCited).toEqual([ticket]);
+    expect(savedReviewProblem(h.saved())).toBeUndefined();
+    expect(h.out).toContain(`Source: Qodo cited ${ticket}`);
+  });
+
+  it("says a review that cites no ticket shows nothing about the ticket either way", async () => {
+    const h = harness([pr1]);
+    expect(await h.wait()).toBe(0);
+    expect(h.out).toContain(
+      `Source: no finding on ${PR1_HEAD.slice(0, 7)} cites a ticket. That shows neither that the ticket was read nor that it is met.`,
+    );
   });
 
   it("names the findings carried over from a local review, without changing what is saved", async () => {

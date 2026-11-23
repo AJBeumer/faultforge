@@ -15,6 +15,7 @@ import {
   type QodoReview,
   reviewEffort,
   reviewRounds,
+  ticketsCited,
 } from "../qodo/qodo-review.ts";
 import { errorText as message } from "../shared/error-text.ts";
 import { loadFactory, repoConfig } from "../shared/factory-config.ts";
@@ -218,6 +219,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
   const findings = result.review ? findingsFor(result.review, headSha) : [];
   const open = result.review ? openFindings(result.review) : [];
   const effort = result.review ? reviewEffort(result.review, headSha) : null;
+  const cited = result.review ? ticketsCited(result.review, headSha) : [];
   // CI is optional evidence about the same commit: computed safely so a failed lookup never costs the save.
   const ci = ciOrUnavailable(
     () => deps.checkRuns(headSha),
@@ -241,6 +243,7 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
     abTest: { name: result.review?.ab_test_name ?? null, arm: result.review?.ab_arm ?? null },
     findings,
     openFindings: open,
+    ticketsCited: cited,
   };
   writeSavedReview(savedReviewPath(dir, headSha), record);
 
@@ -264,6 +267,11 @@ async function wait({ repoKey, pr, timeoutMinutes, commit }: Args, deps: WaitScr
     `Qodo's review of ${short} is complete (effort: ${effort ?? "not reported"}). Push seen ${pushSeenAt}, review started ${record.reviewStartedAt}.`,
   );
   log(`CI: ${record.ci}`);
+  log(
+    cited.length
+      ? `Source: Qodo cited ${cited.join(", ")}`
+      : `Source: no finding on ${short} cites a ticket. That shows neither that the ticket was read nor that it is met.`,
+  );
   const carriedOver = result.review ? localReviewFindings(result.review).length : 0;
   log(`${findings.length} finding(s) on ${short}; ${open.length} open on this PR in total:`);
   if (carriedOver) log(`${carriedOver} finding(s) carried over from local reviews (review_source: local_skill).`);
