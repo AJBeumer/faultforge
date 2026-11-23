@@ -31,7 +31,19 @@ import { examDecision, loadedFirst, type PairResult, readTranscript } from "./sk
 
 const SKILL = "prove-finding";
 const SESSION_TIMEOUT_MS = 30 * 60_000;
-const TOOLS = ["Skill", "Read", "Write", "Edit", "Glob", "Grep", "TodoWrite", "Bash(npx vitest:*)", "Bash(npx tsc:*)"];
+// The skill's helper runs the test: Claude Code refuses file writes under `.claude/`, where the hooks live.
+const TOOLS = [
+  "Skill",
+  "Read",
+  "Write",
+  "Edit",
+  "Glob",
+  "Grep",
+  "TodoWrite",
+  `Bash(node .claude/skills/${SKILL}/try-proof.mjs:*)`,
+  "Bash(npx vitest:*)",
+  "Bash(npx tsc:*)",
+];
 
 interface Location {
   commit: string;
@@ -63,7 +75,8 @@ function runSession(dir: string, prompt: string, tdir: string, budget: number, r
   const mcp = join(tdir, "session-mcp.json");
   writeFileSync(mcp, JSON.stringify({ mcpServers: {} }));
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk"];
-  args.push("--allowedTools", TOOLS.join(" "), "--max-budget-usd", String(budget));
+  // Commas, not spaces: a rule such as `Bash(npx vitest:*)` holds a space (exam run 1 lost Bash that way).
+  args.push("--allowedTools", TOOLS.join(","), "--max-budget-usd", String(budget));
   args.push("--settings", settings, "--mcp-config", mcp, "--strict-mcp-config", "--disallowedTools", "ScheduleWakeup");
   const started = new Date().toISOString();
   const result = spawnSync(claudeBinary(), args, {
