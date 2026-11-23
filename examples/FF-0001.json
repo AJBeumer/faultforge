@@ -73,8 +73,8 @@
     }
   ],
   "challenge": {
-    "verdict": "not_run",
-    "note": "Devil's Advocate, which tests each finding, starts on Day 15. This is about the finding, not the detection: Qodo's catch is confirmed in `detection` and `human`."
+    "verdict": "supported",
+    "note": "Devil's Advocate v1 (the prove-finding skill, checked by proof:verify) wrote a failing test for Qodo's finding from its text, file and line alone, in a fresh session that could not read the answer key or this record. The verifier issued a certificate on the reviewed commit c7ffd15: the test fails there and passes with a fix confined to line 33. On the base commit 9916758 it issued none, and the session answered disproven. Run on 23 November 2026: PR #446, decision log week 4. This is about the finding, not the detection: Qodo's catch is confirmed in `detection` and `human`."
   },
   "human": {
     "disposition": "confirmed_detected",
