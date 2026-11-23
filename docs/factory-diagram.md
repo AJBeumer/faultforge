@@ -42,8 +42,17 @@ flowchart TD
   AU -- "ready: 11" --> V{"Runner's verify, from a trusted main<br/>PR open at the pushed head, required checks green,<br/>review record of the head, gate met, revert:check"}
   V -- "problems: 1" --> H
   B -. "runner error: 1" .-> H
-  V -- "ok: 10" --> D{{"agent-done<br/>the owner checks the criteria and merges"}}
-  D --> M[(main)]
+  V -- "ok: 10" --> D{{"agent-done"}}
+  D --> QW{"Qodo's approval workflow, after each review<br/>nothing above Low, no guarded path<br/>guards: .claude/hooks/**"}
+  QW -- "a guarded path" --> HP{{"Held for a person<br/>no label, even with a clean review"}}
+  QW -- "findings above Low" --> NL["No label"]
+  QW -- clean --> QL["Label: Qodo approved<br/>added by qodo-code-review[bot]"]
+  QL --> AC{"approval:check<br/>added by Qodo's app after the head's review began,<br/>gate met, every CI check finished, no guarded path"}
+  AC -- disagree --> HP
+  AC -- approved-verified --> OM
+  NL --> OM
+  HP --> OM
+  OM{{"The owner checks the criteria and merges<br/>a label is not an approval vote"}} --> M[(main)]
   classDef planned stroke-dasharray: 5 5
 ```
 
@@ -62,6 +71,8 @@ flowchart TD
 | `revert:check` | The new tests fail without the change | The tests run on the base | Back to the build |
 | Audit | `main` didn't move, nothing was posted, the ticket didn't change | GitHub's history for the run's window | `agent-needs-help` |
 | Verify | All of the above, rechecked by the runner from a trusted `main` | GitHub and the saved records | `agent-needs-help` |
+| Approval label | Qodo's workflow: nothing above Low and no guarded path (`.claude/hooks/**`); then `Qodo approved` | Qodo's review of the head | No label; a guarded path goes to a person |
+| `approval:check` | The label was added by `qodo-code-review[bot]` after the head's review began; gate met; every CI check finished | The PR's timeline, the saved review, the checks | `disagree`: the owner looks before merging |
 | Merge | The owner's decision | The PR and its evidence | The owner sends it back |
 
 ## Where runs stopped

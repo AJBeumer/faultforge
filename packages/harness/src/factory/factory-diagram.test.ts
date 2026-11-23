@@ -228,6 +228,25 @@ describe("mermaid", () => {
     expect(chart).toContain("classDef planned stroke-dasharray");
   });
 
+  it("draws the approval step from factory.json: the label, the guarded paths and the route to a person", () => {
+    const approval = { label: "Qodo approved", actor: "qodo-code-review[bot]", guards: [".claude/hooks/**"] };
+    const chart = mermaid(runStats(runs), gate, ["npm run check"], approval);
+    expect(chart).toContain("guards: .claude/hooks/**");
+    expect(chart).toContain('QW -- "a guarded path" --> HP');
+    expect(chart).toContain("Label: Qodo approved<br/>added by qodo-code-review[bot]");
+    expect(chart).toContain("AC -- disagree --> HP");
+    expect(chart).toContain("AC -- approved-verified --> OM");
+    expect(chart).toContain("a label is not an approval vote");
+    expect(chart).not.toContain("D --> M[(main)]");
+    // CI and the tests stay their own steps, before the label.
+    expect(chart).toContain("ci:wait");
+    expect(chart).toContain("npm run check<br/>typecheck, lint, tests, docs");
+  });
+
+  it("goes straight from agent-done to main when a repo has no approval workflow", () => {
+    expect(mermaid(runStats(runs), gate, [])).toContain("D --> M[(main)]");
+  });
+
   it("gives a failed pre-flight its own path to the owner", () => {
     const s = runStats([{ id: "a", events: [ev("picked"), ev("claimed"), ev("qodo-checked", { exitCode: 1 })] }]);
     expect(mermaid(s, gate, [])).toContain('P -- "failed: 1" --> H');
