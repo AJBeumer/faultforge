@@ -192,10 +192,12 @@ function approvalSteps(approval: Approval | undefined): string[] {
     `  QW -- ${label("findings above Low")} --> NL[${label("No label")}]`,
     `  QW -- clean --> QL[${label(`Label: ${approval.label}<br/>added by ${approval.actor}`)}]`,
     `  QL --> AC{${label("approval:check<br/>added by Qodo's app after the head's review began,<br/>gate met, every CI check finished, no guarded path")}}`,
-    `  AC -- disagree --> HP`,
+    // disagree only happens with a label on the PR: its own step, never the no-label one.
+    `  AC -- disagree --> LD{{${label("Label not backed by our checks<br/>the owner looks before merging")}}}`,
     `  AC -- approved-verified --> OM`,
     "  NL --> OM",
     "  HP --> OM",
+    "  LD --> OM",
     `  OM{{${label("The owner checks the criteria and merges<br/>a label is not an approval vote")}}} --> M[(main)]`,
   ];
 }

@@ -234,7 +234,9 @@ describe("mermaid", () => {
     expect(chart).toContain("guards: .claude/hooks/**");
     expect(chart).toContain('QW -- "a guarded path" --> HP');
     expect(chart).toContain("Label: Qodo approved<br/>added by qodo-code-review[bot]");
-    expect(chart).toContain("AC -- disagree --> HP");
+    // Proof test for the review finding "A disagree verdict is drawn as though no label was added" (certificate issued).
+    expect(chart).toContain('AC -- disagree --> LD{{"Label not backed by our checks');
+    expect(chart).not.toContain("AC -- disagree --> HP");
     expect(chart).toContain("AC -- approved-verified --> OM");
     expect(chart).toContain("a label is not an approval vote");
     expect(chart).not.toContain("D --> M[(main)]");

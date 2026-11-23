@@ -48,10 +48,11 @@ flowchart TD
   QW -- "findings above Low" --> NL["No label"]
   QW -- clean --> QL["Label: Qodo approved<br/>added by qodo-code-review[bot]"]
   QL --> AC{"approval:check<br/>added by Qodo's app after the head's review began,<br/>gate met, every CI check finished, no guarded path"}
-  AC -- disagree --> HP
+  AC -- disagree --> LD{{"Label not backed by our checks<br/>the owner looks before merging"}}
   AC -- approved-verified --> OM
   NL --> OM
   HP --> OM
+  LD --> OM
   OM{{"The owner checks the criteria and merges<br/>a label is not an approval vote"}} --> M[(main)]
   classDef planned stroke-dasharray: 5 5
 ```
