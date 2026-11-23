@@ -52,3 +52,11 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 - [23 November: Ponytail in interactive sessions only](decisions/week-4.md#23-november-ponytail-in-interactive-sessions-only)
 - [Day 12: Give your factory the full picture](decisions/week-4.md#day-12-give-your-factory-the-full-picture)
 - [Day 12, later: every review records the tickets Qodo cited](decisions/week-4.md#day-12-later-every-review-records-the-tickets-qodo-cited)
+- [Day 13: Teach your factory a new skill](decisions/week-4.md#day-13-teach-your-factory-a-new-skill)
+- [23 November: prove-finding at scale, and on a planted bug](decisions/week-4.md#23-november-prove-finding-at-scale-and-on-a-planted-bug)
+- [23 November: Qodo configuration v14, and every finding gets proved first](decisions/week-4.md#23-november-qodo-configuration-v14-and-every-finding-gets-proved-first)
+- [23 November: Qodo configuration v15, and two predictions before review](decisions/week-4.md#23-november-qodo-configuration-v15-and-two-predictions-before-review)
+
+## [Week 4, continued](decisions/week-4b.md)
+
+- [Day 14: Turn your quality gate into a workflow](decisions/week-4b.md#day-14-turn-your-quality-gate-into-a-workflow)

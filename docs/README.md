@@ -51,7 +51,8 @@ New to the project's words? The [glossary](glossary.md) defines each one.
 - [Week 1](decisions/week-1.md): 2 to 8 November, Days 1 to 3.
 - [Week 2](decisions/week-2.md): 9 to 15 November, Days 4 to 8, cases, audits and benchmarks v1 and v2.
 - [Week 3](decisions/week-3.md): 16 to 22 November, Days 9 to 11.
-- [Week 4](decisions/week-4.md): from 23 November.
+- [Week 4](decisions/week-4.md): from 23 November, Days 12 and 13.
+- [Week 4, continued](decisions/week-4b.md): Day 14, the approval workflow.
 - [Does a house rule change the review?](rules-before-after.md): the Day 5 before-and-after measurement.
 - [Ask the codebase before you build](wisdom-day-6.md): the Day 6 report.
 
