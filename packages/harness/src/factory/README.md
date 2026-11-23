@@ -14,8 +14,10 @@ hooks, and settles what it left: a PR with Qodo's review and evidence, or a clea
 - `revert-check.ts` with `revert-run.ts`: the revert checks. `alert.ts`: the lab's alert issues.
 - Questions before a build: `factory-clarify.ts` (what is asked, the answer's check, the comment),
   `factory-clarify-run.ts` (the read-only agent), `clarify-measure.ts` (the step against an answer key).
+- The chart: `factory-diagram.ts` draws `docs/factory-diagram.md` from the run records and `factory.json`: the gate,
+  the CI jobs, and, for a repo with an `approval` section, Qodo's label, the guarded paths and `approval:check`.
 
-Entry points: `npm run factory:tick`, `factory:timeline`, `factory:recover`, `clarify:measure` (in `cli/`); `factory:keep`
+Entry points: `npm run factory:tick`, `factory:timeline`, `factory:recover`, `clarify:measure`, `factory:diagram` (in `cli/`); `factory:keep`
 (`factory-keep.ts`), `factory:sandbox` (`factory-sandbox-setup.ts`), `revert:check` (`revert-check.ts`).
 
 Uses: `shared`, `qodo`, `review`, `door`, `guard`, `tickets`, `rules`.
