@@ -43,6 +43,11 @@
         "properties": { "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" } },
         "unevaluatedProperties": false
       }
+    },
+    "ticketsCited": {
+      "description": "The tickets Qodo cited in its findings on this commit (citations with source_type ticket), each once. Empty shows neither that a ticket was read nor that it was met. Absent in a save made before citations were recorded.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
     }
   },
   "additionalProperties": false,

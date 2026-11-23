@@ -24,6 +24,7 @@ export interface QodoReview {
     /** "local_skill" for a finding Qodo carried onto this review from a local (pre-PR) review, attached on
      * a commit the PR's own run never reviewed. */
     review_source?: string | null;
+    evidence?: { citations?: { source?: string | null; source_type?: string | null }[] | null } | null;
   }[];
   finding_count?: number;
 }
@@ -154,6 +155,19 @@ export function findingsFor(review: QodoReview, headSha: string): Finding[] {
       title: f.title ?? null,
       description: f.description ?? null,
     }));
+}
+
+/**
+ * The tickets Qodo cited in its findings on this commit, each once, in first-seen order. A citation is the only
+ * sign in its answer that it read a linked ticket; an empty list shows neither that it did nor that it didn't.
+ */
+export function ticketsCited(review: QodoReview, headSha: string): string[] {
+  const cited = (review.findings ?? [])
+    .filter((f) => f.git_sha === headSha)
+    .flatMap((f) => f.evidence?.citations ?? [])
+    .filter((c) => c?.source_type === "ticket" && typeof c.source === "string" && c.source)
+    .map((c) => c.source as string);
+  return [...new Set(cited)];
 }
 
 /**
