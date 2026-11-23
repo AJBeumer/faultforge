@@ -46,3 +46,7 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 - [17 November: green before review, in smaller pull requests](decisions/week-3.md#17-november-green-before-review-in-smaller-pull-requests)
 - [Day 10: Factory with verification](decisions/week-3.md#day-10-factory-with-verification)
 - [Day 11: make the reviewer yours](decisions/week-3.md#day-11-make-the-reviewer-yours)
+
+## [Week 4 (23 to 29 November)](decisions/week-4.md)
+
+- [23 November: Ponytail in interactive sessions only](decisions/week-4.md#23-november-ponytail-in-interactive-sessions-only)
