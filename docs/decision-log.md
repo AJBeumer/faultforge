@@ -50,3 +50,4 @@ The entries are kept in one file per week, under [decisions/](decisions/). They 
 ## [Week 4 (23 to 29 November)](decisions/week-4.md)
 
 - [23 November: Ponytail in interactive sessions only](decisions/week-4.md#23-november-ponytail-in-interactive-sessions-only)
+- [Day 12: Give your factory the full picture](decisions/week-4.md#day-12-give-your-factory-the-full-picture)
