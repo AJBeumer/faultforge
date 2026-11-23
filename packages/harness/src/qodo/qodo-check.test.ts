@@ -52,7 +52,7 @@ afterEach(() => {
 function writeSnapshot(
   configDir: string,
   version: string,
-  data: { rules?: unknown[]; skills?: unknown[]; relations?: unknown[] } = {},
+  data: { rules?: unknown[]; skills?: unknown[]; relations?: unknown[]; files?: unknown } = {},
 ) {
   const dir = join(configDir, version);
   mkdirSync(dir, { recursive: true });
@@ -68,6 +68,8 @@ function writeSnapshot(
     join(dir, "cross-repo-relations.json"),
     JSON.stringify({ relations: data.relations ?? [], repo: "AJBeumer/faultforge-target", shallow: false }),
   );
+  if (data.files !== "none")
+    writeFileSync(join(dir, "pr-agent-files.json"), JSON.stringify({ files: data.files ?? [] }));
 }
 
 describe("compareRules", () => {
@@ -212,9 +214,61 @@ describe("runCheck", () => {
       },
       snapshotDir: configDir,
       targetRepo: "AJBeumer/faultforge-target",
+      prAgentFiles: () => [{ repo: "AJBeumer/faultforge", place: "wiki", text: null }],
       ...overrides,
     };
   }
+
+  it("exits 1 and names the page when a Wiki .pr_agent.toml appeared since the snapshot", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule()], skills: [skill()], relations: [] });
+    const page = '[review_agent]\nissues_user_guidelines = "x"\n';
+    const result = await runCheck(
+      deps(configDir, { prAgentFiles: () => [{ repo: "AJBeumer/faultforge", place: "wiki", text: page }] }),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.differences.map(formatDifference)).toEqual([
+      "new file: AJBeumer/faultforge wiki .pr_agent.toml (AJBeumer/faultforge wiki)",
+    ]);
+  });
+
+  it("exits 2 when a Wiki can't be read, never 0", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule()], skills: [skill()], relations: [] });
+    const result = await runCheck(
+      deps(configDir, {
+        prAgentFiles: () => {
+          throw new Error("git clone failed: Could not resolve host: github.com");
+        },
+      }),
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toMatch(/resolve host/);
+  });
+
+  it("exits 2 when the snapshot has no record of the .pr_agent.toml files", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule()], skills: [skill()], relations: [], files: "none" });
+    const result = await runCheck(deps(configDir));
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toMatch(/pr-agent-files\.json/);
+  });
+
+  it("saves the files it read, absent ones too, before comparing", async () => {
+    const configDir = tmpDir();
+    writeSnapshot(configDir, "qodo-v1", { rules: [rule()], skills: [skill()], relations: [] });
+    const saved: Record<string, unknown> = {};
+    await runCheck(
+      deps(configDir, {
+        saveRaw: (name, data) => {
+          saved[name] = data;
+        },
+      }),
+    );
+    expect(saved["pr-agent-files.json"]).toEqual({
+      files: [{ repo: "AJBeumer/faultforge", place: "wiki", text: null }],
+    });
+  });
 
   it("exits 0 when everything matches", async () => {
     const configDir = tmpDir();

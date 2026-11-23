@@ -1,15 +1,18 @@
 /**
- * Compares Qodo's live configuration (rules, review skills, the target's relationships) with the
- * highest-numbered snapshot in private storage. Qodo can derive new rules on its own within a minute of a
- * merge, so drift must be caught the next time anything runs, not later by hand.
+ * Compares Qodo's live configuration (rules, review skills, the target's relationships, and every repository's
+ * root and Wiki `.pr_agent.toml`, `pr-agent-files.ts`) with the highest-numbered snapshot in private storage.
+ * Qodo can derive new rules on its own within a minute of a merge, so drift must be caught the next time
+ * anything runs, not later by hand.
  *
  *   npm run qodo:check
  *
- * Read-only throughout (`QodoApi`'s allow-list). Needs `QODO_API_KEY` or `QODO_KEY_FILE`. The live
- * answers are saved raw, before comparing, under `raw-artifacts/qodo-state/<timestamp>/`.
+ * Read-only throughout (`QodoApi`'s allow-list; GitHub reads and a Wiki clone into a temporary folder). Needs
+ * `QODO_API_KEY` or `QODO_KEY_FILE`. The live answers are saved raw, before comparing, under
+ * `raw-artifacts/qodo-state/<timestamp>/`, the files as `pr-agent-files.json` (`text: null` when absent).
  *
  * Exit codes: 0 Qodo matches the snapshot; 1 a difference was found, each one printed (new, missing or
- * changed, with its id, name and field); 2 unable to check (no key, no snapshot, an API or parse error).
+ * changed, with its id, name and field); 2 unable to check (no key, no snapshot or no file record in it, an
+ * API or parse error, a Wiki or file that can't be read).
  * The key is never printed.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -18,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { type FactoryConfig, loadFactory, repoConfig } from "../shared/factory-config.ts";
 import { ROOT } from "../shared/paths.ts";
 import { privateDir } from "../shared/templates.ts";
+import { comparePrAgentFiles, type PrAgentFile, readPrAgentFiles, realReaders } from "./pr-agent-files.ts";
 import { QodoApi } from "./qodo-api.ts";
 
 /** The fields that must match. Timestamps, counters, examples and source details change on their own. */
@@ -35,7 +39,7 @@ export interface SkillFacts {
   state: string;
 }
 
-type Kind = "rule" | "skill" | "relation";
+type Kind = "rule" | "skill" | "relation" | "file";
 
 export type Difference =
   | { kind: Kind; type: "new"; id: string; name: string }
@@ -185,6 +189,7 @@ export interface Snapshot {
   rules: RuleFacts[];
   skills: SkillFacts[];
   relations: unknown[];
+  prAgentFiles: PrAgentFile[];
 }
 
 /** The highest `qodo-vN` folder. Throws if there is none: comparing against nothing would read as a match. */
@@ -211,7 +216,10 @@ export function loadSnapshot(configDir: string): Snapshot {
   const rules = (read("rules.json").rules as Parameters<typeof normalizeRule>[0][]).map(normalizeRule);
   const skills = (read("review-skills-list.json").items as Parameters<typeof normalizeSkill>[0][]).map(normalizeSkill);
   const relations = read("cross-repo-relations.json").relations as unknown[];
-  return { version: basename(dir), rules, skills, relations };
+  // Without a record of the .pr_agent.toml files, a Wiki page could not be told from the snapshot's state.
+  const prAgentFiles = read("pr-agent-files.json").files;
+  if (!Array.isArray(prAgentFiles)) throw new Error(`${basename(dir)}/pr-agent-files.json holds no list of files`);
+  return { version: basename(dir), rules, skills, relations, prAgentFiles };
 }
 
 export interface CheckDeps {
@@ -220,6 +228,8 @@ export interface CheckDeps {
   saveRaw(name: string, data: unknown): void;
   snapshotDir: string;
   targetRepo: string;
+  /** Every repository's root and Wiki `.pr_agent.toml` (`pr-agent-files.ts`); throws when one can't be read. */
+  prAgentFiles(): PrAgentFile[];
 }
 
 export interface CheckResult {
@@ -260,11 +270,14 @@ export async function runCheck(deps: CheckDeps): Promise<CheckResult> {
       paged<RelationsPage>(deps, "cross-repo-relations", "cross-repo-relations"),
       deps.targetRepo,
     );
+    const files = deps.prAgentFiles();
+    deps.saveRaw("pr-agent-files.json", { files });
 
     const differences = [
       ...compareRules(rawRules.map(normalizeRule), snapshot.rules),
       ...compareSkills(rawSkills.map(normalizeSkill), snapshot.skills),
       ...compareRelations(liveRelations, snapshot.relations),
+      ...comparePrAgentFiles(files, snapshot.prAgentFiles),
     ];
     if (differences.length) {
       return {
@@ -340,6 +353,11 @@ export async function checkLiveQodoConfig(
       saveRaw,
       snapshotDir: roots.snapshotDir ?? join(privateDir(), "config"),
       targetRepo,
+      prAgentFiles: () =>
+        readPrAgentFiles(
+          Object.values(factory.repos).map((r) => r.github),
+          realReaders,
+        ),
     });
     return { ...result, evidenceDir: dir };
   } catch (error) {
