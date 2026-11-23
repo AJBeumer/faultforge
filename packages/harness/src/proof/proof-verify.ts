@@ -135,6 +135,17 @@ export interface Decision {
   reasons: string[];
 }
 
+/**
+ * Why a relative path in the test climbs above the repository, or null. A run of `../` deeper than the test's own
+ * folder leaves the repository; one that stays within it (`../../deps.ts` from `src/a/b/`) is ordinary. Exam v2's
+ * p11 was refused by a cruder check that called any `../../` a climb out.
+ */
+export function climbProblem(testPath: string, testText: string): string | null {
+  const depth = testPath.replace(/\\/g, "/").split("/").length - 1;
+  const deepest = Math.max(0, ...[...testText.matchAll(/(?:\.\.[\\/])+/g)].map((m) => m[0].length / 3));
+  return deepest > depth ? `a relative path climbs ${deepest} folders up, above the repository (${depth} deep)` : null;
+}
+
 /** The problems that need no run: where the test goes, what it reaches for, and what the patch touches. */
 export function staticProblems(facts: Pick<ProofFacts, "cited" | "testPath" | "testText" | "patch" | "existing">) {
   const problems: string[] = [];
@@ -144,9 +155,12 @@ export function staticProblems(facts: Pick<ProofFacts, "cited" | "testPath" | "t
     .split(/\r?\n/)
     .map((l) => `+${l}`)
     .join("\n");
-  // Only the path checks: a proof about this repository's own code may name it or read the environment, which
-  // `plainEnv` strips of every token. shortcut: catches a path written plainly, not one built at run time.
-  for (const p of changeProblems(asDiff).filter((p) => /absolute path|climbs/.test(p))) problems.push(`the test: ${p}`);
+  // Only the absolute-path check: a proof about this repository's own code may name it or read the environment,
+  // which `plainEnv` strips of every token. shortcut: catches a path written plainly, not one built at run time;
+  // the sandbox stops the rest.
+  for (const p of changeProblems(asDiff).filter((p) => /absolute path/.test(p))) problems.push(`the test: ${p}`);
+  const climb = climbProblem(facts.testPath, facts.testText);
+  if (climb) problems.push(`the test: ${climb}`);
   const patch = patchProblem(facts.patch, facts.cited);
   if (patch) problems.push(patch);
   return problems;

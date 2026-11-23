@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { agreedClass, classifyRun, decide, type ProofFacts, sandboxArgs, testPathProblem } from "./proof-verify.ts";
+import {
+  agreedClass,
+  classifyRun,
+  climbProblem,
+  decide,
+  type ProofFacts,
+  sandboxArgs,
+  testPathProblem,
+} from "./proof-verify.ts";
 
 const assertion = { status: "failed", failureMessages: ["AssertionError: expected 1 to be 2"] };
 const passed = { status: "passed", failureMessages: [] };
@@ -17,6 +25,18 @@ describe("classifyRun", () => {
     );
     expect(classifyRun({ testResults: [] })).toBe("no-tests");
     expect(classifyRun(null)).toBe("error");
+  });
+});
+
+describe("climbProblem", () => {
+  const at = "packages/harness/src/guard/install.proof.test.ts"; // four folders deep
+  it("lets a relative path climb within the repository", () => {
+    expect(climbProblem(at, 'import { x } from "../../shared/paths.ts";')).toBeNull();
+    expect(climbProblem(at, 'import "../../../../vitest.config.ts";')).toBeNull();
+  });
+  it("refuses one that climbs above it, with either slash", () => {
+    expect(climbProblem(at, 'readFileSync("../../../../../secret")')).toMatch(/5 folders up/);
+    expect(climbProblem("a.proof.test.ts", 'import "..\\\\x.ts";')).toMatch(/above the repository/);
   });
 });
 
