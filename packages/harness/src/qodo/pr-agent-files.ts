@@ -86,7 +86,9 @@ export interface ReaderCalls {
   showWiki(dir: string, name: string): string;
 }
 
-const git = (dir: string, ...args: string[]) => runExternal(`git ${args[0]}`, "git", ["-C", dir, ...args], 60_000);
+// The same output limit as `gh`: execFileSync's 1 MiB default would stop the check at a large page.
+const git = (dir: string, ...args: string[]) =>
+  runExternal(`git ${args[0]}`, "git", ["-C", dir, ...args], 60_000, { maxBuffer: 64 * 1024 * 1024 });
 
 const realCalls: ReaderCalls = {
   rootText: (repo) => gh("api", `repos/${repo}/contents/.pr_agent.toml`, "-H", "Accept: application/vnd.github.raw"),
