@@ -109,3 +109,8 @@ The owner asked to include Ponytail (github.com/DietrichGebert/ponytail, MIT), a
   - Lab code only, one model.
   - Pairs aren't independent across runs.
   - The network is still open to agent-written tests (#27).
+
+## 23 November: Qodo configuration v14, and every finding gets proved first
+
+- **Qodo configuration v14.** Qodo added the `prove-finding` skill as review skill 400468 by itself, at 14:36 UTC, when [PR #442](https://github.com/AJBeumer/faultforge/pull/442) put the skill on `main`. It is scoped to this repository only, and Qodo marked it as not relevant to code review. `qodo:check` matched v12 at 11:10 and 12:45 UTC and reported this skill as the only difference at 16:58. The owner keeps it and recorded the state as v14. The rules, review skills and relationships that reach the target are unchanged, and `qodo:check` matches v14. v13 was the Day 11 Wiki setup, which `qodo:check` cannot see (#428). No case ran under v13, and none has run under v14.
+- **The skill is used on every finding.** The owner decided that a finding the gate says to fix is proved before it is fixed. `/work-ticket` now runs `prove-finding` on an export of the reviewed commit, and `npm run proof:verify` decides. A finding with a certificate gets the fix and keeps the proof test. A finding without one stays open for the owner. This applies to interactive sessions. The factory does not use the skill yet: unattended proofs need the network block in #27.
