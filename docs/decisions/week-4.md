@@ -39,3 +39,35 @@ The owner asked to include Ponytail (github.com/DietrichGebert/ponytail, MIT), a
 - **Qodo's review of PR #438:** round 1 raised one Medium. A citation's source was printed verbatim, so a newline or terminal escape in it could forge report lines. Reproduced with a failing test, then fixed: only plain web addresses count. Round 2 found nothing, and the quality gate was met in 2 of 3 rounds.
 - **Measured on PR #438 itself:** neither review cited #437, and both saves record `ticketsCited: []`. That fits Day 12: a clean review says nothing about the ticket. The ticket's checklist was verified by its own tests.
 - **Unchanged:** the gate reads findings, not this field. Older saves without the field still pass `ledger:check`.
+
+## Day 13: Teach your factory a new skill
+
+*Recorded 23 November. Qodo configuration v12. The target repository was not touched.*
+
+- **Challenge requirement:** turn one recurring check into a skill (`SKILL.md` with inputs, ordered steps, expected results, evidence and stop conditions), use it on a real task in a fresh session, refine what the agent misunderstood, retry, and record Qodo's review of the code.
+- **Increment delivered:** findings that carry their own proof ([PR #442](https://github.com/AJBeumer/faultforge/pull/442), ticket #441).
+  - **The skill, `prove-finding`:** given a review finding, the agent writes a new test and a fix confined to the cited lines, and runs both through the helper `try-proof.mjs`. The verdict is `supported`, `disproven` or `inconclusive`.
+  - **The verifier, `npm run proof:verify`:** re-runs the bundle in a fresh export of the commit and never reads the agent's verdict. A certificate needs four things: the test fails as an assertion failure; it passes once only the fix is applied; the fix stays inside the cited lines; and the test is a new file that changes nothing else. Each test runs in a child process under Node's permission model, reading only its export and starting no process.
+  - **The exam, `npm run skill:exam`:** runs the skill blind in fresh headless sessions on matched pairs, the same Qodo finding on the commit that was reviewed and on the commit that fixed it. Only certificates are scored.
+- **What changed from the plan and why:**
+  - **The selection rule was amended before any session ran and before the key was hashed.** The ticket's rule picked three findings. For two of them, no later commit changed the cited lines: Qodo had marked them implemented for fixes made elsewhere. Without such a commit there is no known-answer fixed side, so the rule now also requires a later reviewed commit that changes a cited line.
+  - **Run 1 was void.** Its one session couldn't run a test, because of two harness faults: the tool list was joined with spaces, and Claude Code refuses writes under `.claude/`. It gave a verdict from reading the code instead. The refinement: the skill now runs every proof through its helper, and any verdict except `inconclusive` must rest on runs the session saw itself.
+  - **Qodo's round 1 changed the verifier.** It raised 13 findings, including that a test could read private storage and that a stale report could earn a certificate. All were fixed. The sandbox came from that review, and the worker-thread version was found to run tests unconfined before it shipped.
+- **Tests and Qodo evidence:**
+  - **The exam key's sha256 was committed before the first session:** `docs/evidence/day-13/skill-exam-v1.key.sha256` in `24c6b6a`.
+  - **Rule fixed in advance:** at least 2 of 3 certified on the reviewed side and 0 on the fixed side is "works"; any fixed-side certificate is "fails"; anything else is inconclusive.
+  - **Run 2:** 3 of 3 certified, 0 false proofs. Works.
+  - **Run 2's bundles re-verified with the sandboxed verifier:** the same result.
+  - **Run 3, the final skill:** 2 of 3 certified (one `inconclusive`), 0 false proofs. Works.
+  - **Across runs:** all 12 scored sessions loaded the skill as their first tool call, and every fixed-side session answered `disproven`.
+  - **The sandbox, as an integration test:** a proof whose test reads a file outside its export is refused. Before the sandbox, that same bundle was certified.
+  - **Qodo on PR #442:** three rounds (13, 1, 0 findings; 6 High, 7 Medium, 1 Low; none dismissed). The quality gate was met at round 3 on `f51814b`. CI is green on Linux and Windows.
+- **Lesson or decision:**
+  - **A skill needs an exam it can fail in both directions.** The fixed side checks that the skill doesn't manufacture proofs, and here it never did.
+  - **A certificate proves cause, not remedy.** The reviewed side's test also ran on Qodo's own fix commit. It passed for one pair and stayed red for the others, because those tests pin a different remedy from the one the real fix chose.
+  - **Qodo's "implemented" doesn't mean the cited lines changed.** In 3 of the 6 findings the selection rule reached, the fix was made elsewhere.
+- **Remaining risk:**
+  - Three pairs from one repository, so this shows a direction, not a rate.
+  - The two runs split on one borderline finding.
+  - The network stays open to agent-written tests (#27).
+  - Native addons are allowed in the sandbox: only the ones `npm ci` installs from the lockfile.
