@@ -97,6 +97,15 @@ describe("approval:check", () => {
     expect(run(["faultforge", "5", "--predict"], h.deps)).toBe(2);
   });
 
+  // Proof test for the review finding "A push can bypass the guarded-path check" (certificate issued).
+  it("refuses to judge when the head moves between reading it and reading the changed files", () => {
+    const h = harness({ labelled: true });
+    let reads = 0;
+    const moving = { ...h.deps, view: () => ({ ...h.deps.view("", 5), headRefOid: ++reads === 1 ? HEAD : OLD }) };
+    expect(run(["faultforge", "5"], moving)).toBe(2);
+    expect(h.err.join("\n")).toMatch(/head moved/);
+  });
+
   it("reads past 100 files, so a guarded file further down still holds the PR", () => {
     const files = [...Array.from({ length: 150 }, (_, i) => `src/f${i}.ts`), ".claude/hooks/a.ts"];
     const h = harness({ labelled: true, files });
@@ -155,5 +164,12 @@ describe("CI green", () => {
     expect(ciGreen([{ ...first, conclusion: "SKIPPED" }, ...rest], JOBS)).toBe(false);
     expect(ciGreen([{ ...first, conclusion: "NEUTRAL" }, ...rest], JOBS)).toBe(false);
     expect(ciGreen([...green, { name: "optional", status: "COMPLETED", conclusion: "SKIPPED" }], JOBS)).toBe(true);
+  });
+
+  // Proof test for the review finding "Pending checks can appear green" (certificate issued).
+  it("is not green while any check is still running, a rerun of a required job or an optional check", () => {
+    const [first] = green;
+    expect(ciGreen([...green, { ...first, status: "IN_PROGRESS", conclusion: "" }], JOBS)).toBe(false);
+    expect(ciGreen([...green, { name: "optional", status: "QUEUED", conclusion: "" }], JOBS)).toBe(false);
   });
 });

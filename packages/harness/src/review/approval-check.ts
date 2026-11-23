@@ -62,8 +62,8 @@ const realDeps: ApprovalCheckDeps = {
 };
 
 /**
- * Every required job succeeded on the head (a skipped or neutral required job did not run its steps), and no
- * other check failed (those may also be skipped or neutral).
+ * Every check on the head finished, every required job succeeded (a skipped or neutral required job did not run
+ * its steps), and no other check failed (those may also be skipped or neutral).
  */
 export function ciGreen(rollup: Check[], required: string[]): boolean {
   const conclusion = (c: Check) => (c.conclusion || c.state || "").toUpperCase();
@@ -73,6 +73,7 @@ export function ciGreen(rollup: Check[], required: string[]): boolean {
   if (rollup.some((c) => finished(c) && !ok(c))) return false;
   return (
     required.length > 0 &&
+    rollup.every(finished) &&
     required.every((job) => rollup.some((c) => (c.name ?? c.context) === job && conclusion(c) === "SUCCESS"))
   );
 }
@@ -104,6 +105,8 @@ export function run(argv: string[], deps: ApprovalCheckDeps = realDeps): number 
   try {
     view = deps.view(repo.github, pr);
     files = deps.files(repo.github, pr);
+    // The files come from a second request: a push in between would pair them with another head.
+    if (deps.view(repo.github, pr).headRefOid !== view.headRefOid) throw new Error("the head moved while it was read");
   } catch (e) {
     deps.error(`approval:check: couldn't read the pull request: ${e instanceof Error ? e.message : String(e)}`);
     return 2;

@@ -107,22 +107,28 @@ export function replayRuns(
   for (const r of runs) {
     const pr = replays.get(r.replayPr) as number;
     const where = `arm ${r.arm} run ${r.run} PR ${r.replayPr}${pr !== r.replayPr ? ` (replays ${pr})` : ""}`;
-    if (r.reviewComplete !== true) {
-      out.push(`  ${where}: not counted, its review never finished (review_complete is not true)`);
-      continue;
-    }
     const entries = key.filter((k) => k.pr === pr);
     const entry = entries[0] as KeyLine;
     const guarded = guardedFiles(changed(entry.parentOfFirst, entry.first), guards);
     const levels = r.findings.map((f) => f.level);
     const o = defectOutcome(levels, flag, guarded);
-    byArm.set(r.arm, [...(byArm.get(r.arm) ?? []), o]);
+    const finished = r.reviewComplete === true;
+    if (finished) byArm.set(r.arm, [...(byArm.get(r.arm) ?? []), o]);
     out.push(
-      `  ${where}: ${entries.length} proven defect(s), ${r.findings.length} finding(s), highest ${highestLevel(levels)}${guarded.length ? ", guarded" : ""}  ->  ${o}`,
+      `  ${where}: ${entries.length} proven defect(s), ${r.findings.length} finding(s), highest ${highestLevel(levels)}${guarded.length ? ", guarded" : ""}  ->  ${o}${finished ? "" : ", not counted: its review never finished (review_complete is not true)"}`,
     );
   }
   for (const [arm, outcomes] of [...byArm].sort()) out.push(`  arm ${arm}: ${totals(outcomes)}`);
   return out;
+}
+
+/** Every replay is of a key PR, and every key PR has one: a PR left out would drop its defects without a word. */
+export function checkReplays(prs: number[], replays: Map<number, number>): void {
+  const replayed = [...replays.values()];
+  const missing = replayed.filter((pr) => !prs.includes(pr));
+  if (missing.length) throw new Error(`--replays names PRs the key doesn't hold: ${missing.join(", ")}`);
+  const unreplayed = prs.filter((pr) => !replayed.includes(pr));
+  if (unreplayed.length) throw new Error(`--replays gives no replay for the key's PRs: ${unreplayed.join(", ")}`);
 }
 
 const gitChanged = (from: string, to: string): string[] =>
@@ -171,8 +177,7 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, chang
       const key = checkKey(parseJsonLines(readFileSync(keyPath, "utf8")));
       const prs = [...new Set(key.map((k) => k.pr))].sort((a, b) => a - b);
       const replays = replaysText === undefined ? new Map(prs.map((pr) => [pr, pr])) : parseReplays(replaysText);
-      const missing = [...replays.values()].filter((pr) => !prs.includes(pr));
-      if (missing.length) throw new Error(`--replays names PRs the key doesn't hold: ${missing.join(", ")}`);
+      checkReplays(prs, replays);
       out.push("", "Scored review runs, every PR holding proven defects:");
       out.push(...replayRuns(key, readRuns(runsDir, replays), replays, changed, guards, flag));
     }

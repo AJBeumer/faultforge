@@ -3,6 +3,7 @@ import type { SavedRun } from "../review/reviewer-score.ts";
 import {
   caseOutcome,
   checkKey,
+  checkReplays,
   defectOutcome,
   highestLevel,
   type KeyLine,
@@ -20,6 +21,20 @@ describe("the replay's inputs", () => {
     );
     expect(() => checkKey([{ pr: 391, first: "abc", parentOfFirst: SHA_B }])).toThrow(/key line 1/);
     expect(checkKey([{ pr: 391, first: SHA_A, parentOfFirst: SHA_B }])).toHaveLength(1);
+  });
+
+  it("refuses replays that leave out a key PR, or name one the key doesn't hold", () => {
+    expect(() => checkReplays([312, 391], new Map([[411, 391]]))).toThrow(/no replay for the key's PRs: 312/);
+    expect(() => checkReplays([391], new Map([[411, 999]]))).toThrow(/doesn't hold: 999/);
+    expect(() =>
+      checkReplays(
+        [312, 391],
+        new Map([
+          [411, 391],
+          [412, 312],
+        ]),
+      ),
+    ).not.toThrow();
   });
 
   it("names the highest label a review raised, an unknown one first", () => {
@@ -52,7 +67,9 @@ describe("replaying saved runs", () => {
     );
   });
 
-  it("lists a run whose review never finished, and counts it in nothing", () => {
+  // Proof test for the review finding "Unfinished saved reviews are printed without their known answer or
+  // label outcome" (certificate issued).
+  it("shows a run whose review never finished in full, and counts it in nothing", () => {
     const out = replayRuns(
       key,
       [run({ reviewComplete: false })],
@@ -62,7 +79,7 @@ describe("replaying saved runs", () => {
       ["informational"],
     );
     expect(out).toEqual([
-      "  arm A run 1 PR 411 (replays 391): not counted, its review never finished (review_complete is not true)",
+      "  arm A run 1 PR 411 (replays 391): 2 proven defect(s), 0 finding(s), highest no findings  ->  false approval, not counted: its review never finished (review_complete is not true)",
     ]);
   });
 
