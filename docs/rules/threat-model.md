@@ -53,8 +53,8 @@ No layer is complete on its own. Each one catches some of what the others miss.
 3. **The factory sandbox and run policy** ([`factory-trigger.md`](../factory-trigger.md)). In GitHub Actions
    the agent runs as its own user, with network access only to an allow-list of hosts. In every factory
    run, the policy hook limits what the agent may do, and the runner audits what changed after it stops.
-4. **`npm run qodo:check`.** It compares Qodo's rules, review skills and the target's relationships with a
-   recorded snapshot in private storage. `case:pr` runs it before every case PR, and every factory tick runs
+4. **`npm run qodo:check`.** It compares Qodo's rules, review skills, the target's relationships and every
+   repository's root and Wiki `.pr_agent.toml` with a recorded snapshot in private storage. `case:pr` runs it before every case PR, and every factory tick runs
    it before the agent starts. A difference stops the case or the run.
 5. **The owner.** The owner reads every case PR, confirms every verdict, and closes the PR without merging.
 6. **A check of the target itself.** An integration test in CI

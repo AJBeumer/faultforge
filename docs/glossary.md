@@ -33,6 +33,7 @@ Part of the [docs](README.md). Each project term in one or two sentences, with a
 - **Configuration version.** A numbered record of Qodo's setup: its rules, its review skills and the target's relationships, kept as a snapshot in private storage. Results are only compared within one version, and each new version is entered in the [decision log](decision-log.md).
 - **Relationship.** A link Qodo makes between two repositories it reviews, which would let it read one while reviewing the other. The target must have none.
 - **`qodo:check`.** The command that compares Qodo's live setup with the latest snapshot. See the [threat model](rules/threat-model.md#the-layers-behind-it).
+- **"Qodo approved".** The label Qodo's approval workflow adds to a lab pull request with nothing above Low and no guarded file. A claim, checked by `approval:check`. See [Qodo's approval label](approval-label.md).
 - **Review effort.** The depth Qodo chose for a review, such as `lite`, `standard` or `skip`. A skipped review is not a clean one.
 
 ## Keeping hints away from the reviewer
