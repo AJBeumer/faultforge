@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { examDecision, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
+import { examDecision, examOptions, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
 
 const line = (o: unknown) => JSON.stringify(o);
 const transcript = [
@@ -31,6 +31,32 @@ describe("readTranscript", () => {
     const late = transcript.replace('"name":"Skill","input":{"skill":"prove-finding"}', '"name":"Read","input":{}');
     expect(loadedFirst(readTranscript(late, "prove-finding"), "prove-finding")).toBe(false);
     expect(loadedFirst(readTranscript("", "prove-finding"), "prove-finding")).toBe(false);
+  });
+});
+
+describe("examOptions", () => {
+  const flag = (argv: string[], name: string) => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  it("reads the key's repository from --repo, and this checkout without it", () => {
+    expect(examOptions(["--key", "k.json", "--out", "o", "--repo", "../target"], flag)?.repo).toBe("../target");
+    expect(examOptions(["--key", "k.json", "--out", "o"], flag)).toEqual({
+      key: "k.json",
+      out: "o",
+      repo: ".",
+      budget: 5,
+      rescore: false,
+    });
+  });
+  it("reads --only, --budget and --rescore", () => {
+    const options = examOptions(["--key", "k", "--out", "o", "--only", "t1,t2", "--budget", "3", "--rescore"], flag);
+    expect(options).toMatchObject({ only: ["t1", "t2"], budget: 3, rescore: true });
+  });
+  it("refuses a missing key or output folder, or a budget that isn't a positive number", () => {
+    expect(examOptions(["--out", "o"], flag)).toBeNull();
+    expect(examOptions(["--key", "k"], flag)).toBeNull();
+    expect(examOptions(["--key", "k", "--out", "o", "--budget", "lots"], flag)).toBeNull();
   });
 });
 

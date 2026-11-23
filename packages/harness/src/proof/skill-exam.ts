@@ -74,6 +74,36 @@ export interface PairResult {
   reviewedTestOnFixed?: string;
 }
 
+/** `skill:exam`'s options. `repo` holds the key's commits: this checkout unless `--repo` names another. */
+export interface ExamOptions {
+  key: string;
+  out: string;
+  repo: string;
+  only?: string[];
+  budget: number;
+  rescore: boolean;
+}
+
+/** The options from `argv`, read with `flag`; null when `--key` or `--out` is missing or `--budget` isn't a number. */
+export function examOptions(
+  argv: string[],
+  flag: (argv: string[], name: string) => string | undefined,
+): ExamOptions | null {
+  const key = flag(argv, "key");
+  const out = flag(argv, "out");
+  const budget = Number(flag(argv, "budget") ?? "5");
+  if (!key || !out || !Number.isFinite(budget) || budget <= 0) return null;
+  const only = flag(argv, "only")?.split(",");
+  return {
+    key,
+    out,
+    repo: flag(argv, "repo") ?? ".",
+    budget,
+    rescore: argv.includes("--rescore"),
+    ...(only ? { only } : {}),
+  };
+}
+
 /** What the scoring reads from one trial's saved result. */
 export interface TrialRow {
   pair: string;

@@ -2,7 +2,10 @@
  * `npm run skill:exam`: runs the `prove-finding` skill blind on a key of matched pairs, one fresh headless
  * Claude Code session per trial, and scores the verifier's certificates (`skill-exam.ts`).
  *
- * Usage: npm run skill:exam -- --key <key.json> --out <dir> [--only t1,t2] [--budget <usd>] [--rescore]
+ * Usage: npm run skill:exam -- --key <key.json> --out <dir> [--repo <dir>] [--only t1,t2] [--budget <usd>] [--rescore]
+ *
+ * `--repo` names the repository holding the key's commits (default: this checkout); the skill always comes from this
+ * checkout.
  *
  * The key (kept in private storage; its sha256 is committed before any session runs) holds `pairs`, each with
  * the finding's `title` and `description` and its location on the `reviewed` and the `fixed` commit, and
@@ -28,7 +31,7 @@ import { privateDir } from "../shared/paths.ts";
 import { sha256 } from "../shared/provenance.ts";
 import { commitFiles, exportCommit, flag, SetupError, testOnCommit, verifyBundle } from "./proof-run.ts";
 import { testPathProblem } from "./proof-verify.ts";
-import { examDecision, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
+import { examDecision, examOptions, loadedFirst, pairResults, readTranscript } from "./skill-exam.ts";
 
 const SKILL = "prove-finding";
 const SESSION_TIMEOUT_MS = 30 * 60_000;
@@ -105,7 +108,9 @@ function runTrial(repo: string, key: Key, trial: Key["trials"][number], out: str
     const dir = exportCommit(repo, loc.commit);
     try {
       for (const f of ["settings.json", "settings.local.json"]) rmSync(join(dir, ".claude", f), { force: true });
-      cpSync(join(repo, ".claude", "skills", SKILL), join(dir, ".claude", "skills", SKILL), { recursive: true });
+      // The skill comes from this checkout, whatever repository the key's commits are in.
+      const skill = join(resolve("."), ".claude", "skills", SKILL);
+      cpSync(skill, join(dir, ".claude", "skills", SKILL), { recursive: true });
       runSession(dir, trialPrompt(loc, pair.title, pair.description), tdir, budget, repo);
       if (existsSync(join(dir, "proof-bundle"))) cpSync(join(dir, "proof-bundle"), bundle, { recursive: true });
     } finally {
@@ -158,20 +163,19 @@ function savedRows(key: Key, out: string): Row[] {
 }
 
 export function main(argv: string[]): number {
-  const keyFile = flag(argv, "key");
-  const outFlag = flag(argv, "out");
-  if (!keyFile || !outFlag || !existsSync(keyFile)) {
-    console.error("usage: skill:exam --key <key.json> --out <dir> [--only t1,t2] [--budget <usd>] [--rescore]");
+  const options = examOptions(argv, flag);
+  if (!options || !existsSync(options.key)) {
+    console.error(
+      "usage: skill:exam --key <key.json> --out <dir> [--repo <dir>] [--only t1,t2] [--budget <usd>] [--rescore]",
+    );
     return 2;
   }
-  const repo = resolve(".");
-  const out = resolve(outFlag);
+  const { only, budget, rescore } = options;
+  const repo = resolve(options.repo);
+  const out = resolve(options.out);
   mkdirSync(out, { recursive: true });
-  const keyText = readFileSync(keyFile, "utf8");
+  const keyText = readFileSync(options.key, "utf8");
   const key = JSON.parse(keyText) as Key;
-  const only = flag(argv, "only")?.split(",");
-  const budget = Number(flag(argv, "budget") ?? "5");
-  const rescore = argv.includes("--rescore");
   console.log(`key sha256 ${sha256(keyText)}`);
   try {
     for (const t of key.trials.filter((t) => !only || only.includes(t.trial))) {
