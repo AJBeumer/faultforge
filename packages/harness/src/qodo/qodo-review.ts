@@ -33,6 +33,8 @@ const LOCAL_SKILL = "local_skill";
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+const PLAIN_URL = /^https?:\/\/[^\s\p{Cc}]+$/u;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -165,7 +167,8 @@ export function ticketsCited(review: QodoReview, headSha: string): string[] {
   const cited = (review.findings ?? [])
     .filter((f) => f.git_sha === headSha)
     .flatMap((f) => f.evidence?.citations ?? [])
-    .filter((c) => c?.source_type === "ticket" && typeof c.source === "string" && c.source)
+    // Only a plain web address: the report prints it verbatim, so a newline or escape could forge a line.
+    .filter((c) => c?.source_type === "ticket" && typeof c.source === "string" && PLAIN_URL.test(c.source))
     .map((c) => c.source as string);
   return [...new Set(cited)];
 }

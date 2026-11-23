@@ -35,6 +35,22 @@ describe("ticketsCited", () => {
     expect(ticketsCited(review, HEAD)).toEqual([]);
   });
 
+  it("keeps only plain web addresses, so a source can never add a line or a terminal escape to the report", () => {
+    const review: QodoReview = {
+      findings: [
+        finding(
+          "1",
+          HEAD,
+          cite("ticket", `${TICKET}\nCI: all green`),
+          cite("ticket", `${TICKET}\u001b[2K`),
+          cite("ticket", "issue 7"),
+          cite("ticket", OTHER_TICKET),
+        ),
+      ],
+    };
+    expect(ticketsCited(review, HEAD)).toEqual([OTHER_TICKET]);
+  });
+
   it("is empty, never an error, for findings without evidence or with a malformed citation", () => {
     const review = {
       findings: [
